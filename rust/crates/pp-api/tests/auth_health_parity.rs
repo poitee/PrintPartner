@@ -269,3 +269,28 @@ async fn closed_owner_health_stays_fatal() {
 async fn anonymous_closed_owner_health_stays_fatal() {
     compare("anonymous-closed-owner").await;
 }
+
+#[test]
+fn node_health_snapshot_is_current() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let node = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
+    let output = std::process::Command::new(node)
+        .current_dir(root)
+        .args([
+            "--conditions=development",
+            "fixtures/parity/auth-health/generate.mjs",
+            "--check",
+        ])
+        .output()
+        .expect("install Node and run npm --prefix web ci before auth health parity tests");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Node health snapshot check failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("auth health: 6 registered-handler cases passed"));
+}

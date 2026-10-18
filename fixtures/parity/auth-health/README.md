@@ -21,6 +21,10 @@ The Rust test holds explicit expected Rust responses and asserts every status
 and the complete JSON body. It also compares status and every shared body field
 with the Node snapshot and requires an exact list of intentional differences.
 Node's entire body, including its capability list, is checked by `--check`.
+The `node_health_snapshot_is_current` Rust test runs that command automatically,
+so package tests and CI detect stale Node output. Install the web dependencies
+before running these Rust tests. `PP_TEST_NODE` can select the Node executable
+matching the installed native modules, as the existing CI asset build does.
 
 ```sh
 CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_health_parity
