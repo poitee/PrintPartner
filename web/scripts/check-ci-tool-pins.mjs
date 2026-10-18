@@ -33,16 +33,16 @@ const desktopNodeSetups = {
     'rust-verify': { majors: [24] },
   },
   'desktop-native-macos': {
-    'linux-precheck': { majors: [24], needs: ['changes'], condition: "${{ needs.changes.outputs.macos != 'false' }}" },
+    'linux-precheck': { majors: [24], needs: ['changes'], condition: "${{ needs.changes.outputs.macos == 'true' }}" },
     'server-smoke': {
       majors: [24],
       needs: ['changes', 'linux-precheck'],
-      condition: "${{ !cancelled() && (needs.changes.outputs.macos == 'false' || needs.linux-precheck.result == 'success') }}",
+      condition: "${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}",
     },
     bundle: {
       majors: [24],
       needs: ['changes', 'linux-precheck'],
-      condition: "${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' }}",
+      condition: "${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}",
     },
     'bundle-intel': {
       majors: [24],
@@ -52,7 +52,7 @@ const desktopNodeSetups = {
     'macos-storage-gate': {
       majors: [22, 24],
       needs: ['changes', 'linux-precheck'],
-      condition: "${{ !cancelled() && needs.changes.outputs.macos != 'false' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}",
+      condition: "${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}",
     },
   },
 };
@@ -184,13 +184,12 @@ function checkDesktopNodeSetups(workflow, file, lanes) {
     }
     for (const [index, setup] of setups.entries()) {
       const major = majors[index];
-      const condition = name === 'server-smoke' ? "needs.changes.outputs.macos != 'false'" : undefined;
       const version = setup.with?.['node-version'];
       if (!mapping(setup.with) || typeof version !== 'string'
         || !new RegExp(`^${major}\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$`).test(version)
-        || Object.hasOwn(setup.with, 'node-version-file') || setup.if !== condition
+        || Object.hasOwn(setup.with, 'node-version-file') || Object.hasOwn(setup, 'if')
         || Object.hasOwn(setup, 'continue-on-error')) {
-        report(file, path, 'UNPINNED_DESKTOP_NODE', `setup-node must select one exact Node ${major} patch with its permitted condition and without failure overrides`);
+        report(file, path, 'UNPINNED_DESKTOP_NODE', `setup-node must select one exact Node ${major} patch without a step condition or failure overrides`);
         continue;
       }
       if (expectedVersions.has(major) && expectedVersions.get(major) !== version) {
@@ -202,8 +201,8 @@ function checkDesktopNodeSetups(workflow, file, lanes) {
         report(file, path, 'INVALID_DESKTOP_NODE_SHELL', 'runtime assertions must use the built-in bash shell through step, job, or workflow settings');
       }
       if (!mapping(verification) || verification.run !== `test "$(node --version)" = "v${version}"`
-        || verification.if !== condition || Object.hasOwn(verification, 'continue-on-error')) {
-        report(file, path, 'MISSING_DESKTOP_NODE_VERIFICATION', 'setup-node must be immediately followed by a matching runtime assertion with the same permitted condition');
+        || Object.hasOwn(verification, 'if') || Object.hasOwn(verification, 'continue-on-error')) {
+        report(file, path, 'MISSING_DESKTOP_NODE_VERIFICATION', 'setup-node must be immediately followed by an unconditional matching runtime assertion');
       }
       if (index > 0) {
         const previous = setups[index - 1];
@@ -213,10 +212,6 @@ function checkDesktopNodeSetups(workflow, file, lanes) {
           typeof step?.run === 'string' && nodeCommand.test(step.run) && step.run !== fixtureRecord)) {
           report(file, path, 'EARLY_DESKTOP_NODE_COMMAND', 'only fixture executable recording may use Node before the build runtime setup');
         }
-      }
-      if (condition !== undefined && steps.slice(steps.indexOf(setup) + 2).some(step =>
-        typeof step?.run === 'string' && nodeCommand.test(step.run) && step.if !== condition)) {
-        report(file, path, 'UNGUARDED_DESKTOP_NODE_COMMAND', 'downstream Node commands must use the setup condition');
       }
     }
     if (steps.slice(0, steps.indexOf(setups[0])).some(step => typeof step?.run === 'string'

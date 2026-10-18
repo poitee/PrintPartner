@@ -412,9 +412,6 @@ for (const [label, name, mutate, diagnostic] of [
     const steps = workflow.jobs['macos-storage-gate'].steps;
     steps.splice(steps.findIndex(step => step.with?.['node-version'] === '24.21.0'), 0, { run: 'npm ci' });
   }, 'EARLY_DESKTOP_NODE_COMMAND'],
-  ['unguarded conditional build', 'desktop-native-macos', workflow => {
-    delete workflow.jobs['server-smoke'].steps.find(step => step.name === 'Build desktop assets and pp-server').if;
-  }, 'UNGUARDED_DESKTOP_NODE_COMMAND'],
 ]) {
   test(`event tree rejects ${label} despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;

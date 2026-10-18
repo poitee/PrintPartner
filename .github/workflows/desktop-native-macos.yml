@@ -107,7 +107,6 @@ jobs:
           node-version: '24.21.0'
           architecture: arm64
       - name: Verify Node runtime
-        if: needs.changes.outputs.macos != 'false'
         run: test "$(node --version)" = "v24.21.0"
       - name: Build desktop assets and pp-server
         run: |
