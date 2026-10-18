@@ -605,7 +605,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 #[test]
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
-        ("tool.check_hardware_interfaces", "tool.get_workflow_help"),
+        ("tool.get_workflow_help", "tool.check_hardware_interfaces"),
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
