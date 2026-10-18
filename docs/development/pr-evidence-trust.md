@@ -57,6 +57,12 @@ assessment uses a separate document.
 [The Evidence paragraph in ci.md](ci.md#ephemeral-pr-runners) still calls `Lint Evidence
 block` a required check, contrary to this live snapshot. The maintainer's next
 slice must reconcile that section after the overlapping documentation work lands.
+The [gate evidence guide](../contributing/gate-evidence.md#ci-and-local-checks)
+also has stale `pull_request_target`, protected-default-branch, and "never
+executes the PR head" claims. Reconcile that paragraph in the same next slice.
+The [CI controls record](ci-controls.md) also lists an obsolete PR Evidence
+`dangerous-triggers` exemption. The current zizmor configuration has no such
+exemption for this workflow.
 
 ## Standard trusted validation options
 
@@ -67,6 +73,13 @@ repository ruleset. This makes workflow edits subject to an enforced human gate.
 It does not provide an independent machine result. A maintainer must choose
 approval, stale-review, and bypass settings. Merely adding another CODEOWNERS
 entry would not activate enforcement.
+
+First establish an eligible approver distinct from the PR author. The
+[CI controls record](ci-controls.md#phase-2-for-chad) notes that agent PRs use
+`poitee`, the sole owner named for these paths, and GitHub forbids self-approval.
+Separate agent authorship or another eligible code owner is a prerequisite to
+enforcement without a bypass. Test that identity arrangement before enabling
+required review. Identity and credential provisioning remain outside this slice.
 
 ### Use a base-controlled metadata workflow
 
