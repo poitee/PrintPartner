@@ -20,9 +20,33 @@ struct Snapshot {
     user_version: i64,
 }
 
+// SQLite URI paths decode %HH, so escape every byte outside the RFC 3986 path
+// set. Windows separators become `/`, and `file:///C:/...` keeps the drive.
+fn immutable_uri(path: &Path) -> String {
+    let path = path.to_str().expect("fixture paths are UTF-8");
+    let path = if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_owned()
+    };
+    let mut uri = String::from(if path.starts_with('/') {
+        "file://"
+    } else {
+        "file:///"
+    });
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/:".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri + "?immutable=1"
+}
+
 fn immutable(path: &Path) -> Connection {
     Connection::open_with_flags(
-        format!("file:{}?immutable=1", path.display()),
+        immutable_uri(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
     )
     .unwrap()
@@ -99,17 +123,21 @@ fn scan_objects(path: &Path) -> Vec<String> {
 
 struct Fixture {
     root: PathBuf,
+    current_version: u64,
 }
+
+// Reserved URI characters in the root make every immutable open prove escaping.
+// Windows forbids `?` in file names.
+const RESERVED: &str = if cfg!(windows) { " #%&;=" } else { " ?#%&;=" };
 
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "pp-schema40-failure-{}",
+            "pp-schema40-failure{RESERVED}{}",
             hex::encode(rand::random::<[u8; 16]>())
         ));
         std::fs::create_dir(&root).unwrap();
-        let fixture = Self { root };
-        let seed = fixture.root.join("seed");
+        let seed = root.join("seed");
         std::fs::create_dir(&seed).unwrap();
         Connection::open(seed.join("print-partner.db"))
             .unwrap()
@@ -118,9 +146,12 @@ impl Fixture {
                  INSERT INTO gre710_probe VALUES (X'00FF01');",
             )
             .unwrap();
-        let (owner, _) = WriterOwner::open(&seed, Limits::default()).unwrap();
+        let (owner, ready) = WriterOwner::open(&seed, Limits::default()).unwrap();
         owner.shutdown().unwrap();
-        fixture
+        Self {
+            root,
+            current_version: ready.version,
+        }
     }
 
     fn input(&self, schema_version: u64) -> PathBuf {
@@ -144,7 +175,11 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.root).unwrap();
+        // A second panic while unwinding aborts and hides the failed assertion.
+        let result = std::fs::remove_dir_all(&self.root);
+        if !std::thread::panicking() {
+            result.expect("remove schema40 failure fixture");
+        }
     }
 }
 
@@ -179,7 +214,8 @@ fn assert_stamp_refused(directory: &Path) {
     );
 }
 
-fn assert_retry_succeeds(directory: &Path) {
+// Retry migrates to whatever the seed reached, so schema bumps need no edit here.
+fn assert_retry_succeeds(fixture: &Fixture, directory: &Path) {
     let database = directory.join("print-partner.db");
     Connection::open(&database)
         .unwrap()
@@ -188,12 +224,18 @@ fn assert_retry_succeeds(directory: &Path) {
     let input = snapshot(read_only(&database));
     let (owner, ready) = WriterOwner::open(directory, Limits::default()).unwrap();
     owner.shutdown().unwrap();
-    assert_eq!((ready.previous_version, ready.version), (39, 41));
+    assert_eq!(
+        (ready.previous_version, ready.version),
+        (39, fixture.current_version)
+    );
     assert_eq!(
         ready.backup,
         Some(directory.join("backups/pre-schema40.db"))
     );
-    assert_eq!(version(read_only(&database)), "41");
+    assert_eq!(
+        version(read_only(&database)),
+        fixture.current_version.to_string()
+    );
     assert_eq!(
         snapshot(immutable(&directory.join("backups/pre-schema40.db"))),
         input
@@ -231,7 +273,7 @@ fn failed_schema40_rolls_back_from39_and_retries() {
     assert_eq!(snapshot(read_only(&database)), input);
     assert_eq!(snapshot(immutable(&backup)), input);
     assert_eq!(backup_bytes(&directory), backups);
-    assert_retry_succeeds(&directory);
+    assert_retry_succeeds(&fixture, &directory);
 }
 
 #[test]
@@ -266,7 +308,7 @@ fn failed_schema40_preserves_committed38_and39_and_their_backups() {
         expected[2].1
     );
     assert_eq!(backup_bytes(&directory), backups);
-    assert_retry_succeeds(&directory);
+    assert_retry_succeeds(&fixture, &directory);
     let retried = backup_bytes(&directory);
     for name in ["pre-schema38.db", "pre-schema39.db"] {
         assert_eq!(retried[name], backups[name]);
