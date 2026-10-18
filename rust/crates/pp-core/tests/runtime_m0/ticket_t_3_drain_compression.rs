@@ -1,12 +1,11 @@
+use super::{CoreRuntime, scratch};
 use super::{assert_clean, bootstrap, launch, pid, temporary};
 use axum::http::{HeaderMap, StatusCode};
 use http_body_util::BodyExt;
-use pp_core::CoreRuntime;
 use pp_gateway::ownership::cutover::CUTOVER_FILE;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -188,19 +187,15 @@ async fn isolated(name: &str, rebuild: bool) -> Option<PathBuf> {
     if std::env::var("PP_DRAIN_CASE").ok().as_deref() == Some(name) {
         return Some(PathBuf::from(std::env::var_os("PP_DRAIN_DATA").unwrap()));
     }
-    let data = temporary("t3-drain-compression");
+    let (_scratch, data) = temporary("t3-drain-compression");
     let test = format!("drain::compression::{name}");
-    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
     child
         .args(["--exact", &test, "--nocapture"])
         .env("PP_DRAIN_CASE", name)
         .env("PP_DRAIN_DATA", &data)
-        .env("PP_DESKTOP_REBUILD", if rebuild { "1" } else { "0" })
-        .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(240), child.output())
-        .await
-        .expect("isolated compression case exceeded four minutes")
-        .unwrap();
+        .env("PP_DESKTOP_REBUILD", if rebuild { "1" } else { "0" });
+    let output = scratch::output(&mut child, Duration::from_secs(240));
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("{stdout}");
     assert!(
@@ -217,7 +212,6 @@ async fn isolated(name: &str, rebuild: bool) -> Option<PathBuf> {
         "{}",
         json!({"child": test, "PP_DESKTOP_REBUILD": rebuild, "passed": 1, "cutover_file": false})
     );
-    fs::remove_dir_all(data).unwrap();
     None
 }
 

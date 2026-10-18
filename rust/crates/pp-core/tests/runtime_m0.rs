@@ -4,12 +4,100 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
+use pp_core::{CoreStatus, DesktopLaunch, SupervisorConfig, VerifiedBundle};
+use scratch::{Runtime as CoreRuntime, temporary};
 use std::os::unix::fs::DirBuilderExt;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+
+#[path = "runtime_m0/scratch.rs"]
+mod scratch;
+
+#[path = "runtime_m0/process.rs"]
+mod process;
+
+#[test]
+fn scratch_root_is_empty_after_runtime_tests() {
+    let root = tempfile::Builder::new()
+        .prefix("pp-m0-check-")
+        .tempdir()
+        .unwrap();
+    let output = scratch::output(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--skip",
+                "scratch_root_is_empty_after_runtime_tests",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("TMPDIR", root.path())
+            .env("TMP", root.path())
+            .env("TEMP", root.path())
+            .env("CARGO_TARGET_TMPDIR", root.path()),
+        Duration::from_secs(1800),
+    );
+    assert!(
+        output.status.success(),
+        "runtime suite failed\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    scratch::assert_empty(root.path());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok."));
+}
+
+#[tokio::test]
+async fn scratch_cleanup_after_runtime_panic() {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let panic = tokio::spawn(async move {
+        let (scratch, data) = temporary("panic");
+        let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+        let CoreStatus::Ready { pid, .. } = *runtime.handle().subscribe().borrow() else {
+            panic!("not ready")
+        };
+        send.send((
+            scratch.path().to_owned(),
+            runtime.runtime_dir().to_owned(),
+            pid,
+        ))
+        .unwrap();
+        let _scratch =
+            scratch::RawDropScratch::new(scratch, data, runtime.runtime_dir().to_owned(), pid);
+        let _runtime = runtime.into_inner();
+        panic!("exercise lifecycle scratch cleanup while unwinding");
+    })
+    .await
+    .unwrap_err();
+    assert!(panic.is_panic());
+    let (scratch, runtime, pid) = receive.await.unwrap();
+    assert!(!pp_core::process_alive(pid));
+    assert!(!scratch.exists());
+    assert!(!runtime.exists());
+}
+
+#[tokio::test]
+async fn cancelled_fixture_shutdown_waits_for_closure() {
+    let (scratch, data) = temporary("cancelled-shutdown");
+    let runtime = CoreRuntime::start(launch(data)).await.unwrap();
+    let CoreStatus::Ready { pid, .. } = *runtime.handle().subscribe().borrow() else {
+        panic!("not ready")
+    };
+    let directory = runtime.runtime_dir().to_owned();
+    assert!(directory.exists() && pp_core::process_alive(pid));
+    let work = runtime.handle().track_shutdown_work().unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), runtime.shutdown())
+            .await
+            .is_err()
+    );
+    assert!(!pp_core::process_alive(pid));
+    assert!(!directory.exists());
+    drop(work);
+    scratch.close().unwrap();
+}
 
 #[path = "runtime_m0/drain.rs"]
 mod drain;
@@ -114,8 +202,7 @@ async fn request(
 
 #[tokio::test]
 async fn protected_real_node_lifecycle() {
-    let data =
-        std::env::temp_dir().join(format!("pp-m0-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let (_scratch_data, data) = temporary("pp-m0");
     let mut runtime = CoreRuntime::start(launch(data.clone()))
         .await
         .expect("real Node reaches verified readiness");
@@ -278,7 +365,7 @@ async fn protected_real_node_lifecycle() {
 async fn authenticated_logout_requests_complete_shutdown() {
     use fs2::FileExt;
 
-    let data = temporary("logout");
+    let (_scratch_data, data) = temporary("logout");
     let mut runtime = CoreRuntime::start(launch(data.clone()))
         .await
         .expect("real Node reaches verified readiness");
@@ -382,7 +469,7 @@ async fn authenticated_logout_requests_complete_shutdown() {
 #[tokio::test]
 async fn ticket_t_12_hostile_lock_is_refused_before_supervised_node_startup() {
     use std::os::unix::fs::symlink;
-    let data = temporary("hostile-lock");
+    let (_scratch_data, data) = temporary("hostile-lock");
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(&data)
@@ -414,20 +501,19 @@ async fn ticket_t_12_hostile_lock_is_refused_before_supervised_node_startup() {
         "{}",
         serde_json::json!({"proof_class":"headless_unsigned", "case":"hostile_lock_refused", "error":error.to_string(), "database_unchanged":true, "config_unchanged":true, "stale_marker_unchanged":true, "ownership_cleanup_not_started":true, "supervised_child_not_started":true})
     );
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[tokio::test]
 async fn ticket_t_12_unsafe_ancestor_is_refused_before_child_or_database_open() {
     use std::os::unix::fs::PermissionsExt;
-    let parent = temporary("unsafe-ancestor");
+    let (_scratch_parent, parent) = temporary("unsafe-ancestor");
     let data = parent.join("data");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&data)
         .unwrap();
-    let source = temporary("ancestor-copy-source");
+    let (_scratch_source, source) = temporary("ancestor-copy-source");
     let (owner, _) = pp_storage::WriterOwner::open(&source, pp_storage::Limits::default()).unwrap();
     owner.shutdown().unwrap();
     let database = data.join("print-partner.db");
@@ -445,8 +531,6 @@ async fn ticket_t_12_unsafe_ancestor_is_refused_before_child_or_database_open() 
     let after = [&database, &config, &marker].map(|path| std::fs::read(path).unwrap());
     let entries = std::fs::read_dir(&data).unwrap().count();
     let parent_entries = std::fs::read_dir(&parent).unwrap().count();
-    std::fs::remove_dir_all(&parent).unwrap();
-    std::fs::remove_dir_all(&source).unwrap();
     assert_eq!(error.to_string(), "Unsafe data directory ancestor");
     assert_eq!(after, before);
     assert_eq!(entries, 3);
@@ -460,12 +544,13 @@ async fn ticket_t_12_unsafe_ancestor_is_refused_before_child_or_database_open() 
 #[tokio::test]
 async fn ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open() {
     use std::os::unix::fs::PermissionsExt;
-    let data = temporary("unsafe-directory");
+    let (_scratch_data, data) = temporary("unsafe-directory");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&data)
         .unwrap();
+    let _permissions = scratch::PrivatePermissions(data.clone());
     let database = data.join("print-partner.db");
     let copied = b"copied database must remain unopened";
     std::fs::write(&database, copied).unwrap();
@@ -489,12 +574,11 @@ async fn ticket_t_12_unsafe_directory_is_refused_before_child_or_database_open()
             serde_json::json!({"proof_class":"headless_unsigned", "case":"unsafe_directory_refused", "permissions":permissions, "error":error.to_string(), "database_unchanged":true, "origin_unchanged":true, "ownership_artifacts_absent":true})
         );
     }
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[tokio::test]
 async fn ticket_t_12_unsafe_config_is_refused_before_any_database_open() {
-    let data = temporary("unsafe-origin-config");
+    let (_scratch_data, data) = temporary("unsafe-origin-config");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -518,15 +602,11 @@ async fn ticket_t_12_unsafe_config_is_refused_before_any_database_open() {
     assert!(!data.join(".desktop-owner.json").exists());
     let owner = pp_storage::lease::StorageLease::acquire(&data).unwrap();
     drop(owner);
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[tokio::test]
 async fn occupied_saved_port_recovers_before_child_start() {
-    let data = std::env::temp_dir().join(format!(
-        "pp-bind-m0-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
+    let (_scratch_data, data) = temporary("pp-bind-m0");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -651,15 +731,11 @@ async fn occupied_saved_port_recovers_before_child_start() {
     assert_eq!(cleared.theme, None);
     assert_eq!(cleared.sidebar_collapsed, Some(true));
     assert!(runtime.shutdown().await.complete());
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[tokio::test]
 async fn wrong_release_is_rejected_before_storage_or_child() {
-    let data = std::env::temp_dir().join(format!(
-        "pp-version-m0-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
+    let (_scratch_data, data) = temporary("pp-version-m0");
     let mut wrong = launch(data.clone());
     wrong.bundle.runtime_version = "0.0.0-web".into();
     let error = CoreRuntime::start(wrong).await.err().unwrap();
@@ -675,10 +751,7 @@ async fn wrong_release_is_rejected_before_storage_or_child() {
 
 #[tokio::test]
 async fn expired_bootstrap_is_denied_by_real_listener() {
-    let data = std::env::temp_dir().join(format!(
-        "pp-expiry-m0-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
+    let (_scratch_data, data) = temporary("pp-expiry-m0");
     let mut runtime = CoreRuntime::start(launch(data)).await.unwrap();
     let origin = runtime.origin().to_owned();
     let target = runtime.take_launch_target().unwrap().into_url();
@@ -702,10 +775,7 @@ async fn expired_bootstrap_is_denied_by_real_listener() {
 
 #[tokio::test]
 async fn crash_guard_stops_after_five_failures_and_recovers_explicitly() {
-    let data = std::env::temp_dir().join(format!(
-        "pp-guard-m0-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
+    let (_scratch_data, data) = temporary("pp-guard-m0");
     let runtime = CoreRuntime::start(launch(data)).await.unwrap();
     let handle = runtime.handle();
     assert!(handle.recover_compat().await.is_err());
@@ -754,21 +824,11 @@ async fn crash_guard_stops_after_five_failures_and_recovers_explicitly() {
     runtime.shutdown().await;
 }
 
-fn temporary(case: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "pp-{case}-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ))
-}
-
 #[tokio::test]
 async fn source_sync_receipt_is_admitted_before_desktop_effects() {
     use std::os::unix::fs::MetadataExt;
 
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "source-sync-receipt-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
+    let (_scratch_root, root) = temporary("source-sync-receipt");
     std::fs::create_dir_all(&root).unwrap();
     let cases = [
         (
@@ -827,7 +887,6 @@ async fn source_sync_receipt_is_admitted_before_desktop_effects() {
     assert!(parsed["worker_pid"].as_u64().unwrap() > 0);
     let shutdown = second.shutdown().await;
     assert!(shutdown.complete(), "{shutdown:?}");
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 fn copy_directory(source: &std::path::Path, target: &std::path::Path) {
@@ -846,7 +905,7 @@ fn copy_directory(source: &std::path::Path, target: &std::path::Path) {
 #[tokio::test]
 async fn changed_or_missing_built_artifacts_are_rejected() {
     use std::io::Write;
-    let root = temporary("integrity");
+    let (_scratch_root, root) = temporary("integrity");
     let source = launch(root.join("data"));
     let assets = root.join("assets");
     copy_directory(&source.assets, &assets);
@@ -909,7 +968,7 @@ async fn changed_or_missing_built_artifacts_are_rejected() {
 
 #[tokio::test]
 async fn cleanup_error_publishes_failed_and_preserves_failure() {
-    let data = temporary("compat-cleanup-status");
+    let (_scratch_data, data) = temporary("compat-cleanup-status");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let handle = runtime.handle();
     let mut state = handle.subscribe();
@@ -959,8 +1018,9 @@ async fn cleanup_error_publishes_failed_and_preserves_failure() {
 async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
     let window = Duration::from_secs(1);
     let stable_time = window + Duration::from_millis(100);
+    let (_scratch_data, data) = temporary("stable-backoff");
     let runtime = CoreRuntime::start_with_compat_config(
-        launch(temporary("stable-backoff")),
+        launch(data),
         SupervisorConfig {
             crash_guard_window: window,
             ..SupervisorConfig::default()
@@ -1008,7 +1068,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
 
 #[tokio::test]
 async fn unexpected_marker_directory_is_preserved_and_reported() {
-    let data = temporary("cleanup-failure");
+    let (_scratch_data, data) = temporary("cleanup-failure");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let marker = data.join(".desktop-lease");
     std::fs::remove_file(&marker).unwrap();
@@ -1035,7 +1095,7 @@ async fn unexpected_marker_directory_is_preserved_and_reported() {
 async fn same_process_restart_retries_failed_storage_release_without_double_ownership() {
     use fs2::FileExt;
 
-    let data = temporary("restart-after-failed-release");
+    let (_scratch_data, data) = temporary("restart-after-failed-release");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let marker = data.join(".desktop-lease");
     std::fs::remove_file(&marker).unwrap();
@@ -1068,14 +1128,13 @@ async fn same_process_restart_retries_failed_storage_release_without_double_owne
     assert!(!marker.exists() && !data.join(".desktop-lease").exists());
     lock.try_lock_exclusive().unwrap();
     FileExt::unlock(&lock).unwrap();
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[test]
 fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
     use fs2::FileExt;
     use std::os::unix::process::CommandExt;
-    let data = temporary("drop-after-runtime");
+    let (scratch_data, data) = temporary("drop-after-runtime");
     let caller = tokio::runtime::Runtime::new().unwrap();
     let runtime = caller
         .block_on(CoreRuntime::start(launch(data.clone())))
@@ -1103,7 +1162,9 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         .open(data.join("printpartner.lock"))
         .unwrap();
     assert!(lock.try_lock_exclusive().is_err());
-    drop(runtime);
+    let _scratch =
+        scratch::RawDropScratch::new(scratch_data, data.clone(), runtime_dir.clone(), pid);
+    drop(runtime.into_inner());
     let deadline = std::time::Instant::now() + Duration::from_secs(16);
     loop {
         let descendant_reaped = descendant.try_wait().unwrap().is_some();
@@ -1130,7 +1191,7 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
 
 #[tokio::test]
 async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
-    let data = temporary("compat-cleanup-failure");
+    let (_scratch_data, data) = temporary("compat-cleanup-failure");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let state = runtime.handle().subscribe();
     assert!(matches!(*state.borrow(), CoreStatus::Ready { .. }));
@@ -1153,12 +1214,11 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
         .err()
         .expect("unproved child closure must prevent same-process restart");
     assert!(error.to_string().contains("Closure was not proved"));
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[tokio::test]
 async fn desktop_manifest_and_icons_are_served_as_assets() {
-    let data = temporary("desktop-icons");
+    let (_scratch_data, data) = temporary("desktop-icons");
     let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let bootstrap = runtime.take_launch_target().unwrap().into_url();
     let (_, headers, _) = request(
@@ -1209,7 +1269,6 @@ async fn desktop_manifest_and_icons_are_served_as_assets() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(runtime.shutdown().await.complete());
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 // Run as a subprocess so SIGKILL ends the actual Rust owner, not the test runner.
@@ -1278,7 +1337,7 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
     use std::io::{BufRead, BufReader};
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    let data = temporary("core-death-live-child");
+    let (_scratch_data, data) = temporary("core-death-live-child");
     let mut core = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "core_process_fixture", "--nocapture"])
         .env("PP_CORE_DEATH_FIXTURE", &data)
@@ -1394,7 +1453,6 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
     if let Some(path) = runtime_dir {
         let _ = std::fs::remove_dir_all(path);
     }
-    let _ = std::fs::remove_dir_all(data);
     if let Err(error) = result {
         std::panic::resume_unwind(error);
     }
@@ -1440,8 +1498,7 @@ async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
             stream.write_all(fixture).await.unwrap();
         }
     });
-    let data =
-        std::env::temp_dir().join(format!("pp-t4-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let (_scratch_data, data) = temporary("pp-t4");
     let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let origin = runtime.origin().to_owned();
     let target = runtime.take_launch_target().unwrap().into_url();
@@ -1679,7 +1736,6 @@ async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
     assert!(receipt.complete(), "{receipt:?}");
     assert_eq!(calls.load(Ordering::SeqCst), count);
     simulator.abort();
-    std::fs::remove_dir_all(data).unwrap();
     println!(
         "ticket_t_4 gateway: hidden polling, existing v1 alias, no request-driven polls, secret isolation, suspend/resume, disable/removal/shutdown passed"
     );
@@ -1752,10 +1808,7 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
     .await;
     let (tls, tls_calls, tls_handshakes) = fake(None).await;
 
-    let data = std::env::temp_dir().join(format!(
-        "pp-gre335-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
+    let (_scratch_data, data) = temporary("pp-gre335");
     let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let origin = runtime.origin().to_owned();
     let target = runtime.take_launch_target().unwrap().into_url();
@@ -1953,13 +2006,11 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
 
     let receipt = runtime.shutdown().await;
     assert!(receipt.complete(), "{receipt:?}");
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[tokio::test]
 async fn ticket_t_5_staged_release_reuses_the_persisted_desktop_identity() {
-    let data =
-        std::env::temp_dir().join(format!("pp-t-5-{}", hex::encode(rand::random::<[u8; 8]>())));
+    let (_scratch_data, data) = temporary("pp-t-5");
     let selected = launch(data.clone());
     let expected_version = selected.bundle.runtime_version.clone();
     let mut runtime = CoreRuntime::start(selected).await.unwrap();
@@ -1998,12 +2049,11 @@ async fn ticket_t_5_staged_release_reuses_the_persisted_desktop_identity() {
     assert!(reopened.shutdown().await.complete());
     assert!(!data.join(".desktop-owner.json").exists());
     assert!(!data.join(".desktop-lease").exists());
-    std::fs::remove_dir_all(data).unwrap();
 }
 
 #[test]
 fn identity_manifest_selects_staged_paths_and_current_version() {
-    let root = temporary("identity-manifest");
+    let (_scratch_root, root) = temporary("identity-manifest");
     std::fs::create_dir_all(&root).unwrap();
     let root = root.canonicalize().unwrap();
     let manifest = root.join("bundle-manifest.json");
@@ -2082,5 +2132,4 @@ fn identity_manifest_selects_staged_paths_and_current_version() {
     assert!(
         std::panic::catch_unwind(|| launch_from_manifest(root.join("data"), &manifest)).is_err()
     );
-    std::fs::remove_dir_all(root).unwrap();
 }

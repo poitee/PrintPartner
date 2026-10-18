@@ -1,9 +1,9 @@
 #[cfg(feature = "desktop_rebuild")]
 use super::request;
+use super::scratch::{self, Runtime as CoreRuntime};
 use super::{launch, temporary};
 #[cfg(feature = "desktop_rebuild")]
 use axum::http::StatusCode;
-use pp_core::CoreRuntime;
 use serde_json::{Value, json};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
@@ -11,10 +11,9 @@ async fn isolated(name: &str, enabled: bool) -> Option<std::path::PathBuf> {
     if std::env::var("PP_ACCOUNT_CASE").ok().as_deref() == Some(name) {
         return Some(std::env::var_os("PP_ACCOUNT_DATA").unwrap().into());
     }
-    let data = temporary("ticket-t-68-account");
-    let output = tokio::time::timeout(
-        Duration::from_secs(600),
-        tokio::process::Command::new(std::env::current_exe().unwrap())
+    let (_scratch, data) = temporary("ticket-t-68-account");
+    let output = scratch::output(
+        std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 &format!("ticket_t_68_desktop_account_mapping::{name}"),
@@ -23,13 +22,9 @@ async fn isolated(name: &str, enabled: bool) -> Option<std::path::PathBuf> {
             .env("PP_ACCOUNT_CASE", name)
             .env("PP_ACCOUNT_DATA", &data)
             .env("PRINT_PARTNER_DESKTOP_ACCOUNT_MODE", "existing-account-v1")
-            .env("PP_DESKTOP_REBUILD", if enabled { "1" } else { "0" })
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .expect("mapping subprocess timed out")
-    .unwrap();
+            .env("PP_DESKTOP_REBUILD", if enabled { "1" } else { "0" }),
+        Duration::from_secs(600),
+    );
     println!("{}", String::from_utf8_lossy(&output.stdout));
     assert!(
         output.status.success(),
@@ -37,7 +32,7 @@ async fn isolated(name: &str, enabled: bool) -> Option<std::path::PathBuf> {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-    println!("{}", json!({"case":name,"artifact":data}));
+    println!("{}", json!({"case":name,"passed":1}));
     None
 }
 
@@ -55,13 +50,12 @@ async fn node(data: &Path, body: &str) -> Value {
         json!(format!("file://{}", schema.display())),
         json!(data),
     );
-    let output = tokio::process::Command::new(bundle.node)
-        .args(["--input-type=module", "-e", &script])
-        .current_dir(bundle.web_root)
-        .kill_on_drop(true)
-        .output()
-        .await
-        .unwrap();
+    let output = scratch::output(
+        std::process::Command::new(bundle.node)
+            .args(["--input-type=module", "-e", &script])
+            .current_dir(bundle.web_root),
+        Duration::from_secs(120),
+    );
     assert!(
         output.status.success(),
         "{}",

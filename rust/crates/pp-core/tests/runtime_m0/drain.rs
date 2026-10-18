@@ -1,8 +1,9 @@
+use super::scratch::{self, Receipt as ShutdownReceipt, Runtime as CoreRuntime};
 use super::{launch, request, temporary};
 use axum::http::StatusCode;
 use fs2::FileExt;
 use pp_compat::CompatExit;
-use pp_core::{CoreRuntime, CoreStatus, MUTATION_DRAIN, ShutdownReceipt};
+use pp_core::{CoreStatus, MUTATION_DRAIN};
 use pp_gateway::ownership::cutover::{CUTOVER_FILE, CutoverRefusal};
 use serde_json::json;
 use std::{fs, path::PathBuf, time::Duration};
@@ -14,18 +15,14 @@ async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
     if std::env::var("PP_DRAIN_CASE").ok().as_deref() == Some(name) {
         return Some(PathBuf::from(std::env::var_os("PP_DRAIN_DATA").unwrap()));
     }
-    let data = temporary("t3-runtime-drain");
-    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
+    let (_scratch, data) = temporary("t3-runtime-drain");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
     child
         .args(["--exact", &format!("drain::{name}"), "--nocapture"])
         .env("PP_DRAIN_CASE", name)
         .env("PP_DRAIN_DATA", &data)
-        .env("PP_DESKTOP_REBUILD", if rebuild { "1" } else { "0" })
-        .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(240), child.output())
-        .await
-        .expect("isolated drain case exceeded four minutes")
-        .unwrap();
+        .env("PP_DESKTOP_REBUILD", if rebuild { "1" } else { "0" });
+    let output = scratch::output(&mut child, Duration::from_secs(240));
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("{stdout}");
     assert!(
@@ -44,7 +41,6 @@ async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
             json!({"case": name, "restart_after_owner_exit": receipt})
         );
     }
-    fs::remove_dir_all(data).unwrap();
     None
 }
 
