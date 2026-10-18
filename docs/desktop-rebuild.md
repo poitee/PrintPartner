@@ -375,6 +375,16 @@ Spoolman references from new Parts without changing accepted decisions.
 Recompute consumes it. Save and rebase remain GRE-608. Existing GRE-668,
 GRE-669 and GRE-670 follow-ups remain open.
 
+Quantity JSON uses the existing `ryu-js` formatter at the shared Part encoding
+boundary, including the bytes sorted and hashed by the planning digest.
+Filename quantities retain JavaScript's binary64 rounding. For example,
+`9007199254740993` becomes `9007199254740992`, `1000000000000000128` prints as
+`1000000000000000100`, `1e20` prints as `100000000000000000000`, and `1e21`
+prints as `1e+21`. This does not expand the stored integer range. Recompute
+still refuses unsafe quantities atomically, preserving existing draft rows
+and STL files. This code remains behind default-off `desktop_rebuild`; product
+callers still require the stored `PP_DESKTOP_REBUILD` setting.
+
 Tests compare literal Node fingerprints, Parts and digests, propagate resource
 refusals, and cancel at every budget checkpoint. Regenerate the fixtures twice:
 
