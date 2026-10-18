@@ -155,6 +155,11 @@ three nextest slots while running. Their assertions and deadlines are unchanged.
 The local job has a 120-minute budget for this schedule. Hosted Rust Linux keeps
 the default profile and 90-minute job budget.
 
+Local Linux uses the host-managed Cargo cache volume. It skips `Swatinem/rust-cache`
+because that action's post-job cleanup deletes registry source directories that
+another container may still be compiling. Hosted runners, macOS and Windows keep
+the action cache. Each job's target directory remains in its own workspace.
+
 Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
 manual dispatches and merge groups also keep their existing hosted runners.
 Docker image jobs, service-container jobs and cargo-deny stay hosted because the
