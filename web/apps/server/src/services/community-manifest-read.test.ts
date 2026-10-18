@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,7 +11,27 @@ import { resolvePlanManifestSelections } from "./manifest-apply.js";
 
 vi.mock("node:fs", async (original) => {
   const actual = await original<typeof import("node:fs")>();
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+  const { fileURLToPath } = await import("node:url");
+  const file = fileURLToPath(new URL("../data/manifests/gre-702-fixture.yaml", import.meta.url));
+  const fixture = fileURLToPath(new URL("../test-fixtures/community-manifest.yaml", import.meta.url));
+  return {
+    ...actual,
+    realpathSync: new Proxy(actual.realpathSync, {
+      apply(target, receiver, args) {
+        return args[0] === file ? file : Reflect.apply(target, receiver, args);
+      },
+    }),
+    statSync: new Proxy(actual.statSync, {
+      apply(target, receiver, args) {
+        return Reflect.apply(target, receiver, args[0] === file ? [fixture, ...args.slice(1)] : args);
+      },
+    }),
+    readFileSync: vi.fn(new Proxy(actual.readFileSync, {
+      apply(target, receiver, args) {
+        return Reflect.apply(target, receiver, args[0] === file ? [fixture, ...args.slice(1)] : args);
+      },
+    })),
+  };
 });
 
 const DATA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../data");
@@ -48,16 +68,12 @@ describe("community manifest reads", () => {
   }
 
   it("loads a valid slug from the manifests directory", () => {
-    const slug = `gre-678-${process.pid}`;
+    const slug = "gre-702-fixture";
     const file = join(MANIFESTS_DIR, `${slug}.yaml`);
-    writeFileSync(file, "selections:\n  toolhead: custom\n");
-    try {
-      const planId = planWithStoredSlug(slug);
-      expect(resolvePlanManifestSelections(repo, planId)).toEqual({ toolhead: "custom" });
-      expect(readPaths()).toContain(file);
-    } finally {
-      rmSync(file, { force: true });
-    }
+    const planId = planWithStoredSlug(slug);
+    expect(resolvePlanManifestSelections(repo, planId)).toEqual({ fixture_mode: "chosen" });
+    expect(readPaths()).toContain(file);
+    expect(fs.existsSync(file)).toBe(false);
   });
 
   it.each([

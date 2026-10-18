@@ -3248,7 +3248,7 @@ pub(crate) fn publication_conflicts(
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/common/claimed_attempt.rs"
+        "/src/claimed_attempt.rs"
     ));
     use super::*;
 
