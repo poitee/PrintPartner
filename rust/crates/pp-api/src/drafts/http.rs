@@ -9,7 +9,7 @@ use axum::{
     routing::{get, patch},
 };
 use pp_storage::{
-    auth::{AuthFailure, Secret},
+    auth::{self, AuthFailure, Secret, rebuild::RebuildAuthClient},
     read_model::Credential,
     required_units::{AdmissionFailure, Outcome as WorkspaceOutcome},
     working_drafts::{
@@ -91,17 +91,23 @@ impl DraftHttpConfig {
 struct App {
     config: DraftHttpConfig,
     client: WorkingDraftClient,
+    auth: RebuildAuthClient,
     admission: Arc<tokio::sync::Semaphore>,
     waiters: Arc<tokio::sync::Semaphore>,
 }
 
-pub fn draft_router(config: DraftHttpConfig, client: WorkingDraftClient) -> Router {
+pub fn draft_router(
+    config: DraftHttpConfig,
+    client: WorkingDraftClient,
+    auth: RebuildAuthClient,
+) -> Router {
     if !config.enabled {
         return Router::new();
     }
     let app = App {
         config,
         client,
+        auth,
         admission: Arc::new(tokio::sync::Semaphore::new(64)),
         waiters: Arc::new(tokio::sync::Semaphore::new(64)),
     };
@@ -144,9 +150,10 @@ async fn guard(
         app.config.body_limit.min(1024 * 1024)
     };
     let (parts, body) = request.into_parts();
-    let bytes = match to_bytes(body, limit).await {
-        Ok(bytes) => bytes,
-        Err(_) => return failure(413, "Request body too large"),
+    let bytes = match tokio::time::timeout(Duration::from_secs(5), to_bytes(body, limit)).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) => return failure(413, "Request body too large"),
+        Err(_) => return failure(408, "Request body timed out"),
     };
     next.run(axum::extract::Request::from_parts(parts, Body::from(bytes)))
         .await
@@ -338,9 +345,38 @@ async fn call(
     };
     let cancellation = Cancellation(Arc::new(AtomicBool::new(false)));
     let flag = cancellation.0.clone();
-    let credential = principal.credential();
+    let internal_detail = match &operation {
+        Operation::Read(_) => "Plan draft data is inconsistent",
+        Operation::Edit(..) => "Plan draft update failed",
+    };
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        if matches!(&operation, Operation::Read(_))
+            && let Principal::ApiKey { tenant, secret } = &principal
+        {
+            let resolved = app
+                .auth
+                .submit(
+                    auth::Request::ResolveKey {
+                        tenant_id: tenant.clone(),
+                        key: Secret::new(secret.clone()),
+                    },
+                    flag.clone(),
+                    app.config.wait,
+                )?
+                .recv()
+                .map_err(|_| AuthFailure::CommitUnknown)??;
+            match resolved {
+                auth::Outcome::KeyResolved { principal, .. } => {
+                    ensure!(
+                        principal.is_some_and(|key| key.tenant_id == *tenant),
+                        AuthFailure::InvalidCredentials
+                    );
+                }
+                _ => return Err(AuthFailure::Storage.into()),
+            }
+        }
+        let credential = principal.credential();
         match operation {
             Operation::Read(request) => app
                 .client
@@ -355,8 +391,8 @@ async fn call(
     .await;
     match result {
         Ok(Ok(reply)) => present(reply, profile),
-        Ok(Err(error)) => domain_error(error),
-        Err(_) => failure(500, "Draft service unavailable"),
+        Ok(Err(error)) => domain_error(error, internal_detail),
+        Err(_) => internal_error(internal_detail),
     }
 }
 
@@ -398,12 +434,12 @@ fn present(reply: Reply, profile: PositiveId) -> Response {
             coded_failure(422, "Plan draft update failed", code, json!({}))
         }
         Reply::Read(Outcome::Read { .. } | Outcome::Diff { .. }) => {
-            failure(500, "Plan draft data is inconsistent")
+            internal_error("Plan draft data is inconsistent")
         }
     }
 }
 
-fn domain_error(error: anyhow::Error) -> Response {
+fn domain_error(error: anyhow::Error, internal_detail: &str) -> Response {
     if let Some(auth) = error.downcast_ref::<AuthFailure>() {
         return match auth {
             AuthFailure::SessionRequired
@@ -413,7 +449,8 @@ fn domain_error(error: anyhow::Error) -> Response {
                 failure(403, "Explicit account owner mapping is required")
             }
             AuthFailure::QueueFull | AuthFailure::Stopped => unavailable("writer_stopped"),
-            _ => failure(500, "Draft service unavailable"),
+            AuthFailure::CommitUnknown => unavailable("outcome_unknown"),
+            _ => internal_error(internal_detail),
         };
     }
     if let Some(draft) = error.downcast_ref::<Failure>() {
@@ -422,7 +459,7 @@ fn domain_error(error: anyhow::Error) -> Response {
             Failure::QueueFull => unavailable("writer_queue_full"),
             Failure::Stopped => unavailable("writer_stopped"),
             Failure::OutcomeUnknown => unavailable("outcome_unknown"),
-            Failure::CorruptOrigin => failure(500, "Draft service unavailable"),
+            Failure::CorruptOrigin => internal_error(internal_detail),
         };
     }
     if let Some(admission) = error.downcast_ref::<AdmissionFailure>() {
@@ -443,8 +480,11 @@ fn domain_error(error: anyhow::Error) -> Response {
         "Writer transaction admission deadline expired" | "database is locked" => {
             unavailable("transaction_unavailable")
         }
-        _ => failure(500, "Draft service unavailable"),
+        _ => internal_error(internal_detail),
     }
+}
+fn internal_error(detail: &str) -> Response {
+    coded_failure(500, detail, "internal_error", json!({}))
 }
 fn profile_missing() -> Response {
     coded_failure(404, "Plan not found", "profile_not_found", json!({}))
@@ -516,6 +556,10 @@ mod tests {
                 "outcome_unknown",
             ),
             (
+                anyhow::Error::new(AuthFailure::CommitUnknown),
+                "outcome_unknown",
+            ),
+            (
                 anyhow::Error::new(AdmissionFailure::Cancelled),
                 "request_cancelled",
             ),
@@ -524,7 +568,7 @@ mod tests {
                 "transaction_unavailable",
             ),
         ] {
-            let response = domain_error(error);
+            let response = domain_error(error, "Plan draft data is inconsistent");
             assert_eq!(response.status(), 503);
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
             assert_eq!(
@@ -560,6 +604,7 @@ mod tests {
             let app = App {
                 config: DraftHttpConfig::new("http://127.0.0.1:1234", "default").unwrap(),
                 client: owner.working_drafts_with_policy(policy).unwrap(),
+                auth: owner.rebuild_auth_with_policy(policy, Default::default()).unwrap(),
                 admission: Arc::new(tokio::sync::Semaphore::new(1)),
                 waiters: Arc::new(tokio::sync::Semaphore::new(1)),
             };

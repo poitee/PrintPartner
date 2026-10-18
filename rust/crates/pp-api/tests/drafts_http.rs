@@ -77,7 +77,14 @@ impl Server {
             .unwrap()
             .with_limits(body_limit, Duration::from_millis(100))
             .unwrap();
-        let router = draft_router(config, owner.working_drafts_with_policy(policy()).unwrap());
+        let auth = owner
+            .rebuild_auth_with_policy(policy(), Default::default())
+            .unwrap();
+        let router = draft_router(
+            config,
+            owner.working_drafts_with_policy(policy()).unwrap(),
+            auth,
+        );
         let task = tokio::spawn(async move {
             axum::serve(
                 listener,
@@ -103,6 +110,15 @@ impl Server {
     fn sql(&self) -> Connection {
         Connection::open(self.directory.join("print-partner.db")).unwrap()
     }
+    fn included(&self, part_id: i64) -> i64 {
+        self.sql()
+            .query_row(
+                "SELECT included FROM plan_draft_parts WHERE id=?1",
+                [part_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
     async fn close(self) {
         self.task.abort();
         let _ = self.task.await;
@@ -121,7 +137,10 @@ impl Server {
         String::from_utf8(response).unwrap()
     }
     async fn auth(&self, request: auth::Request) -> auth::Outcome {
-        let auth = self.owner.auth_with_policy(policy()).unwrap();
+        let auth = self
+            .owner
+            .rebuild_auth_with_policy(policy(), Default::default())
+            .unwrap();
         tokio::task::spawn_blocking(move || {
             auth.submit(
                 request,
@@ -251,16 +270,7 @@ async fn edits_persist_and_preserve_conflict_workspaces() {
         changed["reconciliation"],
         json!({"kind":"ready","reused_units":4,"new_units":0,"surplus_units":2})
     );
-    assert_eq!(
-        s.sql()
-            .query_row(
-                "SELECT included FROM plan_draft_parts WHERE id=5",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        1
-    );
+    assert_eq!(s.included(5), 1);
     assert_eq!(
         s.sql()
             .query_row(
@@ -364,16 +374,37 @@ async fn api_keys_use_fixed_tenant_routing_and_revocation() {
     else {
         panic!("API key creation");
     };
+    assert_eq!(info.last_used_at, None);
+    let last_used = || {
+        s.sql().query_row(
+        "SELECT json_extract(value,'$[0].lastUsedAt') FROM app_settings WHERE tenant_id='default' AND key='api_keys_v1'",
+        [], |row| row.get::<_, Option<String>>(0),
+    ).unwrap()
+    };
     let request = |method: Method, path: &str, secret: &str| {
         s.client
             .request(method, format!("{}{path}", s.origin))
             .header("Origin", &s.origin)
             .header("Authorization", format!("Bearer {secret}"))
     };
-    assert_eq!(
-        response(request(Method::GET, "/plans/1/drafts", key.expose()), 200).await["drafts"][1],
-        identity()
-    );
+    for (request, pointer) in [
+        (
+            request(Method::GET, "/plans/1/drafts", key.expose()),
+            "/drafts/1",
+        ),
+        (
+            s.client
+                .get(format!("{}/api/v2/plans/1/drafts/2", s.origin))
+                .header("x-print-partner-api-key", key.expose()),
+            "/draft",
+        ),
+    ] {
+        assert_eq!(last_used(), None);
+        let body = response(request, 200).await;
+        assert_eq!(body.pointer(pointer), Some(&identity()));
+        assert!(last_used().is_some());
+        s.sql().execute("UPDATE app_settings SET value=json_set(value,'$[0].lastUsedAt',NULL) WHERE tenant_id='default' AND key='api_keys_v1'", []).unwrap();
+    }
     assert_eq!(
         response(
             request(Method::GET, "/plans/2/drafts", key.expose()).header("x-tenant-id", "foreign"),
@@ -381,16 +412,6 @@ async fn api_keys_use_fixed_tenant_routing_and_revocation() {
         )
         .await,
         json!({"detail":"Plan not found","code":"profile_not_found"})
-    );
-    assert_eq!(
-        response(
-            s.client
-                .get(format!("{}/plans/1/drafts/2", s.origin))
-                .header("x-print-partner-api-key", key.expose()),
-            200
-        )
-        .await["draft"],
-        identity()
     );
     assert_eq!(
         response(
@@ -615,16 +636,7 @@ async fn bounds_and_typed_bodies_reject_before_mutation() {
             .unwrap(),
         ("open".into(), 0)
     );
-    assert_eq!(
-        s.sql()
-            .query_row(
-                "SELECT included FROM plan_draft_parts WHERE id=5",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
+    assert_eq!(s.included(5), 0);
     s.close().await;
     let s = Server::start(8 * 1024 * 1024, "default", "").await;
     let mut bulk = edit(DIGEST).to_string();
@@ -636,16 +648,7 @@ async fn bounds_and_typed_bodies_reject_before_mutation() {
     )
     .await;
     assert_eq!(edited["parts"][1]["included"], true);
-    assert_eq!(
-        s.sql()
-            .query_row(
-                "SELECT included FROM plan_draft_parts WHERE id=5",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        1
-    );
+    assert_eq!(s.included(5), 1);
     response(s.request(Method::GET, "/plans/1/drafts").body(bulk), 413).await;
     response(
         s.request(Method::PATCH, "/plans/1/drafts/2/parts")
@@ -669,22 +672,25 @@ async fn failed_selection_keeps_committed_edit_and_sanitizes_errors() {
             500
         )
         .await,
-        json!({"detail":"Draft service unavailable"})
+        json!({"detail":"Plan draft update failed","code":"internal_error"})
     );
-    assert_eq!(
-        s.sql()
-            .query_row(
-                "SELECT included FROM plan_draft_parts WHERE id=5",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-        1
-    );
+    assert_eq!(s.included(5), 1);
     assert_eq!(
         response(s.request(Method::GET, "/plans/1/drafts/2"), 200).await["parts"][1]["included"],
         true
     );
+    s.sql()
+        .execute(
+            "UPDATE plan_drafts SET snapshot_digest='private fixture detail' WHERE id=2",
+            [],
+        )
+        .unwrap();
+    for path in ["/plans/1/drafts", "/api/v2/plans/1/drafts/2"] {
+        assert_eq!(
+            response(s.request(Method::GET, path), 500).await,
+            json!({"detail":"Plan draft data is inconsistent","code":"internal_error"})
+        );
+    }
     s.close().await;
 }
 
@@ -777,55 +783,69 @@ async fn gate_probe() {
 }
 
 #[tokio::test]
-async fn active_requests_are_bounded_and_capacity_recovers_after_disconnect() {
-    if isolated("active_requests_are_bounded_and_capacity_recovers_after_disconnect") {
+async fn active_requests_are_bounded_and_recover_after_timeout_or_disconnect() {
+    if isolated("active_requests_are_bounded_and_recover_after_timeout_or_disconnect") {
         return;
     }
     let s = Server::start(1024 * 1024, "default", "").await;
     let host = s.origin.strip_prefix("http://").unwrap();
-    let mut sockets = Vec::new();
-    for _ in 0..64 {
-        let mut socket = tokio::net::TcpStream::connect(host).await.unwrap();
-        socket.write_all(format!("GET /plans/1/drafts HTTP/1.1\r\nHost: {host}\r\nCookie: {COOKIE}\r\nContent-Length: 1\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
-        sockets.push(socket);
+    let wait_for_status = |status| {
+        let server = &s;
+        async move {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let result = server
+                        .request(Method::GET, "/plans/1/drafts")
+                        .send()
+                        .await
+                        .unwrap();
+                    if result.status() == status {
+                        break result.json::<Value>().await.unwrap();
+                    }
+                    assert_eq!(
+                        result.status().as_u16(),
+                        if status == 503 { 200 } else { 503 }
+                    );
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap()
+        }
+    };
+    for disconnect in [false, true] {
+        let mut sockets = Vec::new();
+        for _ in 0..64 {
+            let mut socket = tokio::net::TcpStream::connect(host).await.unwrap();
+            socket.write_all(format!("GET /plans/1/drafts HTTP/1.1\r\nHost: {host}\r\nCookie: pp_session=not-a-real-session\r\nContent-Length: 1\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            sockets.push(socket);
+        }
+        let busy = wait_for_status(503).await;
+        assert_eq!(
+            busy,
+            json!({"detail":"Draft service temporarily unavailable"})
+        );
+        if disconnect {
+            sockets.clear();
+        } else {
+            tokio::time::timeout(Duration::from_secs(8), async {
+                for socket in &mut sockets {
+                    let mut bytes = Vec::new();
+                    socket.read_to_end(&mut bytes).await.unwrap();
+                    let reply = String::from_utf8(bytes).unwrap();
+                    assert!(reply.starts_with("HTTP/1.1 408"), "{reply}");
+                    assert_eq!(
+                        serde_json::from_str::<Value>(reply.split_once("\r\n\r\n").unwrap().1)
+                            .unwrap(),
+                        json!({"detail":"Request body timed out"})
+                    );
+                }
+            })
+            .await
+            .unwrap();
+        }
+        let recovered = wait_for_status(200).await;
+        assert_eq!(recovered["drafts"][1], identity());
     }
-    let busy = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let result = s
-                .request(Method::GET, "/plans/1/drafts")
-                .send()
-                .await
-                .unwrap();
-            if result.status() == 503 {
-                break result.json::<Value>().await.unwrap();
-            }
-            assert_eq!(result.status(), 200);
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(
-        busy,
-        json!({"detail":"Draft service temporarily unavailable"})
-    );
-    drop(sockets);
-    let recovered = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let result = s
-                .request(Method::GET, "/plans/1/drafts")
-                .send()
-                .await
-                .unwrap();
-            if result.status() == 200 {
-                break result.json::<Value>().await.unwrap();
-            }
-            assert_eq!(result.status(), 503);
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert_eq!(recovered["drafts"][1], identity());
     s.close().await;
 }
