@@ -31,6 +31,8 @@ impl Fixture {
             hex::encode(rand::random::<[u8; 8]>())
         ));
         std::fs::create_dir_all(root.join("supplied")).unwrap();
+        // macOS temp paths pass through the `/var` link, which source reads refuse.
+        let root = std::fs::canonicalize(root).unwrap();
         let (owner, _) = WriterOwner::open(&root.join("data"), Limits::default()).unwrap();
         let policy = AuthPolicy {
             registration: RegistrationPolicy::Open,
@@ -263,6 +265,13 @@ fn source_import_client_refuses_invalid_directory_input() {
         (error.as_str(), fixture.rows()),
         ("Cancelled before admission", rows)
     );
+    let part = [pp_source::SourcePath::try_from("part.stl".to_owned()).unwrap()];
+    let local = pp_source::LocalFiles::open(&fixture.supplied()).unwrap();
+    assert_eq!(local.inventory(&part, 1024).unwrap().len(), 1);
+    assert!(matches!(
+        local.inventory_until(&part, 1024, &AtomicBool::new(true)),
+        Err(pp_source::Error::Limit)
+    ));
     let missing = fixture
         .imports
         .get(fixture.credential(), "refused".into())

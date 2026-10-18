@@ -73,6 +73,15 @@ impl LocalFiles {
         Ok(paths)
     }
     pub fn inventory(&self, paths: &[SourcePath], max_bytes: u64) -> Result<Vec<InputFile>> {
+        self.inventory_until(paths, max_bytes, &AtomicBool::new(false))
+    }
+    /// `inventory` that stops with `Error::Limit` once `cancelled` is set.
+    pub fn inventory_until(
+        &self,
+        paths: &[SourcePath],
+        max_bytes: u64,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<InputFile>> {
         validate_paths(paths)?;
         let mut result = Vec::new();
         let mut total = 0u64;
@@ -82,6 +91,9 @@ impl LocalFiles {
             let mut size = 0u64;
             let mut buf = [0u8; 8192];
             loop {
+                if cancelled.load(Ordering::Acquire) {
+                    return Err(Error::Limit);
+                }
                 let n = file.read(&mut buf)?;
                 if n == 0 {
                     break;

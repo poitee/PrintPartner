@@ -46,16 +46,10 @@ impl SourceImports {
             .into_iter()
             .map(SourcePath::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let live = || -> Result<()> {
-            ensure!(
-                !cancelled.load(Ordering::Acquire),
-                "Cancelled before admission"
-            );
-            Ok(())
-        };
-        live()?;
-        let expected_files = LocalFiles::open(supplied)?
-            .inventory(&paths, request.max_input_bytes)?
+        scanned(cancelled, Ok(()))?;
+        let local = scanned(cancelled, LocalFiles::open(supplied))?;
+        let inventory = local.inventory_until(&paths, request.max_input_bytes, cancelled);
+        let expected_files = scanned(cancelled, inventory)?
             .into_iter()
             .map(|file| File {
                 path: file.path.as_str().into(),
@@ -64,15 +58,11 @@ impl SourceImports {
                 kind: "input".into(),
             })
             .collect();
-        live()?;
         let accounting_epoch = self.client.accounting_epoch();
-        let disk = match local_selection::stored_bytes(&self.repos, cancelled) {
-            Ok(disk) => disk,
-            Err(error) => {
-                live()?;
-                return Err(error.into());
-            }
-        };
+        let disk = scanned(
+            cancelled,
+            local_selection::stored_bytes(&self.repos, cancelled),
+        )?;
         self.client.admit(
             credential,
             request,
@@ -97,4 +87,14 @@ impl SourceImports {
                 .collect(),
         })
     }
+}
+
+/// Reports a scan stopped by `cancelled` as a cancellation, not as its I/O
+/// result.
+fn scanned<T>(cancelled: &AtomicBool, result: Result<T, pp_source::Error>) -> Result<T> {
+    ensure!(
+        !cancelled.load(Ordering::Acquire),
+        "Cancelled before admission"
+    );
+    Ok(result?)
 }
