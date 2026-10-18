@@ -442,14 +442,30 @@ A recompute runs in three steps on the writer thread:
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
-`RecomputeOutcome::into_json_body` writes Node's result kinds. Node's service
-also selects Required units after a created or existing draft. This client does
-not, so a caller that needs the workspace runs the Required-unit selection
-itself. Node's `would_wipe` result has no Rust preparation counterpart yet.
+`RecomputeOutcome::into_json_body` writes Node's result kinds. Node's
+`would_wipe` result has no Rust preparation counterpart yet.
+
+`WorkingDraftClient::recompute_and_select` ports Node's
+`PlanDraftWorkspaceService.recompute`. It runs the recompute above and, after
+a created or existing draft, selects Required units as `edit` does. The
+selection has no decisions, uses the key `auto-<snapshot digest>`, and runs in
+its own immediate transaction with a fresh admission deadline. A draft that
+already has a selection is not selected again; a read transaction returns its
+workspace. Either path returns `RecomputeWorkspaceOutcome::Selected` with the
+`required_units::Outcome`. Every other recompute result is `Refused`.
+The selection checks cancellation before it starts and before it commits, but
+it does not use the preparation budget, as `edit` does not. If the selection
+fails or is cancelled, the recompute stays committed and the method returns
+the error. Node's route answers that error with HTTP 500 and `internal_error`.
+A retry with the same key finds the saved draft, so it only runs the selection
+again.
 
 The operation tests replay each Node case on a copy of the required-units
 `unchanged` database and compare outcomes and the `plan_drafts`,
-`plan_draft_inputs` and `plan_draft_parts` rows with Node's. Creation times are
+`plan_draft_inputs`, `plan_draft_parts`, reconciliation and assignment rows
+with Node's. The selecting cases run Node's service: created then replayed,
+existing, an injected selection failure then a retry, and a draft selected
+before the recompute. Creation times are
 compared by format. Cases that change the database between the transactions
 run their SQL after Node's preparation returns. The Rust test reads run it when
 the first STL scan starts. After that scan, preparation still reads settings,
@@ -458,8 +474,10 @@ of those, and it only turns off Spoolman defaults, which the fixture does not
 set. Both sides therefore prepare the same Parts.
 Rust-only tests cover cancellation, a budget refusal, open drafts whose Parts,
 selected reconciliation or any loaded column exceed the budget when their edits
-are carried, a cancelled or unauthenticated request, and a client without
-observations. Regenerate the fixture twice:
+are carried, a cancelled or unauthenticated request, a client without
+observations, and cancellation during the selection. That test holds the
+selection with a slow trigger, cancels, compares the rows with Node's committed
+recompute, and then retries. Regenerate the fixture twice:
 
 ```sh
 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server > /persist/tmp/recompute-first.jsonl
