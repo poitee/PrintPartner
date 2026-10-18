@@ -751,13 +751,15 @@ impl ServerWorkerClient {
         )?)
         .receive()
     }
-    /// Runs one phase of a claimed supplied import. A refused original authority
+    /// Runs one phase of a claimed supplied import with a live reservation for
+    /// its tenant and Source. A refused original authority
     /// commits the refusal and its Source observation before returning the typed
     /// failure.
     #[cfg(feature = "desktop_rebuild")]
     pub fn import_phase(
         &self,
         lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
         phase: crate::uploads::Phase,
     ) -> Result<crate::uploads::Operation> {
         ensure!(lease.worker == self.identity, "Foreign worker lease");
@@ -766,6 +768,7 @@ impl ServerWorkerClient {
             &self.storage,
             crate::uploads::Command::Phase {
                 lease: lease.clone(),
+                source_work: source_work.proof()?,
                 phase,
                 policy,
             },

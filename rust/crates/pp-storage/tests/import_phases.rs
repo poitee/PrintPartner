@@ -8,10 +8,12 @@ use pp_storage::{
         self, AuthPolicy, AuthorityFailure, FirstUserTenant, RegistrationPolicy, Secret,
         SessionTenantPolicy,
     },
-    catalog::{CreateSource, Credentials, Deletion, Outcome as CatalogOutcome, Request},
+    catalog::{
+        CreateSource, Credentials, Deletion, Outcome as CatalogOutcome, Request, SourceWorkLease,
+    },
     jobs::{
-        AttemptLease, ClaimedAttempt, Credential, JobKind, Outcome, ServerWorkerClient,
-        UserOperation, WorkerAdmission,
+        ClaimedAttempt, Credential, JobKind, Outcome, ServerWorkerClient, UserOperation,
+        WorkerAdmission,
     },
     uploads::{
         Admission, Artifact, File, ImportClient, Input, Operation, OwnedInput, Phase,
@@ -45,20 +47,28 @@ struct Fixture {
 
 impl Fixture {
     fn open() -> Self {
+        Self::open_with_admission(1)
+    }
+
+    fn open_with_admission(per_resource: usize) -> Self {
         let root = std::env::temp_dir().join(format!(
             "pp-import-phases-{}",
             hex::encode(rand::random::<[u8; 8]>())
         ));
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
-        Self::with(root, owner)
+        Self::with_admission(root, owner, per_resource)
     }
 
     fn with(root: PathBuf, owner: WriterOwner) -> Self {
+        Self::with_admission(root, owner, 1)
+    }
+
+    fn with_admission(root: PathBuf, owner: WriterOwner, per_resource: usize) -> Self {
         let imports = owner.imports(policy(), QUOTA).unwrap();
         let admission = WorkerAdmission {
             kinds: JobKind::ALL.into_iter().map(|kind| (kind, 2)).collect(),
             total: 4,
-            per_resource: 1,
+            per_resource,
             lease_seconds: 60,
         };
         let worker = owner.job_worker_with_policy(policy(), admission).unwrap();
@@ -157,13 +167,13 @@ impl Fixture {
             .admit(credential, request, files, 0, epoch, &cancelled)
     }
 
-    fn claim(&self, op: &Operation) -> AttemptLease {
-        let ClaimedAttempt { lease, .. } = self.worker.claim_import(&op.job_id).unwrap().unwrap();
-        lease
+    fn claim(&self, op: &Operation) -> ClaimedAttempt {
+        self.worker.claim_import(&op.job_id).unwrap().unwrap()
     }
 
-    fn phase(&self, lease: &AttemptLease, phase: Phase) -> anyhow::Result<Operation> {
-        self.worker.import_phase(lease, phase)
+    fn phase(&self, claim: &ClaimedAttempt, phase: Phase) -> anyhow::Result<Operation> {
+        self.worker
+            .import_phase(&claim.lease, claim.source_work.as_ref().unwrap(), phase)
     }
 
     fn cancel(&self, token: &str, op: &Operation) -> pp_storage::jobs::JobRecord {
@@ -225,6 +235,58 @@ impl Fixture {
 
     fn connection(&self) -> Connection {
         Connection::open(self.root.join("print-partner.db")).unwrap()
+    }
+
+    fn snapshot(&self) -> Vec<(String, Vec<Vec<String>>)> {
+        let connection = self.connection();
+        let tables = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        tables
+            .into_iter()
+            .map(|table| {
+                let mut statement = connection
+                    .prepare(&format!("SELECT * FROM \"{}\"", table.replace('"', "\"\"")))
+                    .unwrap();
+                let width = statement.column_count();
+                let mut rows = statement
+                    .query_map([], |row| {
+                        (0..width)
+                            .map(|index| {
+                                row.get::<_, rusqlite::types::Value>(index)
+                                    .map(|value| format!("{value:?}"))
+                            })
+                            .collect::<rusqlite::Result<Vec<_>>>()
+                    })
+                    .unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .unwrap();
+                rows.sort();
+                (table, rows)
+            })
+            .collect()
+    }
+
+    fn rejected_phase(
+        &self,
+        claim: &ClaimedAttempt,
+        source_work: &SourceWorkLease,
+        phase: Phase,
+        expected: &str,
+    ) {
+        let before = self.snapshot();
+        assert_eq!(
+            self.worker
+                .import_phase(&claim.lease, source_work, phase)
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
+        assert_eq!(self.snapshot(), before);
     }
 
     fn job(&self, op: &Operation) -> (String, Option<String>, i64) {
@@ -494,6 +556,7 @@ fn a_changed_source_conflicts_and_a_cancelled_import_settles_as_cancelled() {
         fixture.phase(&lease, Phase::Read).unwrap_err().to_string(),
         "Stale attempt fence"
     );
+    drop(lease);
     let lease = fixture.claim(&op);
     assert_eq!(
         fixture.phase(&lease, owned(&op)).unwrap_err().to_string(),
@@ -533,7 +596,7 @@ fn generic_claims_leave_admitted_imports_to_their_owner() {
             .is_none()
     );
     let lease = fixture.claim(&op);
-    assert_eq!(lease.job_id(), op.job_id);
+    assert_eq!(lease.lease.job_id(), op.job_id);
     fixture.reopen();
 }
 
@@ -883,27 +946,219 @@ fn postprocessing_keeps_its_durable_wire_values() {
 fn a_released_import_source_lease_cannot_advance_under_a_replacement() {
     let fixture = Fixture::open();
     let op = fixture.admit(fixture.physical(), "released-source-fence");
-    let lease = fixture.claim(&op);
-    let mut source_work = fixture
-        .worker
-        .begin_source_work(
-            &lease,
-            None,
+    let mut claim = fixture.claim(&op);
+    claim.source_work.as_mut().unwrap().release().unwrap();
+    let catalog = fixture.owner.local_source_catalog();
+    let replacement = catalog
+        .begin_work(
+            op.source_id,
             &AtomicBool::new(false),
             Duration::from_secs(5),
         )
         .unwrap();
-    source_work.release().unwrap();
-    let _replacement = fixture
-        .worker
-        .begin_source_work(
-            &lease,
-            None,
+    for phase in [
+        Phase::Read,
+        owned(&op),
+        published(&op),
+        Phase::Activate,
+        Phase::Fail,
+        Phase::Cleanup,
+    ] {
+        fixture.rejected_phase(
+            &claim,
+            claim.source_work.as_ref().unwrap(),
+            phase,
+            "Lease already released",
+        );
+    }
+    assert_eq!(
+        fixture
+            .worker
+            .import_phase(&claim.lease, &replacement, owned(&op))
+            .unwrap()
+            .state,
+        State::OwnedInputReady
+    );
+}
+
+#[test]
+fn phases_reject_another_source_or_tenant_without_writes() {
+    for wrong_tenant in [false, true] {
+        let fixture = Fixture::open();
+        let other = fixture.admit(fixture.physical(), "other-source");
+        let credential = if wrong_tenant {
+            Credential::Session(Secret::new(fixture.register()))
+        } else {
+            fixture.physical()
+        };
+        let op = fixture.admit(credential, "bound-source");
+        assert_eq!(op.tenant != other.tenant, wrong_tenant);
+        let claim = fixture.claim(&op);
+        let wrong = fixture
+            .owner
+            .local_source_catalog()
+            .begin_work(
+                other.source_id,
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        fixture.rejected_phase(&claim, &wrong, Phase::Fail, "Wrong Source reservation");
+        for phase in [
+            Phase::Read,
+            owned(&op),
+            published(&op),
+            Phase::Activate,
+            Phase::Cleanup,
+        ] {
+            fixture.rejected_phase(&claim, &wrong, phase.clone(), "Wrong Source reservation");
+            fixture.phase(&claim, phase).unwrap();
+        }
+        assert_eq!(fixture.job(&op).0, "succeeded");
+        assert_eq!(fixture.quota(&op), (0, 9, true));
+        fixture.reopen();
+    }
+}
+
+#[test]
+fn a_wrong_source_cannot_commit_an_authority_refusal() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let op = fixture.admit(
+        Credential::Session(Secret::new(token.clone())),
+        "revoked-fence",
+    );
+    let claim = fixture.claim(&op);
+    let other = fixture.admit(fixture.physical(), "other-source");
+    let wrong = fixture
+        .owner
+        .local_source_catalog()
+        .begin_work(
+            other.source_id,
             &AtomicBool::new(false),
             Duration::from_secs(5),
         )
         .unwrap();
-    let before = fixture.document(&op);
-    assert!(fixture.phase(&lease, owned(&op)).is_err());
-    assert_eq!(fixture.document(&op), before);
+    fixture.logout(&token);
+    for phase in [
+        Phase::Read,
+        owned(&op),
+        published(&op),
+        Phase::Activate,
+        Phase::Fail,
+        Phase::Cleanup,
+    ] {
+        fixture.rejected_phase(&claim, &wrong, phase, "Wrong Source reservation");
+    }
+    let error = fixture.phase(&claim, Phase::Read).unwrap_err();
+    assert_eq!(
+        authority(&error),
+        Some(&AuthorityFailure::CredentialInvalid)
+    );
+    assert_eq!(fixture.job(&op).1.as_deref(), Some("source_writer"));
+}
+
+#[test]
+fn a_previous_writer_source_proof_cannot_advance_a_fresh_attempt() {
+    let fixture = Fixture::open();
+    let op = fixture.admit(fixture.physical(), "old-incarnation");
+    let old = fixture.claim(&op);
+    let fixture = fixture.reopen();
+    let claim = fixture.claim(&op);
+    let old_source = old.source_work.as_ref().unwrap();
+    fixture.rejected_phase(
+        &claim,
+        old_source,
+        Phase::Fail,
+        "Wrong Source writer incarnation",
+    );
+    for phase in [
+        Phase::Read,
+        owned(&op),
+        published(&op),
+        Phase::Activate,
+        Phase::Cleanup,
+    ] {
+        fixture.rejected_phase(
+            &claim,
+            old_source,
+            phase.clone(),
+            "Wrong Source writer incarnation",
+        );
+        fixture.phase(&claim, phase).unwrap();
+    }
+    assert_eq!(fixture.job(&op).0, "succeeded");
+    fixture.reopen();
+}
+
+#[test]
+fn an_import_source_lease_blocks_sync_until_released() {
+    let fixture = Fixture::open_with_admission(2);
+    let token = fixture.register();
+    let op = fixture.admit(
+        Credential::Session(Secret::new(token.clone())),
+        "sync-exclusion",
+    );
+    let mut claim = fixture.claim(&op);
+    let Outcome::Job(sync, _) = fixture
+        .owner
+        .jobs(policy())
+        .unwrap()
+        .submit(
+            Credential::Session(Secret::new(token)),
+            UserOperation::Enqueue {
+                key: "competing-sync".into(),
+                payload_version: 1,
+                payload: pp_storage::jobs::Payload::Sync {
+                    project_ids: Some(vec![op.source_id as u64]),
+                },
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    else {
+        panic!("Sync expected")
+    };
+    let mut sync_claim = fixture.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(sync_claim.job.job_id, sync.job_id);
+    fixture.worker.open_source_sync(&sync_claim.lease).unwrap();
+    for settled in [false, true] {
+        if settled {
+            for phase in [owned(&op), published(&op), Phase::Activate, Phase::Cleanup] {
+                fixture.phase(&claim, phase).unwrap();
+            }
+            assert_eq!(fixture.job(&op).0, "succeeded");
+        }
+        let before = fixture.snapshot();
+        let error = fixture
+            .worker
+            .claim_next_source_sync_target(&mut sync_claim.lease)
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .downcast_ref::<pp_storage::catalog::SourceBusy>()
+                .is_some(),
+            "{error:#}"
+        );
+        assert_eq!(fixture.snapshot(), before);
+    }
+    claim.source_work.as_mut().unwrap().release().unwrap();
+    let pp_storage::source_sync::NextSyncTarget::Local(target) = fixture
+        .worker
+        .claim_next_source_sync_target(&mut sync_claim.lease)
+        .unwrap()
+    else {
+        panic!("Local target expected")
+    };
+    assert_eq!(target.observation().source_id(), op.source_id);
+    fixture.rejected_phase(
+        &claim,
+        claim.source_work.as_ref().unwrap(),
+        owned(&op),
+        "Lease already released",
+    );
 }
