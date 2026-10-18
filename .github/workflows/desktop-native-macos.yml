@@ -452,7 +452,7 @@ jobs:
             -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
           hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
             "$fixture_root/fixtures.sparseimage"
-          trap '
+          cleanup_source_fixture() {
             result=$?
             for attempt in 1 2 3; do
               if hdiutil detach "$fixture_mount"; then
@@ -468,7 +468,8 @@ jobs:
               echo "::warning::Could not detach owned test fixture at $fixture_mount"
             fi
             exit "$result"
-          ' EXIT
+          }
+          trap cleanup_source_fixture EXIT
           df -h "$fixture_mount"
           mkdir "$fixture_mount/tmp"
           TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source
