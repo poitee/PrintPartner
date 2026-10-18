@@ -207,6 +207,63 @@ fn preparation_matches_literal_node_results() {
     preparation_matches_cases(cases());
 }
 #[test]
+fn preparation_large_quantity_digest_matches_node() {
+    naming_override_case("large-filename-quantities");
+}
+
+fn large_quantity_snapshot() -> PreparedDraftSnapshot {
+    let case = cases()
+        .into_iter()
+        .find(|c| c["name"] == "large-filename-quantities")
+        .unwrap();
+    let (root, mut connection) = database(&case);
+    let reads = Reads {
+        case: case.clone(),
+        hashes: Default::default(),
+    };
+    let cancelled = AtomicBool::new(false);
+    let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    prepare(
+        &mut connection,
+        "default",
+        1,
+        case["base"].clone(),
+        PreparationContext {
+            options: &options(&case),
+            repos: &root.path().join("repos"),
+        },
+        &reads,
+        &mut budget,
+    )
+    .unwrap()
+}
+
+#[test]
+fn preparation_large_quantity_keeps_integer_spelling() {
+    let prepared = large_quantity_snapshot();
+    let expected = [
+        "9007199254740991",
+        "9007199254740992",
+        "9007199254740992",
+        "1000000000000000100",
+        "100000000000000000000",
+        "1e+21",
+    ];
+    assert_eq!(prepared.parts.len(), expected.len());
+    for (part, expected) in prepared.parts.iter().zip(expected) {
+        assert_eq!(
+            String::from_utf8(part.json_fields(
+                &["quantityInferred", "quantityOverride", "quantityEffective"],
+                false
+            ))
+            .unwrap(),
+            format!(
+                "{{\"quantityInferred\":{expected},\"quantityOverride\":null,\"quantityEffective\":{expected}}}"
+            ),
+        );
+    }
+}
+#[test]
 fn full_naming_override_omits_role() {
     naming_override_case("naming-full-override-omits-role");
 }
