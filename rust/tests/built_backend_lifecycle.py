@@ -165,6 +165,7 @@ def _subreaper_worker(connection, parent_connection, function, args, cleanup_pat
             else:
                 outcome = ("error", traceback.format_exc())
         finally:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
             write_json(cleanup_path, reap_owned_descendants())
         connection.send(outcome)
     except BaseException:

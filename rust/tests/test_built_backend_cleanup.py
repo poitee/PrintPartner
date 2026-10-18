@@ -90,8 +90,8 @@ import json, os, socket, time
 from pathlib import Path
 listener = socket.socket()
 listener.bind(('127.0.0.1', 0))
-listener.listen()
 Path({str(ready)!r}).write_text(json.dumps({{'pid': os.getpid(), 'port': listener.getsockname()[1], 'env': dict(os.environ), 'pgid': os.getpgrp(), 'exec_environ': Path('/proc/self/environ').read_bytes().hex()}}))
+listener.listen()
 while True:
     time.sleep(.05)
 """
