@@ -463,8 +463,19 @@ pub(crate) fn execute(
     admission: crate::writer_admission::Deadline,
 ) -> Result<Response> {
     let import = command.op.is_import();
-    let Ok(tx) = crate::writer_admission::begin_immediate(connection, admission) else {
-        return Ok(Refusal::Unavailable.response(import));
+    let tx = match crate::writer_admission::begin_immediate(connection, admission) {
+        Ok(tx) => tx,
+        Err(error) => {
+            let refusal = match error.downcast_ref::<rusqlite::Error>() {
+                Some(error)
+                    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy) =>
+                {
+                    Refusal::Unavailable
+                }
+                _ => Refusal::Internal,
+            };
+            return Ok(refusal.response(import));
+        }
     };
     let (tenant, _) =
         auth::authority::queries::reconciliation_actor(&tx, command.credential, command.policy)?;
