@@ -33,6 +33,9 @@ pub mod profile_interpreter;
 #[cfg(feature = "desktop_rebuild")]
 pub mod review_observations;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod rebuild_api;
+
 #[cfg(test)]
 mod origin_tests;
 
