@@ -126,8 +126,79 @@ The filter also skips one test by name, outside those groups:
 
 - **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
 - **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests, its macOS jobs run only when the PR is ready for review and has the `macos` label. A new push to `main` does not cancel a running `main` run; it waits, and only the newest waiting push runs next.
+  After normal detach retries fail, `lsof +f -- "$fixture_mount"` records open files on the source fixture's owned APFS filesystem before forced detach. Diagnostic and detach failures warn without changing the test exit status. Run `python3 scripts/test_native_image_cleanup.py -v` for executable cleanup fixtures. The same suite runs in `macos-storage-gate`, including a macOS-only disposable APFS image held open by a child process. Linux skips that native proof.
 - **Desktop runtime** (`desktop-runtime.yml`) builds `pp-api` and `pp-server` and runs the proofs that need the built server on Linux: the serial `runtime_m0` lifecycle log, the Python lifecycle, upload and gateway drivers, the source artifact checks and `verify.py`. Unit tests, clippy and fmt are not repeated here; `rust (linux)` runs them.
 
 When `rust (macos)` or a Native macOS bundle workflow job fails on a push to `main`, an alert job opens an issue labelled `ci-macos-main` for that workflow run, or comments on the existing open issue for the same run. Rust failures confined to Linux or Windows do not alert. Only the alert job receives `issues: write`.
 
 Required Rust and lint jobs fail if their input-selection job fails, so a broken filter or failing filter test cannot pass through the required checks. Failure alerts run independently with a separate issue per workflow run, so a shared concurrency queue cannot drop pending alerts. Reruns comment on the existing open issue for that run.
+
+## Ephemeral PR runners
+
+Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
+for Rust Linux, ast-grep, web checks, WebKit STL smoke, PR evidence lint, desktop contracts, desktop runtime,
+source artifacts, embedded-driver smoke, and the native
+macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
+`[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
+Each runner accepts one job and is destroyed afterward. Linux has three slots with
+3 vCPU and 8 GB each; macOS has two fresh Tart VM slots.
+Routing matches registration labels, not ephemeral runner names. Live PR jobs
+have used `pp-linux-*` registrations with the `pp-local` label. Runner join
+configuration belongs to the runner host and is not supplied through workflow env.
+
+PR evidence lint uses `pull_request`, including body edits, and checks out trusted
+default-branch tooling. Same-repository PRs use the Linux fleet; forks retain
+`ubuntu-latest`. The required check remains `Lint Evidence block`.
+
+Rust Linux selects the `pp-local-linux` nextest profile for same-repository PRs.
+The real-Node `runtime_m0` suite and compatibility-process package reserve all
+three nextest slots while running. Their assertions and deadlines are unchanged.
+The local job has a 120-minute budget for this schedule. Hosted Rust Linux keeps
+the default profile and 90-minute job budget.
+
+Local Linux uses the host-managed Cargo cache volume. It skips `Swatinem/rust-cache`
+because that action's post-job cleanup deletes registry source directories that
+another container may still be compiling. Hosted runners, macOS and Windows keep
+the action cache. Each job's target directory remains in its own workspace.
+
+Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
+manual dispatches and merge groups also keep their existing hosted runners.
+Docker image jobs, service-container jobs and cargo-deny stay hosted because the
+Linux runner containers have no Docker socket. Selector and result-only jobs stay
+hosted. WebKit STL smoke uses the Linux fleet after a fresh-image proof rendered
+the production STL canvas with Mesa llvmpipe under Xvfb:
+[run 39110024828](https://github.com/poitee/PrintPartner/actions/runs/39110024828).
+Its fork and manual-dispatch fallback remains `ubuntu-24.04`.
+Rust verification stays hosted
+because its iptables LAN guard requires privileges absent from the containers.
+No job routed to the local fleet references `secrets.`.
+
+The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitHub CLI through
+`sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
+1.99.0 with rustfmt and clippy. Changes to the setup script trigger every
+path-filtered consumer, including Rust input selection. The local web validation
+job has a 45-minute limit after two runs reached the hosted 20-minute limit while
+still executing tests. Fork PRs and non-PR runs retain the 20-minute limit.
+
+Rust Windows jobs select `[self-hosted, windows, x64, pp-local-win]` only when
+`PP_LOCAL_WIN` is `true` and the event is a same-repository PR. The switch defaults
+off; it is now enabled after the full local Rust job passed:
+[Windows Rust smoke](https://github.com/poitee/PrintPartner/actions/runs/39079477016).
+Fork PRs and non-PR events retain `windows-latest`. The runner image supplies Git
+Bash, PowerShell 7 and Python 3.13. The job verifies Python's version and hashing
+API and passes its exact executable path to manifest generation. It avoids the
+setup-python Windows installer, which requires administrator privileges.
+The `ci/runner-smoke-win` branch remains for Chad to remove.
+
+Local macOS jobs install Python 3.12 through pinned `actions/setup-python` before
+building manifests, which require `hashlib.file_digest`. They create the action's
+required `/Users/runner/hostedtoolcache` prefix and give the actual VM user ownership,
+including when that user is `admin`. The action sets PATH and Python discovery
+variables to the installed interpreter. A required step checks the version and API;
+cross-OS manifest generation uses the action's exact interpreter path. Historical
+schema trees missing from a shallow checkout are fetched together in one Git
+operation, then every pinned tree and the required archive are checked.
+
+Linux and macOS label smoke passed before this change:
+[run 39072361760](https://github.com/poitee/PrintPartner/actions/runs/39072361760).
+The temporary `ci/runner-smoke` branch was deleted after both jobs succeeded.

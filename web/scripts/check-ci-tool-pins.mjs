@@ -26,7 +26,21 @@ const desktopNodeLanes = [
   ['desktop-e2e', 'linux-smoke', 'E2E', 22],
   ['desktop-webkit', 'webkit-stl', 'WEBKIT', 24],
 ];
-const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence', ...desktopNodeLanes.map(([name]) => name)];
+const desktopNodeSetups = {
+  'desktop-runtime': {
+    runtime: [22, 24],
+    'source-artifacts': [24],
+    'rust-verify': [24],
+  },
+  'desktop-native-macos': {
+    'linux-precheck': [24],
+    'server-smoke': [24],
+    bundle: [24],
+    'bundle-intel': [24],
+    'macos-storage-gate': [22, 24],
+  },
+};
+const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence', ...desktopNodeLanes.map(([name]) => name), ...Object.keys(desktopNodeSetups)];
 const desktopContracts = /^desktop-contracts\.ya?ml$/;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
@@ -117,6 +131,40 @@ function checkNodeLanes(workflow, file, names, code = 'WEB', condition, major = 
   }
 }
 
+function checkDesktopNodeSetups(workflow, file, lanes) {
+  const expectedVersions = new Map();
+  for (const [name, majors] of Object.entries(lanes)) {
+    const path = `jobs.${name}.steps`;
+    const steps = workflow.jobs[name]?.steps;
+    const setups = Array.isArray(steps) ? steps.filter(step => mapping(step)
+      && typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node') : [];
+    if (setups.length !== majors.length) {
+      report(file, path, 'INVALID_DESKTOP_NODE_SETUP', `expected ${majors.length} setup-node steps for the pinned Node majors`);
+      continue;
+    }
+    for (const [index, setup] of setups.entries()) {
+      const major = majors[index];
+      const version = setup.with?.['node-version'];
+      if (!mapping(setup.with) || typeof version !== 'string'
+        || !new RegExp(`^${major}\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$`).test(version)
+        || Object.hasOwn(setup.with, 'node-version-file') || Object.hasOwn(setup, 'if')
+        || Object.hasOwn(setup, 'continue-on-error')) {
+        report(file, path, 'UNPINNED_DESKTOP_NODE', `setup-node must select one exact Node ${major} patch without a step condition or failure overrides`);
+        continue;
+      }
+      if (expectedVersions.has(major) && expectedVersions.get(major) !== version) {
+        report(file, path, 'MISMATCHED_DESKTOP_NODE', `expected ${expectedVersions.get(major)}, received ${version}`);
+      }
+      expectedVersions.set(major, version);
+      const verification = steps[steps.indexOf(setup) + 1];
+      if (!mapping(verification) || verification.run !== `test "$(node --version)" = "v${version}"`
+        || Object.hasOwn(verification, 'if') || Object.hasOwn(verification, 'continue-on-error')) {
+        report(file, path, 'MISSING_DESKTOP_NODE_VERIFICATION', 'setup-node must be immediately followed by an unconditional matching runtime assertion');
+      }
+    }
+  }
+}
+
 function checkUses(step, file, path, seen) {
   if (!Object.hasOwn(step, 'uses')) return;
   if (!literal(step.uses)) {
@@ -194,6 +242,10 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
     if (new RegExp(`^${name}\\.ya?ml$`, 'i').test(basename(file))) {
       checkNodeLanes(workflow, file, [lane], code, undefined, major);
     }
+  }
+  for (const [name, lanes] of Object.entries(desktopNodeSetups)) {
+    if (!new RegExp(`^${name}\\.ya?ml$`, 'i').test(basename(file))) continue;
+    checkDesktopNodeSetups(workflow, file, lanes);
   }
   if (/^web-ci\.ya?ml$/.test(basename(file))) checkNodeLanes(workflow, file, ['web', 'web-build']);
   if (/^integration-smoke\.ya?ml$/i.test(basename(file))) checkNodeLanes(workflow, file, ['postgres'], 'INTEGRATION', "github.event_name != 'workflow_dispatch' || inputs.postgres");

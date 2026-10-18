@@ -1,6 +1,6 @@
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/common/claimed_attempt.rs"
+    "/src/claimed_attempt.rs"
 ));
 use anyhow::Result;
 use pp_storage::{
@@ -5270,16 +5270,14 @@ fn individual_source_claim_skips_busy_head_without_mutating_it() {
             project_id: free_id as u64,
         },
     );
-    call(
-        &owner,
-        UserOperation::Cancel {
-            job_id: first.job_id,
-        },
-    )
-    .unwrap();
+    worker
+        .update(&mut active.lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(get(&owner, &first.job_id).state, PersistentState::Succeeded);
     let before = get(&owner, &waiting.job_id);
     let mut other = worker.claim().unwrap().unwrap();
     assert_eq!(other.job.job_id, free.job_id);
+    assert!(worker.claim().unwrap().is_none());
     let after = get(&owner, &waiting.job_id);
     assert_eq!(after.state_version, before.state_version);
     assert_eq!(after.attempt, before.attempt);

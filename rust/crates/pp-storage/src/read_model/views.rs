@@ -489,8 +489,8 @@ fn project_review(
             let object = row
                 .as_object_mut()
                 .ok_or_else(|| anyhow::anyhow!("Review Part object missing"))?;
-            object.remove("requirement");
-            object.remove("option_group_id");
+            object.shift_remove("requirement");
+            object.shift_remove("option_group_id");
         }
         add_spools(&mut row, spools)?;
         #[cfg(feature = "desktop_rebuild")]
