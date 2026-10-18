@@ -751,13 +751,15 @@ impl ServerWorkerClient {
         )?)
         .receive()
     }
-    /// Runs one phase of a claimed supplied import. A refused original authority
+    /// Runs one phase of a claimed supplied import with a live reservation for
+    /// its tenant and Source. A refused original authority
     /// commits the refusal and its Source observation before returning the typed
     /// failure.
     #[cfg(feature = "desktop_rebuild")]
     pub fn import_phase(
         &self,
         lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
         phase: crate::uploads::Phase,
     ) -> Result<crate::uploads::Operation> {
         ensure!(lease.worker == self.identity, "Foreign worker lease");
@@ -766,6 +768,7 @@ impl ServerWorkerClient {
             &self.storage,
             crate::uploads::Command::Phase {
                 lease: lease.clone(),
+                source_work: source_work.proof()?,
                 phase,
                 policy,
             },
@@ -3459,13 +3462,11 @@ mod tests {
     }
     #[cfg(feature = "desktop_rebuild")]
     fn test_storage() -> SettingsClient {
-        let (owner, _) = WriterOwner::open(
-            &std::env::temp_dir().join(format!("pp-claim-unit-{}", random())),
-            crate::Limits::default(),
-        )
-        .unwrap();
+        let root = std::env::temp_dir().join(format!("pp-claim-unit-{}", random()));
+        let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
         let client = owner.client();
         owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         client
     }
 

@@ -1160,18 +1160,26 @@ mod tests {
     }
 
     fn group_snapshot(group: u32) -> String {
-        let output = std::process::Command::new("ps")
-            .args(["-e", "-o", "pid,ppid,pgid,sid,stat,comm"])
+        let output = match std::process::Command::new("ps")
+            .args(["-e", "-o", "pid,ppid,pgid,stat,comm"])
             .output()
-            .unwrap();
+        {
+            Ok(output) => output,
+            Err(error) => return format!("ps failed to spawn: {error}"),
+        };
         let group = group.to_string();
-        String::from_utf8_lossy(&output.stdout)
+        let rows = String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter(|line| {
                 line.contains("PID") || line.split_whitespace().nth(2) == Some(group.as_str())
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        format!(
+            "ps status: {}\nps stderr: {}\n{rows}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )
     }
 
     /// `kill(pid, 0)` is true for a zombie. A preserved peer has to still be
@@ -2039,9 +2047,22 @@ if sys.argv[1] == "wait":
             "grandchild survived a failed leader wait\n{}",
             group_snapshot(pid)
         );
+        let group_probe = unsafe { libc::kill(-(pid as i32), 0) };
+        let group_probe_error = if group_probe < 0 {
+            Some(std::io::Error::last_os_error())
+        } else {
+            None
+        };
         assert!(
-            super::drain::process_group_absent(pid),
-            "group survived a failed leader wait\n{}",
+            group_probe < 0
+                && group_probe_error
+                    .as_ref()
+                    .is_some_and(|error| error.raw_os_error() == Some(libc::ESRCH)),
+            "group survived a failed leader wait: pgid={pid}, kill(-pgid, 0)={group_probe}, errno={:?}, error={:?}, drain result={result:#?}\n{}",
+            group_probe_error
+                .as_ref()
+                .and_then(|error| error.raw_os_error()),
+            group_probe_error.as_ref().map(|error| error.to_string()),
             group_snapshot(pid)
         );
         assert!(

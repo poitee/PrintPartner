@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -28,11 +28,23 @@ import { digestPlanInputs } from "./services/plan-freshness.js";
 import { executeOwnershipCopy, inspectOwnershipCopy } from "./ownership-migration.js";
 import { ownershipHistoryTables } from "./ownership-history.js";
 import { tenantExportDirectory } from "./lib/secure-path.js";
+import { inspectOwnershipExports } from "./ownership-exports.js";
 import { registerExportRoutes } from "./routes/exports.js";
+import { ACCEPTED_PLATE_EXPORT_LIMITS, materializeAcceptedPlateExport } from "./services/accepted-plate-export-delivery.js";
 
 const roots: string[] = [];
 const now = "2026-10-15T00:00:00.000Z";
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const sourceStl = (id: number, version: number) => `solid source-${id}-v${version}
+facet normal 0 0 1
+outer loop
+vertex 0 0 0
+vertex 50 0 0
+vertex 0 40 30
+endloop
+endfacet
+endsolid source-${id}-v${version}
+`;
 beforeEach(() => { process.env.PP_DESKTOP_REBUILD = "1"; });
 afterEach(() => { vi.restoreAllMocks(); delete process.env.PP_DESKTOP_REBUILD; roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 function edit(source: string, operation: (db: Database.Database) => void) {
@@ -53,7 +65,7 @@ function fixture(tracked = true, quantity = 1) {
       for (const version of [1, 2]) {
         const locator = `${id}/revisions/commit-${version}`;
         const snapshot = join(sourceDir, "repos", locator); mkdirSync(snapshot, { recursive: true });
-        writeFileSync(join(snapshot, id === 1 ? "a.stl" : "b.stl"), `Source ${id} v${version}`);
+        writeFileSync(join(snapshot, id === 1 ? "a.stl" : "b.stl"), sourceStl(id, version));
         db.prepare("INSERT INTO source_revisions (id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at) VALUES (?,?,?,?,?,?)")
           .run(id * 10 + version, id, `commit-${version}`, hash(`manifest-${id}-${version}`), locator, now);
       }
@@ -74,7 +86,7 @@ function fixture(tracked = true, quantity = 1) {
     if (tracked) {
       const triggers = z.array(z.object({ sql: z.string() })).parse(db.prepare("SELECT sql FROM sqlite_schema WHERE name IN ('trg_plan_revision_parts_immutable_update','trg_plan_revisions_immutable_update')").all());
       db.exec("DROP TRIGGER trg_plan_revision_parts_immutable_update; DROP TRIGGER trg_plan_revisions_immutable_update");
-      for (const id of [1, 2]) db.prepare("UPDATE plan_revision_parts SET artifact_digest=? WHERE revision_id=?").run(hash(`Source ${id} v2`), id);
+      for (const id of [1, 2]) db.prepare("UPDATE plan_revision_parts SET artifact_digest=? WHERE revision_id=?").run(hash(sourceStl(id, 2)), id);
       const parts = drizzle(db).select().from(schema.planRevisionParts).all();
       for (const id of [1, 2]) db.prepare("UPDATE plan_revisions SET snapshot_digest=? WHERE id=?").run(digestPlanRevisionParts(parts.filter(part => part.revisionId === id)), id);
       triggers.forEach(trigger => db.exec(trigger.sql));
@@ -260,7 +272,7 @@ it.each([true, false])("copies tracked=%s accepted history and keeps both owners
       expect(a.getAcceptedPlanRevision(2)).toBeNull(); expect(b.getAcceptedPlanRevision(1)).toBeNull();
       expect(a.listSourceRevisions(1).map(revision => revision.id)).toEqual(expect.arrayContaining([11, 12]));
       expect(a.getSourceRevision(22)).toBeNull(); expect(b.getSourceRevision(12)).toBeNull();
-      expect(readFileSync(join(paths.destinationDir, "repos/1/revisions/commit-1/a.stl"), "utf8")).toBe("Source 1 v1");
+      expect(readFileSync(join(paths.destinationDir, "repos/1/revisions/commit-1/a.stl"), "utf8")).toBe(sourceStl(1, 1));
       if (tracked) expect(a.getAcceptedPlanRevisionInputSet(1)?.inputs[0]?.source_revision_id).toBe(12);
     } finally { store.close(); }
   }
@@ -1124,4 +1136,63 @@ it("copies a selected subset of the historical Required-unit map", async () => {
     expect(state.plates.flatMap(plate => plate.units)).toHaveLength(1);
     expect(plan.snapshot.parts.flatMap(part => part.units)).toHaveLength(2);
   } finally { store.close(); }
+});
+
+async function materializePlates(root: string, tenantId: string, profileId: number, plateRevisionId?: number) {
+  const store = new SqliteDatabase(root); store.connect();
+  try {
+    const repo = new AppRepository(getDb(store), tenantId, store.reposDir);
+    const input = repo.readAcceptedPlateExportInput(profileId);
+    return await materializeAcceptedPlateExport({ repository: repo, reposDir: store.reposDir,
+      tenantExportsDir: tenantExportDirectory(join(root, "exports"), tenantId), limits: ACCEPTED_PLATE_EXPORT_LIMITS },
+    { profileId, expectedPlateRevisionId: plateRevisionId ?? (input.kind === "ready" ? input.input.plateRevisionId : 0) });
+  } finally { store.close(); }
+}
+it("copies accepted Plate export trees to each mapped owner and reuses them after reopen", async () => {
+  const paths = plateFixture();
+  const published = await Promise.all([1, 2].map(profileId => materializePlates(paths.sourceDir, "default", profileId)));
+  const input = manifest(paths.sourceDir);
+  expect(input.exports.map(artifact => [artifact.path, artifact.user_id])).toEqual([1, 2].flatMap(profileId => [
+    "accepted-plates.zip", "manifest.json", "plates/0001.3mf"].map(file => [`tenant-default/accepted-plates/profile-${profileId}/revision-${profileId * 3}/${file}`, profileId === 1 ? "account-a" : "account-b"])));
+  const before = files(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(files(paths.sourceDir)).toEqual(before);
+  for (const [index, owner] of ["account-a", "account-b"].entries()) {
+    const source = published[index];
+    if (source?.kind !== "materialized") throw new Error("Missing source Plate export");
+    const copied = [source.manifest, source.bundle, ...source.plates].map(file => join(tenantExportDirectory(join(paths.destinationDir, "exports"), owner), file.relativePath));
+    const inodes = copied.map(path => lstatSync(path).ino);
+    for (let restart = 0; restart < 2; restart++) {
+      const reopened = await materializePlates(paths.destinationDir, owner, index + 1);
+      if (reopened.kind !== "materialized") throw new Error(`Copied Plate export unavailable ${reopened.kind}`);
+      expect([reopened.manifest, reopened.bundle, ...reopened.plates].map(file => [file.absolutePath, file.sha256]))
+        .toEqual([source.manifest, source.bundle, ...source.plates].map((file, position) => [copied[position], file.sha256]));
+      expect(copied.map(path => lstatSync(path).ino)).toEqual(inodes);
+    }
+    expect((await materializePlates(paths.destinationDir, index === 0 ? "account-b" : "account-a", index + 1, source.plateRevisionId)).kind).toBe("empty_plan");
+  }
+  expect(existsSync(join(paths.destinationDir, "exports/tenant-default"))).toBe(false);
+});
+it("admits five-digit accepted Plate ordinals", () => {
+  const root = mkdtempSync(join(tmpdir(), "pp-plate-ordinals-")); roots.push(root);
+  const revision = join(root, "tenant-default/accepted-plates/profile-1/revision-3");
+  mkdirSync(join(revision, "plates"), { recursive: true });
+  writeFileSync(join(revision, "manifest.json"), JSON.stringify({ format: "accepted-plate-3mf-manifest-v1", basis: { profile_id: 1, plate_revision_id: 3 },
+    plates: [{ ordinal: 9999, entry: "plates/9999.3mf" }, { ordinal: 10000, entry: "plates/10000.3mf" }] }));
+  for (const file of ["accepted-plates.zip", "plates/9999.3mf", "plates/10000.3mf"]) writeFileSync(join(revision, file), file);
+  expect(inspectOwnershipExports(root, [{ id: 1, tenantId: "default" }], [{ id: 3, profileId: 1 }]).map(artifact => artifact.path)).toEqual([
+    "accepted-plates.zip", "manifest.json", "plates/10000.3mf", "plates/9999.3mf"].map(file => `tenant-default/accepted-plates/profile-1/revision-3/${file}`));
+});
+it.each(["cross-plan", "manifest-mismatch", "unknown-file", "missing-plate", "manifest-directory"])("refuses %s accepted Plate export trees", async kind => {
+  const paths = plateFixture();
+  await materializePlates(paths.sourceDir, "default", 1);
+  const input = manifest(paths.sourceDir);
+  const plates = join(paths.sourceDir, "exports/tenant-default/accepted-plates");
+  if (kind === "cross-plan") cpSync(join(plates, "profile-1/revision-3"), join(plates, "profile-2/revision-3"), { recursive: true });
+  if (kind === "manifest-mismatch") cpSync(join(plates, "profile-1/revision-3"), join(plates, "profile-1/revision-2"), { recursive: true });
+  if (kind === "unknown-file") writeFileSync(join(plates, "profile-1/revision-3/notes.txt"), "unexpected");
+  if (kind === "missing-plate") rmSync(join(plates, "profile-1/revision-3/plates/0001.3mf"));
+  if (kind === "manifest-directory") { rmSync(join(plates, "profile-1/revision-3/manifest.json")); mkdirSync(join(plates, "profile-1/revision-3/manifest.json")); }
+  expect(() => inspectOwnershipCopy(paths)).toThrow();
+  await refused(paths, input);
 });

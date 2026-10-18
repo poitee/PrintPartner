@@ -35,6 +35,11 @@ mutants = [
     ('carried edits keep the prepared digest', 'changed |= *part != before;', 'changed |= false;'),
     ('superseded draft keeps its lifecycle', "SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND state='open'", "SET state='abandoned' WHERE tenant_id=? AND profile_id=? AND state='open'"),
     ('creation time is not ISO', '            auth::catalog_timestamp(),', '            "now",'),
+    ('recompute skips selection', '                    let _ = reply.send(recomputed.and_then(|outcome| {\n                        select_recomputed(\n                            connection, credential, policy, profile, &cancelled, outcome,\n                        )\n                    }));', '                    let _ = (credential, reply.send(recomputed.map(RecomputeWorkspaceOutcome::Refused)));'),
+    ('existing draft is not selected', '        RecomputeOutcome::Created { draft } | RecomputeOutcome::Existing { draft } => draft,', '        RecomputeOutcome::Created { draft } => draft,'),
+    ('selected draft is selected again', '    if !draft.ordinary["requiredUnitReconciliation"].is_null() {', '    if false {'),
+    ('selection key ignores the digest', '        &format!("auto-{}", digest.as_str()),', '        "auto",'),
+    ('selection skips the commit cancellation check', '    let outcome = body(&tx)?;\n    ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);', '    let outcome = body(&tx)?;'),
 ]
 with tempfile.TemporaryDirectory(prefix='pp-a9-mutants-', dir='/persist/tmp') as directory:
     scratch = Path(directory) / 'rust'

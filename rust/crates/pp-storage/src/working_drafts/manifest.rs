@@ -695,15 +695,8 @@ pub(super) fn kit(raw: Option<String>, b: &mut PreparationBudget<'_>) -> ReadRes
     let Some(raw) = raw else {
         return Ok(Vec::new());
     };
-    b.document(raw.len(), raw.len())?;
-    match Document::parse(raw.as_bytes(), b) {
-        Ok(_) => {}
-        Err(ReadFailure::InvalidDocument) => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    }
-    let selections = crate::manifest_options::KitManifest::from_stored(&raw)
-        .unwrap_or_default()
-        .selection_projection();
+    let selections =
+        crate::manifest_options::observation::stored_kit(&raw, b)?.selection_projection();
     b.check()?;
     Ok(selections)
 }
