@@ -1,12 +1,17 @@
 name: Rust cross-OS
 
-# Every PR builds and tests the Rust workspace on Linux, macOS and Windows,
-# with the desktop_rebuild feature off and on. See docs/development/ci.md.
+# Relevant PRs test Rust on Linux and Windows. Ready PRs with the macos label
+# also test macOS with desktop_rebuild=off. Non-PR events cover both states.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
   push:
     branches: [main]
   workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: '37 7 * * *'
 
 permissions:
   contents: read
@@ -25,43 +30,43 @@ env:
   INSTA_UPDATE: 'no'
 
 jobs:
-  rust:
-    name: rust (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # Runner labels, per-OS package scope and per-OS test filters live only here.
-        include:
-          - os: linux
-            runner: ubuntu-latest
-            scope: [--workspace]
-            tests: all()
-          # These tests fail on macOS. Each skipped term names the ticket that removes it
-          # (docs/development/ci.md#macos-exclusions):
-          #   GRE-645: the runtime_m0 binary, ticket_t_2:: and ticket_t_12_missing_config_...
-          - os: macos
-            runner: macos-26
-            scope: [--workspace]
-            tests: >-
-              not (
-              binary_id(pp-core::runtime_m0)
-              | (package(pp-compat) & test(/^ticket_t_2::/))
-              | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)
-              )
-          # These crates still use Unix-only APIs or depend on one that does.
-          # Each port ticket deletes its line (docs/development/ci.md#windows-exclusions).
-          - os: windows
-            runner: windows-latest
-            scope:
-              - --workspace
-              - --exclude pp-storage --exclude pp-source # GRE-653
-              - --exclude pp-compat --exclude pp-core # GRE-654
-              - --exclude pp-api --exclude pp-gateway --exclude pp-server # GRE-655
-              - --exclude pp-desktop # GRE-656
-            tests: all()
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.select.outputs.relevant }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed inputs
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_*path_filter.py'
+          python3 -B -m unittest discover -s scripts -p test_alert_macos_main.py
+          python3 scripts/ci-path-filter.py rust
+
+  rust-linux:
+    name: rust (linux)
+    needs: changes
+    # Explicit jobs keep each required check present when selection skips it.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
+    runs-on: ubuntu-latest
+    env:
+      RUST_OS: linux
+      CARGO_SCOPE: --workspace
+      NEXTEST_FILTER: all()
+    timeout-minutes: 90
+    steps: &rust-steps
+      - name: Require successful input selection
+        env:
+          SELECTOR_RESULT: ${{ needs.changes.result }}
+        run: test "$SELECTOR_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -79,7 +84,7 @@ jobs:
         with:
           tool: nextest@0.9.148
       - name: Install Linux desktop dependencies
-        if: matrix.os == 'linux'
+        if: env.RUST_OS == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -113,7 +118,7 @@ jobs:
       # The default macOS TMPDIR is case-insensitive, sits under the /var symlink and is
       # too long for Unix socket paths. The tests need a TMPDIR that is none of these.
       - name: Mount a short case-sensitive TMPDIR
-        if: matrix.os == 'macos'
+        if: env.RUST_OS == 'macos'
         run: |
           set -euo pipefail
           hdiutil create -size 8g -type SPARSE -fs 'Case-sensitive APFS' -volname pptmp "$RUNNER_TEMP/pptmp.sparseimage"
@@ -126,13 +131,80 @@ jobs:
         run: cargo fmt --manifest-path rust/Cargo.toml --all --check
       - name: clippy (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --all-targets --keep-going -- -D warnings
       - name: clippy (desktop_rebuild on)
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
       - name: nextest (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}'
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER"
       - name: nextest (desktop_rebuild on)
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild
+      # nextest does not run doctests.
+      - name: doctests (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}' --features desktop_rebuild
+        run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc
+      - name: doctests (desktop_rebuild on)
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
+        run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc --features desktop_rebuild
+
+  rust-macos:
+    name: rust (macos)
+    needs: changes
+    # macOS is opt-in on ready PRs, and always selected on non-PR events.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) }}
+    concurrency:
+      group: rust-macos-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    runs-on: macos-26
+    env:
+      RUST_OS: macos
+      CARGO_SCOPE: --workspace
+      # GRE-645: lifecycle groups and config deadline regression.
+      NEXTEST_FILTER: >-
+        not (
+        binary_id(pp-core::runtime_m0)
+        | (package(pp-compat) & test(/^ticket_t_2::/))
+        | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)
+        )
+    timeout-minutes: 90
+    steps: *rust-steps
+
+  rust-windows:
+    name: rust (windows)
+    needs: changes
+    # Explicit jobs keep each required check present when selection skips it.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
+    runs-on: windows-latest
+    env:
+      RUST_OS: windows
+      # Unix-only crates; remove each exclusion when its port ticket is fixed.
+      CARGO_SCOPE: >-
+        --workspace
+        --exclude pp-storage --exclude pp-source
+        --exclude pp-compat --exclude pp-core
+        --exclude pp-api --exclude pp-gateway --exclude pp-server
+        --exclude pp-desktop
+      NEXTEST_FILTER: all()
+    timeout-minutes: 90
+    steps: *rust-steps
+
+  alert-macos-main:
+    needs: [rust-linux, rust-macos, rust-windows]
+    if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Open or update the macOS main failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALERT_KIND: rust
+        run: python3 scripts/alert-macos-main.py

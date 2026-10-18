@@ -855,8 +855,9 @@ until its holder releases or drops it. An abandoned claim reply drops its lease.
 The existing orphan queue handles releases that cannot enter the writer queue.
 
 CheckSourceUpdates claims have no initial Source-work lease. Their workers acquire
-individual leases through `begin_source_work`. Sync keeps its existing scoped
-Source bridge until D18 supplies the target API. Import settlement belongs to
+individual leases through `begin_source_work`. D18 (a) replaced Sync's scoped
+Source bridge: Sync reserves each target's Source when it claims the target, and
+`begin_source_work` refuses a Sync attempt. Import settlement belongs to
 D14 (d), local scan settlement to D17, and Sync settlement to D18. Claim-time
 import reservation and targeted `SourceBusy` errors follow the reference
 `source_binding`, `claim`, and `claim_import` in
@@ -1460,10 +1461,12 @@ owned by another profile, matching Node. Remapping treats an ownerless queue ite
 as related when any part belongs to the profile or no referenced parts still exist,
 even when its state is `done`. Node's exact error messages are retained in the
 fixture; tests separately assert the Rust reference's more specific diagnostics.
-Node's inline projection check has no progress-validation counterpart, and its
-match-key remap cannot represent token identity, excluded targets, resolved-only
-coordinates, or changed unit indexes. Direct Rust tests cover progress corruption,
-excluded or missing tokens, and changed indexes against the reference behavior.
+Node's inline projection check has no progress-validation counterpart. Both
+implementations remap Checkoff and send-queue coordinates by Required-unit token
+(GRE-677): a kept unit follows its token to its new index, and a dropped or
+excluded unit refuses the remap. The Node transaction cases
+`mapped-remap-index-change` and `mapped-remap-index-0` record this. Direct Rust
+tests cover progress corruption, excluded or missing tokens, and changed indexes.
 
 
 ## D19 publication transaction and job conflicts, GRE-612 PR 2
@@ -1499,17 +1502,17 @@ Node `applyPlanChanges` does not check durable jobs, so its running-export case
 publishes. Rust returns the exact job conflict list and leaves publication rows
 unchanged. Both runtimes publish with a terminal uploaded-only upload.
 
-Rust never publishes where Node's Checkoff remap assessment refuses. It preserves
-Node's refusal reasons for deleted Parts, missing match keys, and indexes at or
-past the new quantity. Where both would publish, Rust writes coordinates by
-Required-unit token and refuses if the referenced token was dropped.
+Rust keeps Node's Checkoff remap refusal reasons for deleted Parts, missing match
+keys, and indexes at or past the new quantity. After those checks, both runtimes
+write coordinates by Required-unit token and refuse if the referenced token was
+dropped or excluded (GRE-677).
 
 This rule applies whenever a kept token's index changes. `Selection::PriorCompletion`
-renumbers units with no quantity change. The index-1 fixture proves that Rust
-preserves the token where Node's coordinate resolves to a different token. At
-index 0, Rust refuses the dropped token and writes nothing where Node publishes.
-Index 2 and a cross-Part filename rename match Node's refusal literally. Fixtures
-retain Node's literal outcomes and compare Checkoff coordinates to Required-unit rows.
+renumbers units with no quantity change. In the index-1 fixture both runtimes move
+the coordinate to the kept token's new index. At index 0 both refuse the dropped
+token and write nothing. Index 2 and a cross-Part filename rename refuse with
+Node's quantity and match-key reasons. Fixtures record Node's literal outcomes,
+and Rust compares them exactly.
 
 ## D19 publication client and writer admission, GRE-612 PR 3
 
@@ -1623,7 +1626,8 @@ GRE-703 item 1 by moving the test harness onto the real migration. It also remov
 the client schema prerequisite notes for GRE-707 item 6.
 `mark_local_failure`, `revalidate_source_authority` and
 `commit_source_authority_refusal` retain their tests and integration annotations;
-this schema slice adds no production callers for them. The authority helper
+this schema slice adds no production callers for them. Their callers are the
+D18 (b) Sync target failure (GRE-614) and the D14 import Phase path (GRE-610). The authority helper
 reuses `AuthorityRefusalReason::of` and saves one refusal.
 
 The Node generator now also executes the local `syncProjectById` completion and
@@ -1657,3 +1661,161 @@ initializer test bypasses preflight to prove that step validation rolls back the
 new index and leaves version 39 intact. The same drift is also refused through
 `WriterOwner` preflight. Logical comparisons include the SQLite catalog and rows,
 because SQLite's backup API can rewrite header counters.
+
+### D18 source sync: batch open and target claim
+
+D18 (a), GRE-614, ports the first part of `source_sync` from
+`desktop/source-sync-local-current-20261008` behind `desktop_rebuild`. A Sync
+attempt opens a batch, then claims its targets one at a time. The default build
+is unchanged and stays at schema 35.
+
+| Slice | Work | Estimated added/changed lines |
+| --- | --- | ---: |
+| D18 (a) | Schema 41; `open`, basis validation, target claim with Source reservation, ordinary failures, `halt_job`; Cancel and worker Fail halts; bridge removal; tests, Node probe, docs | 1,600 |
+| D18 (b) | Target validation, `settle`, `fail` with `mark_local_failure`, `acknowledge`, `adopt`, `halt_after_error` and `HaltSourceSync`; recovery of retained evidence; tests and docs | 1,450 |
+| D18 (c) | `finish`, `inspect`, `inspect_retained`, the recovery read types, the journal-owner guards for generic Finish, effects and reconciliation, claim and advance refusals, the prune guard; tests and docs | 1,200 |
+
+`open_source_sync` seals the batch the first time. An explicit selection keeps
+payload order. A selection of all Sources orders them by `last_synced_at`, then
+id, as the reference does; Node's `listProjectIds` uses table order. A later open
+revalidates the sealed basis and returns claims from earlier attempts to pending.
+
+`claim_next_source_sync_target` claims the first target that is not settled, in
+one writer transaction. A missing Source fails with Node's `Source not found`. A
+non-Local Source fails as `unsupported_kind`. Neither failure takes a reservation.
+A Local target records the attempt, the Source observation and a new reservation
+token. The token is activated after the commit, as claim-time reservation does.
+The reference uses three round trips for this: next, `BeginSyncTarget` and bind.
+A busy Source returns `SourceBusy` and leaves the target pending. A claim before
+open is refused. The returned `SyncTargetLease` holds the Source until it is
+released or dropped, so callers must not keep it longer than the target's work.
+
+Cancel, a worker `Fail` and a revoked original credential halt the batch. Pending
+targets become not-run. A claimed target is kept for reconciliation, and the Job
+becomes `reconciliation_required`. Otherwise the Job is cancelled or failed. A
+revoked credential records a Source-writer refusal. Until D18 (b), a claimed
+target cannot be settled. Until D18 (c), generic Finish and effects are still
+accepted for Sync.
+
+The reference schema numbers Source Sync 42 because its 41 validates manifest
+columns, which main does not have. Here the 40 to 41 step installs
+`source_sync_batches` and `source_sync_targets` from `source_sync/schema.sql`,
+following D17 (c): back up to `backups/pre-schema41.db`, install and validate in
+one transaction, then stamp 41. Preflight refuses Sync objects below 41.
+
+`fixtures/parity/source-sync/generate.mjs` runs Node's `InProcessJobRunner` Sync
+job over a missing id and a Local Source. The Rust test asserts the target order
+and Node's literal failure. Node has no durable batch, Source reservation or
+authority check. The claim-before-open, restart-recovery and ordinal tests adapt
+the reference `pp-core/tests/source_sync_local.rs` cases. The halt, refusal,
+busy-Source and bridge tests are new.
+
+```sh
+node fixtures/parity/source-sync/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests
+```
+
+### D20 Checkoff progress
+
+GRE-615 adds `pp-storage::checkoff_progress`, compiled only with
+`desktop_rebuild`. `WriterOwner::checkoff_progress()` returns a client whose
+`apply` runs one request in one immediate writer transaction. No routes call it
+yet; D24 and D26 wire HTTP behind `PP_DESKTOP_REBUILD`.
+
+The contract is `db/accepted-plan-progress.ts`, `setAcceptedPrintedCounts` in
+`db/repository.ts`, the progress and assembly routes in `routes/parts.ts`, and
+the import route in `routes/plan-drafts.ts`. `apply` returns the Node status
+and JSON body for each outcome:
+
+- Completion by Required-unit token marks that unit and every lower unit
+  printed. Clearing it clears that unit and every higher unit, including their
+  assembly.
+- Assembly by token sets one unit. Assembling an unprinted unit changes nothing.
+- Part coordinates (`/parts/:id/progress` and `/parts/:id/assembled` bodies)
+  resolve to a token against the current accepted snapshot.
+- Import sets each listed Part's printed prefix. It checks every row before it
+  writes any, and reports how many Parts changed.
+
+Every write first checks the expected accepted basis, then archival. Unit
+completion and assembly then check that each Part has one progress row per
+unit. Import skips that check, as Node does. Only a successful write commits,
+so a refusal leaves the database unchanged, including API key usage. An import for a Plan the caller cannot see returns 404
+`progress_target_not_found`. This differs from Node on purpose. Node throws a
+plain error and returns 500, but its route already returns 404 for a Plan it
+does not serve.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test checkoff_progress
+```
+
+### D21 accepted read JSON bodies, GRE-616 PR 1
+
+With `desktop_rebuild`, `AcceptedRead`, `Snapshot` and `Batch` each have an
+`into_json_body` method. It returns the same bytes as the derived `Serialize`
+output, except for Part manifest metadata. Each accepted `Part` now carries its
+`PartManifestMetadata`, and the body writes `requirement` and `optionGroupId`
+from those UTF-16 units. Text that is not valid Unicode keeps each unpaired
+surrogate as a `\uXXXX` escape, as `JSON.stringify` does. The derived output
+writes `null` for that text. No routes call these methods yet; D23 to D26 wire
+HTTP behind `PP_DESKTOP_REBUILD`.
+
+D22, GRE-618, lifts the temporary snapshot refusal for non-scalar manifest
+text by moving Review to the same lossless carrier, as described below.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::json_body
+```
+
+### D21 published capture, GRE-616 PR 2
+
+With `desktop_rebuild`, `read_model::capture_published` reads the Accepted Plan
+and its Build context in one transaction after a committed Save. It fails when
+the Build is missing, when the Accepted Plan is not ready, or when the snapshot
+Plan version is older than the Save receipt. Integrity failures propagate
+unchanged. The D13 Save port (GRE-608) is its first caller.
+
+Two other reference differences are not ported, because main is already
+correct:
+
+- Accepted progress. The reference counts units inline. Main uses
+  `views::progress`, which gives the same counts: units of included Parts, and
+  the units not yet completed. A test pins these counts in both profile
+  summaries.
+- Naming folder rules. The reference omits `functional_class` when it is unset,
+  which changes the effective naming digest. Node `digestEffectiveNaming` writes
+  `"functional_class":null`, and main does the same. Porting the change would
+  mark every Build with such a rule stale. A test pins the Node digest.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib read_model::capture_published_tests
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --test ticket_t_61_read_model
+```
+
+
+### D22 Review JSON and workflow
+
+GRE-618 completes the workflow and views delta from
+`desktop/source-sync-local-current-20261008`. Workflow already matches that
+reference, so its resolver stays unchanged. Main retains its catalog and
+collation fallbacks instead of the reference's panic behavior.
+
+With `desktop_rebuild`, `views::review_json` returns `ProjectReviewJsonBody`.
+Its `into_bytes` preserves `requirement` and `option_group_id` from each Part's
+UTF-16 manifest metadata, including unpaired surrogates as JSON escapes.
+`summary_json` returns an optional `ProjectReviewSummaryJsonBody` with its own
+`into_bytes`. Ready and empty reads have summaries; unavailable reads do not.
+The summary uses scalar fields and does not serialize Part metadata.
+Accepted snapshot reads now admit valid non-scalar metadata. Invalid PPJS
+encodings, projection mismatches and digest failures remain refusals.
+
+Default builds retain `views::review` and `views::summarize_review`. The fixture
+binary selects the matching API at compile time. No HTTP routes or runtime
+callers are added. Future product callers must check `PP_DESKTOP_REBUILD` and
+send these JSON bytes directly, without parsing them through `serde_json::Value`,
+which cannot hold unpaired surrogates.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild
+```

@@ -1424,9 +1424,13 @@ async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
             assert!(request.contains("x-api-key: recorded-test-key"));
             seen.fetch_add(1, Ordering::SeqCst);
             let fixture: &[u8] = match served_mode.load(Ordering::SeqCst) {
-                1 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-error.json"),
-                2 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-offline.json"),
-                _ => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json"),
+                1 => include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-error.json"),
+                2 => {
+                    include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-offline.json")
+                }
+                _ => {
+                    include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-success.json")
+                }
             };
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
@@ -1728,7 +1732,7 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
         let body = serde_json::from_slice(&response.2).unwrap_or(serde_json::Value::Null);
         (response.0, body, started.elapsed())
     }
-    let success = include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json");
+    let success = include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-success.json");
     let moonraker_reply: &'static [u8] = Box::leak(
         [
             format!(

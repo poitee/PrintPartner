@@ -347,8 +347,9 @@ pub fn recorded_status(body: &[u8], base: &str) -> Result<Status> {
         State::Idle => Some("Idle".into()),
         _ => raw.map(str::to_owned),
     };
-    let uri: axum::http::Uri = base.parse()?;
-    result.ip_address = uri.host().map(str::to_owned);
+    // Node reports WHATWG `URL.hostname`; the url crate implements the same parser,
+    // so case and IP-literal canonicalization match.
+    result.ip_address = url::Url::parse(base)?.host_str().map(str::to_owned);
     let number = |object: &str, field: &str| {
         status
             .get(object)
@@ -399,54 +400,15 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
-    const SUCCESS: &[u8] = include_bytes!("../tests/fixtures/moonraker-success.json");
+    const SUCCESS: &[u8] =
+        include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-success.json");
+    // Recorded body mapping is pinned against Node by tests/ticket_t_4_watcher_proof_parity.rs.
     #[test]
-    fn ticket_t_4_recorded_success_error_offline_wire_shape() {
-        let status = recorded_status(SUCCESS, "http://printer.test:7125").unwrap();
-        assert_eq!(
-            serde_json::to_value(status).unwrap(),
-            serde_json::json!({"state":"printing","progress":43.0,"filename":"bracket.gcode","message":"Printing bracket.gcode","ip_address":"printer.test","nozzle_temperature_c":210.2,"nozzle_target_c":215.0,"bed_temperature_c":59.8,"bed_target_c":60.0})
-        );
-        let error = recorded_status(
-            include_bytes!("../tests/fixtures/moonraker-error.json"),
-            "http://printer.test",
-        )
-        .unwrap();
-        assert_eq!(
-            serde_json::to_value(error).unwrap(),
-            serde_json::json!({"state":"error","filename":"bracket.gcode","message":"error","ip_address":"printer.test"})
-        );
-        assert!(
-            recorded_status(
-                include_bytes!("../tests/fixtures/moonraker-offline.json"),
-                "http://printer.test"
-            )
-            .is_err()
-        );
+    fn ticket_t_4_offline_wire_shape() {
         assert_eq!(
             serde_json::to_value(Status::offline("Moonraker status unavailable")).unwrap(),
             serde_json::json!({"state":"offline","message":"Moonraker status unavailable"})
         );
-    }
-    #[test]
-    fn ticket_t_4_state_progress_and_optional_fields() {
-        for (raw, expected) in [
-            ("standby", State::Idle),
-            ("cancelled", State::Idle),
-            ("complete", State::Complete),
-            ("paused", State::Paused),
-            ("READY", State::Unknown),
-        ] {
-            let body=serde_json::to_vec(&serde_json::json!({"result":{"status":{"print_stats":{"state":raw},"virtual_sdcard":{"progress":2}}}})).unwrap();
-            let status = recorded_status(&body, "http://printer.test").unwrap();
-            assert_eq!(status.state, expected);
-            assert_eq!(
-                status.progress,
-                if raw == "paused" { Some(100.0) } else { None }
-            );
-            assert!(status.filename.is_none());
-        }
-        assert!(recorded_status(b"{}", "http://printer.test").is_err());
     }
     async fn simulator(stall: bool) -> (String, Arc<AtomicUsize>, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

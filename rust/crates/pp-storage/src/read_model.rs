@@ -1,6 +1,10 @@
 mod context;
 pub(crate) mod graph;
+#[cfg(feature = "desktop_rebuild")]
+mod json_body;
 pub use context::{CapturedContext, PlateRef, RevisionRef, UnitHistory};
+#[cfg(feature = "desktop_rebuild")]
+pub use json_body::{AcceptedBatchJsonBody, AcceptedReadJsonBody, AcceptedSnapshotJsonBody};
 pub mod views;
 pub mod workflow;
 
@@ -228,6 +232,35 @@ pub(crate) fn reusable_draft_base(
     Ok(matches!(accepted, AcceptedRead::Ready { .. }))
 }
 
+/// Reads the Accepted Plan and its Build context after a committed Save. The
+/// snapshot must be at least `minimum_version`, the receipt's Plan version.
+#[cfg(feature = "desktop_rebuild")]
+#[cfg_attr(not(test), expect(dead_code, reason = "D13 Save (GRE-608) calls this"))]
+pub(crate) fn capture_published(
+    tx: &rusqlite::Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    repos: &std::path::Path,
+    minimum_version: u64,
+) -> Result<(Box<Snapshot>, CapturedContext)> {
+    let mut budget = graph::Budget::default();
+    let accepted = graph::read(tx, tenant, profile, repos, &mut budget)?;
+    let context = context::capture(tx, tenant, profile, &accepted, &mut budget)?
+        .ok_or_else(|| anyhow!("Published Build context missing"))?;
+    let AcceptedRead::Ready { snapshot } = accepted else {
+        return Err(anyhow!("Published accepted authority unavailable"));
+    };
+    ensure!(
+        u64::try_from(snapshot.plan_version).is_ok_and(|version| version >= minimum_version),
+        "Accepted capture predates Save receipt"
+    );
+    Ok((snapshot, context))
+}
+
 #[cfg(all(test, feature = "desktop_rebuild"))]
 #[path = "read_model/preparation_tests.rs"]
 mod preparation_tests;
+
+#[cfg(all(test, feature = "desktop_rebuild"))]
+#[path = "read_model/capture_published_tests.rs"]
+mod capture_published_tests;

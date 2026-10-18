@@ -6026,11 +6026,14 @@ export class AppRepository {
     };
   }
 
-  private applyCheckoffRemap(plan: CheckoffRemapPlan, finalRemap: ReadonlyMap<string, number>): void {
+  private applyCheckoffRemap(
+    plan: CheckoffRemapPlan,
+    finalRemap: ReadonlyMap<string, { readonly part_id: number; readonly unit_index: number }>,
+  ): void {
     if (finalRemap.size === 0) return;
     const remapUnit = (unit: { part_id: number; unit_index: number }) => {
       const next = finalRemap.get(`${unit.part_id}:${unit.unit_index}`);
-      return next ? { ...unit, part_id: next } : unit;
+      return next ? { ...unit, ...next } : unit;
     };
     if (plan.checkoffLinksRaw != null) {
       const links = JSON.parse(plan.checkoffLinksRaw) as Array<Record<string, unknown>>;
@@ -6508,6 +6511,9 @@ export class AppRepository {
             .all()
             .map((row) => [row.id, row.matchKey] as const),
         );
+        const includedDraftPartIds = new Set(
+          prepared.parts.filter((part) => part.included).map((part) => part.draftPartId),
+        );
         const newPartByMatchKey = new Map(
           prepared.parts.map((part) => [
             part.partKey,
@@ -6534,6 +6540,20 @@ export class AppRepository {
               .map((row) => [row.id, row.profileId] as const),
           ),
           newPartByMatchKey,
+          oldTokenByCoordinate: new Map(
+            baseUnits.map((unit) => {
+              const projectionPartId = predecessorProjectionByRevisionPartId.get(unit.revisionPartId);
+              if (projectionPartId == null) throw new Error("Required-unit predecessor Part is missing");
+              return [`${projectionPartId}:${unit.priorIndex}`, unit.token] as const;
+            }),
+          ),
+          newCoordinateByToken: new Map(
+            prepared.progress.flatMap((unit) =>
+              unit.token != null && includedDraftPartIds.has(unit.draftPartId)
+                ? [[unit.token, { draftPartId: unit.draftPartId, unitIndex: unit.unitIndex }] as const]
+                : [],
+            ),
+          ),
         });
         if (assessment.kind === "unsafe") {
           return {
@@ -6725,11 +6745,11 @@ export class AppRepository {
         revisionPartByDraftPart.set(part.draftPartId, revisionPart.id);
       }
       if (checkoffRemapPlan) {
-        const finalRemap = new Map<string, number>();
-        for (const [key, draftPartId] of checkoffRemapPlan.remapByDraftPart) {
-          const projectionPartId = projectionByDraftPart.get(draftPartId);
+        const finalRemap = new Map<string, { part_id: number; unit_index: number }>();
+        for (const [key, target] of checkoffRemapPlan.remapByCoordinate) {
+          const projectionPartId = projectionByDraftPart.get(target.draftPartId);
           if (!projectionPartId) throw new Error("Checkoff remap target Part is missing");
-          finalRemap.set(key, projectionPartId);
+          finalRemap.set(key, { part_id: projectionPartId, unit_index: target.unitIndex });
         }
         this.applyCheckoffRemap(checkoffRemapPlan, finalRemap);
       }

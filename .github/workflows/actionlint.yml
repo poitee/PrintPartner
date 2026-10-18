@@ -9,11 +9,42 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.select.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed inputs
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_*path_filter.py'
+          python3 -B -m unittest discover -s scripts -p test_alert_macos_main.py
+          python3 scripts/ci-path-filter.py actions
+
   actionlint:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Require successful input selection
+        env:
+          SELECTOR_RESULT: ${{ needs.changes.result }}
+        run: test "$SELECTOR_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -29,9 +60,15 @@ jobs:
         run: '"$RUNNER_TEMP/actionlint" -color'
 
   zizmor:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Require successful input selection
+        env:
+          SELECTOR_RESULT: ${{ needs.changes.result }}
+        run: test "$SELECTOR_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
