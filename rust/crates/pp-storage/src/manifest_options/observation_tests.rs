@@ -751,35 +751,52 @@ fn stored_kit_preserves_duplicate_free_node_counts_and_depth() {
 }
 
 #[test]
-fn stored_kit_missing_value_tokens_preserve_the_remaining_node_budget() {
-    for (raw, nodes) in [("", 1), (" \t\r\n", 1), ("[0,]", 3), (r#"{"key": }"#, 3)] {
-        let cancelled = AtomicBool::new(false);
-        let mut budget = PreparationBudget::new(
-            &cancelled,
-            PreparationLimits {
-                nodes,
-                ..PreparationLimits::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            observation::stored_kit(raw, &mut budget)
-                .map(drop)
-                .map_err(|error| format!("{error:?}")),
-            Ok(()),
-            "{raw:?}",
-        );
-        assert_eq!(
-            observation::stored_kit("{}", &mut budget)
-                .map(drop)
-                .map_err(|error| format!("{error:?}")),
-            Ok(()),
-            "remaining budget after {raw:?}",
-        );
-        assert!(matches!(
-            observation::stored_kit("{}", &mut budget),
-            Err(ReadFailure::LimitExceeded(Resource::Nodes))
-        ));
+fn stored_kit_malformed_value_tokens_preserve_the_remaining_node_budget() {
+    for (raw, nodes) in [
+        ("", 0),
+        (" \t\r\n", 0),
+        ("[0,]", 2),
+        (r#"{"key": }"#, 2),
+        ("n", 0),
+        ("tru", 0),
+        ("fals", 0),
+        (r#""\q""#, 0),
+        (r#""unterminated"#, 0),
+        ("1.", 0),
+        ("1e", 0),
+        ("1e+", 0),
+        (r#"{"kept":0,"nested":[true,n]}"#, 6),
+        (r#"{"kept":0,"nested":[true,"\q"]}"#, 6),
+        (r#"{"kept":0,"nested":[true,"unterminated"#, 6),
+        ("[0,1.]", 2),
+        ("[0,1e+]", 2),
+    ] {
+        for remaining in [0, 1] {
+            let cancelled = AtomicBool::new(false);
+            let mut budget = PreparationBudget::new(
+                &cancelled,
+                PreparationLimits {
+                    nodes: nodes + remaining,
+                    ..PreparationLimits::default()
+                },
+            )
+            .unwrap();
+            let kit = observation::stored_kit(raw, &mut budget)
+                .unwrap_or_else(|error| panic!("{raw:?}, {remaining} remaining: {error:?}"));
+            let mut output = Vec::new();
+            kit.write_selections_json(&mut output);
+            assert_eq!(output, b"{}", "{raw:?}");
+            if remaining == 1 {
+                assert!(
+                    observation::stored_kit("{}", &mut budget).is_ok(),
+                    "remaining budget after {raw:?}",
+                );
+            }
+            assert!(matches!(
+                observation::stored_kit("{}", &mut budget),
+                Err(ReadFailure::LimitExceeded(Resource::Nodes))
+            ));
+        }
     }
 }
 
@@ -951,6 +968,20 @@ fn the_stored_kit_shares_the_node_allowance_with_import_rules() {
     // {"selections":{"zeta":"z1"}} charges its root, two keys, the inner object and one value.
     assert_eq!(outcome(&both, 7), Ok(()));
     assert_eq!(outcome(&both, 6), Err("LimitExceeded(Nodes)".to_owned()));
+
+    database
+        .connection
+        .execute(
+            "INSERT INTO app_settings (tenant_id,key,value) VALUES (?1,'kit_manifest_1',?2)",
+            params![TENANT, r#"{"kept":0,"nested":[true,n]}"#],
+        )
+        .unwrap();
+    let malformed = database.capture(TENANT, 1).unwrap();
+    assert_eq!(outcome(&malformed, 8), Ok(()));
+    assert_eq!(
+        outcome(&malformed, 7),
+        Err("LimitExceeded(Nodes)".to_owned())
+    );
 }
 
 #[test]

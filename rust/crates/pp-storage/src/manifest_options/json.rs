@@ -167,29 +167,30 @@ struct Parser<'a, E> {
 impl<E: From<JsonError>> Parser<'_, E> {
     fn value(&mut self, depth: usize) -> Result<JsonValue, E> {
         self.whitespace();
-        if !matches!(
-            self.peek(),
-            Some(b'n' | b't' | b'f' | b'"' | b'[' | b'{' | b'-' | b'0'..=b'9')
-        ) {
-            return Err(JsonError::Syntax.into());
-        }
-        if depth > MAX_DEPTH {
-            return Err(JsonError::Limit(JsonLimit::Depth).into());
-        }
+        let value = match self.peek() {
+            Some(b'n') => self.literal(b"null", JsonValue::Null)?,
+            Some(b't') => self.literal(b"true", JsonValue::Bool(true))?,
+            Some(b'f') => self.literal(b"false", JsonValue::Bool(false))?,
+            Some(b'"') => JsonValue::Text(self.string()?),
+            Some(b'[') => {
+                self.node(depth)?;
+                return self.array(depth);
+            }
+            Some(b'{') => {
+                self.node(depth)?;
+                return self.object(depth);
+            }
+            Some(b'-' | b'0'..=b'9') => self.number()?,
+            _ => return Err(JsonError::Syntax.into()),
+        };
         self.node(depth)?;
-        match self.peek() {
-            Some(b'n') => Ok(self.literal(b"null", JsonValue::Null)?),
-            Some(b't') => Ok(self.literal(b"true", JsonValue::Bool(true))?),
-            Some(b'f') => Ok(self.literal(b"false", JsonValue::Bool(false))?),
-            Some(b'"') => Ok(JsonValue::Text(self.string()?)),
-            Some(b'[') => self.array(depth),
-            Some(b'{') => self.object(depth),
-            Some(b'-' | b'0'..=b'9') => Ok(self.number()?),
-            _ => Err(JsonError::Syntax.into()),
-        }
+        Ok(value)
     }
 
     fn node(&mut self, depth: usize) -> Result<(), E> {
+        if depth > MAX_DEPTH {
+            return Err(JsonError::Limit(JsonLimit::Depth).into());
+        }
         self.nodes = self
             .nodes
             .checked_add(1)
@@ -408,12 +409,28 @@ mod tests {
     }
 
     #[test]
-    fn missing_value_tokens_return_syntax_without_charging_nodes() {
+    fn malformed_value_tokens_return_syntax_without_charging_nodes() {
         for (input, expected_depths) in [
             ("", vec![]),
             (" \t\r\n", vec![]),
             ("[0,]", vec![0, 1]),
             (r#"{"key": }"#, vec![0, 1]),
+            ("n", vec![]),
+            ("tru", vec![]),
+            ("fals", vec![]),
+            (r#""\q""#, vec![]),
+            (r#""unterminated"#, vec![]),
+            ("1.", vec![]),
+            ("1e", vec![]),
+            ("1e+", vec![]),
+            (r#"{"kept":0,"nested":[true,n]}"#, vec![0, 1, 1, 1, 1, 2]),
+            (r#"{"kept":0,"nested":[true,"\q"]}"#, vec![0, 1, 1, 1, 1, 2]),
+            (
+                r#"{"kept":0,"nested":[true,"unterminated"#,
+                vec![0, 1, 1, 1, 1, 2],
+            ),
+            ("[0,1.]", vec![0, 1]),
+            ("[0,1e+]", vec![0, 1]),
         ] {
             let mut depths = Vec::new();
             let parsed = parse_with_node(input.as_bytes(), |depth| {
