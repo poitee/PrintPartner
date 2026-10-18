@@ -20,10 +20,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     net::{IpAddr, SocketAddr},
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    task::{Context, Poll},
     time::Duration,
 };
 
@@ -39,6 +41,14 @@ pub struct DraftHttpConfig {
 
 impl DraftHttpConfig {
     pub fn new(origin: &str, api_key_tenant: &str) -> Result<Self> {
+        Self::from_startup(
+            origin,
+            api_key_tenant,
+            std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
+        )
+    }
+
+    fn from_startup(origin: &str, api_key_tenant: &str, flag: Option<&str>) -> Result<Self> {
         let url = reqwest::Url::parse(origin)?;
         ensure!(
             url.path() == "/"
@@ -62,15 +72,16 @@ impl DraftHttpConfig {
             "Invalid API key tenant"
         );
         let origin = url.origin().ascii_serialization();
-        let host = origin.split_once("://").expect("URL scheme").1.to_owned();
+        let host = origin
+            .split_once("://")
+            .ok_or_else(|| anyhow::anyhow!("Listener must be an origin"))?
+            .1
+            .to_owned();
         Ok(Self {
             origin,
             host,
             api_key_tenant: api_key_tenant.into(),
-            enabled: matches!(
-                std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
-                Some("1" | "true")
-            ),
+            enabled: matches!(flag, Some("1" | "true")),
             body_limit: 8 * 1024 * 1024,
             wait: Duration::from_millis(100),
         })
@@ -130,18 +141,21 @@ async fn guard(
     mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let Ok(_permit) = app.admission.try_acquire() else {
-        return failure(503, "Draft service temporarily unavailable");
+    let Ok(permit) = app.admission.clone().try_acquire_owned() else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Draft service temporarily unavailable",
+        );
     };
     if request.uri().to_string().len() > 16_384 {
-        return failure(414, "Request target too long");
+        return failure(StatusCode::URI_TOO_LONG, "Request target too long");
     }
     if let Err((status, detail)) = admit(&app.config, &request) {
         return failure(status, detail);
     }
     let principal = match principal(request.headers(), &app.config.api_key_tenant) {
         Some(value) => value,
-        None => return failure(401, "Authentication required"),
+        None => return failure(StatusCode::UNAUTHORIZED, "Authentication required"),
     };
     request.extensions_mut().insert(principal);
     let limit = if request.method() == Method::PATCH {
@@ -152,31 +166,69 @@ async fn guard(
     let (parts, body) = request.into_parts();
     let bytes = match tokio::time::timeout(Duration::from_secs(5), to_bytes(body, limit)).await {
         Ok(Ok(bytes)) => bytes,
-        Ok(Err(_)) => return failure(413, "Request body too large"),
-        Err(_) => return failure(408, "Request body timed out"),
+        Ok(Err(_)) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "Request body too large"),
+        Err(_) => return failure(StatusCode::REQUEST_TIMEOUT, "Request body timed out"),
     };
-    next.run(axum::extract::Request::from_parts(parts, Body::from(bytes)))
-        .await
+    let response = next
+        .run(axum::extract::Request::from_parts(parts, Body::from(bytes)))
+        .await;
+    response.map(|body| {
+        Body::new(AdmittedBody {
+            body,
+            _permit: permit,
+        })
+    })
+}
+
+struct AdmittedBody {
+    body: Body,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl http_body::Body for AdmittedBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        Pin::new(&mut self.body).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.body.size_hint()
+    }
 }
 
 fn admit(
     config: &DraftHttpConfig,
     request: &axum::extract::Request,
-) -> std::result::Result<(), (u16, &'static str)> {
+) -> std::result::Result<(), (StatusCode, &'static str)> {
     let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() else {
-        return Err((500, "Transport identity unavailable"));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Transport identity unavailable",
+        ));
     };
     if !peer.ip().is_loopback() {
-        return Err((403, "Loopback transport required"));
+        return Err((StatusCode::FORBIDDEN, "Loopback transport required"));
     }
     let headers = request.headers();
-    if headers.get_all("host").iter().count() != 1
-        || headers.get("host").and_then(|value| value.to_str().ok()) != Some(&config.host)
+    let authority = request.uri().authority().map(|value| value.as_str());
+    let host = headers.get("host").and_then(|value| value.to_str().ok());
+    if headers.get_all("host").iter().count() > 1
+        || (headers.contains_key("host") && host != Some(&config.host))
+        || authority.or(host) != Some(&config.host)
         || headers
             .keys()
             .any(|key| key == "forwarded" || key.as_str().starts_with("x-forwarded-"))
     {
-        return Err((403, "Invalid request host"));
+        return Err((StatusCode::FORBIDDEN, "Invalid request host"));
     }
     let origin = headers.get("origin").and_then(|value| value.to_str().ok());
     if headers.get_all("origin").iter().count() > 1
@@ -190,7 +242,7 @@ fn admit(
             .iter()
             .any(|value| value == "cross-site")
     {
-        return Err((403, "Invalid request origin"));
+        return Err((StatusCode::FORBIDDEN, "Invalid request origin"));
     }
     Ok(())
 }
@@ -341,7 +393,10 @@ async fn call(
     operation: Operation,
 ) -> Response {
     let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
-        return failure(503, "Draft service temporarily unavailable");
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Draft service temporarily unavailable",
+        );
     };
     let cancellation = Cancellation(Arc::new(AtomicBool::new(false)));
     let flag = cancellation.0.clone();
@@ -404,11 +459,13 @@ fn identity(draft: &DraftIdentity) -> Value {
 fn present(reply: Reply, profile: PositiveId) -> Response {
     match reply {
         Reply::Read(Outcome::Listed { drafts }) => json_response(
-            200,
+            StatusCode::OK,
             json!({"profile_id":profile,"drafts":drafts.iter().map(identity).collect::<Vec<_>>()}),
         ),
         Reply::Read(Outcome::Workspace { workspace })
-        | Reply::Edited(WorkspaceOutcome::Ready { workspace }) => json_response(200, workspace),
+        | Reply::Edited(WorkspaceOutcome::Ready { workspace }) => {
+            json_response(StatusCode::OK, workspace)
+        }
         Reply::Read(Outcome::ProfileNotFound)
         | Reply::Edited(WorkspaceOutcome::ProfileNotFound) => profile_missing(),
         Reply::Read(Outcome::DraftNotFound) | Reply::Edited(WorkspaceOutcome::DraftNotFound) => {
@@ -430,9 +487,12 @@ fn present(reply: Reply, profile: PositiveId) -> Response {
         Reply::Edited(WorkspaceOutcome::IdempotencyConflict) => {
             conflict("idempotency_conflict", json!({}))
         }
-        Reply::Edited(WorkspaceOutcome::DomainError { code }) => {
-            coded_failure(422, "Plan draft update failed", code, json!({}))
-        }
+        Reply::Edited(WorkspaceOutcome::DomainError { code }) => coded_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Plan draft update failed",
+            code,
+            json!({}),
+        ),
         Reply::Read(Outcome::Read { .. } | Outcome::Diff { .. }) => {
             internal_error("Plan draft data is inconsistent")
         }
@@ -444,11 +504,15 @@ fn domain_error(error: anyhow::Error, internal_detail: &str) -> Response {
         return match auth {
             AuthFailure::SessionRequired
             | AuthFailure::InvalidCredentials
-            | AuthFailure::CredentialChanged => failure(401, "Authentication required"),
-            AuthFailure::OwnerMappingRequired => {
-                failure(403, "Explicit account owner mapping is required")
+            | AuthFailure::CredentialChanged => {
+                failure(StatusCode::UNAUTHORIZED, "Authentication required")
             }
-            AuthFailure::QueueFull | AuthFailure::Stopped => unavailable("writer_stopped"),
+            AuthFailure::OwnerMappingRequired => failure(
+                StatusCode::FORBIDDEN,
+                "Explicit account owner mapping is required",
+            ),
+            AuthFailure::QueueFull => unavailable("writer_queue_full"),
+            AuthFailure::Stopped => unavailable("writer_stopped"),
             AuthFailure::CommitUnknown => unavailable("outcome_unknown"),
             _ => internal_error(internal_detail),
         };
@@ -471,7 +535,7 @@ fn domain_error(error: anyhow::Error, internal_detail: &str) -> Response {
         });
     }
     match error.to_string().as_str() {
-        "Authentication required" => failure(401, "Authentication required"),
+        "Authentication required" => failure(StatusCode::UNAUTHORIZED, "Authentication required"),
         "Cancelled before admission" => unavailable("request_cancelled"),
         "Writer queue full" => unavailable("writer_queue_full"),
         "Storage stopped" | "Storage stopped without read result" | "Writer admission poisoned" => {
@@ -484,38 +548,68 @@ fn domain_error(error: anyhow::Error, internal_detail: &str) -> Response {
     }
 }
 fn internal_error(detail: &str) -> Response {
-    coded_failure(500, detail, "internal_error", json!({}))
+    coded_failure(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        detail,
+        "internal_error",
+        json!({}),
+    )
 }
 fn profile_missing() -> Response {
-    coded_failure(404, "Plan not found", "profile_not_found", json!({}))
+    coded_failure(
+        StatusCode::NOT_FOUND,
+        "Plan not found",
+        "profile_not_found",
+        json!({}),
+    )
 }
 fn draft_missing() -> Response {
-    coded_failure(404, "Plan draft not found", "draft_not_found", json!({}))
+    coded_failure(
+        StatusCode::NOT_FOUND,
+        "Plan draft not found",
+        "draft_not_found",
+        json!({}),
+    )
 }
 fn conflict(code: &str, extra: Value) -> Response {
-    coded_failure(409, "Plan draft update failed", code, extra)
+    coded_failure(
+        StatusCode::CONFLICT,
+        "Plan draft update failed",
+        code,
+        extra,
+    )
 }
 fn unavailable(code: &str) -> Response {
     coded_failure(
-        503,
+        StatusCode::SERVICE_UNAVAILABLE,
         "Draft service temporarily unavailable",
         code,
         json!({}),
     )
 }
 fn invalid_request() -> Response {
-    coded_failure(400, "Request is invalid", "invalid_request", json!({}))
+    coded_failure(
+        StatusCode::BAD_REQUEST,
+        "Request is invalid",
+        "invalid_request",
+        json!({}),
+    )
 }
-fn coded_failure(status: u16, detail: &str, code: impl serde::Serialize, extra: Value) -> Response {
+fn coded_failure(
+    status: StatusCode,
+    detail: &str,
+    code: impl serde::Serialize,
+    extra: Value,
+) -> Response {
     let mut body = extra.as_object().cloned().unwrap_or_default();
     body.insert("detail".into(), json!(detail));
     body.insert("code".into(), json!(code));
     json_response(status, body)
 }
-fn json_response(status: u16, value: impl serde::Serialize) -> Response {
-    (StatusCode::from_u16(status).expect("status"), Json(value)).into_response()
+fn json_response(status: StatusCode, value: impl serde::Serialize) -> Response {
+    (status, Json(value)).into_response()
 }
-fn failure(status: u16, detail: &str) -> Response {
+fn failure(status: StatusCode, detail: &str) -> Response {
     json_response(status, json!({"detail":detail}))
 }
 
@@ -545,9 +639,67 @@ mod tests {
         assert_eq!(admit(&config, &request).unwrap_err().0, 403);
     }
 
+    #[test]
+    fn authority_is_accepted_only_when_it_matches_the_configured_host() {
+        let config = DraftHttpConfig::new("https://127.0.0.1:1234", "default").unwrap();
+        for (uri, host, accepted) in [
+            ("https://127.0.0.1:1234/plans/1/drafts", None, true),
+            (
+                "https://127.0.0.1:1234/plans/1/drafts",
+                Some("127.0.0.1:1234"),
+                true,
+            ),
+            (
+                "https://127.0.0.1:1234/plans/1/drafts",
+                Some("evil.test"),
+                false,
+            ),
+            (
+                "https://evil.test/plans/1/drafts",
+                Some("127.0.0.1:1234"),
+                false,
+            ),
+            ("/plans/1/drafts", Some("127.0.0.1:1234"), true),
+            ("/plans/1/drafts", None, false),
+        ] {
+            let mut builder = axum::extract::Request::builder().uri(uri);
+            if let Some(host) = host {
+                builder = builder.header("host", host);
+            }
+            let mut request = builder.body(Body::empty()).unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 9000))));
+            assert_eq!(admit(&config, &request).is_ok(), accepted, "{uri} {host:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn response_body_reserves_admission_until_consumed_or_dropped() {
+        let admission = Arc::new(tokio::sync::Semaphore::new(1));
+        for consume in [true, false] {
+            let body = Body::new(AdmittedBody {
+                body: Body::from("workspace response"),
+                _permit: admission.clone().try_acquire_owned().unwrap(),
+            });
+            assert!(admission.clone().try_acquire_owned().is_err());
+            if consume {
+                assert_eq!(to_bytes(body, 1024).await.unwrap(), "workspace response");
+            } else {
+                drop(body);
+            }
+            assert_eq!(admission.available_permits(), 1);
+        }
+    }
+
     #[tokio::test]
     async fn storage_failures_keep_compatible_codes_and_hide_internal_details() {
         for (error, code) in [
+            (
+                anyhow::Error::new(AuthFailure::QueueFull),
+                "writer_queue_full",
+            ),
+            (anyhow::Error::new(AuthFailure::Stopped), "writer_stopped"),
             (anyhow::Error::new(Failure::Cancelled), "request_cancelled"),
             (anyhow::Error::new(Failure::QueueFull), "writer_queue_full"),
             (anyhow::Error::new(Failure::Stopped), "writer_stopped"),
@@ -641,3 +793,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "http/tests.rs"]
+mod http_tests;

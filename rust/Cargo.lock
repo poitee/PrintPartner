@@ -3275,6 +3275,7 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
  "hex",
+ "http-body",
  "lettre",
  "log",
  "pp-storage",

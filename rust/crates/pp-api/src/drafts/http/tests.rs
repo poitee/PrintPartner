@@ -1,6 +1,4 @@
-#![cfg(feature = "desktop_rebuild")]
-
-use pp_api::drafts::{DraftHttpConfig, draft_router};
+use super::{DraftHttpConfig, draft_router};
 use pp_storage::{
     Limits, WriterOwner,
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
@@ -19,26 +17,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const DIGEST: &str = "ae11e670337e3e5eab736b29b4e294edbea8b564661cf15972625783f8930ee3";
 const COOKIE: &str = "pp_session=required-unit-fixture-secret";
 
-fn isolated(name: &str) -> bool {
-    if std::env::var("GRE619_HTTP_CHILD").ok().as_deref() == Some(name) {
-        return false;
-    }
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", name, "--nocapture"])
-        .env("GRE619_HTTP_CHILD", name)
-        .env("PP_DESKTOP_REBUILD", "true")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-    true
-}
-
 fn policy() -> AuthPolicy {
     AuthPolicy {
         registration: RegistrationPolicy::Open,
@@ -56,6 +34,15 @@ struct Server {
 }
 impl Server {
     async fn start(body_limit: usize, tenant: &str, setup: &str) -> Self {
+        Self::start_with_gate(body_limit, tenant, setup, Some("true")).await
+    }
+
+    async fn start_with_gate(
+        body_limit: usize,
+        tenant: &str,
+        setup: &str,
+        flag: Option<&str>,
+    ) -> Self {
         let mut random = [0; 12];
         getrandom::fill(&mut random).unwrap();
         let directory =
@@ -63,7 +50,7 @@ impl Server {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(
             directory.join("print-partner.db"),
-            include_bytes!("../../pp-storage/tests/fixtures/required-units/unchanged.db"),
+            include_bytes!("../../../../pp-storage/tests/fixtures/required-units/unchanged.db"),
         )
         .unwrap();
         Connection::open(directory.join("print-partner.db"))
@@ -73,7 +60,7 @@ impl Server {
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
-        let config = DraftHttpConfig::new(&origin, tenant)
+        let config = DraftHttpConfig::from_startup(&origin, tenant, flag)
             .unwrap()
             .with_limits(body_limit, Duration::from_millis(100))
             .unwrap();
@@ -174,9 +161,6 @@ fn identity() -> Value {
 
 #[tokio::test]
 async fn listing_and_workspace_have_literal_wire_contracts() {
-    if isolated("listing_and_workspace_have_literal_wire_contracts") {
-        return;
-    }
     let s = Server::start(1024 * 1024, "default", "").await;
     let expected = json!({"profile_id":1,"drafts":[
         {"draft_id":1,"state":"consumed","lifecycle_version":1,
@@ -237,9 +221,6 @@ async fn listing_and_workspace_have_literal_wire_contracts() {
 
 #[tokio::test]
 async fn edits_persist_and_preserve_conflict_workspaces() {
-    if isolated("edits_persist_and_preserve_conflict_workspaces") {
-        return;
-    }
     let s = Server::start(1024 * 1024, "default", "").await;
     let before = response(s.request(Method::GET, "/plans/1/drafts/2"), 200).await;
     let mut expected =
@@ -305,9 +286,6 @@ async fn edits_persist_and_preserve_conflict_workspaces() {
 
 #[tokio::test]
 async fn missing_resources_and_cross_tenant_reads_are_hidden() {
-    if isolated("missing_resources_and_cross_tenant_reads_are_hidden") {
-        return;
-    }
     let s = Server::start(1024 * 1024, "default", "").await;
     for profile in [2, 999] {
         for (method, suffix, body) in [
@@ -362,9 +340,6 @@ async fn missing_resources_and_cross_tenant_reads_are_hidden() {
 
 #[tokio::test]
 async fn api_keys_use_fixed_tenant_routing_and_revocation() {
-    if isolated("api_keys_use_fixed_tenant_routing_and_revocation") {
-        return;
-    }
     let s = Server::start(1024 * 1024, "default", "").await;
     let auth::Outcome::KeyCreated { info, key } = s
         .auth(auth::Request::CreateKey {
@@ -467,9 +442,6 @@ async fn api_keys_use_fixed_tenant_routing_and_revocation() {
 
 #[tokio::test]
 async fn admission_rejects_ambiguous_credentials_hosts_and_origins() {
-    if isolated("admission_rejects_ambiguous_credentials_hosts_and_origins") {
-        return;
-    }
     let s = Server::start(1024 * 1024, "default", "").await;
     for header in [
         "forwarded",
@@ -563,9 +535,6 @@ async fn admission_rejects_ambiguous_credentials_hosts_and_origins() {
 
 #[tokio::test]
 async fn bounds_and_typed_bodies_reject_before_mutation() {
-    if isolated("bounds_and_typed_bodies_reject_before_mutation") {
-        return;
-    }
     let s = Server::start(256, "default", "").await;
     for body in [
         "{",
@@ -661,9 +630,6 @@ async fn bounds_and_typed_bodies_reject_before_mutation() {
 
 #[tokio::test]
 async fn failed_selection_keeps_committed_edit_and_sanitizes_errors() {
-    if isolated("failed_selection_keeps_committed_edit_and_sanitizes_errors") {
-        return;
-    }
     let s=Server::start(1024*1024,"default","CREATE TRIGGER injected_failure BEFORE INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT RAISE(ABORT,'private fixture detail'); END").await;
     assert_eq!(
         response(
@@ -694,8 +660,8 @@ async fn failed_selection_keeps_committed_edit_and_sanitizes_errors() {
     s.close().await;
 }
 
-#[test]
-fn runtime_gate_is_exact_and_isolated() {
+#[tokio::test]
+async fn runtime_gate_is_exact_and_isolated() {
     for value in [
         None,
         Some(""),
@@ -707,86 +673,55 @@ fn runtime_gate_is_exact_and_isolated() {
         Some("1"),
         Some("true"),
     ] {
-        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-        command
-            .args(["--ignored", "--exact", "gate_probe", "--nocapture"])
-            .env_remove("PP_DESKTOP_REBUILD")
-            .env(
-                "GRE619_GATE_EXPECTED",
-                if matches!(value, Some("1" | "true")) {
-                    "on"
+        let s = Server::start_with_gate(1024 * 1024, "default", "", value).await;
+        let enabled = matches!(value, Some("1" | "true"));
+        for prefix in ["", "/api/v2"] {
+            for (method, suffix) in [
+                (Method::GET, ""),
+                (Method::GET, "/2"),
+                (Method::PATCH, "/2/parts"),
+            ] {
+                let status = if !enabled {
+                    404
+                } else if method == Method::GET {
+                    200
                 } else {
-                    "off"
-                },
-            );
-        if let Some(value) = value {
-            command.env("PP_DESKTOP_REBUILD", value);
+                    400
+                };
+                let result = s
+                    .request(method, &format!("{prefix}/plans/1/drafts{suffix}"))
+                    .json(&json!({}))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(result.status().as_u16(), status);
+            }
         }
-        let output = command.output().unwrap();
-        assert!(
-            output.status.success(),
-            "{value:?}\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-    }
-}
-
-#[tokio::test]
-#[ignore = "runs with an isolated startup environment"]
-async fn gate_probe() {
-    let s = Server::start(1024 * 1024, "default", "").await;
-    let enabled = std::env::var("GRE619_GATE_EXPECTED").unwrap() == "on";
-    for prefix in ["", "/api/v2"] {
-        for (method, suffix) in [
-            (Method::GET, ""),
-            (Method::GET, "/2"),
-            (Method::PATCH, "/2/parts"),
-        ] {
-            let status = if !enabled {
+        if !enabled {
+            assert_eq!(
+                s.client
+                    .get(format!("{}/plans/1/drafts", s.origin))
+                    .header("Host", "wrong.test")
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
                 404
-            } else if method == Method::GET {
-                200
-            } else {
-                400
-            };
-            let result = s
-                .request(method, &format!("{prefix}/plans/1/drafts{suffix}"))
-                .json(&json!({}))
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(result.status().as_u16(), status);
+            );
         }
-    }
-    if !enabled {
         assert_eq!(
-            s.client
-                .get(format!("{}/plans/1/drafts", s.origin))
-                .header("Host", "wrong.test")
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            404
+            s.sql()
+                .query_row("SELECT state FROM plan_drafts WHERE id=2", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "open"
         );
+        s.close().await;
     }
-    assert_eq!(
-        s.sql()
-            .query_row("SELECT state FROM plan_drafts WHERE id=2", [], |r| r
-                .get::<_, String>(0))
-            .unwrap(),
-        "open"
-    );
-    s.close().await;
 }
 
 #[tokio::test]
 async fn active_requests_are_bounded_and_recover_after_timeout_or_disconnect() {
-    if isolated("active_requests_are_bounded_and_recover_after_timeout_or_disconnect") {
-        return;
-    }
     let s = Server::start(1024 * 1024, "default", "").await;
     let host = s.origin.strip_prefix("http://").unwrap();
     let wait_for_status = |status| {
