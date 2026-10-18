@@ -268,6 +268,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "source.sync",
         "tool.get_workflow_help",
         "tool.get_job_status",
+        "tool.check_hardware_interfaces",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -290,8 +291,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 24);
-    assert_eq!(unresolved.len(), 419);
+    assert_eq!(reviewed.len(), 25);
+    assert_eq!(unresolved.len(), 418);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -554,6 +555,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
     for id in [
         "tool.get_workflow_help",
         "tool.get_job_status",
+        "tool.check_hardware_interfaces",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -603,6 +605,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 #[test]
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
+        ("tool.check_hardware_interfaces", "tool.get_workflow_help"),
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
@@ -2122,7 +2125,14 @@ fn assert_catalog_tool_invalid_admission(id: &str) {
             assert!(!effect);
         }
     }
+    let resources_empty = original["resources"]["reviewed"][entry]["resources"]
+        .as_array()
+        .unwrap()
+        .is_empty();
     for edit in 0..13 {
+        if resources_empty && (9..=11).contains(&edit) {
+            continue;
+        }
         let mut value = original.clone();
         let expected = match edit {
             0 | 1 => {
@@ -2222,6 +2232,27 @@ fn assert_catalog_tool_invalid_admission(id: &str) {
         });
         assert_eq!(result, Err(expected), "edit {edit}");
         assert!(!effect, "edit {edit}");
+    }
+
+    for resource in [
+        json!({"kind":"table","name":"unregistered_table"}),
+        json!({"kind":"file","name":"unregistered-file"}),
+    ] {
+        let mut value = original.clone();
+        value["resources"]["reviewed"][entry]["resources"]
+            .as_array_mut()
+            .unwrap()
+            .push(resource);
+        let mut effect = false;
+        assert!(matches!(
+            admit(&value).and_then(|index| {
+                index.admit_rollback(id)?;
+                effect = true;
+                Ok(())
+            }),
+            Err(AdmissionError::Malformed(_))
+        ));
+        assert!(!effect);
     }
 }
 
@@ -2477,4 +2508,22 @@ fn ticket_t_7_ownership_get_plan_option_groups_requires_valid_inference_formats(
             matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains(&format!("missing field `{format}`")))
         );
     }
+}
+
+#[test]
+fn ticket_t_7_ownership_hardware_interfaces_has_reviewed_empty_node_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.check_hardware_interfaces";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(index.resources_for(id), Ok(&ResourceSet::new()));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&ResourceSet::new()));
+}
+
+#[test]
+fn ticket_t_7_ownership_hardware_interfaces_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.check_hardware_interfaces");
 }
