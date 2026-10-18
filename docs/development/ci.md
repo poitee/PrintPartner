@@ -139,7 +139,7 @@ for Rust Linux, ast-grep, web checks, desktop contracts, desktop runtime,
 source artifacts, embedded-driver smoke, and the native
 macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
 `[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
-Each runner accepts one job and is destroyed afterward. Linux has four slots with
+Each runner accepts one job and is destroyed afterward. Linux has three slots with
 3 vCPU and 8 GB each; macOS has two fresh Tart VM slots.
 
 Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
@@ -154,7 +154,9 @@ No job routed to the local fleet references `secrets.`.
 The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitHub CLI through
 `sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
 1.99.0 with rustfmt and clippy. Changes to the setup script trigger every
-path-filtered consumer, including Rust input selection.
+path-filtered consumer, including Rust input selection. The local web validation
+job has a 45-minute limit after two runs reached the hosted 20-minute limit while
+still executing tests. Fork PRs and non-PR runs retain the 20-minute limit.
 
 Rust Windows jobs select `[self-hosted, windows, x64, pp-local-win]` only when
 `PP_LOCAL_WIN` is `true` and the event is a same-repository PR. The switch defaults
