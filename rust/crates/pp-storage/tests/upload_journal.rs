@@ -8,7 +8,10 @@ use pp_storage::{
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
     catalog::CreateSource,
     jobs::{Credential, JobKind, Payload, WorkerAdmission},
-    uploads::{Admission, Basis, File, ImportClient, Input, Operation, State, Target},
+    uploads::{
+        Admission, Basis, File, ImportClient, Input, MissingPreclaimRefusal, Operation, State,
+        Target,
+    },
 };
 use rusqlite::Connection;
 use serde::Serialize;
@@ -749,8 +752,11 @@ fn preclaim_refused() -> PathBuf {
 
 fn refused_open(root: &std::path::Path) {
     let error = WriterOwner::open(root, Limits::default()).err().unwrap();
-    assert!(
-        format!("{error:#}").contains("Missing Source preclaim refusal"),
+    assert_eq!(
+        error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<MissingPreclaimRefusal>()),
+        Some(&MissingPreclaimRefusal),
         "{error:#}"
     );
 }

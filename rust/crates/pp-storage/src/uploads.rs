@@ -235,6 +235,17 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
     Ok(())
 }
 
+/// Opening storage found an import whose job and cursor show a preclaim refusal
+/// without its `source_preclaim_refusals` row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MissingPreclaimRefusal;
+impl std::fmt::Display for MissingPreclaimRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Missing Source preclaim refusal")
+    }
+}
+impl std::error::Error for MissingPreclaimRefusal {}
+
 /// A preclaim refusal is the entry's only observation: its admitted entry's
 /// first cursor, and the targeted claim refusal that failed its job before any
 /// attempt. A settled entry keeps the refusal as its last observation. An entry
@@ -260,7 +271,7 @@ fn validate_preclaim_refusal(
                     refusal.phase == jobs::AuthorityRefusalPhase::TargetedClaim
                         && refusal.generation == 0
                 })),
-            "Missing Source preclaim refusal"
+            MissingPreclaimRefusal
         );
         return Ok(());
     };
