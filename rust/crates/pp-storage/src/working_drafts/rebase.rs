@@ -229,10 +229,10 @@ pub(super) fn rebase(
         let captured = preparation::capture(tx, &tenant, profile, reads, budget)?;
         Ok(canonical_inputs(&captured.inputs) == canonical_inputs(inputs))
     };
-    // Node's write transaction waits for the writer lock on its own.
-    let admission = writer_admission::Deadline::at_dequeue();
     if same_base && inputs_current(&tx, &current.inputs, &mut budget)? {
         tx.commit()?;
+        // Node's write transaction waits for the writer lock on its own.
+        let admission = writer_admission::Deadline::at_dequeue();
         return transact(connection, admission, cancelled, |tx| {
             let checked = recheck(
                 tx,
@@ -294,6 +294,7 @@ pub(super) fn rebase(
     if !conflicts.is_empty() {
         return finished(RebaseOutcome::MergeConflicts { conflicts });
     }
+    let admission = writer_admission::Deadline::at_dequeue();
     transact(connection, admission, cancelled, |tx| {
         let checked = recheck(
             tx,

@@ -56,6 +56,7 @@ struct Reads {
     database: PathBuf,
     between: Mutex<Option<String>>,
     cancel: Option<Arc<AtomicBool>>,
+    delay: Duration,
 }
 struct Root(Arc<Reads>);
 struct Inventory(Vec<InventoryPath>);
@@ -105,6 +106,7 @@ impl StlRootRead for Root {
         if let Some(cancel) = &self.0.cancel {
             cancel.store(true, Ordering::Release);
         }
+        std::thread::sleep(self.0.delay);
         let entries = self
             .0
             .files
@@ -182,6 +184,7 @@ impl Fixture {
             database: self.database(),
             between: Mutex::new(between.as_str().map(str::to_owned)),
             cancel,
+            delay: Duration::ZERO,
         })))
     }
     fn rows(&self, sql: &str) -> Value {
@@ -396,6 +399,30 @@ fn cancellation_during_preparation_writes_nothing() {
         "{error:?}"
     );
     assert_eq!(f.recorded_rows(), before);
+}
+
+/// The writer's five-second admission wait starts after preparation, so a
+/// slow Source scan does not refuse an uncontended write.
+#[test]
+fn a_preparation_slower_than_the_busy_wait_still_writes() {
+    let case = node("base-moved-abandoned");
+    let f = Fixture::new(&case);
+    let owner = f.open();
+    let reads = Arc::new(Shared(Arc::new(Reads {
+        files: serde_json::from_value(case["files"].clone()).unwrap(),
+        database: f.database(),
+        between: Mutex::new(None),
+        cancel: None,
+        delay: Duration::from_millis(5_500),
+    })));
+    let outcome = rebase(
+        &owner,
+        reads,
+        &case["calls"][0],
+        Arc::new(AtomicBool::new(false)),
+    );
+    owner.shutdown().unwrap();
+    assert_eq!(outcome.unwrap()["kind"], "rebased");
 }
 
 #[test]
