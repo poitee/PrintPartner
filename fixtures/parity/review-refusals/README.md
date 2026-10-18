@@ -10,7 +10,7 @@ Node calls `readAcceptedPlanReview`, the function behind `GET /plans/:id/review`
 
 - **Node.** The raw thrown error (`name`, `code`, `message`) and `routeClass`. `routeClass` is `integrity_failure` when the error is an `AcceptedPlanOperationalIntegrityError`, the same `instanceof` test the route uses, and `unexpected` otherwise.
 - **Rust.** The typed carrier. `AcceptedRead::IntegrityFailure` comes back per Build in the batch. Any other error fails the whole batch and the binary exits nonzero. The Rust literals live in the test, not in `node.json`.
-- **Preserved state.** The `rowsQuery` result and the `repos/` files, before and after the read, must be unchanged and identical to `node.json`. Each runtime also compares every row of every table before and after its own read. That full snapshot is compared only within each runtime.
+- **Preserved state.** The `rowsQuery` result and the `repos/` files, before and after the read, must be unchanged and identical to `node.json`. Each runtime also compares every row of every table before and after its own read. That full snapshot is compared only within each runtime. Both encode each cell with the `cell` SQL in `node.json`, as its storage class plus exact hex bytes, because `quote()` stops TEXT at the first NUL.
 
 The fixture makes no claim about HTTP status, because no Rust HTTP route serves Review yet.
 

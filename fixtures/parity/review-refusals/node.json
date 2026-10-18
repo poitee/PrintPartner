@@ -1,7 +1,8 @@
 {
   "source": "web/apps/server/src/services/accepted-plan-review.ts",
   "database": "rust/crates/pp-storage/tests/fixtures/accepted-plan-node.db",
-  "rowsQuery": "SELECT 'parts',id,quote(requirement),quote(option_group_id) FROM parts UNION ALL SELECT 'plan_revision_parts',id,quote(requirement),quote(option_group_id) FROM plan_revision_parts UNION ALL SELECT 'plan_revisions',id,quote(snapshot_digest),NULL FROM plan_revisions ORDER BY 1,2",
+  "cell": "typeof(\"{column}\")||':'||CASE typeof(\"{column}\") WHEN 'real' THEN printf('%.17g',\"{column}\") ELSE hex(\"{column}\") END",
+  "rowsQuery": "SELECT 'parts',id,typeof(\"requirement\")||':'||CASE typeof(\"requirement\") WHEN 'real' THEN printf('%.17g',\"requirement\") ELSE hex(\"requirement\") END,typeof(\"option_group_id\")||':'||CASE typeof(\"option_group_id\") WHEN 'real' THEN printf('%.17g',\"option_group_id\") ELSE hex(\"option_group_id\") END FROM parts UNION ALL SELECT 'plan_revision_parts',id,typeof(\"requirement\")||':'||CASE typeof(\"requirement\") WHEN 'real' THEN printf('%.17g',\"requirement\") ELSE hex(\"requirement\") END,typeof(\"option_group_id\")||':'||CASE typeof(\"option_group_id\") WHEN 'real' THEN printf('%.17g',\"option_group_id\") ELSE hex(\"option_group_id\") END FROM plan_revision_parts UNION ALL SELECT 'plan_revisions',id,typeof(\"snapshot_digest\")||':'||CASE typeof(\"snapshot_digest\") WHEN 'real' THEN printf('%.17g',\"snapshot_digest\") ELSE hex(\"snapshot_digest\") END,NULL FROM plan_revisions ORDER BY 1,2",
   "sentinel": {
     "path": "repos/1/revisions/accepted/sentinel.txt",
     "contents": "review-refusal sentinel\n"
@@ -23,31 +24,31 @@
           [
             "parts",
             1,
-            "X'50504A5301'",
-            "NULL"
+            "blob:50504A5301",
+            "null:"
           ],
           [
             "parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             1,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revisions",
             1,
-            "'bac2028fe05e303f3c0ff3b2af25b0ebc978bad83e7644320c381e9febadc876'",
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
             null
           ]
         ],
@@ -75,31 +76,31 @@
           [
             "parts",
             1,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             1,
-            "X'50504A5301'",
-            "NULL"
+            "blob:50504A5301",
+            "null:"
           ],
           [
             "plan_revision_parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revisions",
             1,
-            "'bac2028fe05e303f3c0ff3b2af25b0ebc978bad83e7644320c381e9febadc876'",
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
             null
           ]
         ],
@@ -127,31 +128,31 @@
           [
             "parts",
             1,
-            "X'50504A530100000001D800'",
-            "X'50504A530100000001DC00'"
+            "blob:50504A530100000001D800",
+            "blob:50504A530100000001DC00"
           ],
           [
             "parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             1,
-            "X'50504A530100000001D800'",
-            "X'50504A530100000001DC00'"
+            "blob:50504A530100000001D800",
+            "blob:50504A530100000001DC00"
           ],
           [
             "plan_revision_parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revisions",
             1,
-            "'bac2028fe05e303f3c0ff3b2af25b0ebc978bad83e7644320c381e9febadc876'",
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
             null
           ]
         ],
@@ -179,31 +180,31 @@
           [
             "parts",
             1,
-            "X'50504A530100000001D800'",
-            "NULL"
+            "blob:50504A530100000001D800",
+            "null:"
           ],
           [
             "parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             1,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revisions",
             1,
-            "'bac2028fe05e303f3c0ff3b2af25b0ebc978bad83e7644320c381e9febadc876'",
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
             null
           ]
         ],
@@ -231,31 +232,31 @@
           [
             "parts",
             1,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             1,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revision_parts",
             2,
-            "NULL",
-            "NULL"
+            "null:",
+            "null:"
           ],
           [
             "plan_revisions",
             1,
-            "'bac2028fe05e303f3c0ff3b2af25b0ebc978bad83e7644320c381e9febadc876'",
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
             null
           ]
         ],

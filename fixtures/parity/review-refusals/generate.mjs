@@ -28,7 +28,10 @@ const cases = [
   ["non-scalar-projection-mismatch", `UPDATE parts SET requirement=${loneHigh} WHERE id=1`],
   ["unrelated-renamed-column", "ALTER TABLE plan_revision_parts RENAME COLUMN notes TO notes_renamed"],
 ];
-const rowsQuery = "SELECT 'parts',id,quote(requirement),quote(option_group_id) FROM parts UNION ALL SELECT 'plan_revision_parts',id,quote(requirement),quote(option_group_id) FROM plan_revision_parts UNION ALL SELECT 'plan_revisions',id,quote(snapshot_digest),NULL FROM plan_revisions ORDER BY 1,2";
+// quote() stops TEXT at the first NUL, so encode the storage class and the exact bytes.
+const cell = `typeof("{column}")||':'||CASE typeof("{column}") WHEN 'real' THEN printf('%.17g',"{column}") ELSE hex("{column}") END`;
+const encode = (column) => cell.replaceAll("{column}", column);
+const rowsQuery = `SELECT 'parts',id,${encode("requirement")},${encode("option_group_id")} FROM parts UNION ALL SELECT 'plan_revision_parts',id,${encode("requirement")},${encode("option_group_id")} FROM plan_revision_parts UNION ALL SELECT 'plan_revisions',id,${encode("snapshot_digest")},NULL FROM plan_revisions ORDER BY 1,2`;
 const sentinel = { path: "repos/1/revisions/accepted/sentinel.txt", contents: "review-refusal sentinel\n" };
 
 function mutate(path, sql) {
@@ -63,7 +66,7 @@ function snapshot(path) {
   const raw = new DatabaseSync(path, { readOnly: true });
   try {
     return raw.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().flatMap(({ name }) => {
-      const columns = raw.prepare("SELECT name FROM pragma_table_info(?)").all(name).map((c) => `quote("${c.name}")`);
+      const columns = raw.prepare("SELECT name FROM pragma_table_info(?)").all(name).map((c) => encode(c.name));
       return raw.prepare(`SELECT ${columns.join("||','||")} AS line FROM "${name}" ORDER BY line`).all().map(({ line }) => `${name}:${line}`);
     });
   } finally {
@@ -129,7 +132,7 @@ for (const [name, sql] of cases) {
   }
 }
 
-const fixture = `${JSON.stringify({ source: review, database, rowsQuery, sentinel, cases: output }, null, 2)}\n`;
+const fixture = `${JSON.stringify({ source: review, database, cell, rowsQuery, sentinel, cases: output }, null, 2)}\n`;
 const target = join(here, "node.json");
 if (check) assert.equal(readFileSync(target, "utf8"), fixture, "node.json is stale");
 else writeFileSync(target, fixture);

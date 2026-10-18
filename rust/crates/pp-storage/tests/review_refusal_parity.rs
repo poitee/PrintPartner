@@ -137,7 +137,7 @@ fn rows(root: &Path, query: &str) -> Value {
 }
 
 /// Every row of every table, so a write to any column fails the preservation check.
-fn database(root: &Path) -> Vec<String> {
+fn database(root: &Path, cell: &str) -> Vec<String> {
     let connection = Connection::open(root.join("print-partner.db")).unwrap();
     let tables = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -153,7 +153,7 @@ fn database(root: &Path) -> Vec<String> {
             .unwrap()
             .query_map([&table], |row| row.get::<_, String>(0))
             .unwrap()
-            .map(|name| format!("quote(\"{}\")", name.unwrap()))
+            .map(|name| cell.replace("{column}", &name.unwrap()))
             .collect::<Vec<_>>();
         let mut statement = connection
             .prepare(&format!(
@@ -230,6 +230,7 @@ fn review(root: &Path, session: &str) -> Refusal {
 fn review_refusals_match_node_class_and_preserve_stored_inputs() {
     let fixture: Value = serde_json::from_str(NODE).unwrap();
     let query = fixture["rowsQuery"].as_str().unwrap();
+    let cell = fixture["cell"].as_str().unwrap();
     let cases = fixture["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 5);
     for case in cases {
@@ -241,10 +242,10 @@ fn review_refusals_match_node_class_and_preserve_stored_inputs() {
             "{name} stored input"
         );
         assert_eq!(files(&root.0), case["preserved"]["files"], "{name} files");
-        let database_before = database(&root.0);
+        let database_before = database(&root.0, cell);
         let refusal = review(&root.0, "read-fixture-secret");
         assert_eq!(
-            database(&root.0),
+            database(&root.0, cell),
             database_before,
             "{name} preserved database"
         );
@@ -272,12 +273,13 @@ fn review_refusals_match_node_class_and_preserve_stored_inputs() {
 #[test]
 fn unrelated_generic_error_does_not_satisfy_an_integrity_refusal() {
     let fixture: Value = serde_json::from_str(NODE).unwrap();
+    let cell = fixture["cell"].as_str().unwrap();
     let malformed = &fixture["cases"][0];
     assert_eq!(malformed["name"], "malformed-parts-ppjs");
     let root = setup(&fixture, malformed["sql"].as_str().unwrap());
-    let database_before = database(&root.0);
+    let database_before = database(&root.0, cell);
     let refusal = review(&root.0, "not-the-read-session");
-    assert_eq!(database(&root.0), database_before);
+    assert_eq!(database(&root.0, cell), database_before);
     let Refusal::Unexpected { stderr } = &refusal else {
         panic!("{refusal:?}");
     };
