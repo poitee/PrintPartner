@@ -1286,3 +1286,35 @@ fn refused_requests_write_nothing() {
     owner.shutdown().unwrap();
     assert_eq!(f.recorded_rows(), before);
 }
+
+#[test]
+fn preparation_large_quantity_refusal_preserves_rows_and_files() {
+    for quantity in [
+        "9007199254740992",
+        "100000000000000000000",
+        "1000000000000000000000",
+    ] {
+        let filename = format!("part_x{quantity}.stl");
+        let mut case = node("created-then-replayed");
+        case["files"] = json!([filename]);
+        let f = Fixture::new(&case);
+        let before = f.recorded_rows();
+        let file = f.path.join("repos/1/revisions/fixture").join(&filename);
+        let contents = std::fs::read(&file).unwrap();
+        let owner = f.open();
+        let error = recompute(
+            &owner,
+            f.reads(&case["files"], &Value::Null, None),
+            PreparationLimits::default(),
+            "large-quantity",
+            true,
+            1,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid scalar part integer");
+        owner.shutdown().unwrap();
+        assert_eq!(f.recorded_rows(), before, "{quantity}");
+        assert_eq!(std::fs::read(file).unwrap(), contents, "{quantity}");
+    }
+}

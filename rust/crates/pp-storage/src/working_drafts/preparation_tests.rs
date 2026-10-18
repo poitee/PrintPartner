@@ -207,6 +207,34 @@ fn preparation_matches_literal_node_results() {
     preparation_matches_cases(cases());
 }
 #[test]
+fn preparation_large_quantity_digest_matches_node() {
+    naming_override_case("large-filename-quantities");
+}
+
+#[test]
+fn preparation_large_quantity_keeps_integer_spelling() {
+    use crate::manifest_text::{DraftPart, PartManifestMetadata};
+    for (input, expected) in [
+        ("9007199254740991", "9007199254740991"),
+        ("9007199254740992", "9007199254740992"),
+        ("9007199254740993", "9007199254740992"),
+        ("1000000000000000128", "1000000000000000100"),
+        ("100000000000000000000", "100000000000000000000"),
+        ("1000000000000000000000", "1e+21"),
+    ] {
+        let value = json!(input.parse::<f64>().unwrap());
+        let part = DraftPart::new(
+            json!({"quantityInferred": value}),
+            PartManifestMetadata::default(),
+        );
+        assert_eq!(
+            String::from_utf8(part.json_fields(&["quantityInferred"], false)).unwrap(),
+            format!("{{\"quantityInferred\":{expected}}}"),
+            "{input}"
+        );
+    }
+}
+#[test]
 fn full_naming_override_omits_role() {
     naming_override_case("naming-full-override-omits-role");
 }
