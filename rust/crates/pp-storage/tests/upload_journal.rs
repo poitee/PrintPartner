@@ -7,7 +7,7 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
     catalog::CreateSource,
-    jobs::{Credential, Payload},
+    jobs::{Credential, JobKind, Payload, WorkerAdmission},
     uploads::{Admission, Basis, File, ImportClient, Input, Operation, State, Target},
 };
 use rusqlite::Connection;
@@ -628,4 +628,163 @@ fn legacy_files_and_zip_match_the_detached_prior_serializer() {
             field["sha256"]
         );
     }
+}
+
+/// Every journal, quota, preclaim and job row, which a repeated startup must
+/// leave unchanged.
+fn journal_rows(root: &std::path::Path) -> Vec<Vec<String>> {
+    let connection = Connection::open(root.join("print-partner.db")).unwrap();
+    [
+        "source_import_operations",
+        "source_import_quota",
+        "source_preclaim_refusals",
+        "source_revision_observations",
+        "durable_jobs",
+        "durable_job_keys",
+    ]
+    .into_iter()
+    .map(|table| {
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+            .unwrap();
+        let width = statement.column_count();
+        statement
+            .query_map([], |row| {
+                (0..width)
+                    .map(|index| {
+                        Ok(format!(
+                            "{:?}",
+                            row.get::<_, rusqlite::types::Value>(index)?
+                        ))
+                    })
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map(|row| row.join("|"))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    })
+    .collect()
+}
+
+/// Removes the only preclaim row past its immutability trigger, then restores the
+/// trigger so the schema stays intact.
+fn delete_preclaim(root: &std::path::Path) {
+    let connection = Connection::open(root.join("print-partner.db")).unwrap();
+    let trigger: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='trg_source_preclaim_refusals_immutable_delete'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TRIGGER trg_source_preclaim_refusals_immutable_delete")
+        .unwrap();
+    let deleted = connection
+        .execute("DELETE FROM source_preclaim_refusals", [])
+        .unwrap();
+    assert_eq!(deleted, 1);
+    connection.execute_batch(&trigger).unwrap();
+}
+
+/// Admits an import with an owner session, revokes it, and lets a targeted claim
+/// refuse the job before its first attempt, which writes the only preclaim row.
+fn preclaim_refused() -> PathBuf {
+    let Fixture {
+        root,
+        owner,
+        client,
+    } = Fixture::open();
+    let credential = session(&owner);
+    let Credential::Session(token) = &credential else {
+        unreachable!()
+    };
+    let token = Secret::new(token.expose().into());
+    let (request, files) = upload("preclaim");
+    let epoch = client.accounting_epoch();
+    let op = client
+        .admit(
+            credential,
+            request,
+            files,
+            0,
+            epoch,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    owner
+        .auth_with_policy(policy())
+        .unwrap()
+        .submit(
+            auth::Request::Logout { token },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let admission = WorkerAdmission {
+        kinds: JobKind::ALL.into_iter().map(|kind| (kind, 2)).collect(),
+        total: 4,
+        per_resource: 1,
+        lease_seconds: 60,
+    };
+    let worker = owner.job_worker_with_policy(policy(), admission).unwrap();
+    assert!(worker.claim_import(&op.job_id).is_err());
+    let (cursor, phase): (i64, String) = Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT p.cursor,json_extract(j.document,'$._authority_refusal.phase') FROM source_preclaim_refusals p JOIN durable_jobs j ON j.id=p.job_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((cursor, phase.as_str()), (1, "targeted_claim"));
+    drop((worker, client));
+    owner.shutdown().unwrap();
+    root
+}
+
+fn refused_open(root: &std::path::Path) {
+    let error = WriterOwner::open(root, Limits::default()).err().unwrap();
+    assert!(
+        format!("{error:#}").contains("Missing Source preclaim refusal"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn startup_refuses_an_import_missing_its_preclaim_refusal() {
+    // Before startup settles the refused entry.
+    let root = preclaim_refused();
+    delete_preclaim(&root);
+    let missing = journal_rows(&root);
+    refused_open(&root);
+    assert_eq!(journal_rows(&root), missing);
+
+    // After startup settles it, valid records reopen unchanged.
+    let root = preclaim_refused();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    let stored: (String, bool) = Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT state,json_extract(document,'$.cleanup_settled') FROM source_import_operations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, ("failed".into(), true));
+    let settled = journal_rows(&root);
+    for _ in 0..2 {
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        owner.shutdown().unwrap();
+        assert_eq!(journal_rows(&root), settled);
+    }
+    delete_preclaim(&root);
+    let missing = journal_rows(&root);
+    refused_open(&root);
+    assert_eq!(journal_rows(&root), missing);
 }

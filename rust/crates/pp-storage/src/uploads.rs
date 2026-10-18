@@ -237,12 +237,14 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
 
 /// A preclaim refusal is the entry's only observation: its admitted entry's
 /// first cursor, and the targeted claim refusal that failed its job before any
-/// attempt. A settled entry keeps the refusal as its last observation.
+/// attempt. A settled entry keeps the refusal as its last observation. An entry
+/// with an authority revision whose job records that refusal must have the row.
 fn validate_preclaim_refusal(
     connection: &Connection,
     op: &Operation,
     job: &jobs::JobRecord,
 ) -> Result<()> {
+    let refusal = job.authority_refusal.as_ref();
     let Some((cursor, job_id, cancel)) = connection
         .query_row(
             "SELECT cursor,job_id,cancel_requested FROM source_preclaim_refusals WHERE tenant_id=?1 AND operation_key=?2",
@@ -251,6 +253,14 @@ fn validate_preclaim_refusal(
         )
         .optional()?
     else {
+        ensure!(
+            !(op.authority_revision.is_some()
+                && refusal.is_some_and(|refusal| {
+                    refusal.phase == jobs::AuthorityRefusalPhase::TargetedClaim
+                        && refusal.generation == 0
+                })),
+            "Missing Source preclaim refusal"
+        );
         return Ok(());
     };
     let (observations, attempts): (i64, i64) = connection.query_row(
@@ -258,7 +268,6 @@ fn validate_preclaim_refusal(
         params![op.tenant, op.key],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    let refusal = job.authority_refusal.as_ref();
     ensure!(
         cursor == 1
             && job_id == op.job_id
