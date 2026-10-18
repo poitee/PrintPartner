@@ -58,6 +58,18 @@ function rows(path) {
     raw.close();
   }
 }
+// Every row of every table, so a write to any column fails the preservation check.
+function snapshot(path) {
+  const raw = new DatabaseSync(path, { readOnly: true });
+  try {
+    return raw.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().flatMap(({ name }) => {
+      const columns = raw.prepare("SELECT name FROM pragma_table_info(?)").all(name).map((c) => `quote("${c.name}")`);
+      return raw.prepare(`SELECT ${columns.join("||','||")} AS line FROM "${name}" ORDER BY line`).all().map(({ line }) => `${name}:${line}`);
+    });
+  } finally {
+    raw.close();
+  }
+}
 function files(directory) {
   return readdirSync(join(directory, "repos"), { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
@@ -81,6 +93,7 @@ for (const [name, sql] of cases) {
     await ports.db.connect();
     mutate(path, sql);
     const rowsBefore = rows(path);
+    const databaseBefore = snapshot(path);
     const filesBefore = files(directory);
     let thrown;
     try {
@@ -99,6 +112,7 @@ for (const [name, sql] of cases) {
       await ports.db.close();
     }
     assert.deepEqual(rows(path), rowsBefore, `${name} preserved rows`);
+    assert.deepEqual(snapshot(path), databaseBefore, `${name} preserved database`);
     assert.deepEqual(files(directory), filesBefore, `${name} preserved files`);
     output.push({
       name,

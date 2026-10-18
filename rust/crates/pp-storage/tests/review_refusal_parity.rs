@@ -136,6 +136,41 @@ fn rows(root: &Path, query: &str) -> Value {
     Value::Array(rows)
 }
 
+/// Every row of every table, so a write to any column fails the preservation check.
+fn database(root: &Path) -> Vec<String> {
+    let connection = Connection::open(root.join("print-partner.db")).unwrap();
+    let tables = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    let mut lines = Vec::new();
+    for table in tables {
+        let columns = connection
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .unwrap()
+            .query_map([&table], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|name| format!("quote(\"{}\")", name.unwrap()))
+            .collect::<Vec<_>>();
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {} AS line FROM \"{table}\" ORDER BY line",
+                columns.join("||','||")
+            ))
+            .unwrap();
+        for line in statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+        {
+            lines.push(format!("{table}:{}", line.unwrap()));
+        }
+    }
+    lines
+}
+
 fn files(root: &Path) -> Value {
     let mut found = Vec::new();
     let mut pending = vec![root.join("repos")];
@@ -206,7 +241,13 @@ fn review_refusals_match_node_class_and_preserve_stored_inputs() {
             "{name} stored input"
         );
         assert_eq!(files(&root.0), case["preserved"]["files"], "{name} files");
+        let database_before = database(&root.0);
         let refusal = review(&root.0, "read-fixture-secret");
+        assert_eq!(
+            database(&root.0),
+            database_before,
+            "{name} preserved database"
+        );
         let expected = rust_expected(name);
         assert_eq!(refusal, expected, "{name}");
         if name == "unrelated-renamed-column" {
@@ -234,7 +275,9 @@ fn unrelated_generic_error_does_not_satisfy_an_integrity_refusal() {
     let malformed = &fixture["cases"][0];
     assert_eq!(malformed["name"], "malformed-parts-ppjs");
     let root = setup(&fixture, malformed["sql"].as_str().unwrap());
+    let database_before = database(&root.0);
     let refusal = review(&root.0, "not-the-read-session");
+    assert_eq!(database(&root.0), database_before);
     let Refusal::Unexpected { stderr } = &refusal else {
         panic!("{refusal:?}");
     };
