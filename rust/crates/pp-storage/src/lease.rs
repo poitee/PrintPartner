@@ -20,8 +20,8 @@ pub struct LeaseRelease {
 }
 
 pub struct StorageLease {
-    advisory_lock: Option<File>,
     compatibility: Option<CompatibilityReservation>,
+    advisory_lock: Option<File>,
     admitted: Arc<AdmittedDirectory>,
     runtime_dir: PathBuf,
     release_allowed: bool,
@@ -40,6 +40,18 @@ impl CompatibilityReservation {
         let file = admitted.open_lock(c".desktop-lease").context(
             "Data directory already owned by standalone Node; stop it before starting Rust",
         )?;
+        validate_open_lock_identity(&file, &admitted.path.join(".desktop-lease"))
+            .context("Could not validate .desktop-lease compatibility reservation identity")?;
+        match fs4::FileExt::try_lock(&file) {
+            Ok(()) => {}
+            Err(fs4::TryLockError::WouldBlock) => anyhow::bail!(
+                "Data directory already owned; .desktop-lease compatibility reservation is locked"
+            ),
+            Err(fs4::TryLockError::Error(error)) => {
+                return Err(error)
+                    .context("Could not lock .desktop-lease compatibility reservation");
+            }
+        }
         validate_open_lock_identity(&file, &admitted.path.join(".desktop-lease"))
             .context("Could not validate .desktop-lease compatibility reservation identity")?;
         Ok(Self {
