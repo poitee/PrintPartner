@@ -36,6 +36,7 @@ import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests
 import { capturePlanSaveCache, hydratePlanSave, includedPlanReview } from "../lib/planSaveCache";
 import { formatCheckoffSummary } from "../lib/checkoffProgress";
 import { useEngineHealth } from "../hooks/useEngineHealth";
+import { useSpoolmanWorkflowAccess } from "../hooks/useSpoolmanWorkflowAccess";
 import {
   invalidatePlanReview,
   usePatchPartAssembledMutation,
@@ -178,6 +179,7 @@ function summaryFromReview(review: PlanReview | null): string {
 export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   const { health } = useEngineHealth();
   const { selectedProfileId } = useProfileSelection();
+  const { queryAllowed: spoolmanQueryAllowed } = useSpoolmanWorkflowAccess(selectedProfileId);
   const queryClient = useQueryClient();
   const [draftUiByBuild, setDraftUiByBuild] = useState<
     ReadonlyMap<number, BuildDraftUiState>
@@ -663,8 +665,8 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
               if (!workspace && draft && edits.some(({ edit }) => edit.kind === "set_quantity" && typeof edit.value === "function")) {
                 workspace = storeWorkspace(await fetchPlanDraftWorkspace(profileId, draft.draft_id), false);
               }
-              const currentReview = queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, true)) ??
-                queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, false)) ??
+              const currentReview = queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, true, spoolmanQueryAllowed)) ??
+                queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, false, spoolmanQueryAllowed)) ??
                 (profileId === selectedProfileId ? review : null);
               const expectedDraft = workspace?.draft ?? draft;
               const accepted = currentReview?.accepted_basis;
@@ -748,6 +750,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       resolveOpenDraftWorkspace,
       review,
       selectedProfileId,
+      spoolmanQueryAllowed,
       storeWorkspace,
       updateDraftUi,
     ],
