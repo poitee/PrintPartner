@@ -952,39 +952,16 @@ mod tests {
 
     pub(super) fn assert_lock_held_during_reservation_release() {
         if let Some(path) = CHECK_LOCK_DURING_RESERVATION_RELEASE.take() {
-            let probe = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "lease::tests::gre_679_release_order_probe",
-                    "--nocapture",
-                ])
-                .env("PP_GRE_679_RELEASE_PROBE", path)
-                .output()
-                .unwrap();
+            assert!(path.join(".desktop-lease").is_file());
+            let contender = File::open(path.join("printpartner.lock")).unwrap();
             assert!(
-                probe.status.success(),
-                "{}\n{}",
-                String::from_utf8_lossy(&probe.stdout),
-                String::from_utf8_lossy(&probe.stderr)
+                matches!(
+                    fs4::FileExt::try_lock(&contender),
+                    Err(fs4::TryLockError::WouldBlock)
+                ),
+                "advisory lock released before compatibility reservation cleanup"
             );
         }
-    }
-
-    #[test]
-    fn gre_679_release_order_probe() {
-        let Some(path) = std::env::var_os("PP_GRE_679_RELEASE_PROBE") else {
-            return;
-        };
-        let path = PathBuf::from(path);
-        assert!(path.join(".desktop-lease").is_file());
-        let contender = File::open(path.join("printpartner.lock")).unwrap();
-        assert!(
-            matches!(
-                fs4::FileExt::try_lock(&contender),
-                Err(fs4::TryLockError::WouldBlock)
-            ),
-            "advisory lock released before compatibility reservation cleanup"
-        );
     }
 
     #[test]
