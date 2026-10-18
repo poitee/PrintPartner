@@ -127,6 +127,8 @@ def _subreaper_timeout(signum, frame):
 
 
 def _subreaper_worker(connection, parent_connection, function, args, cleanup_path):
+    children_path = Path(f"/proc/self/task/{os.getpid()}/children")
+
     def reap_owned_descendants():
         killed, reaped = set(), []
         deadline = time.monotonic() + STOP_SECONDS
@@ -140,7 +142,7 @@ def _subreaper_worker(connection, parent_connection, function, args, cleanup_pat
             except ChildProcessError:
                 return {"killed": sorted(killed), "reaped": reaped, "children_absent": True}
             # Killing a parent reparents even session-detached, empty-env descendants to this worker.
-            children = Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()
+            children = children_path.read_text().split()
             for child in children:
                 pid = int(child)
                 try:
@@ -156,6 +158,13 @@ def _subreaper_worker(connection, parent_connection, function, args, cleanup_pat
         libc = ctypes.CDLL(None, use_errno=True)
         require(libc.prctl(36, 1, 0, 0, 0) == 0,
                 f"PR_SET_CHILD_SUBREAPER failed: errno {ctypes.get_errno()}")
+        try:
+            children_path.read_text()
+        except OSError as error:
+            raise RuntimeError(
+                f"subreaper containment requires readable {children_path} "
+                "(Linux CONFIG_PROC_CHILDREN) before running the proof"
+            ) from error
         signal.signal(signal.SIGTERM, _subreaper_timeout)
         try:
             outcome = ("result", function(*args))
