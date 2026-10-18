@@ -114,7 +114,8 @@ pub(super) fn prepare(
     assignments: &Value,
     base: &HashMap<String, (Value, bool, bool)>,
 ) -> Result<Prepared> {
-    let assignments: Vec<Assignment> = serde_json::from_value(assignments.clone())?;
+    let mut assignments: Vec<Assignment> = serde_json::from_value(assignments.clone())?;
+    assignments.sort_by_key(Assignment::slot);
     let mut counts = HashMap::new();
     let mut reused = HashSet::new();
     let mut progress = Vec::new();
@@ -153,25 +154,34 @@ pub(super) fn prepare(
         );
         let _ = text(p, "filename")?;
         let _ = role(p);
-        ensure!(
-            p.as_object()
-                .ok_or_else(|| anyhow!("Invalid Part"))?
-                .values()
-                .filter_map(Value::as_str)
-                .map(str::len)
-                .sum::<usize>()
-                + p.manifest
-                    .requirement
-                    .as_ref()
-                    .map_or(0, |text| manifest_byte_len(&text.0))
-                + p.manifest
+        let manifest = &p.manifest;
+        validate_named_text(
+            p,
+            &[
+                "partKey",
+                "relativePath",
+                "filename",
+                "sourceLayer",
+                "status",
+                "roleInferred",
+                "roleOverride",
+                "filamentColorId",
+                "filamentCustomHex",
+                "spoolmanSpoolId",
+                "notes",
+                "githubBlobUrl",
+                "artifactDigest",
+            ],
+            manifest
+                .requirement
+                .as_ref()
+                .map_or(0, |text| utf8_len(&text.0))
+                + manifest
                     .option_group_id
                     .as_ref()
-                    .map_or(0, |id| manifest_byte_len(&id.0))
-                + p.manifest.manifest_source.as_ref().map_or(0, String::len)
-                <= 65536,
-            "Accepted operational row text limit"
-        );
+                    .map_or(0, |id| utf8_len(&id.0))
+                + manifest.manifest_source.as_ref().map_or(0, String::len),
+        )?;
     }
     let digest = revision_digest(&parts)?;
     Ok(Prepared {
@@ -182,13 +192,22 @@ pub(super) fn prepare(
     })
 }
 
-fn manifest_byte_len(text: &crate::manifest_text::JsText) -> usize {
-    match text.as_scalar() {
-        Some(scalar) => scalar.len(),
-        None => {
-            let mut bytes = Vec::new();
-            text.write_json(&mut bytes);
-            bytes.len() - 2
-        }
-    }
+/// Node's `validateAcceptedOperationalTextRow`: the UTF-8 length of the named
+/// text fields plus `extra` bytes of text held outside `row`.
+pub(super) fn validate_named_text(row: &Value, fields: &[&str], extra: usize) -> Result<()> {
+    let bytes = fields
+        .iter()
+        .filter_map(|field| row[*field].as_str())
+        .map(str::len)
+        .sum::<usize>();
+    ensure!(
+        bytes + extra <= 65536,
+        "Accepted operational row text limit"
+    );
+    Ok(())
+}
+
+/// `Buffer.byteLength(text, "utf8")`, which encodes a lone surrogate as U+FFFD.
+fn utf8_len(text: &crate::manifest_text::JsText) -> usize {
+    String::from_utf16_lossy(text.units()).len()
 }
