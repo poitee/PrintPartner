@@ -12,6 +12,39 @@ The fix runs that fixture in a dedicated process. Other tests retain their
 strict assertions that both the descendant PID and its process group disappear.
 It does not add retries, increase cleanup deadlines, or ignore zombies.
 
+## Re-execution proof
+
+The Linux subreaper fixture captures its child test executable's output. A
+successful proof requires exit status zero, exactly one passing result for the
+named fixture, and one libtest summary with one passed test and no failures,
+ignored tests, or measured tests. A missing exact test name exits zero with zero
+tests, which the validator rejects. The existing descendant assertions still
+run in the isolated child.
+
+Run these commands from `rust/` to prepare disposable simulator assets and
+verify the two regressions and the original fixture in both feature modes.
+
+```sh
+CARGO_TARGET_DIR=/path/to/disposable-target python3 scripts/prove-measured-startup-death.py --evidence /path/to/disposable-evidence
+```
+
+Read `/path/to/disposable-evidence/environment.json` and export its values as
+`PP_DESKTOP_RELEASE_MANIFEST` and `PP_COMPAT_MEASURED_STARTUP_STAGE`. Keep both
+variables set for full package suites. Export `CARGO_TARGET_DIR` with the same
+disposable target path for the following commands.
+
+```sh
+cargo test -p pp-compat --locked --no-default-features --lib subreaper_reexec
+cargo test -p pp-compat --locked --no-default-features --lib ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced
+cargo test -p pp-compat --locked --features desktop_rebuild --lib subreaper_reexec
+cargo test -p pp-compat --locked --features desktop_rebuild --lib ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced
+```
+
+Each regression command runs two tests. Each original-fixture command runs one
+test. `subreaper_reexec_runs_exactly_one_fixture` runs the actual fixture in a
+child executable. `subreaper_reexec_wrong_name_is_failure` confirms that the
+child exits zero with zero tests and that validation rejects its output.
+
 ## Captured failure
 
 Base was `a5e8b16f0f1ea15d1a6e5c4228fb66a1e5148aeb`. Four CPU burners ran

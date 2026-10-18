@@ -1753,11 +1753,26 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     fn validate_subreaper_fixture(output: &std::process::Output) -> Result<(), &'static str> {
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err("isolated subreaper fixture failed")
+        if !output.status.success() {
+            return Err("isolated subreaper fixture failed");
         }
+        let stdout = std::str::from_utf8(&output.stdout)
+            .map_err(|_| "isolated subreaper fixture output is not UTF-8")?;
+        let lines: Vec<_> = stdout.lines().filter(|line| !line.is_empty()).collect();
+        let expected = format!("test {SUBREAPER_FIXTURE} ... ok");
+        let invalid = "isolated subreaper fixture did not pass exactly once";
+        let ["running 1 test", result, summary] = lines.as_slice() else {
+            return Err(invalid);
+        };
+        if *result != expected {
+            return Err(invalid);
+        }
+        let (filtered, _) = summary
+            .strip_prefix("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; ")
+            .and_then(|rest| rest.split_once(" filtered out; finished in "))
+            .ok_or(invalid)?;
+        filtered.parse::<usize>().map_err(|_| invalid)?;
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]
@@ -1765,6 +1780,20 @@ mod tests {
     fn subreaper_reexec_runs_exactly_one_fixture() {
         let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
         assert_eq!(validate_subreaper_fixture(&output), Ok(()), "{output:?}");
+        let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+        for malformed in [
+            stdout.repeat(2),
+            stdout.replace(SUBREAPER_FIXTURE, "unrelated_fixture"),
+            stdout.replace("1 passed;", "2 passed;"),
+            stdout.replace("0 failed;", "1 failed;"),
+        ] {
+            let mut invalid = output.clone();
+            invalid.stdout = malformed.into_bytes();
+            assert_eq!(
+                validate_subreaper_fixture(&invalid),
+                Err("isolated subreaper fixture did not pass exactly once")
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -1773,7 +1802,11 @@ mod tests {
         let output = run_subreaper_fixture(&format!("{SUBREAPER_FIXTURE}_missing"));
         assert_eq!(output.status.code(), Some(0));
         assert!(String::from_utf8_lossy(&output.stdout).contains("running 0 tests"));
-        assert!(validate_subreaper_fixture(&output).is_err(), "{output:?}");
+        assert_eq!(
+            validate_subreaper_fixture(&output),
+            Err("isolated subreaper fixture did not pass exactly once"),
+            "{output:?}"
+        );
     }
 
     #[cfg(target_os = "linux")]
