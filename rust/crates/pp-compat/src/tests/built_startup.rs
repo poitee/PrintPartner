@@ -85,14 +85,14 @@ async fn built_startup_owner_fixture() {
         return;
     };
     let scratch = Scratch { root: root.into() };
+    let bundle = bundle();
+    let assets = bundle.web_root.join("apps/web/dist");
     let spec = crate::SpawnSpec {
-        bundle: bundle(),
+        bundle: crate::release::verify_bundle(bundle, &assets).unwrap(),
         before_setup: Box::new(before_setup),
         setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
-    crate::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
-        .unwrap();
     let supervisor = Supervisor::start(spec).unwrap();
     startup_wait_async(&scratch.pidfile()).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -248,7 +248,8 @@ fn ticket_t_3_drain_built_release_startup_parent_death() {
     );
     let evidence = PathBuf::from(std::env::var_os(EVIDENCE).expect("evidence required"));
     let bundle = bundle();
-    crate::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = crate::release::verify_bundle(bundle, &assets).unwrap();
     for cycle in 0..2 {
         let output = evidence.join(format!("cycle-{cycle}"));
         std::fs::create_dir_all(&output).unwrap();
