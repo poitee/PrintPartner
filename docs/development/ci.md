@@ -135,7 +135,7 @@ Required Rust and lint jobs fail if their input-selection job fails, so a broken
 ## Ephemeral PR runners
 
 Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
-for Rust Linux, ast-grep, web checks, PR evidence lint, desktop contracts, desktop runtime,
+for Rust Linux, ast-grep, web checks, WebKit STL smoke, PR evidence lint, desktop contracts, desktop runtime,
 source artifacts, embedded-driver smoke, and the native
 macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
 `[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
@@ -158,8 +158,11 @@ Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, release
 manual dispatches and merge groups also keep their existing hosted runners.
 Docker image jobs, service-container jobs and cargo-deny stay hosted because the
 Linux runner containers have no Docker socket. Selector and result-only jobs stay
-hosted. WebKit STL smoke also stays on `ubuntu-24.04` because the local
-Linux containers cannot provide its WebGL canvas. Rust verification stays hosted
+hosted. WebKit STL smoke uses the Linux fleet after a fresh-image proof rendered
+the production STL canvas with Mesa llvmpipe under Xvfb:
+[run 39110024828](https://github.com/poitee/PrintPartner/actions/runs/39110024828).
+Its fork and manual-dispatch fallback remains `ubuntu-24.04`.
+Rust verification stays hosted
 because its iptables LAN guard requires privileges absent from the containers.
 No job routed to the local fleet references `secrets.`.
 
