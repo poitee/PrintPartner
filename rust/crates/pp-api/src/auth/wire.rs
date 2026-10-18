@@ -11,7 +11,11 @@ use serde_json::{Value, json};
 pub(super) struct Failure(pub StatusCode, pub &'static str);
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"detail": self.1}))).into_response()
+        let mut body = json!({"detail": self.1});
+        if self.0 == StatusCode::UNAUTHORIZED && self.1 == "Current password is incorrect" {
+            body["code"] = json!("current_password_rejected");
+        }
+        (self.0, Json(body)).into_response()
     }
 }
 impl From<anyhow::Error> for Failure {
