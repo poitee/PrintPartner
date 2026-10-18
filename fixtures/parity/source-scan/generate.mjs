@@ -59,19 +59,43 @@ if (process.argv.includes("--probe")) {
       rmSync(directory, { recursive: true, force: true });
     }
   }
+  const { SqliteDatabase, getDb } = await import(pathToFileURL(join(root, "web/apps/server/src/db/client.ts")).href);
+  const { AppRepository } = await import(pathToFileURL(join(root, "web/apps/server/src/db/repository.ts")).href);
+  const { default: Database } = await import(pathToFileURL(join(root, "web/node_modules/better-sqlite3/lib/index.js")).href);
   const failures = [];
-  for (const metadata of [null, { keep: 7, sync_error: "old", sync_required: false }]) {
-    let actual = metadata;
-    let error;
-    try {
-      await syncProjectById({
-        getProjectRow: () => ({ sourceKind: "local", localPath: null, lastCommitSha: null }),
-        getSourceActivationObservation: () => ({ id: 7 }), getSetting: () => null,
-        markSourceSynced: () => { throw new Error("disk read failed"); },
-        updateSource: (_id, patch) => { actual = { ...actual, ...patch.metadata }; },
-      }, "/unused", 7, "/unused", { beforePublish: () => {}, maxDocsBytes: 1024 });
-    } catch (caught) { error = caught.message; }
-    failures.push({ metadata, detail: "disk read failed", result: actual, error });
+  const directory = mkdtempSync(join(tmpdir(), "pp-source-scan-failure-"));
+  const database = new SqliteDatabase(directory);
+  let raw;
+  try {
+    database.connect();
+    raw = new Database(database.dbPath);
+    const repo = new AppRepository(getDb(database), "default", database.reposDir);
+    const source = repo.createSource({ name: "Failure", source_kind: "local", source_type: "local" });
+    repo.markSourceSynced = () => { throw new Error("disk read failed"); };
+    for (const [id, metadata] of [
+      ["sql-null", null],
+      ["object", '{"keep":7,"sync_error":"old","sync_required":false}'],
+      ["empty-string", ""],
+      ["malformed", "{broken"],
+      ["array", '[1,"two",null]'],
+      ["json-string", '"hello"'],
+      ["number", "42"],
+      ["boolean", "false"],
+      ["json-null", "null"],
+      ["whitespace", "  "],
+    ]) {
+      raw.prepare("UPDATE projects SET metadata_json=? WHERE id=?").run(metadata, source.id);
+      let error;
+      try {
+        await syncProjectById(repo, directory, source.id, directory, { beforePublish: () => {}, maxDocsBytes: 1024 });
+      } catch (caught) { error = caught.message; }
+      const stored = raw.prepare("SELECT metadata_json FROM projects WHERE id=?").get(source.id).metadata_json;
+      failures.push({ id, metadata, detail: "disk read failed", result: JSON.parse(stored), error });
+    }
+  } finally {
+    raw?.close();
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
   process.stdout.write(JSON.stringify({ cases, failures }));
 } else {

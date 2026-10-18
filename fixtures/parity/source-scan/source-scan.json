@@ -177,6 +177,7 @@
   ],
   "failures": [
     {
+      "id": "sql-null",
       "metadata": null,
       "detail": "disk read failed",
       "result": {
@@ -186,14 +187,98 @@
       "error": "disk read failed"
     },
     {
-      "metadata": {
-        "keep": 7,
-        "sync_error": "old",
-        "sync_required": false
-      },
+      "id": "object",
+      "metadata": "{\"keep\":7,\"sync_error\":\"old\",\"sync_required\":false}",
       "detail": "disk read failed",
       "result": {
         "keep": 7,
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "empty-string",
+      "metadata": "",
+      "detail": "disk read failed",
+      "result": {
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "malformed",
+      "metadata": "{broken",
+      "detail": "disk read failed",
+      "result": {
+        "raw": "{broken",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "array",
+      "metadata": "[1,\"two\",null]",
+      "detail": "disk read failed",
+      "result": {
+        "raw": "[1,\"two\",null]",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "json-string",
+      "metadata": "\"hello\"",
+      "detail": "disk read failed",
+      "result": {
+        "raw": "\"hello\"",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "number",
+      "metadata": "42",
+      "detail": "disk read failed",
+      "result": {
+        "raw": "42",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "boolean",
+      "metadata": "false",
+      "detail": "disk read failed",
+      "result": {
+        "raw": "false",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "json-null",
+      "metadata": "null",
+      "detail": "disk read failed",
+      "result": {
+        "raw": "null",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "whitespace",
+      "metadata": "  ",
+      "detail": "disk read failed",
+      "result": {
+        "raw": "  ",
         "sync_error": "disk read failed",
         "sync_required": true
       },
