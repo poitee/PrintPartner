@@ -405,7 +405,6 @@ fn replacement_recheck_refuses_changed_content_identity_and_links() {
 #[tokio::test]
 async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
     use crate::state_file::{self, Boundary};
-    use std::os::unix::process::ExitStatusExt;
 
     struct PublicationCase {
         boundary: Boundary,
@@ -476,32 +475,12 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
         for (name, bytes) in portable {
             std::fs::write(fixture.0.join(name), bytes).unwrap();
         }
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "origin_tests::ticket_t_12_origin_crash_relaunch_reuses_complete_published_config",
-                "--nocapture",
-            ])
-            .env("PP_T12_ORIGIN_CRASH_STORE", &fixture.0)
-            .env("PP_T12_ORIGIN_CRASH_CASE", index.to_string())
-            .env("PP_T12_ORIGIN_CRASH_NEW", &new_bytes)
-            .spawn()
-            .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        let (status, timed_out) = loop {
-            if let Some(status) = child.try_wait().unwrap() {
-                break (status, false);
-            }
-            if std::time::Instant::now() >= deadline {
-                child.kill().unwrap();
-                break (child.wait().unwrap(), true);
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        let runtime = std::fs::read(fixture.0.join("crash-runtime")).unwrap();
-        std::fs::remove_dir(std::ffi::OsStr::from_bytes(&runtime)).unwrap();
-        assert!(!timed_out, "publication child exceeded its crash deadline");
-        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        run_crash_child(
+            "origin_tests::ticket_t_12_origin_crash_relaunch_reuses_complete_published_config",
+            &fixture,
+            index,
+            &new_bytes,
+        );
         let expected = if case.expected_new {
             new_bytes
         } else {
@@ -522,6 +501,129 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
         assert_eq!(change, None);
         assert!(TcpListener::bind(address).await.is_err());
         assert_eq!(std::fs::read(fixture.config()).unwrap(), expected);
+        for (name, bytes) in portable {
+            assert_eq!(std::fs::read(fixture.0.join(name)).unwrap(), bytes);
+        }
+    }
+}
+
+/// Re-runs `test` in a child that SIGKILLs itself at publication checkpoint
+/// `case`, then removes the runtime directory the killed lease left behind.
+fn run_crash_child(test: &str, fixture: &Fixture, case: usize, new_bytes: &str) {
+    use std::os::unix::process::ExitStatusExt;
+
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env("PP_T12_ORIGIN_CRASH_STORE", &fixture.0)
+        .env("PP_T12_ORIGIN_CRASH_CASE", case.to_string())
+        .env("PP_T12_ORIGIN_CRASH_NEW", new_bytes)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break (status, false);
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            break (child.wait().unwrap(), true);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let runtime = std::fs::read(fixture.0.join("crash-runtime")).unwrap();
+    std::fs::remove_dir(std::ffi::OsStr::from_bytes(&runtime)).unwrap();
+    assert!(!timed_out, "publication child exceeded its crash deadline");
+    assert_eq!(status.signal(), Some(libc::SIGKILL));
+}
+
+#[tokio::test]
+async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config() {
+    use crate::state_file::{self, Boundary};
+
+    // First publication has no previous file, so it links instead of
+    // renaming and never reaches Recheck or Rename.
+    let cases = [
+        (Boundary::Write, false),
+        (Boundary::FileSync, false),
+        (Boundary::DirectorySync, true),
+    ];
+    if let Some(path) = std::env::var_os("PP_T12_ORIGIN_CRASH_STORE") {
+        let path = Path::new(&path);
+        let case: usize = std::env::var("PP_T12_ORIGIN_CRASH_CASE")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let bytes = std::env::var("PP_T12_ORIGIN_CRASH_NEW").unwrap();
+        let owner = StorageLease::acquire(path).unwrap();
+        std::fs::write(
+            path.join("crash-runtime"),
+            owner.runtime_dir().as_os_str().as_encoded_bytes(),
+        )
+        .unwrap();
+        assert!(state_file::read(&owner, "desktop.toml").unwrap().is_none());
+        state_file::publish_with(&owner, "desktop.toml", bytes.as_bytes(), None, |boundary| {
+            if boundary == cases[case].0 {
+                assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGKILL) }, 0);
+                panic!("SIGKILL returned");
+            }
+            Ok(())
+        })
+        .unwrap();
+        panic!("publication did not reach the crash checkpoint");
+    }
+    for (index, &(_, published)) in cases.iter().enumerate() {
+        let fixture = Fixture::new();
+        let crashed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let crashed_address = crashed.local_addr().unwrap();
+        let crashed_bytes = format!("port = {}\n", crashed_address.port());
+        let portable = [
+            ("print-partner.db", b"copied database".as_slice()),
+            (
+                "browser-preferences.json",
+                b"copied portable preferences".as_slice(),
+            ),
+        ];
+        for (name, bytes) in portable {
+            std::fs::write(fixture.0.join(name), bytes).unwrap();
+        }
+        run_crash_child(
+            "origin_tests::ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config",
+            &fixture,
+            index,
+            &crashed_bytes,
+        );
+        if published {
+            assert_eq!(
+                std::fs::read(fixture.config()).unwrap(),
+                crashed_bytes.as_bytes()
+            );
+        } else {
+            assert!(
+                !fixture.config().exists(),
+                "unlinked publication became visible"
+            );
+        }
+        // Hold the crashed port when nothing was published so relaunch must
+        // choose and publish a fresh one.
+        let _held = (!published).then_some(crashed);
+        let owner = StorageLease::acquire(&fixture.0).unwrap();
+        let (listener, change) = bind_origin(&owner).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        assert_eq!(change, None);
+        assert_eq!(address == crashed_address, published);
+        let expected = format!("port = {}\n", address.port());
+        assert_eq!(
+            std::fs::read(fixture.config()).unwrap(),
+            expected.as_bytes()
+        );
+        drop(listener);
+        let (listener, change) = bind_origin(&owner).await.unwrap();
+        assert_eq!(listener.local_addr().unwrap(), address);
+        assert_eq!(change, None);
+        assert_eq!(
+            std::fs::read(fixture.config()).unwrap(),
+            expected.as_bytes()
+        );
         for (name, bytes) in portable {
             assert_eq!(std::fs::read(fixture.0.join(name)).unwrap(), bytes);
         }
