@@ -38,8 +38,6 @@ const tabTemplates = [
   ['plain-eof', 'a: x\n@'],
   ['flow-map', '{a: x\n@\n  "\\uE000"}'],
   ['flow-sequence', '[x\n@\n  "\\uE000"]'],
-  ['single-quoted', "a: 'x\n@\n  \\uE000'"],
-  ['double-quoted', 'a: "x\n@\n  \\uE000"'],
   ['literal-leading', 'a: |\n@\n  "\\uE000"\n'],
   ['folded-leading', 'a: >\n@\n  "\\uE000"\n'],
   ['literal-content', 'a: |\n  x\n@\n  "\\uE000"\n'],

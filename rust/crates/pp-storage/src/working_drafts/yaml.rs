@@ -256,7 +256,18 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             if i == chars.len() {
                 break;
             }
-            if !blank && flow == 0 && (!plain || plain_parent.is_some_and(|n| line_indent <= n)) {
+            let mut content = i;
+            while chars.get(content).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                if (content - i).is_multiple_of(1024) {
+                    budget.check()?;
+                }
+                content += 1;
+            }
+            let plain_blank = chars.get(content).is_none_or(|c| matches!(c, '\r' | '\n'));
+            if !plain_blank
+                && flow == 0
+                && (!plain || plain_parent.is_some_and(|n| line_indent <= n))
+            {
                 plain = false;
                 node = true;
                 quoted_end = false;
