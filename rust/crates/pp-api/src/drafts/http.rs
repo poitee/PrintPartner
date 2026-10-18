@@ -236,7 +236,11 @@ fn admit(
         || (!matches!(
             *request.method(),
             Method::GET | Method::HEAD | Method::OPTIONS
-        ) && origin != Some(&config.origin))
+        ) && origin != Some(&config.origin)
+            && !matches!(
+                principal(headers, &config.api_key_tenant),
+                Some(Principal::ApiKey { .. })
+            ))
         || headers
             .get_all("sec-fetch-site")
             .iter()
@@ -404,6 +408,15 @@ async fn call(
         Operation::Read(_) => "Plan draft data is inconsistent",
         Operation::Edit(..) => "Plan draft update failed",
     };
+    let (operation_name, draft_id) = match &operation {
+        Operation::Read(Request::List) => ("list", None),
+        Operation::Read(
+            Request::Read { draft_id }
+            | Request::Diff { draft_id }
+            | Request::Workspace { draft_id },
+        ) => ("read", Some(*draft_id)),
+        Operation::Edit(draft_id, _) => ("edit", Some(*draft_id)),
+    };
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         if matches!(&operation, Operation::Read(_))
@@ -446,8 +459,27 @@ async fn call(
     .await;
     match result {
         Ok(Ok(reply)) => present(reply, profile),
-        Ok(Err(error)) => domain_error(error, internal_detail),
-        Err(_) => internal_error(internal_detail),
+        Ok(Err(error)) => {
+            let error_class = if matches!(
+                error.downcast_ref::<Failure>(),
+                Some(Failure::CorruptOrigin)
+            ) {
+                "draft_integrity"
+            } else if error.is::<AuthFailure>() {
+                "auth_storage"
+            } else {
+                "unexpected_storage"
+            };
+            let response = domain_error(error, internal_detail);
+            if response.status().is_server_error() {
+                log::error!(target: "pp_api::drafts", "Draft HTTP failed; operation={operation_name} profile_id={profile:?} draft_id={draft_id:?} error_class={error_class}");
+            }
+            response
+        }
+        Err(_) => {
+            log::error!(target: "pp_api::drafts", "Draft HTTP failed; operation={operation_name} profile_id={profile:?} draft_id={draft_id:?} error_class=worker_failure");
+            internal_error(internal_detail)
+        }
     }
 }
 
@@ -541,9 +573,12 @@ fn domain_error(error: anyhow::Error, internal_detail: &str) -> Response {
         "Storage stopped" | "Storage stopped without read result" | "Writer admission poisoned" => {
             unavailable("writer_stopped")
         }
-        "Writer transaction admission deadline expired" | "database is locked" => {
-            unavailable("transaction_unavailable")
-        }
+        "Writer transaction admission deadline expired" | "database is locked" => coded_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Plan draft update is unavailable",
+            "transaction_unavailable",
+            json!({}),
+        ),
         _ => internal_error(internal_detail),
     }
 }
@@ -715,10 +750,6 @@ mod tests {
                 anyhow::Error::new(AdmissionFailure::Cancelled),
                 "request_cancelled",
             ),
-            (
-                anyhow::anyhow!("database is locked"),
-                "transaction_unavailable",
-            ),
         ] {
             let response = domain_error(error, "Plan draft data is inconsistent");
             assert_eq!(response.status(), 503);
@@ -726,6 +757,18 @@ mod tests {
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap(),
                 json!({"detail":"Draft service temporarily unavailable","code":code})
+            );
+        }
+        for message in [
+            "database is locked",
+            "Writer transaction admission deadline expired",
+        ] {
+            let response = domain_error(anyhow::anyhow!(message), "Plan draft update failed");
+            assert_eq!(response.status(), 503);
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap(),
+                json!({"detail":"Plan draft update is unavailable", "code":"transaction_unavailable"})
             );
         }
         assert!(DraftHttpConfig::new("http://example.test", "default").is_err());

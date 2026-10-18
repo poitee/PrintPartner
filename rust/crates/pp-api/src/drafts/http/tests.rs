@@ -359,7 +359,6 @@ async fn api_keys_use_fixed_tenant_routing_and_revocation() {
     let request = |method: Method, path: &str, secret: &str| {
         s.client
             .request(method, format!("{}{path}", s.origin))
-            .header("Origin", &s.origin)
             .header("Authorization", format!("Bearer {secret}"))
     };
     for (request, pointer) in [
@@ -395,6 +394,28 @@ async fn api_keys_use_fixed_tenant_routing_and_revocation() {
         )
         .await["parts"][1]["included"],
         true
+    );
+    for origin in ["http://evil.test", "null"] {
+        assert_eq!(
+            response(
+                request(Method::PATCH, "/plans/1/drafts/2/parts", key.expose())
+                    .header("Origin", origin)
+                    .json(&edit(DIGEST)),
+                403
+            )
+            .await,
+            json!({"detail":"Invalid request origin"})
+        );
+    }
+    assert_eq!(
+        response(
+            request(Method::PATCH, "/plans/1/drafts/2/parts", key.expose())
+                .header("Cookie", COOKIE)
+                .json(&edit(DIGEST)),
+            403
+        )
+        .await,
+        json!({"detail":"Invalid request origin"})
     );
     let auth::Outcome::KeyChanged { changed: true, .. } = s
         .auth(auth::Request::RevokeKey {
@@ -478,10 +499,6 @@ async fn admission_rejects_ambiguous_credentials_hosts_and_origins() {
             .patch(format!("{}/plans/1/drafts/2/parts", s.origin))
             .header("Cookie", COOKIE)
             .json(&edit(DIGEST)),
-        s.client
-            .patch(format!("{}/plans/1/drafts/2/parts", s.origin))
-            .header("Authorization", "Bearer invalid")
-            .json(&edit(DIGEST)),
     ] {
         assert_eq!(
             response(request, 403).await,
@@ -489,6 +506,10 @@ async fn admission_rejects_ambiguous_credentials_hosts_and_origins() {
         );
     }
     for request in [
+        s.client
+            .patch(format!("{}/plans/1/drafts/2/parts", s.origin))
+            .header("Authorization", "Bearer invalid")
+            .json(&edit(DIGEST)),
         s.client.get(format!("{}/plans/1/drafts", s.origin)),
         s.request(Method::GET, "/plans/1/drafts")
             .header("Authorization", "Bearer key"),
