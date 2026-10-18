@@ -496,6 +496,129 @@ fn cancel_and_revoked_authority_close_the_batch() {
 }
 
 #[test]
+fn repeated_authority_refusal_halt_preserves_evidence() {
+    for claimed in [false, true] {
+        let sync = Fixture::new();
+        let id = sync.source("Refused");
+        let job_id = sync.enqueue(Some(vec![id as u64]));
+        let mut lease = sync.open();
+        let target = claimed.then(|| local(sync.next(&mut lease)));
+        sync.connection()
+            .execute("DELETE FROM sessions", [])
+            .unwrap();
+        assert!(matches!(sync.next(&mut lease), NextSyncTarget::Halted));
+        let refused = sync.job(&job_id);
+        let before = sync.snapshot();
+        let mut connection = sync.connection();
+        let tx = connection.transaction().unwrap();
+        let repeated = halt_job(
+            &tx,
+            refused.clone(),
+            "authority_refused",
+            refused.recovery.as_deref().unwrap(),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(repeated.generation, refused.generation);
+        assert_eq!(repeated.authority_refusal, refused.authority_refusal);
+        assert_eq!(repeated.recovery, refused.recovery);
+        assert_eq!(sync.snapshot(), before);
+        drop(target);
+        let Fixture { owner, root, .. } = sync;
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn authority_refusal_survives_cancel_twice_and_reopen() {
+    let mut sync = Fixture::new();
+    let id = sync.source("Refused");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    sync.connection()
+        .execute("DELETE FROM sessions", [])
+        .unwrap();
+    assert!(matches!(sync.next(&mut lease), NextSyncTarget::Halted));
+    let refused = sync.job(&job_id);
+    assert_eq!(refused.state, PersistentState::ReconciliationRequired);
+    assert_eq!(
+        refused.recovery.as_deref(),
+        Some("Original credential is no longer valid")
+    );
+    assert_eq!(
+        sync.targets(&job_id)[0].2.as_deref(),
+        Some("authority_refused")
+    );
+    let auth::Outcome::Session { token, .. } = sync
+        .owner
+        .auth(FirstUserTenant::NewUser)
+        .submit(
+            auth::Request::Login {
+                email: "source-sync@example.com".into(),
+                password: auth::Secret::new("source-sync-test-password".into()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("session expected")
+    };
+    sync.token = token.expose().to_owned();
+    let before = sync.snapshot();
+    let cancelled = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    assert!(cancelled.cancel_requested);
+    assert_eq!(cancelled.recovery, refused.recovery);
+    assert_eq!(cancelled.authority_refusal, refused.authority_refusal);
+    assert_eq!(cancelled.generation, refused.generation);
+    let after = sync.snapshot();
+    assert_eq!(after[0], before[0]);
+    assert_eq!(after[1], before[1]);
+    let repeated = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    assert_eq!(repeated.authority_refusal, refused.authority_refusal);
+    assert_eq!(repeated.recovery, refused.recovery);
+    assert_eq!(repeated.generation, refused.generation);
+    assert_eq!(sync.snapshot(), after);
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let mut connection = Connection::open(root.join("print-partner.db")).unwrap();
+    let tx = connection.transaction().unwrap();
+    let reopened = jobs::load(&tx, &job_id).unwrap().unwrap();
+    assert_eq!(reopened.authority_refusal, refused.authority_refusal);
+    assert_eq!(reopened.recovery, refused.recovery);
+    assert_eq!(reopened.generation, refused.generation);
+    assert!(reopened.cancel_requested);
+    assert_eq!(reopened.state, PersistentState::ReconciliationRequired);
+    let failure: (String, String) = tx.query_row(
+        "SELECT failure_code,failure_detail FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(
+        failure,
+        (
+            "authority_refused".into(),
+            "Original credential is no longer valid".into()
+        )
+    );
+    drop(tx);
+    drop(connection);
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn worker_failure_halts_an_open_batch() {
     let sync = Fixture::new();
     let id = sync.source("Failed");
