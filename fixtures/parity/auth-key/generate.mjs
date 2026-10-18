@@ -47,7 +47,12 @@ const steps = [
   { op: "list" },
 ];
 
-const GENERATED_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+// Accepts only a real UTC instant in the `toISOString` form both servers write.
+const generatedTime = (value) =>
+  typeof value === "string" &&
+  /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) &&
+  !Number.isNaN(Date.parse(value)) &&
+  new Date(value).toISOString() === value;
 
 // Mirrored by `Tokens` in rust/crates/pp-api/tests/auth_key_parity.rs.
 class Tokens {
@@ -76,7 +81,7 @@ class Tokens {
     if (value === null || typeof value !== "object") return value;
     const result = Object.fromEntries(Object.entries(value).map(([name, item]) => [name, this.normalize(item)]));
     for (const field of ["createdAt", "lastUsedAt"]) {
-      if (!GENERATED_TIME.test(value[field]) || !this.ids.has(value.id)) continue;
+      if (!generatedTime(value[field]) || !this.ids.has(value.id)) continue;
       const slot = `${this.ids.get(value.id).slice(1, -1)}.${field}`;
       const seen = this.times.get(slot) ?? [];
       if (!seen.includes(value[field])) seen.push(value[field]);

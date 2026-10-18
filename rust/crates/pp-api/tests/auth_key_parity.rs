@@ -171,9 +171,10 @@ fn stored_keys(directory: &Path, tenant: &str) -> String {
         .unwrap()
 }
 
-/// Matches the `toISOString` form both servers write, such as `2026-10-18T13:35:59.446Z`.
+/// Accepts only a real UTC instant in the `toISOString` form both servers
+/// write, such as `2026-10-18T13:35:59.446Z`.
 fn generated_time(value: &str) -> bool {
-    value.len() == 24
+    let shaped = value.len() == 24
         && value.bytes().enumerate().all(|(index, byte)| match index {
             4 | 7 => byte == b'-',
             10 => byte == b'T',
@@ -181,7 +182,21 @@ fn generated_time(value: &str) -> bool {
             19 => byte == b'.',
             23 => byte == b'Z',
             _ => byte.is_ascii_digit(),
-        })
+        });
+    if !shaped {
+        return false;
+    }
+    let number = |range: std::ops::Range<usize>| value[range].parse::<u32>().unwrap();
+    let (year, month, day) = (number(0..4), number(5..7), number(8..10));
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        1..=12 => 31,
+        _ => 0,
+    };
+    (1..=days).contains(&day) && number(11..13) < 24 && number(14..16) < 60 && number(17..19) < 60
 }
 
 /// Mirrors `Tokens` in `fixtures/parity/auth-key/generate.mjs`.
@@ -427,6 +442,8 @@ async fn comparison_rejects_leaked_secret_and_accepted_revoked_key() {
     let revoked_use = step("use", step("revoke", 0));
     assert_eq!(replay.steps[revoked_use]["key"], "<key:1>");
     let unknown_revoke = step("revoke", step("rotate", 0));
+    let last = replay.steps.len() - 1;
+    assert_eq!(replay.steps[last]["op"], "list");
     assert_eq!(replay.steps[unknown_revoke]["id"], "key_0000000000000000");
     let key = replay.raw[1]["body"]["key"].clone();
     let id = replay.raw[1]["body"]["id"].clone();
@@ -452,6 +469,18 @@ async fn comparison_rejects_leaked_secret_and_accepted_revoked_key() {
             json!("2001-01-01T00:00:00.000Z"),
         ),
         ("revoked key accepted", revoked_use, "/accepted", id),
+        (
+            "impossible first lastUsedAt",
+            last,
+            "/body/keys/3/lastUsedAt",
+            json!("2026-99-99T99:99:99.999Z"),
+        ),
+        (
+            "lastUsedAt in an array",
+            last,
+            "/body/keys/3/lastUsedAt",
+            json!([replay.raw[last]["body"]["keys"][3]["lastUsedAt"]]),
+        ),
     ];
     for (name, index, pointer, value) in mutations {
         let mut raw = replay.raw.clone();
