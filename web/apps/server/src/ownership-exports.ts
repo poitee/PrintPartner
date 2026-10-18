@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { tenantExportDirectory } from "./lib/secure-path.js";
@@ -13,6 +13,11 @@ export const ownershipExportClaimSchema = z.strictObject({
 });
 export type OwnershipExport = { path: string; sha256: string; profile_id: number; tenant_id: string };
 type Profile = { id: number; tenantId: string };
+type PlateRevision = { id: number; profileId: number };
+const plateManifestSchema = z.object({
+  format: z.literal("accepted-plate-3mf-manifest-v1"),
+  basis: z.object({ profile_id: z.number(), plate_revision_id: z.number() }),
+});
 
 export function ownershipFileDigest(path: string): string {
   if (!lstatSync(path).isFile()) throw new Error("Expected regular file without symlinks");
@@ -27,7 +32,7 @@ export function ownershipFileDigest(path: string): string {
   } finally { closeSync(fd); }
 }
 
-export function inspectOwnershipExports(root: string, profiles: readonly Profile[]): OwnershipExport[] {
+export function inspectOwnershipExports(root: string, profiles: readonly Profile[], plateRevisions: readonly PlateRevision[]): OwnershipExport[] {
   const result: OwnershipExport[] = [];
   const walk = (path: string, pieces: string[]) => {
     const stat = lstatSync(path);
@@ -41,12 +46,26 @@ export function inspectOwnershipExports(root: string, profiles: readonly Profile
     const [first] = pieces;
     const scoped = first?.startsWith("tenant-") === true;
     const layout = scoped ? pieces.slice(1) : pieces;
-    const [plan, kind, filename] = layout;
-    const profileId = /^profile-([1-9][0-9]*)-.+$/.exec(plan ?? "")?.[1];
+    const plate = layout[0] === "accepted-plates";
+    const [plan, kind, filename] = plate ? [layout[1], "accepted-plates", layout.slice(3).join("/")] : layout;
+    const profileId = (plate ? /^profile-([1-9][0-9]*)$/ : /^profile-([1-9][0-9]*)-.+$/).exec(plan ?? "")?.[1];
     const profile = profiles.find(profile => String(profile.id) === profileId);
     const tenant = profile?.tenantId;
     const expectedScope = tenant == null ? null : tenantExportDirectory("", tenant);
     if (!profile || (scoped && first !== expectedScope) || (!scoped && tenant !== "default")) throw new Error("Unassigned export artifact");
+    if (plate) {
+      const revisionId = /^revision-([1-9][0-9]*)$/.exec(layout[2] ?? "")?.[1];
+      if (!plateRevisions.some(revision => String(revision.id) === revisionId && revision.profileId === profile.id)) throw new Error("Unassigned export artifact");
+      if (!(layout.length === 4 && (filename === "manifest.json" || filename === "accepted-plates.zip"))
+        && !(layout.length === 5 && /^plates\/[0-9]{4}\.3mf$/.test(filename))) throw new Error("Unsupported export artifact layout");
+      const sha256 = ownershipFileDigest(path);
+      if (filename === "manifest.json") {
+        const { basis } = plateManifestSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+        if (basis.profile_id !== profile.id || String(basis.plate_revision_id) !== revisionId) throw new Error("Accepted Plate manifest basis mismatch");
+      }
+      result.push({ path: pieces.join("/"), sha256, profile_id: profile.id, tenant_id: profile.tenantId });
+      return;
+    }
     if (layout.length !== 3 || !filename || !(
       (kind === "checklist" && /^checklist-[a-f0-9]{64}\.html$/.test(filename))
       || (kind === "direct-3mf" && /^direct-[a-f0-9]{16}\.3mf$/.test(filename))
