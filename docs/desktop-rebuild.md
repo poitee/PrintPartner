@@ -383,7 +383,26 @@ Filename quantities retain JavaScript's binary64 rounding. For example,
 prints as `1e+21`. This does not expand the stored integer range. Recompute
 still refuses unsafe quantities atomically, preserving existing draft rows
 and STL files. This code remains behind default-off `desktop_rebuild`; product
-callers still require the stored `PP_DESKTOP_REBUILD` setting.
+callers still check the `PP_DESKTOP_REBUILD` environment value at startup.
+
+Preparation uses `pp_domain::build_identity::trim_js` for import-rule JSON,
+rule and path normalization, blank naming markers, decimal `parseInt` prefixes,
+role-default lookup and Spoolman color prefixes. JavaScript trims U+FEFF and
+ordinary whitespace, and preserves U+0085. The prototype-slug decision remains
+on GRE-697.
+
+`working_draft_preparation_trim` compares public-client Parts against literal
+Node 22.23.3 outcomes from disposable databases and STL files. Its two named
+tests cover filtered, unfiltered and wrapped-JSON imports, naming and color
+defaults. Cancellation and invalid U+0085 quantity prefixes preserve draft rows
+and files. The storage module retains its default-off compile gate; product
+callers retain the startup `PP_DESKTOP_REBUILD` environment check.
+
+```sh
+npx --yes --package=node@22 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/preparation-trim-node.mjs web/apps/server > /persist/tmp/preparation-trim.jsonl
+cmp /persist/tmp/preparation-trim.jsonl rust/crates/pp-storage/tests/fixtures/preparation-trim-node.jsonl
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_preparation_trim
+```
 
 Tests compare literal Node fingerprints, Parts and digests, propagate resource
 refusals, and cancel at every budget checkpoint. Regenerate the fixtures twice:
