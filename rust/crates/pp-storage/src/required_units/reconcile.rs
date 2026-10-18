@@ -48,6 +48,7 @@ struct Scope<'a> {
     draft: i64,
     expected: &'a str,
     profile_row: &'a Value,
+    check: &'a dyn Fn() -> Result<()>,
 }
 
 impl Scope<'_> {
@@ -169,7 +170,13 @@ impl Scope<'_> {
                 code: DomainCode::RequiredUnitSetUnavailable,
             });
         };
-        let result = model::reconcile(&d.parts, &d.inputs, &base, &command.request.decisions)?;
+        let result = model::reconcile(
+            &d.parts,
+            &d.inputs,
+            &base,
+            &command.request.decisions,
+            self.check,
+        )?;
         let basis_digest = selection_basis_digest(&mapping, &result.basis);
         let result_digest = digest(&result.full());
         let reconciliation_digest = reconciliation_digest(&json!({
@@ -213,6 +220,7 @@ impl Scope<'_> {
         )?;
         let reconciliation = self.tx.last_insert_rowid();
         for decision in &command.request.decisions {
+            (self.check)()?;
             let (kind, predecessor) = match decision {
                 Decision::Replace { .. } => ("replace", None),
                 Decision::SelectExactPredecessor {
@@ -243,6 +251,7 @@ impl Scope<'_> {
         }
         if let Some(assignments) = result.result["assignments"].as_array() {
             for a in assignments {
+                (self.check)()?;
                 self.tx.execute(
                     "INSERT INTO plan_draft_required_unit_assignments (tenant_id,reconciliation_id,target_draft_part_id,unit_index,kind,required_unit_token) VALUES (?,?,?,?,?,?)",
                     params![
@@ -292,7 +301,9 @@ pub(crate) fn run(
     tx: &Transaction<'_>,
     command: &ReconciliationCommand,
     policy: auth::AuthPolicy,
+    check: &dyn Fn() -> Result<()>,
 ) -> Result<Outcome> {
+    check()?;
     let (tenant, actor) = actor(tx, &command.credential, policy)?;
     let profile = i64::try_from(command.profile_id.get())?;
     let draft = i64::try_from(command.draft_id.get())?;
@@ -319,6 +330,7 @@ pub(crate) fn run(
         draft,
         expected,
         profile_row: &profile_row,
+        check,
     };
     match one(
         tx,

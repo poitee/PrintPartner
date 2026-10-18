@@ -233,7 +233,13 @@ pub(super) fn execute(
         Failure::Cancelled
     );
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
-    let outcome = reconcile::run(&tx, &command.input, command.policy)?;
+    let outcome = reconcile::run(&tx, &command.input, command.policy, &|| {
+        ensure!(
+            !command.cancelled.load(Ordering::Acquire),
+            Failure::Cancelled
+        );
+        Ok(())
+    })?;
     ensure!(
         !command.cancelled.load(Ordering::Acquire),
         Failure::Cancelled

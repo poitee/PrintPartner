@@ -267,6 +267,7 @@ pub(super) fn reconcile(
     inputs: &[Value],
     base: &[BasePart],
     decisions: &[Decision],
+    check: &dyn Fn() -> Result<()>,
 ) -> Result<Reconciled> {
     let mut targets = parts
         .iter()
@@ -294,6 +295,7 @@ pub(super) fn reconcile(
         sources.insert(i.source_layer, id);
     }
     let mut ids = HashSet::new();
+    let mut assignment_count = 0_usize;
     for p in &targets {
         ensure!(
             (1..=pp_domain::MAX_SAFE_INTEGER as i64).contains(&p.id) && ids.insert(p.id),
@@ -303,7 +305,12 @@ pub(super) fn reconcile(
             (1..=10_000).contains(&p.quantity_effective),
             "Required-unit target quantity is invalid"
         );
+        assignment_count = assignment_count
+            .checked_add(p.quantity_effective as usize)
+            .filter(|count| *count <= super::storage::ROW_LIMIT)
+            .ok_or_else(|| anyhow::anyhow!("Reconciliation row limit exceeded"))?;
     }
+    check()?;
     let mut base_ids = HashSet::new();
     let mut tokens = HashSet::new();
     for p in &base {
@@ -312,6 +319,7 @@ pub(super) fn reconcile(
             "Required-unit predecessor Part ID is invalid"
         );
         for (i, u) in p.units.iter().enumerate() {
+            check()?;
             validate_token(&u.token)?;
             ensure!(
                 u.prior_index >= 0,
@@ -355,6 +363,7 @@ pub(super) fn reconcile(
     let mut choices = Vec::new();
     let mut conflicts = Vec::new();
     for (target, candidates) in targets.iter().zip(&candidates) {
+        check()?;
         let decision = decisions
             .iter()
             .find(|d| d.target().get() as i64 == target.id);
@@ -487,6 +496,7 @@ pub(super) fn reconcile(
         };
         let reused = units.len();
         for (unit_index, u) in units.drain(..).enumerate() {
+            check()?;
             selected.insert(u.token.clone());
             assignments.push(Assignment::Reuse {
                 draft_part_id: target.id,
@@ -495,6 +505,7 @@ pub(super) fn reconcile(
             });
         }
         for unit_index in reused..count {
+            check()?;
             assignments.push(Assignment::Create {
                 draft_part_id: target.id,
                 unit_index,
@@ -530,6 +541,74 @@ pub(crate) fn validate_token(t: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::manifest_text::{JsText, ManifestText, OptionGroupId, PartManifestMetadata};
+
+    use super::reconcile as reconcile_checked;
+
+    fn reconcile(
+        parts: &[DraftPart],
+        inputs: &[Value],
+        base: &[BasePart],
+        decisions: &[Decision],
+    ) -> Result<Reconciled> {
+        reconcile_checked(parts, inputs, base, decisions, &|| Ok(()))
+    }
+
+    #[test]
+    fn gre764_cancellation_during_assignment_expansion() {
+        for reuse in [false, true] {
+            let checks = std::cell::Cell::new(0);
+            let check = || {
+                checks.set(checks.get() + 1);
+                ensure!(
+                    checks.get() < if reuse { 164 } else { 64 },
+                    super::super::Failure::Cancelled
+                );
+                Ok(())
+            };
+            let mut prior = base(10);
+            prior.units = (0..100).map(|i| unit(i + 1, i as i64, false)).collect();
+            let bases = if reuse { vec![prior] } else { vec![] };
+            let error = reconcile_checked(
+                &[part(21, reuse.then_some(10), 100)],
+                &[input()],
+                &bases,
+                &[],
+                &check,
+            )
+            .err()
+            .expect("expansion must stop when cancelled");
+            assert!(matches!(
+                error.downcast_ref(),
+                Some(super::super::Failure::Cancelled)
+            ));
+            assert_eq!(checks.get(), if reuse { 164 } else { 64 });
+        }
+    }
+
+    #[test]
+    fn gre764_assignment_cap_precedes_expansion() {
+        let parts: Vec<_> = (1..=21).map(|id| part(id, None, 10_000)).collect();
+        let checks = std::cell::Cell::new(0);
+        let check = || {
+            checks.set(checks.get() + 1);
+            Ok(())
+        };
+        let error = reconcile_checked(&parts, &[input()], &[], &[], &check)
+            .err()
+            .expect("210000 assignments must be rejected");
+        assert_eq!(error.to_string(), "Reconciliation row limit exceeded");
+        assert_eq!(checks.get(), 0, "oversized drafts must not start expansion");
+        let allowed = reconcile_checked(&parts[..20], &[input()], &[], &[], &check).unwrap();
+        assert_eq!(allowed.result["kind"], "ready");
+        assert_eq!(
+            allowed.result["assignments"].as_array().unwrap().len(),
+            200_000
+        );
+        assert_eq!(
+            allowed.result["assignments"][199_999],
+            json!({"kind":"create", "draftPartId":20, "unitIndex":9999})
+        );
+    }
 
     fn part(id: i64, predecessor: Option<i64>, quantity: i64) -> DraftPart {
         DraftPart::new(
