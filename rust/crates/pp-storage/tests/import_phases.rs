@@ -878,3 +878,32 @@ fn postprocessing_keeps_its_durable_wire_values() {
         assert!(serde_json::from_value::<Postprocessing>(wire.into()).is_err());
     }
 }
+
+#[test]
+fn a_released_import_source_lease_cannot_advance_under_a_replacement() {
+    let fixture = Fixture::open();
+    let op = fixture.admit(fixture.physical(), "released-source-fence");
+    let lease = fixture.claim(&op);
+    let mut source_work = fixture
+        .worker
+        .begin_source_work(
+            &lease,
+            None,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    source_work.release().unwrap();
+    let _replacement = fixture
+        .worker
+        .begin_source_work(
+            &lease,
+            None,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let before = fixture.document(&op);
+    assert!(fixture.phase(&lease, owned(&op)).is_err());
+    assert_eq!(fixture.document(&op), before);
+}
