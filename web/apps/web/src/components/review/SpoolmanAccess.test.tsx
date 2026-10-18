@@ -243,7 +243,10 @@ it.each([false, true])("preserves attached-spool catalog role display with acces
     { role: "primary", part_count: 1, filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5", filament_custom_hex: null, filament_display: "Catalog Red", filament_hex: "#ff0000" },
     { role: "accent", part_count: 1, filament_color_id: "spoolman:int-1:filament:2", spoolman_spool_id: null, filament_custom_hex: null, filament_display: "Spoolman Blue", filament_hex: "#0000ff" },
   ];
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ roles }), { headers: { "content-type": "application/json" } })));
+  const fetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => String(input).includes("/role-filaments")
+    ? Promise.resolve(new Response(JSON.stringify({ roles }), { headers: { "content-type": "application/json" } }))
+    : fetch(input, init)));
   client.setQueryData(queryKeys.roleFilaments(1, allowed), roles);
   render(<><ObservedRoleColors /><PartColorDialog part={part} profileId={1} onClose={vi.fn()} /></>, { wrapper });
   await waitFor(() => expect(screen.getByLabelText("primary").textContent).toBe("Catalog Red #ff0000"));
