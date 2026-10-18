@@ -18,6 +18,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "../../pp-storage/tests/common/process.rs"]
+mod child_process;
+
 struct Scratch(PathBuf);
 impl Drop for Scratch {
     fn drop(&mut self) {
@@ -277,7 +280,7 @@ fn node_health_snapshot_is_current() {
         .canonicalize()
         .unwrap();
     let node = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
-    let output = std::process::Command::new(node)
+    let output = child_process::command(node)
         .current_dir(root)
         .args([
             "--conditions=development",
