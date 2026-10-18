@@ -192,7 +192,7 @@ pub fn validate_plates(
 }
 
 fn quoted(value: &str) -> String {
-    serde_json::to_string(value).expect("strings serialize")
+    serde_json::Value::String(value.to_owned()).to_string()
 }
 fn placement(value: Placement) -> &'static str {
     match value {
@@ -229,7 +229,7 @@ pub fn layout_digest(plates: &[ValidatedPlate], format: u8) -> Digest {
         output.push_str("]}");
     }
     output.push_str("]}");
-    Digest::parse(hex::encode(Sha256::digest(output.as_bytes()))).expect("SHA-256 is a digest")
+    Digest::from_bytes(Sha256::digest(output.as_bytes()).into())
 }
 
 pub fn initial_plate_id(
@@ -338,10 +338,14 @@ pub fn pack_units(printer: &PrinterGeometry, units: &[PackingUnit]) -> PackResul
             y = margin;
             row_depth = 0;
         }
+        let (Ok(x_um), Ok(y_um)) = (OffsetUm::parse(i64::from(x)), OffsetUm::parse(i64::from(y)))
+        else {
+            return PackResult::UnitTooLarge(unit.token);
+        };
         current.push(PackedUnit {
             unit: unit.clone(),
-            x_um: OffsetUm::parse(i64::from(x)).expect("stored offset"),
-            y_um: OffsetUm::parse(i64::from(y)).expect("stored offset"),
+            x_um,
+            y_um,
         });
         x += unit.width_um.get() + margin;
         row_depth = row_depth.max(unit.depth_um.get());
@@ -414,10 +418,14 @@ pub fn pack_units_around(
                 .copied()
                 .filter(|value| *value + u64::from(unit.width_um.get()) <= u64::from(max_x))
             {
+                let (Ok(x_um), Ok(y_um)) = (OffsetUm::parse(x as i64), OffsetUm::parse(y as i64))
+                else {
+                    return PackResult::UnitTooLarge(unit.token);
+                };
                 let candidate = PackedUnit {
                     unit: unit.clone(),
-                    x_um: OffsetUm::parse(x as i64).unwrap(),
-                    y_um: OffsetUm::parse(y as i64).unwrap(),
+                    x_um,
+                    y_um,
                 };
                 let test = UnitInput {
                     token: candidate.unit.token.clone(),
@@ -567,8 +575,8 @@ pub fn grouping_buckets<T: Clone>(units: &[GroupUnit<T>], rules: &[GroupRule]) -
             .into_iter()
             .collect();
     }
-    let mut buckets: HashMap<String, Vec<T>> = HashMap::new();
-    let mut order = Vec::new();
+    let mut indices = HashMap::new();
+    let mut buckets: Vec<Vec<T>> = Vec::new();
     for unit in units {
         let material = rules
             .iter()
@@ -620,13 +628,11 @@ pub fn grouping_buckets<T: Clone>(units: &[GroupUnit<T>], rules: &[GroupRule]) -
             })
             .collect::<Vec<_>>()
             .join("\0");
-        if !buckets.contains_key(&key) {
-            order.push(key.clone());
-        }
-        buckets.entry(key).or_default().push(unit.value.clone());
+        let index = *indices.entry(key).or_insert_with(|| {
+            buckets.push(Vec::new());
+            buckets.len() - 1
+        });
+        buckets[index].push(unit.value.clone());
     }
-    order
-        .into_iter()
-        .map(|key| buckets.remove(&key).expect("inserted bucket"))
-        .collect()
+    buckets
 }

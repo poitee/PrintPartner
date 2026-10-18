@@ -48,6 +48,10 @@ hex_identity!(RequiredUnitToken, "ppu_", 36);
 hex_identity!(PlateId, "plate_", 38);
 
 impl Digest {
+    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(hex::encode(bytes))
+    }
+
     pub fn parse(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         ensure!(

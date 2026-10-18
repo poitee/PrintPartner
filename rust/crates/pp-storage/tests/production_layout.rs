@@ -291,4 +291,9 @@ fn node_grouping_with_material_override_and_color_fallback() {
         serde_json::json!(layout::grouping_buckets(&units, &rules)),
         golden()["grouped"]
     );
+    let interleaved = [units[0].clone(), units[2].clone(), units[1].clone()];
+    assert_eq!(
+        serde_json::json!(layout::grouping_buckets(&interleaved, &rules)),
+        golden()["grouped"]
+    );
 }
