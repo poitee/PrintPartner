@@ -31,6 +31,9 @@ class CiPathFilterTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(ci_filter.relevant(path, "rust"))
 
+    def test_linux_setup_selects_rust(self):
+        self.assertTrue(ci_filter.relevant("scripts/setup-ci-linux.sh", "rust"))
+
     def test_actions_inputs(self):
         for path in [".github/workflows/a.yml", ".github/actions/a/action.yml",
                      "scripts/test_ci_path_filter.py", ".github/zizmor.yml",
