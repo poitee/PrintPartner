@@ -132,10 +132,13 @@ const RESERVED: &str = if cfg!(windows) { " #%&;=" } else { " ?#%&;=" };
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
+        // An absolute root keeps `file:///` URIs and reported backup paths
+        // correct when TMPDIR is relative.
+        let root = std::path::absolute(std::env::temp_dir().join(format!(
             "pp-schema40-failure{RESERVED}{}",
             hex::encode(rand::random::<[u8; 16]>())
-        ));
+        )))
+        .unwrap();
         std::fs::create_dir(&root).unwrap();
         // Own the root before seeding so a setup panic still removes it.
         let mut fixture = Self {
