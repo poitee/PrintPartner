@@ -1739,24 +1739,51 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    const SUBREAPER_FIXTURE: &str =
+        "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced";
+
+    #[cfg(target_os = "linux")]
+    fn run_subreaper_fixture(test_name: &str) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--format=pretty", "--color=never"])
+            .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
+            .output()
+            .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn validate_subreaper_fixture(output: &std::process::Output) -> Result<(), &'static str> {
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err("isolated subreaper fixture failed")
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subreaper_reexec_runs_exactly_one_fixture() {
+        let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
+        assert_eq!(validate_subreaper_fixture(&output), Ok(()), "{output:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subreaper_reexec_wrong_name_is_failure() {
+        let output = run_subreaper_fixture(&format!("{SUBREAPER_FIXTURE}_missing"));
+        assert_eq!(output.status.code(), Some(0));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 0 tests"));
+        assert!(validate_subreaper_fixture(&output).is_err(), "{output:?}");
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced() {
         use tokio::io::{AsyncBufReadExt, BufReader};
 
         if std::env::var_os("PP_COMPAT_SUBREAPER_FIXTURE").is_none() {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced",
-                    "--nocapture",
-                ])
-                .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
-                .status()
-                .unwrap();
-            assert!(
-                status.success(),
-                "isolated subreaper fixture failed: {status}"
-            );
+            let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
+            assert_eq!(validate_subreaper_fixture(&output), Ok(()), "{output:?}");
             return;
         }
         assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
