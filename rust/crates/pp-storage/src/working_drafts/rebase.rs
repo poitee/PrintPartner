@@ -1,6 +1,10 @@
 //! Node's `rebasePlanDraft`, with the `mergeRebasedPlanDraft` it calls.
 use super::*;
 
+#[cfg(test)]
+#[path = "rebase_budget_tests.rs"]
+mod budget_tests;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SourceState {
