@@ -185,12 +185,21 @@ fn line_end(chars: &[char], start: usize, budget: &PreparationBudget<'_>) -> Rea
     Ok(end)
 }
 
+struct FlowProperty {
+    line: usize,
+    // Output length after the property, where an empty node ends.
+    end: usize,
+    // A `:` after the empty node would separate it as a mapping key.
+    key: bool,
+}
+
 fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String> {
     budget.check()?;
     let chars = scalar_chars(source, budget)?;
     let mut output = String::with_capacity(source.len());
     let mut i = 0;
-    let mut flow = 0usize;
+    // Opening bracket of each open flow collection.
+    let mut flow: Vec<char> = Vec::new();
     let mut quote = None;
     let mut plain = false;
     // Column of the last block `-` or `?`, or of the key before the last block
@@ -202,6 +211,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     let mut line_start = true;
     let mut line_begin = 0usize;
     let mut line_indent = 0usize;
+    // The line began inside a quoted scalar, so its indent is unknown here.
+    let mut quoted_line = false;
     let mut quoted_end = false;
     let mut block: Option<(usize, Option<usize>)> = None;
     // js-yaml's indent for the outermost flow collection: one past its block
@@ -213,8 +224,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     // line a block value's flow opens on.
     let mut shallow_flow = false;
     let mut separation_tab = false;
-    // Line of a flow node's tag or anchor while its content has not started.
-    let mut flow_property: Option<usize> = None;
+    // A tab after a flow node's properties counts once the node ends.
+    let mut node_tab = false;
+    let mut flow_key = false;
+    let mut flow_property: Option<FlowProperty> = None;
     let mut consumed = 0usize;
     let mut next_check = 4096usize;
     while i < chars.len() {
@@ -232,9 +245,11 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             }
             line_begin = start;
             line_indent = i - start;
+            quoted_line = start > 0 && !matches!(chars[start - 1], '\r' | '\n');
             node_column = None;
             shallow_flow = false;
             separation_tab = false;
+            node_tab = false;
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
             if let Some((base, required)) = block {
                 let required = required.or_else(|| (!blank).then_some(line_indent));
@@ -278,7 +293,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             }
             let plain_blank = chars.get(content).is_none_or(|c| matches!(c, '\r' | '\n'));
             if !plain_blank
-                && flow == 0
+                && flow.is_empty()
                 && (!plain || plain_parent.is_some_and(|n| line_indent <= n))
             {
                 plain = false;
@@ -287,7 +302,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             }
             line_start = false;
             if line_indent == 0
-                && flow == 0
+                && flow.is_empty()
                 && matches!(chars.get(i..i + 3), Some(['-', '-', '-'] | ['.', '.', '.']))
                 && chars.get(i + 3).copied().is_none_or(yaml_blank_break)
             {
@@ -353,7 +368,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     output.push(*c);
                     consumed += c.len_utf8();
                     i += 1;
-                    if *c == '\n' {
+                    if matches!(*c, '\r' | '\n') {
                         line_start = true;
                     }
                 }
@@ -412,21 +427,33 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i = end;
             continue;
         }
+        let mut separator = false;
         if !yaml_blank_break(c) {
-            if separation_tab && shallow_flow && flow > 0 {
+            // js-yaml ends a flow node at its properties when a line break
+            // follows and the next line is not indented past the collection.
+            // That line may sit below the collection's indent.
+            if let Some(property) = flow_property.take()
+                && property.line != line_begin
+                && line_indent <= flow_indent
+            {
+                separator = c == ':' && property.key;
+                if !separator && !matches!(c, ',' | ']' | '}') {
+                    return invalid();
+                }
+                // saphyr reads the empty node only when it ends on the property's line.
+                output.truncate(property.end);
+                output.push(' ');
+                shallow_flow = line_indent < flow_indent;
+            }
+            // js-yaml indents every other flow line at least to the collection.
+            if !flow.is_empty() && !shallow_flow && !quoted_line && line_indent < flow_indent {
+                return invalid();
+            }
+            if separation_tab && shallow_flow && !flow.is_empty() {
                 return invalid();
             }
             // js-yaml counts no indent on the first line.
             document_indent.get_or_insert(if line_begin == 0 { 0 } else { line_indent });
-            // js-yaml ends a flow node at its properties when a line break
-            // follows and the next line is not indented past the collection.
-            if flow_property.take().is_some_and(|line| {
-                line != line_begin
-                    && line_indent <= flow_indent
-                    && !matches!(c, ',' | ']' | '}' | ':')
-            }) {
-                return invalid();
-            }
         }
         if node && !yaml_blank_break(c) && node_column.is_none() {
             node_column = Some(column);
@@ -468,8 +495,12 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i = end;
             if c == '*' {
                 node = false;
-            } else if flow > 0 {
-                flow_property = Some(line_begin);
+            } else if !flow.is_empty() {
+                flow_property = Some(FlowProperty {
+                    line: line_begin,
+                    end: output.len(),
+                    key: flow_key,
+                });
             }
             continue;
         }
@@ -483,7 +514,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         }
         if node && matches!(c, '|' | '>') {
             // js-yaml reads no block scalar inside a flow collection.
-            if flow > 0 {
+            if !flow.is_empty() {
                 return invalid();
             }
             let end = line_end(&chars, i, budget)?;
@@ -514,29 +545,43 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             continue;
         }
         let colon = c == ':'
-            && (next.is_none_or(yaml_blank_break)
+            && (separator
+                || next.is_none_or(yaml_blank_break)
                 || quoted_end
-                || (flow > 0 && next.is_some_and(|n| matches!(n, ',' | '[' | ']' | '{' | '}'))));
+                || (!flow.is_empty()
+                    && next.is_some_and(|n| matches!(n, ',' | '[' | ']' | '{' | '}'))));
         let structural = colon
-            || (flow > 0 && matches!(c, ',' | ']' | '}'))
+            || (!flow.is_empty() && matches!(c, ',' | ']' | '}'))
             || (node && matches!(c, '[' | '{'))
             || (node && matches!(c, '-' | '?') && next.is_none_or(yaml_blank_break));
         if structural {
-            if flow == 0 && c == ':' {
+            if flow.is_empty() && c == ':' {
                 parent = Some(node_column.unwrap_or(column));
-            } else if flow == 0 && matches!(c, '-' | '?') {
+            } else if flow.is_empty() && matches!(c, '-' | '?') {
                 parent = Some(column);
             }
             node_column = None;
+            if node_tab && shallow_flow && !flow.is_empty() {
+                if !matches!(c, '[' | '{') {
+                    return invalid();
+                }
+                separation_tab = true;
+            }
+            node_tab = false;
             if matches!(c, '[' | '{') {
-                if flow == 0 {
+                if flow.is_empty() {
                     flow_indent = parent.map_or(document_indent.unwrap_or(0), |p| p + 1);
                     shallow_flow = line_indent < flow_indent;
                 }
-                flow += 1;
+                flow.push(c);
             } else if matches!(c, ']' | '}') {
-                flow = flow.saturating_sub(1);
+                flow.pop();
             }
+            flow_key = match c {
+                '{' | '?' => true,
+                ',' => flow.last() == Some(&'{'),
+                _ => false,
+            };
             node = !matches!(c, ']' | '}');
             plain = false;
             quoted_end = false;
@@ -547,10 +592,17 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             node = false;
             plain = true;
             quoted_end = false;
-        } else if c == '\t' && !plain && (node || flow > 0) {
-            separation_tab = true;
+        } else if c == '\t' && !plain && (node || !flow.is_empty()) {
+            if flow_property.is_some() {
+                node_tab = true;
+            } else {
+                separation_tab = true;
+            }
         }
         output.push(c);
+        if separator {
+            output.push(' ');
+        }
         if plain && c == '\u{e000}' {
             output.push(c);
         }
