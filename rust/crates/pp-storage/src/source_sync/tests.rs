@@ -79,6 +79,28 @@ impl Fixture {
         }
     }
 
+    fn login(&mut self) {
+        let auth::Outcome::Session { token, .. } = self
+            .owner
+            .auth(FirstUserTenant::NewUser)
+            .submit(
+                auth::Request::Login {
+                    email: "source-sync@example.com".into(),
+                    password: auth::Secret::new("source-sync-test-password".into()),
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("session expected")
+        };
+        self.token = token.expose().to_owned();
+    }
+
     fn source(&self, name: &str) -> i64 {
         let catalog::Outcome::Source(Some(source)) = self
             .catalog
@@ -496,6 +518,59 @@ fn cancel_and_revoked_authority_close_the_batch() {
 }
 
 #[test]
+fn cancel_closes_an_open_batch_after_worker_advance_refusal() {
+    let mut sync = Fixture::new();
+    let id = sync.source("Pending");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    sync.worker
+        .update(
+            &mut lease,
+            WorkerOperation::BeginEffect(jobs::EffectIntent {
+                operation: jobs::EffectOperation::SourceRefresh,
+                basis_hash: "a".repeat(64),
+                content_hash: "b".repeat(64),
+                target: id.to_string(),
+            }),
+        )
+        .unwrap();
+    sync.connection()
+        .execute("DELETE FROM sessions", [])
+        .unwrap();
+    assert!(
+        sync.worker
+            .update(&mut lease, WorkerOperation::Heartbeat)
+            .is_err()
+    );
+    let refused = sync.job(&job_id);
+    assert_eq!(refused.state, PersistentState::ReconciliationRequired);
+    assert_eq!(
+        refused.authority_refusal.as_ref().unwrap().phase,
+        AuthorityRefusalPhase::WorkerAdvance
+    );
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    sync.login();
+    let cancelled = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    assert!(cancelled.cancel_requested);
+    assert_eq!(cancelled.state, PersistentState::ReconciliationRequired);
+    assert_eq!(cancelled.generation, refused.generation + 1);
+    assert_eq!(cancelled.authority_refusal, refused.authority_refusal);
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
+    assert_eq!(
+        sync.targets(&job_id),
+        [(id, "not_run".into(), Some("batch_halt".into()))]
+    );
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn repeated_authority_refusal_halt_preserves_evidence() {
     for claimed in [false, true] {
         let sync = Fixture::new();
@@ -552,25 +627,7 @@ fn authority_refusal_survives_cancel_twice_and_reopen() {
         sync.targets(&job_id)[0].2.as_deref(),
         Some("authority_refused")
     );
-    let auth::Outcome::Session { token, .. } = sync
-        .owner
-        .auth(FirstUserTenant::NewUser)
-        .submit(
-            auth::Request::Login {
-                email: "source-sync@example.com".into(),
-                password: auth::Secret::new("source-sync-test-password".into()),
-            },
-            Arc::new(AtomicBool::new(false)),
-            Duration::from_secs(5),
-        )
-        .unwrap()
-        .recv()
-        .unwrap()
-        .unwrap()
-    else {
-        panic!("session expected")
-    };
-    sync.token = token.expose().to_owned();
+    sync.login();
     let before = sync.snapshot();
     let cancelled = sync.user(UserOperation::Cancel {
         job_id: job_id.clone(),

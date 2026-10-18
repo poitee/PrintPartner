@@ -262,10 +262,10 @@ pub(crate) fn halt_job(
             job.state,
             PersistentState::Failed | PersistentState::ReconciliationRequired
         )
-        && job
-            .authority_refusal
-            .as_ref()
-            .is_some_and(|refusal| refusal.generation == job.generation - 1)
+        && job.authority_refusal.as_ref().is_some_and(|refusal| {
+            refusal.phase == crate::jobs::AuthorityRefusalPhase::SourceWriter
+                && refusal.generation == job.generation - 1
+        })
         && job.recovery.as_deref() == Some(detail.as_str())
     {
         return Ok(job);

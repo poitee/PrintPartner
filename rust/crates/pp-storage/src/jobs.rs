@@ -2019,7 +2019,10 @@ pub(crate) fn user(
             #[cfg(feature = "desktop_rebuild")]
             if job.kind == JobKind::Sync {
                 if job.state == PersistentState::ReconciliationRequired
-                    && job.authority_refusal.is_some()
+                    && job.authority_refusal.as_ref().is_some_and(|refusal| {
+                        refusal.phase == AuthorityRefusalPhase::SourceWriter
+                            && refusal.generation == job.generation - 1
+                    })
                 {
                     save(tx, &mut job, "cancellation_requested")?;
                     return Ok(Outcome::Job(job, LocalCommit::Committed));
