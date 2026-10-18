@@ -132,57 +132,66 @@ pub(super) enum JsonError {
 }
 
 pub(super) fn parse(bytes: &[u8]) -> Result<JsonValue, JsonError> {
+    parse_with_node(bytes, |_| Ok(()))
+}
+
+pub(super) fn parse_with_node<E: From<JsonError>>(
+    bytes: &[u8],
+    mut on_node: impl FnMut(usize) -> Result<(), E>,
+) -> Result<JsonValue, E> {
     if bytes.len() > MAX_BYTES {
-        return Err(JsonError::Limit(JsonLimit::Bytes));
+        return Err(JsonError::Limit(JsonLimit::Bytes).into());
     }
     let mut parser = Parser {
         bytes,
         position: 0,
         nodes: 0,
+        on_node: &mut on_node,
     };
     parser.whitespace();
     let value = parser.value(0)?;
     parser.whitespace();
     if parser.position != bytes.len() {
-        return Err(JsonError::Syntax);
+        return Err(JsonError::Syntax.into());
     }
     Ok(value)
 }
 
-struct Parser<'a> {
+struct Parser<'a, E> {
     bytes: &'a [u8],
     position: usize,
     nodes: usize,
+    on_node: &'a mut dyn FnMut(usize) -> Result<(), E>,
 }
 
-impl Parser<'_> {
-    fn value(&mut self, depth: usize) -> Result<JsonValue, JsonError> {
+impl<E: From<JsonError>> Parser<'_, E> {
+    fn value(&mut self, depth: usize) -> Result<JsonValue, E> {
         if depth > MAX_DEPTH {
-            return Err(JsonError::Limit(JsonLimit::Depth));
+            return Err(JsonError::Limit(JsonLimit::Depth).into());
         }
-        self.node()?;
+        self.node(depth)?;
         self.whitespace();
         match self.peek() {
-            Some(b'n') => self.literal(b"null", JsonValue::Null),
-            Some(b't') => self.literal(b"true", JsonValue::Bool(true)),
-            Some(b'f') => self.literal(b"false", JsonValue::Bool(false)),
-            Some(b'"') => self.string().map(JsonValue::Text),
+            Some(b'n') => Ok(self.literal(b"null", JsonValue::Null)?),
+            Some(b't') => Ok(self.literal(b"true", JsonValue::Bool(true))?),
+            Some(b'f') => Ok(self.literal(b"false", JsonValue::Bool(false))?),
+            Some(b'"') => Ok(JsonValue::Text(self.string()?)),
             Some(b'[') => self.array(depth),
             Some(b'{') => self.object(depth),
-            Some(b'-' | b'0'..=b'9') => self.number(),
-            _ => Err(JsonError::Syntax),
+            Some(b'-' | b'0'..=b'9') => Ok(self.number()?),
+            _ => Err(JsonError::Syntax.into()),
         }
     }
 
-    fn node(&mut self) -> Result<(), JsonError> {
+    fn node(&mut self, depth: usize) -> Result<(), E> {
         self.nodes = self
             .nodes
             .checked_add(1)
             .ok_or(JsonError::Limit(JsonLimit::Nodes))?;
         if self.nodes > MAX_NODES {
-            return Err(JsonError::Limit(JsonLimit::Nodes));
+            return Err(JsonError::Limit(JsonLimit::Nodes).into());
         }
-        Ok(())
+        (self.on_node)(depth)
     }
 
     fn literal(&mut self, expected: &[u8], value: JsonValue) -> Result<JsonValue, JsonError> {
@@ -252,7 +261,7 @@ impl Parser<'_> {
         Ok(value)
     }
 
-    fn array(&mut self, depth: usize) -> Result<JsonValue, JsonError> {
+    fn array(&mut self, depth: usize) -> Result<JsonValue, E> {
         self.position += 1;
         self.whitespace();
         let mut values = Vec::new();
@@ -266,12 +275,12 @@ impl Parser<'_> {
             match self.take() {
                 Some(b',') => self.whitespace(),
                 Some(b']') => return Ok(JsonValue::Array(values)),
-                _ => return Err(JsonError::Syntax),
+                _ => return Err(JsonError::Syntax.into()),
             }
         }
     }
 
-    fn object(&mut self, depth: usize) -> Result<JsonValue, JsonError> {
+    fn object(&mut self, depth: usize) -> Result<JsonValue, E> {
         self.position += 1;
         self.whitespace();
         let mut values = OrderedObject::default();
@@ -281,10 +290,10 @@ impl Parser<'_> {
         }
         loop {
             let key = self.string()?;
-            self.node()?;
+            self.node(depth + 1)?;
             self.whitespace();
             if self.take() != Some(b':') {
-                return Err(JsonError::Syntax);
+                return Err(JsonError::Syntax.into());
             }
             let value = self.value(depth + 1)?;
             values.insert(key, value);
@@ -292,7 +301,7 @@ impl Parser<'_> {
             match self.take() {
                 Some(b',') => self.whitespace(),
                 Some(b'}') => return Ok(JsonValue::Object(values)),
-                _ => return Err(JsonError::Syntax),
+                _ => return Err(JsonError::Syntax.into()),
             }
         }
     }
@@ -371,12 +380,25 @@ fn hex(value: u8) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonError, JsonLimit, parse};
+    use super::{JsonError, JsonLimit, parse, parse_with_node};
 
     fn round_trip(input: &str) -> String {
         let mut output = Vec::new();
         parse(input.as_bytes()).unwrap().write_json(&mut output);
         String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn node_callback_preserves_value_and_key_depths() {
+        let input = br#"{"a":[null,{"b":true}],"c":0}"#;
+        let mut depths = Vec::new();
+        let parsed = parse_with_node(input, |depth| {
+            depths.push(depth);
+            Ok::<(), JsonError>(())
+        })
+        .unwrap();
+        assert_eq!(depths, [0, 1, 1, 2, 2, 3, 3, 1, 1]);
+        assert_eq!(parsed, parse(input).unwrap());
     }
 
     #[test]
