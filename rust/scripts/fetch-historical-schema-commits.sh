@@ -13,11 +13,18 @@ commits=(
   71e25e7731feddd0eaec05a0d1070dc13de790a7
 )
 
+missing=()
 for commit in "${commits[@]}"; do
-  if git cat-file -e "${commit}^{tree}" 2>/dev/null; then
-    continue
+  if ! git cat-file -e "${commit}^{tree}" 2>/dev/null; then
+    missing+=("$commit")
   fi
-  git fetch --no-tags --depth=1 origin "$commit"
+done
+
+if [[ -n "${missing[*]-}" ]]; then
+  git fetch --no-tags --depth=1 origin "${missing[@]}"
+fi
+
+for commit in "${commits[@]}"; do
   git cat-file -e "${commit}^{tree}"
 done
 
