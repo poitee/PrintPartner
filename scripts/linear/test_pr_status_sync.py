@@ -1,12 +1,15 @@
 import copy
 import datetime as dt
+import http.client
 import importlib.util
 import io
 import json
 from pathlib import Path
 import subprocess
 import textwrap
+import traceback
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 
@@ -28,6 +31,205 @@ def pr(number=1, state="OPEN", body="Refs GRE-1", age=0):
             "headRefName": "slice", "updatedAt": timestamp,
             "mergedAt": timestamp if state == "MERGED" else None,
             "closedAt": timestamp if state != "OPEN" else None}
+
+
+class HttpTest(unittest.TestCase):
+    def setUp(self):
+        patch.dict(sync.os.environ, {"LINEAR_API_KEY": "secret-test-key"}).start()
+        self.request = patch.object(sync.urllib.request, "urlopen").start()
+        self.sleep = patch("time.sleep").start()
+        self.logs = io.StringIO()
+        patch.object(sync.sys, "stderr", self.logs).start()
+        self.addCleanup(patch.stopall)
+
+    def response(self, value):
+        return io.BytesIO(json.dumps(value).encode())
+
+    def http_error(self, status, body):
+        return urllib.error.HTTPError("https://example.invalid", status, "secret-test-key", {},
+                                      self.response(body) if isinstance(body, dict) else io.BytesIO(body))
+
+    def errors(self, code):
+        return {"errors": [{"message": "failure secret-test-key", "extensions": {"code": code}}]}
+
+    def assert_safe_failure(self, query="query{viewer{id}}", message=None):
+        with self.assertRaises(RuntimeError) as caught:
+            real_gql(query)
+        if message:
+            self.assertEqual(str(caught.exception), message)
+        rendered = "".join(traceback.format_exception(caught.exception)) + self.logs.getvalue()
+        self.assertNotIn("secret-test-key", rendered)
+
+    def test_http_400_ratelimited_then_success(self):
+        self.request.side_effect = [self.http_error(400, self.errors("RATELIMITED")),
+                                    self.response({"data": {"ok": True}})]
+        self.assertEqual(real_gql("query{viewer{id}}"), {"ok": True})
+        self.assertEqual(self.request.call_count, 2)
+        self.assertEqual(self.sleep.call_count, 1)
+        self.assertIn("400", self.logs.getvalue())
+        self.assertIn("failure [REDACTED]", self.logs.getvalue())
+        self.assertIn("RATELIMITED", self.logs.getvalue())
+        self.assertNotIn("secret-test-key", self.logs.getvalue())
+
+    def test_http_genuine_graphql_error_does_not_retry(self):
+        self.request.side_effect = self.http_error(400, self.errors("GRAPHQL_VALIDATION_FAILED"))
+        self.assert_safe_failure(message="Linear API returned GraphQL errors")
+        self.assertEqual(self.request.call_count, 1)
+        self.assertFalse(self.sleep.called)
+        self.assertIn("GRAPHQL_VALIDATION_FAILED", self.logs.getvalue())
+        self.assertIn("failure [REDACTED]", self.logs.getvalue())
+
+    def test_transient_http_exhaustion_is_bounded_and_safe(self):
+        for status in (429, 500, 502, 503):
+            with self.subTest(status=status):
+                self.request.reset_mock()
+                self.sleep.reset_mock()
+                self.request.side_effect = [self.http_error(status, b"secret-test-key unavailable")
+                                            for _ in range(3)]
+                self.assert_safe_failure()
+                self.assertEqual(self.request.call_count, 3)
+                self.assertEqual(self.sleep.call_count, 2)
+
+    def test_timeout_then_success_and_exhaustion(self):
+        self.request.side_effect = [TimeoutError("secret-test-key"), self.response({"data": {"ok": True}})]
+        self.assertEqual(real_gql("query{viewer{id}}"), {"ok": True})
+        self.request.reset_mock()
+        self.request.side_effect = urllib.error.URLError(TimeoutError("secret-test-key"))
+        self.assert_safe_failure()
+        self.assertEqual(self.request.call_count, 3)
+
+    def test_response_graphql_ratelimited_then_success(self):
+        self.request.side_effect = [self.response(self.errors("RATELIMITED")),
+                                    self.response({"data": {"ok": True}})]
+        self.assertEqual(real_gql("query{viewer{id}}"), {"ok": True})
+        self.assertEqual(self.request.call_count, 2)
+
+    def test_http_protocol_failures_retry_without_exposing_key(self):
+        for error in (http.client.IncompleteRead(b"secret-test-key"),
+                      http.client.BadStatusLine("secret-test-key")):
+            with self.subTest(error=type(error).__name__):
+                self.request.reset_mock()
+                self.request.side_effect = [error, self.response({"data": {"ok": True}})]
+                self.assertEqual(real_gql("query{viewer{id}}"), {"ok": True})
+                self.assertEqual(self.request.call_count, 2)
+                self.request.reset_mock()
+                self.request.side_effect = error
+                self.assert_safe_failure()
+                self.assertEqual(self.request.call_count, 3)
+
+    def test_incomplete_response_body_retries(self):
+        response = self.response({})
+        with patch.object(response, "read", side_effect=http.client.IncompleteRead(b"secret-test-key")):
+            self.request.side_effect = [response, self.response({"data": {"ok": True}})]
+            self.assertEqual(real_gql("query{viewer{id}}"), {"ok": True})
+        self.assertEqual(self.request.call_count, 2)
+        self.assertNotIn("secret-test-key", self.logs.getvalue())
+
+    def test_server_graphql_errors_retry_safe_operations(self):
+        for code in ("INTERNAL_SERVER_ERROR", "UNKNOWN", None):
+            for query in ("query{viewer{id}}", "mutation{issueUpdate(id:1,input:{}){success}}"):
+                with self.subTest(code=code, query=query):
+                    self.request.reset_mock()
+                    self.request.side_effect = [self.http_error(503, self.errors(code)),
+                                                self.response({"data": {"ok": True}})]
+                    self.assertEqual(real_gql(query), {"ok": True})
+                    self.assertEqual(self.request.call_count, 2)
+
+    def test_invalid_graphql_requests_remain_fatal_on_server_error(self):
+        for code in ("BAD_USER_INPUT", "GRAPHQL_VALIDATION_FAILED", "GRAPHQL_PARSE_FAILED"):
+            with self.subTest(code=code):
+                self.request.reset_mock()
+                self.request.side_effect = self.http_error(500, self.errors(code))
+                self.assert_safe_failure(message="Linear API returned GraphQL errors")
+                self.assertEqual(self.request.call_count, 1)
+
+    def test_reconcile_deadline_bounds_requests_and_preserves_summary(self):
+        now = [0.0]
+        timeouts = []
+        def timeout(request, *, timeout):
+            timeouts.append(timeout)
+            now[0] += timeout
+            raise TimeoutError("secret-test-key")
+        def sleep(seconds):
+            now[0] += seconds
+        self.request.side_effect = timeout
+        self.sleep.side_effect = sleep
+        prs = [pr(number=n, body=f"Refs GRE-{n}") for n in range(1, 7)]
+        with patch.object(sync, "all_prs", return_value=prs), \
+                patch.object(sync.time, "monotonic", side_effect=lambda: now[0]):
+            with self.assertRaises(RuntimeError) as caught:
+                sync.reconcile(3)
+        self.assertLessEqual(now[0], 240)
+        self.assertEqual(timeouts[-1], 23)
+        self.assertEqual(self.request.call_count, 8)
+        for number in range(1, 7):
+            self.assertIn(f"GRE-{number}", str(caught.exception))
+        self.assertIn("stale issue listing", str(caught.exception))
+        self.assertNotIn("secret-test-key", "".join(traceback.format_exception(caught.exception)))
+        self.request.side_effect = None
+        self.request.return_value = self.response({"data": {"ok": True}})
+        self.assertEqual(real_gql("query{viewer{id}}"), {"ok": True})
+        self.assertEqual(self.request.call_args.kwargs["timeout"], 30)
+
+    def test_deadline_refuses_requests_and_waits_without_enough_time(self):
+        for remaining, calls in ((0, 0), (0.5, 1)):
+            with self.subTest(remaining=remaining), \
+                    patch.object(sync, "_request_deadline", remaining), \
+                    patch.object(sync.time, "monotonic", return_value=0):
+                self.request.reset_mock()
+                self.sleep.reset_mock()
+                self.request.side_effect = TimeoutError("secret-test-key")
+                self.assert_safe_failure()
+                self.assertEqual(self.request.call_count, calls)
+                self.assertFalse(self.sleep.called)
+                if calls:
+                    self.assertEqual(self.request.call_args.kwargs["timeout"], remaining)
+
+    def test_genuine_or_mixed_graphql_errors_do_not_retry(self):
+        for status in (200, 500):
+            with self.subTest(status=status):
+                body = self.errors("RATELIMITED")
+                body["errors"] += self.errors("BAD_USER_INPUT")["errors"]
+                self.request.reset_mock()
+                self.request.side_effect = None
+                if status == 200:
+                    self.request.return_value = self.response(body)
+                else:
+                    self.request.side_effect = self.http_error(status, body)
+                self.assert_safe_failure(message="Linear API returned GraphQL errors")
+                self.assertEqual(self.request.call_count, 1)
+
+    def test_comment_create_is_not_replayed_after_ambiguous_failure(self):
+        for failure in (TimeoutError("secret-test-key"), self.http_error(503, b"unavailable"),
+                        http.client.IncompleteRead(b"secret-test-key"),
+                        http.client.BadStatusLine("secret-test-key"),
+                        self.http_error(503, self.errors("INTERNAL_SERVER_ERROR"))):
+            with self.subTest(failure=type(failure).__name__):
+                self.request.reset_mock()
+                self.request.side_effect = failure
+                self.assert_safe_failure("mutation{commentCreate(input:{}){success}}")
+                self.assertEqual(self.request.call_count, 1)
+
+    def test_comment_create_can_retry_explicit_rate_limit_rejection(self):
+        self.request.side_effect = [self.http_error(400, self.errors("RATELIMITED")),
+                                    self.response({"data": {"commentCreate": {"success": True}}})]
+        self.assertEqual(real_gql("mutation{commentCreate(input:{}){success}}"),
+                         {"commentCreate": {"success": True}})
+        self.assertEqual(self.request.call_count, 2)
+
+    def test_partial_graphql_data_does_not_replay_comment_create(self):
+        body = {**self.errors("RATELIMITED"), "data": {"commentCreate": {"success": True}}}
+        self.request.return_value = self.response(body)
+        self.assert_safe_failure("mutation{commentCreate(input:{}){success}}",
+                                 "Linear API returned GraphQL errors")
+        self.assertEqual(self.request.call_count, 1)
+
+    def test_issue_update_can_retry_ambiguous_timeout(self):
+        self.request.side_effect = [TimeoutError("secret-test-key"),
+                                    self.response({"data": {"issueUpdate": {"success": True}}})]
+        self.assertEqual(real_gql("mutation{issueUpdate(id:1,input:{}){success}}"),
+                         {"issueUpdate": {"success": True}})
+        self.assertEqual(self.request.call_count, 2)
 
 
 class SyncTest(unittest.TestCase):
@@ -179,6 +381,41 @@ class SyncTest(unittest.TestCase):
         sync._prs = [pr(body="Refs GRE-999999")]
         sync.reconcile(3)
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Backlog")
+
+    def test_reconcile_restores_deadline_on_success_and_unexpected_failure(self):
+        with patch.object(sync, "_request_deadline", None):
+            sync.reconcile(3)
+            self.assertIsNone(sync._request_deadline)
+            with patch.object(sync, "all_prs", side_effect=RuntimeError("unavailable")):
+                with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                    sync.reconcile(3)
+            self.assertIsNone(sync._request_deadline)
+
+    def test_reconcile_continues_same_pr_later_pr_and_stale_issues(self):
+        self.issues = {f"GRE-{n}": ticket(n) for n in range(1, 7)}
+        sync._prs = [pr(body="Refs GRE-1, GRE-2"), pr(number=2, body="Refs GRE-3")]
+        def failing(query, variables):
+            if "issues(first:1," in query and variables["n"] == 1:
+                raise RuntimeError("secret-test-key lookup failed")
+            if "commentCreate(" in query and variables["id"] == "4":
+                raise RuntimeError("secret-test-key comment failed")
+            return self.linear(query, variables)
+        self.api.side_effect = failing
+        with self.assertRaises(RuntimeError) as caught:
+            sync.reconcile(3)
+        self.assertNotIn("secret-test-key", str(caught.exception))
+        self.assertIn("GRE-1", str(caught.exception))
+        self.assertIn("GRE-4", str(caught.exception))
+        self.assertEqual([self.issues[f"GRE-{n}"]["state"]["name"] for n in range(1, 7)],
+                         ["In Progress", "In Review", "In Review", "In Progress", "Backlog", "Backlog"])
+
+    def test_event_still_stops_on_first_issue_failure(self):
+        self.issues["GRE-2"] = ticket(2)
+        self.api.side_effect = TimeoutError("temporary")
+        with self.assertRaises(TimeoutError):
+            sync.apply_event(pr(body="Refs GRE-1, GRE-2"), {})
+        self.assertEqual(self.api.call_count, 1)
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "In Progress")
 
     def test_lookup_graphql_failure_remains_visible_without_echoing_key(self):
         self.api.side_effect = real_gql

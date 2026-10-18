@@ -5,7 +5,7 @@
 //! the reference engine's behavior instead of a Node result.
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/common/claimed_attempt.rs"
+    "/src/claimed_attempt.rs"
 ));
 use anyhow::Result;
 use pp_storage::jobs::ClaimedAttempt;
