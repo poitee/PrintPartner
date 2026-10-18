@@ -12,6 +12,9 @@ def relevant(path, kind):
     # A filter change must test its own consumers.
     if path in {"scripts/ci-path-filter.py", "scripts/test_ci_path_filter.py"}:
         return True
+    if kind == "native" and path in {".github/workflows/desktop-native-macos.yml",
+                                      "scripts/test_native_image_cleanup.py"}:
+        return True
     if kind == "actions":
         return (path.startswith((".github/workflows/", ".github/actions/"))
                 or path in {".github/zizmor.yml", ".github/actionlint.yaml", ".github/actionlint.yml"})
@@ -40,8 +43,8 @@ def select(event, base, head, kind):
 
 if __name__ == "__main__":
     kind = sys.argv[1]
-    if kind not in {"rust", "actions"}:
-        raise SystemExit("Expected rust or actions")
+    if kind not in {"rust", "actions", "native"}:
+        raise SystemExit("Expected rust, actions or native")
     value = str(select(os.environ["EVENT_NAME"], os.environ.get("BASE_SHA"),
                        os.environ.get("HEAD_SHA"), kind)).lower()
     message = f"{kind} inputs changed: {value}\n"
