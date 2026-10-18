@@ -512,6 +512,7 @@ pub(crate) enum Command {
     },
     Phase {
         lease: jobs::AttemptLease,
+        source_work: catalog::SourceWorkProof,
         phase: Phase,
         policy: AuthPolicy,
     },
@@ -682,11 +683,20 @@ pub(crate) fn execute(
         Command::Admit(command) => admit(&tx, catalog_state, command)?,
         Command::Phase {
             lease,
+            source_work,
             phase,
             policy,
         } => {
             let mut job = jobs::claimed_job(&tx, &lease)?;
             let mut op = bound(&tx, &job)?.ok_or_else(|| anyhow!("Missing import operation"))?;
+            crate::source_scan::require_live_reservation(
+                catalog_state,
+                &source_work,
+                &catalog::SourceBinding {
+                    tenant: job.tenant.clone(),
+                    id: op.source_id,
+                },
+            )?;
             if let Err(error) = jobs::revalidate_source_authority(&tx, &job, policy) {
                 let observed = Observed::fenced(&job, &lease, &op);
                 if jobs::commit_source_authority_refusal(&tx, &mut job, &error)? {
