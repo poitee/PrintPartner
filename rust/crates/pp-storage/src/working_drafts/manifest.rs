@@ -278,10 +278,11 @@ pub(super) fn optional_document(
     read: &DocumentRead,
     b: &mut PreparationBudget<'_>,
 ) -> ReadResult<Option<Manifest>> {
+    b.check()?;
     match read {
         DocumentRead::Bytes(bytes) => match parse(bytes, b) {
             Ok(d) => Ok(Some(d)),
-            Err(ReadFailure::InvalidDocument) => Ok(None),
+            Err(ReadFailure::InvalidDocument) => b.check().map(|()| None),
             Err(e) => Err(e),
         },
         _ => Ok(None),
