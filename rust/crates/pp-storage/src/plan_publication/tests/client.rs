@@ -308,6 +308,61 @@ fn cancellation_after_admission_does_not_retract_publication() {
     });
 }
 
+fn await_publication(
+    _client: &PublicationClient,
+    completed: &mpsc::Receiver<()>,
+    wait: Duration,
+) -> std::result::Result<(), mpsc::RecvTimeoutError> {
+    completed.recv_timeout(wait)
+}
+
+#[test]
+fn abandoned_publication_reply_is_released_when_completion_times_out() {
+    let data = fixture();
+    let case = &data["clients"][0];
+    let client = client(1);
+    thread::scope(|scope| {
+        let (finished, completed) = mpsc::channel();
+        let publication = &client;
+        let caller = scope.spawn(move || {
+            let result = publication.apply(
+                input(case).unwrap(),
+                &AtomicBool::new(false),
+                Duration::ZERO,
+            );
+            finished.send(()).unwrap();
+            result
+        });
+        let (mut queue, _) = client
+            .shared
+            .changed
+            .wait_timeout_while(
+                client.shared.queue.lock().unwrap(),
+                Duration::from_secs(5),
+                |queue| queue.pending.is_empty(),
+            )
+            .unwrap();
+        assert_eq!(queue.pending.len(), 1);
+        queue.closed = true;
+        drop(queue);
+        let result = await_publication(&client, &completed, Duration::ZERO);
+        let mut queue = client.shared.queue.lock().unwrap();
+        let stranded = !queue.pending.is_empty();
+        queue.pending.clear();
+        drop(queue);
+        let error = caller.join().unwrap().unwrap_err();
+        assert!(matches!(
+            error.downcast::<AdmissionFailure>().unwrap(),
+            AdmissionFailure::OutcomeUnknown
+        ));
+        assert!(matches!(result, Err(mpsc::RecvTimeoutError::Timeout)));
+        assert!(
+            !stranded,
+            "timeout left the admitted reply sender in the stopped queue"
+        );
+    });
+}
+
 /// Run from `rust` with `cargo test -p pp-storage --features desktop_rebuild
 /// owner_installs_schema_dispatches_random_tokens_and_drains_before_stop`.
 /// Queue notifications establish admission and shutdown ordering; timeouts only bound failures.
