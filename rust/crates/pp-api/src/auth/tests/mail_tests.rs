@@ -215,13 +215,14 @@ async fn accepted_reset_delivery_drains_after_http_shutdown() {
     let fake = SmtpFake::start(Mode::Blocked).await;
     let directory = directory();
     let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
-    let auth = owner
-        .auth_with_policy(AuthPolicy {
+    let auth = crate::auth::test_backend(
+        &owner,
+        AuthPolicy {
             registration: RegistrationPolicy::Open,
             session_tenant: SessionTenantPolicy::AccountTenant,
             first_user: FirstUserTenant::NewUser,
-        })
-        .unwrap();
+        },
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let mail = fake.mailer();
@@ -335,13 +336,14 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
         let fake = SmtpFake::start(mode).await;
         let directory = directory();
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
-        let auth = owner
-            .auth_with_policy(AuthPolicy {
+        let auth = crate::auth::test_backend(
+            &owner,
+            AuthPolicy {
                 registration: RegistrationPolicy::Open,
                 session_tenant: SessionTenantPolicy::AccountTenant,
                 first_user: FirstUserTenant::NewUser,
-            })
-            .unwrap();
+            },
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let mail = fake.mailer();
