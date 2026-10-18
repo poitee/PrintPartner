@@ -233,7 +233,6 @@ fn inserted_parts_count_tenant_and_lossless_manifest_utf8() {
                 manifest_source: None,
             },
         );
-        // 6 tenant bytes + 2 filename bytes + 65526 surrogate bytes + 2 option bytes.
         super::insert_part(&tx, table, &part).unwrap();
         let mut statement = tx
             .prepare(&format!("SELECT requirement FROM {table}"))
@@ -253,6 +252,43 @@ fn inserted_parts_count_tenant_and_lossless_manifest_utf8() {
             "Accepted operational row text limit"
         );
     }
+}
+
+#[test]
+fn input_validation_counts_named_fields_and_tenant() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    let tx = connection.transaction().unwrap();
+    tx.execute_batch("CREATE TABLE projects(id,tenant_id); CREATE TABLE source_revisions(id,tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,extra)").unwrap();
+    let tenant = "é".repeat(32731);
+    tx.execute("INSERT INTO projects VALUES(1,?)", [&tenant])
+        .unwrap();
+    let mut input = json!({"sourceId":1,"sourceLayer":"s","trackingKind":"untracked","sourceRevisionId":null,"manifestDigest":null,"effectiveNamingDigest":"a".repeat(64),"extra":"ignored".repeat(10000)});
+    validate_inputs(&tx, &tenant, &[input.clone()]).unwrap();
+    input["sourceLayer"] = json!("sx");
+    assert_eq!(
+        error(validate_inputs(&tx, &tenant, &[input])),
+        "Accepted operational row text limit"
+    );
+
+    tx.execute("INSERT INTO projects VALUES(2,'tenant')", [])
+        .unwrap();
+    let upstream = "é".repeat(32729);
+    tx.execute(
+        "INSERT INTO source_revisions VALUES(3,'tenant',2,?,?,'','','complete',?)",
+        params![upstream, "a".repeat(64), "ignored".repeat(1000)],
+    )
+    .unwrap();
+    let input = json!({"sourceId":2,"sourceLayer":"s","trackingKind":"revision","sourceRevisionId":3,"manifestDigest":"a".repeat(64),"effectiveNamingDigest":"b".repeat(64)});
+    validate_inputs(&tx, "tenant", &[input.clone()]).unwrap();
+    tx.execute(
+        "UPDATE source_revisions SET upstream_revision_key=upstream_revision_key || 'x'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        error(validate_inputs(&tx, "tenant", &[input])),
+        "Accepted operational row text limit"
+    );
 }
 
 #[test]
