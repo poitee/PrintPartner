@@ -65,7 +65,10 @@ fn parse_json<T: DeserializeOwned>(input: &str, label: &str, check: Check<'_>) -
     parsed.map_err(|_| anyhow!("{label} is invalid"))
 }
 
-pub(super) fn digest(value: &impl Serialize, check: Check<'_>) -> Result<String> {
+pub(in crate::required_units) fn digest(
+    value: &impl Serialize,
+    check: Check<'_>,
+) -> Result<String> {
     struct Hash(Sha256);
     impl Write for Hash {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -80,6 +83,15 @@ pub(super) fn digest(value: &impl Serialize, check: Check<'_>) -> Result<String>
     let mut hash = Hash(Sha256::new());
     write(value, &mut hash, check)?;
     Ok(hex::encode(hash.0.finalize()))
+}
+
+pub(in crate::required_units) fn string(
+    value: &impl Serialize,
+    check: Check<'_>,
+) -> Result<String> {
+    let mut out = Vec::new();
+    write(value, &mut out, check)?;
+    Ok(String::from_utf8(out)?)
 }
 
 fn record<'a>(value: &'a Value, label: &str) -> Result<&'a Value> {

@@ -155,6 +155,20 @@ pub(crate) struct Reconciled {
     pub basis: Value,
 }
 impl Reconciled {
+    pub fn full_borrowed(&self) -> impl serde::Serialize + '_ {
+        #[derive(serde::Serialize)]
+        struct FullResult<'a> {
+            #[serde(flatten)]
+            result: &'a Value,
+            #[serde(rename = "selectionBasis")]
+            basis: &'a Value,
+        }
+        FullResult {
+            result: &self.result,
+            basis: &self.basis,
+        }
+    }
+    #[cfg(test)]
     pub fn full(&self) -> Value {
         let mut result = self.result.clone();
         result["selectionBasis"] = self.basis.clone();
@@ -262,6 +276,18 @@ fn basis(part: &BasePart) -> Vec<BasisRow> {
         })
         .collect()
 }
+fn checked_values(
+    values: impl IntoIterator<Item = impl serde::Serialize>,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Value> {
+    let mut out = Vec::new();
+    for value in values {
+        check()?;
+        out.push(serde_json::to_value(value)?);
+    }
+    Ok(Value::Array(out))
+}
+
 pub(super) fn reconcile(
     parts: &[DraftPart],
     inputs: &[Value],
@@ -521,8 +547,16 @@ pub(super) fn reconcile(
     surplus.sort();
     rows.sort_by_key(|r| (r.revision_part_id, r.prior_index));
     Ok(Reconciled {
-        result: json!({"kind":"ready","assignments":assignments,"surplus":surplus}),
-        basis: json!(rows),
+        result: Value::Object(
+            [
+                ("kind".into(), json!("ready")),
+                ("assignments".into(), checked_values(assignments, check)?),
+                ("surplus".into(), checked_values(surplus, check)?),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        basis: checked_values(rows, check)?,
     })
 }
 pub(crate) fn validate_token(t: &str) -> Result<()> {
@@ -551,6 +585,31 @@ mod tests {
         decisions: &[Decision],
     ) -> Result<Reconciled> {
         reconcile_checked(parts, inputs, base, decisions, &|| Ok(()))
+    }
+
+    #[test]
+    fn gre764_cancellation_during_result_tree_construction() {
+        let visited = std::cell::Cell::new(0);
+        let values = (0..200_000).map(|index| {
+            visited.set(visited.get() + 1);
+            Assignment::Create {
+                draft_part_id: 4,
+                unit_index: index,
+            }
+        });
+        let error = checked_values(values, &|| {
+            if visited.get() == 64 {
+                return Err(anyhow::anyhow!(crate::working_drafts::Failure::Cancelled));
+            }
+            Ok(())
+        })
+        .map(|_| ())
+        .expect_err("result construction must stop when cancelled");
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(crate::working_drafts::Failure::Cancelled)
+        ));
+        assert_eq!(visited.get(), 64);
     }
 
     #[test]

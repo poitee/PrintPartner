@@ -330,6 +330,27 @@ pub(crate) fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
     digest(&json!({"format":FORMAT,"base_mapping_digest":mapping,"rows":basis}))
 }
 
+pub(super) fn selection_basis_digest_checked(
+    mapping: &Value,
+    basis: &Value,
+    check: Check<'_>,
+) -> Result<String> {
+    #[derive(Serialize)]
+    struct SelectionBasis<'a> {
+        format: &'static str,
+        base_mapping_digest: &'a Value,
+        rows: &'a Value,
+    }
+    json::digest(
+        &SelectionBasis {
+            format: FORMAT,
+            base_mapping_digest: mapping,
+            rows: basis,
+        },
+        check,
+    )
+}
+
 pub(super) fn reconciliation_digest(h: &Value) -> String {
     digest(&json!({
         "format":FORMAT,
@@ -618,6 +639,8 @@ fn valid_object_name(name: &str, token: &str) -> bool {
             .is_some_and(|rest| rest.ends_with("__"))
 }
 
+pub(super) use json::{digest as checked_digest, string as checked_string};
+
 /// Reads the accepted revision's Required-unit set as predecessor Parts.
 /// Returns `None` when the revision has no set, as Node's
 /// `readRequiredUnitSetByRevision` reports `uninitialized`.
@@ -627,32 +650,47 @@ pub(crate) fn base(
     profile: i64,
     revision: Option<i64>,
 ) -> Result<Option<(Value, Vec<BasePart>)>> {
+    base_checked(tx, tenant, profile, revision, &|| Ok(()))
+}
+
+pub(super) fn base_checked(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    revision: Option<i64>,
+    check: Check<'_>,
+) -> Result<Option<(Value, Vec<BasePart>)>> {
+    check()?;
     let Some(revision) = revision else {
         return Ok(Some((Value::Null, Vec::new())));
     };
-    let header = one(
+    let header = one_checked(
         tx,
         "SELECT input_set_id FROM plan_revisions WHERE tenant_id=? AND profile_id=? AND id=?",
         &[&tenant, &profile, &revision],
+        check,
     )?
     .ok_or_else(|| anyhow!("Plan draft base revision is missing"))?;
-    let set = one(
+    let set = one_checked(
         tx,
         "SELECT * FROM plan_revision_required_unit_sets WHERE tenant_id=? AND profile_id=? AND revision_id=?",
         &[&tenant, &profile, &revision],
+        check,
     )?;
-    let created = rows(
+    let created = rows_checked(
         tx,
         "SELECT token FROM required_units WHERE tenant_id=? AND profile_id=? AND created_in_revision_id=?",
         &[&tenant, &profile, &revision],
+        check,
     )?;
     let Some(set) = set else {
         ensure!(
             created.is_empty()
-                && one(
+                && one_checked(
                     tx,
                     "SELECT required_unit_token FROM plan_revision_required_units WHERE tenant_id=? AND revision_id=? LIMIT 1",
                     &[&tenant, &revision],
+                    check,
                 )?
                 .is_none(),
             "Required-unit set is partial"
@@ -665,11 +703,13 @@ pub(crate) fn base(
     );
     let mut sources = HashMap::new();
     if let Some(input_set) = optional_num(&header, "inputSetId")? {
-        for input in rows(
+        for input in rows_checked(
             tx,
             "SELECT source_id,source_layer FROM plan_revision_inputs WHERE tenant_id=? AND input_set_id=?",
             &[&tenant, &input_set],
+            check,
         )? {
+            check()?;
             let layer = text(&input, "sourceLayer")?.to_owned();
             let id = if sources.contains_key(&layer) {
                 None
@@ -679,14 +719,16 @@ pub(crate) fn base(
             sources.insert(layer, id);
         }
     }
-    let parts = rows(
+    let parts = rows_checked(
         tx,
         "SELECT id,quantity_effective,projection_part_id,source_layer,artifact_digest,role_inferred,role_override FROM plan_revision_parts WHERE tenant_id=? AND revision_id=? ORDER BY id",
         &[&tenant, &revision],
+        check,
     )?;
     let mut quantities = HashMap::new();
     let mut count = 0;
     for part in &parts {
+        check()?;
         let id = num(part, "id")?;
         ensure!(
             optional_num(part, "projectionPartId")?.is_some(),
@@ -700,10 +742,11 @@ pub(crate) fn base(
         quantities.insert(id, quantity);
         count += quantity;
     }
-    let mappings = rows(
+    let mappings = rows_checked(
         tx,
         "SELECT m.revision_part_id,m.unit_index,u.token,u.object_name,u.created_at,COALESCE(p.completed,0) AS completed,COALESCE(p.assembled,0) AS assembled FROM plan_revision_required_units m JOIN required_units u ON u.token=m.required_unit_token AND u.tenant_id=?1 AND u.profile_id=?2 JOIN plan_revision_parts r ON r.id=m.revision_part_id AND r.revision_id=?3 AND r.tenant_id=?1 LEFT JOIN print_progress p ON p.tenant_id=?1 AND p.part_id=r.projection_part_id AND p.unit_index=m.unit_index WHERE m.tenant_id=?1 AND m.revision_id=?3 ORDER BY m.revision_part_id,m.unit_index",
         &[&tenant, &profile, &revision],
+        check,
     )?;
     ensure!(
         num(&set, "expectedUnitCount")? == count && mappings.len() as i64 == count,
@@ -713,6 +756,7 @@ pub(crate) fn base(
     let mut tokens = HashSet::new();
     let mut canonical = Vec::new();
     for mapping in &mappings {
+        check()?;
         let part = num(mapping, "revisionPartId")?;
         let index = num(mapping, "unitIndex")?;
         let slots = units.entry(part).or_default();
@@ -750,18 +794,31 @@ pub(crate) fn base(
             assembled: assembled == 1,
         });
     }
-    ensure!(
-        created
-            .iter()
-            .all(|u| u["token"].as_str().is_some_and(|t| tokens.contains(t))),
-        "Required-unit set contains an orphan unit"
-    );
-    let mapping = digest(&json!({
-        "format":"required-unit-map-v1",
-        "revision_id":revision,
-        "expected_unit_count":count,
-        "rows":canonical
-    }));
+    for unit in &created {
+        check()?;
+        ensure!(
+            unit["token"]
+                .as_str()
+                .is_some_and(|token| tokens.contains(token)),
+            "Required-unit set contains an orphan unit"
+        );
+    }
+    #[derive(Serialize)]
+    struct Mapping<'a> {
+        format: &'static str,
+        revision_id: i64,
+        expected_unit_count: i64,
+        rows: &'a [Value],
+    }
+    let mapping = json::digest(
+        &Mapping {
+            format: "required-unit-map-v1",
+            revision_id: revision,
+            expected_unit_count: count,
+            rows: &canonical,
+        },
+        check,
+    )?;
     ensure!(
         mapping == set["mappingDigest"],
         "Required-unit set digest is corrupt"
@@ -769,6 +826,7 @@ pub(crate) fn base(
     let parts = parts
         .iter()
         .map(|part| {
+            check()?;
             let id = num(part, "id")?;
             Ok(BasePart {
                 id,

@@ -2,7 +2,8 @@ use super::{
     Decision, DomainCode, Outcome, ReconciliationCommand,
     model::{self, FORMAT, digest},
     storage::{
-        self, Draft, num, one, optional_num, reconciliation_digest, selection_basis_digest, text,
+        self, Draft, num, one, optional_num, reconciliation_digest, selection_basis_digest_checked,
+        text,
     },
     view::workspace,
 };
@@ -169,7 +170,8 @@ impl Scope<'_> {
                 workspace: workspace(self.tx, self.tenant, self.profile_row, &d)?,
             });
         }
-        let Some((mapping, base)) = storage::base(self.tx, self.tenant, self.profile, revision)?
+        let Some((mapping, base)) =
+            storage::base_checked(self.tx, self.tenant, self.profile, revision, self.check)?
         else {
             return Ok(Outcome::DomainError {
                 code: DomainCode::RequiredUnitSetUnavailable,
@@ -182,8 +184,8 @@ impl Scope<'_> {
             &command.request.decisions,
             self.check,
         )?;
-        let basis_digest = selection_basis_digest(&mapping, &result.basis);
-        let result_digest = digest(&result.full());
+        let basis_digest = selection_basis_digest_checked(&mapping, &result.basis, self.check)?;
+        let result_digest = storage::checked_digest(&result.full_borrowed(), self.check)?;
         let reconciliation_digest = reconciliation_digest(&json!({
             "baseRevisionId":revision,
             "baseMappingDigest":mapping,
@@ -210,11 +212,11 @@ impl Scope<'_> {
                 revision,
                 mapping.as_str(),
                 basis_digest,
-                result.basis.to_string(),
+                storage::checked_string(&result.basis, self.check)?,
                 decision_digest,
                 text(&result.result, "kind")?,
                 result_digest,
-                result.result.to_string(),
+                storage::checked_string(&result.result, self.check)?,
                 reconciliation_digest,
                 expected_count,
                 actor,

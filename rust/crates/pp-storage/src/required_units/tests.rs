@@ -317,3 +317,214 @@ fn result_json_matches_node_messages() {
 fn selection_basis_matches_node_messages() {
     node_message_cases("selection_basis_json");
 }
+
+#[test]
+fn gre764_cancellation_during_base_mapping_read() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    let mut db = Database::open(UNCHANGED);
+    let before = {
+        let tx = db.connection.transaction().unwrap();
+        storage::draft(&tx, "default", 1, 2).unwrap().unwrap()
+    };
+    let reading = Arc::new(AtomicBool::new(false));
+    let flag = reading.clone();
+    db.connection
+        .authorizer(Some(move |ctx: rusqlite::hooks::AuthContext<'_>| {
+            if matches!(
+                ctx.action,
+                rusqlite::hooks::AuthAction::Read {
+                    table_name: "plan_revision_required_units",
+                    ..
+                }
+            ) {
+                flag.store(true, Ordering::Relaxed);
+            }
+            rusqlite::hooks::Authorization::Allow
+        }))
+        .unwrap();
+    let read_steps = Arc::new(AtomicUsize::new(0));
+    let steps = read_steps.clone();
+    let flag = reading.clone();
+    db.connection
+        .progress_handler(
+            1,
+            Some(move || {
+                if flag.load(Ordering::Relaxed) {
+                    steps.fetch_add(1, Ordering::Relaxed);
+                }
+                false
+            }),
+        )
+        .unwrap();
+    let complete_read_steps = {
+        let tx = db.connection.transaction().unwrap();
+        storage::base_checked(&tx, "default", 1, Some(1), &|| Ok(()))
+            .unwrap()
+            .unwrap();
+        read_steps.load(Ordering::Relaxed)
+    };
+    read_steps.store(0, Ordering::Relaxed);
+    reading.store(false, Ordering::Relaxed);
+    let checks = std::cell::Cell::new(0);
+    {
+        let tx = db.connection.transaction().unwrap();
+        tx.execute(
+            "UPDATE plan_draft_parts SET notes='uncommitted' WHERE draft_id=2",
+            [],
+        )
+        .unwrap();
+        let result = storage::base_checked(&tx, "default", 1, Some(1), &|| {
+            if reading.load(Ordering::Relaxed) {
+                checks.set(checks.get() + 1);
+                if checks.get() == 2 {
+                    return Err(anyhow::anyhow!(crate::working_drafts::Failure::Cancelled));
+                }
+            }
+            Ok(())
+        });
+        let error = result
+            .err()
+            .expect("base mapping read must stop before loading all six units");
+        assert!(
+            matches!(
+                error.downcast_ref(),
+                Some(crate::working_drafts::Failure::Cancelled)
+            ),
+            "{error:?}"
+        );
+        assert_eq!(checks.get(), 2);
+        let stopped_read_steps = read_steps.load(Ordering::Relaxed);
+        assert!(
+            stopped_read_steps > 0 && stopped_read_steps < complete_read_steps,
+            "mapping read executed {stopped_read_steps} SQL steps versus {complete_read_steps} for a complete read"
+        );
+    }
+    let tx = db.connection.transaction().unwrap();
+    let after = storage::draft(&tx, "default", 1, 2).unwrap().unwrap();
+    assert_eq!(after.header, before.header);
+    assert_eq!(after.parts, before.parts);
+    assert_eq!(after.inputs, before.inputs);
+}
+
+#[test]
+fn gre764_cancellation_during_result_json_and_digest() {
+    use serde::ser::{Serialize, SerializeSeq, Serializer};
+    struct Assignments<'a>(&'a std::cell::Cell<usize>);
+    impl Serialize for Assignments<'_> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let mut seq = serializer.serialize_seq(Some(200_000))?;
+            for index in 0..200_000 {
+                self.0.set(self.0.get() + 1);
+                seq.serialize_element(&json!({"kind":"create","draftPartId":4,"unitIndex":index}))?;
+            }
+            seq.end()
+        }
+    }
+    #[derive(serde::Serialize)]
+    struct ResultBody<'a> {
+        kind: &'static str,
+        assignments: Assignments<'a>,
+        surplus: &'a [String],
+    }
+    for hashing in [false, true] {
+        let mut db = Database::open(UNCHANGED);
+        let before = {
+            let tx = db.connection.transaction().unwrap();
+            storage::draft(&tx, "default", 1, 2).unwrap().unwrap()
+        };
+        let visited = std::cell::Cell::new(0);
+        let checks = std::cell::Cell::new(0);
+        let cancelled = std::cell::Cell::new(false);
+        let check = || {
+            if cancelled.get() {
+                return Err(anyhow::anyhow!(crate::working_drafts::Failure::Cancelled));
+            }
+            if visited.get() > 0 {
+                checks.set(checks.get() + 1);
+                if checks.get() == 2 {
+                    cancelled.set(true);
+                    return Err(anyhow::anyhow!(crate::working_drafts::Failure::Cancelled));
+                }
+            }
+            Ok(())
+        };
+        {
+            let tx = db.connection.transaction().unwrap();
+            tx.execute(
+                "UPDATE plan_draft_parts SET notes='uncommitted' WHERE draft_id=2",
+                [],
+            )
+            .unwrap();
+            let body = ResultBody {
+                kind: "ready",
+                assignments: Assignments(&visited),
+                surplus: &[],
+            };
+            let result = if hashing {
+                storage::checked_digest(&body, &check)
+            } else {
+                storage::checked_string(&body, &check)
+            };
+            let error = result
+                .map(|_| ())
+                .expect_err("result serialization must stop when cancelled");
+            assert!(
+                matches!(
+                    error.downcast_ref(),
+                    Some(crate::working_drafts::Failure::Cancelled)
+                ),
+                "{error:?}"
+            );
+            assert_eq!(checks.get(), 2);
+            assert!(
+                visited.get() > 0 && visited.get() < 1000,
+                "serialized {} assignments",
+                visited.get()
+            );
+        }
+        let tx = db.connection.transaction().unwrap();
+        let after = storage::draft(&tx, "default", 1, 2).unwrap().unwrap();
+        assert_eq!(after.header, before.header);
+        assert_eq!(after.parts, before.parts);
+        assert_eq!(after.inputs, before.inputs);
+    }
+}
+
+#[test]
+fn gre764_checked_result_bytes_and_digests_match_existing_order() {
+    use super::model::{Reconciled, digest};
+    for result in [
+        json!({"kind":"ready","assignments":[{"kind":"create","draftPartId":4,"unitIndex":0},{"kind":"reuse","draftPartId":4,"unitIndex":1,"token":"ppu_00000000000000000000000000000001"}],"surplus":["ppu_00000000000000000000000000000002"]}),
+        json!({"kind":"unresolved","conflicts":[{"kind":"unsafe_predecessor","targetDraftPartId":4,"predecessorRevisionPartId":1}]}),
+    ] {
+        let reconciled = Reconciled {
+            result,
+            basis: json!([{"revisionPartId":1,"token":"ppu_00000000000000000000000000000001","priorIndex":0,"createdAt":"2026-08-20T09:00:00.000Z","completed":true,"assembled":false}]),
+        };
+        let check = || Ok(());
+        assert_eq!(
+            storage::checked_string(&reconciled.result, &check).unwrap(),
+            reconciled.result.to_string()
+        );
+        assert_eq!(
+            storage::checked_string(&reconciled.basis, &check).unwrap(),
+            reconciled.basis.to_string()
+        );
+        assert_eq!(
+            storage::checked_string(&reconciled.full_borrowed(), &check).unwrap(),
+            reconciled.full().to_string()
+        );
+        assert_eq!(
+            storage::checked_digest(&reconciled.full_borrowed(), &check).unwrap(),
+            digest(&reconciled.full())
+        );
+        let mapping = json!(MAPPING);
+        assert_eq!(
+            storage::selection_basis_digest_checked(&mapping, &reconciled.basis, &check).unwrap(),
+            storage::selection_basis_digest(&mapping, &reconciled.basis)
+        );
+    }
+}
