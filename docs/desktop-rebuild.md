@@ -561,7 +561,7 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-source
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-source --features desktop_rebuild
 ```
 
-D5 retained capture and D28 ZIP acquisition label policy remain separate slices. The second D3 PR for source acquisition and uploads remains deferred. Local selection is outside this audit. This audit introduces no user-visible path and needs no runtime gate. Future rebuild callers must compile behind `desktop_rebuild` and check `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
+D5 retained capture and D28 ZIP acquisition label policy remain separate slices. GRE-784 adds the synchronous supplied-import client; the rest of D3 source acquisition remains deferred. Local selection is outside this audit. This audit introduces no user-visible path and needs no runtime gate. Future rebuild callers must compile behind `desktop_rebuild` and check `PP_DESKTOP_REBUILD` for exactly `1` or `true`.
 
 ### D7 catalog core
 
@@ -722,7 +722,13 @@ GRE-598 adds `pp_core::review_observations` behind `desktop_rebuild`. Library ca
 
 An optional filament provider reads bounded JSON over HTTP, confines redirects to its original origin, and resolves only its configured integration's filament identifiers. Provider reads reuse the checked `pp-net` address policy and pin DNS answers before connecting. Cloud metadata destinations are rejected. Provider failures fall back to catalog-only lookup. Cancellation returns an error. No application routes or startup paths call these library methods, so runtime behavior remains unchanged. Later drafts API integration must check the stored `PP_DESKTOP_REBUILD` setting.
 
-The second D3 PR remains dependent on later source and storage work. The reference acquisition and upload modules require retained capture from D5, the upload journal from D14, and import job methods from D15. Those APIs are absent on main. This port does not claim acquisition or upload completion and does not advance those slices.
+The reference acquisition and upload modules land in smaller slices on top of D5 retained capture, the D14 upload journal and D15 import jobs.
+
+GRE-784 adds `pp_core::uploads::SourceImports` behind `desktop_rebuild`. `SourceImports::new` opens the owner's upload journal with its import quota. `directory_input` names every regular file below a supplied directory in path order. It skips names that start with `.` and refuses links and special files. `admit` hashes the named files from that directory under the request's input limit, measures stored bytes under the storage `repos` directory, and admits the operation once per key. A replay of the same request returns the stored operation. `get` returns the journal operation. A refusal before admission writes no rows and changes no files. The client never claims or runs the import. A later slice adds the runner and verifies published artifacts on `get`. Captured preparation stays in GRE-785. No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_client
+```
 
 ### D6 native-secret migration
 

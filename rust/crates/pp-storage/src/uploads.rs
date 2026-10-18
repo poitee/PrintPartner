@@ -596,6 +596,17 @@ impl WriterOwner {
             quota,
         })
     }
+
+    /// The directory published Source revisions and owned import inputs live
+    /// under.
+    pub fn import_repos_root(&self) -> Result<std::path::PathBuf> {
+        Ok(self
+            .lease
+            .as_ref()
+            .ok_or_else(|| anyhow!("Storage stopped"))?
+            .data_dir()
+            .join("repos"))
+    }
 }
 
 impl ImportClient {
