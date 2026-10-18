@@ -7,7 +7,7 @@ use pp_storage::{
     auth::{self, Secret},
     read_model::Credential,
     working_drafts::{
-        Failure, PositiveId, RebaseRequest,
+        Failure, PositiveId, RebaseArgs, RebaseRequest,
         observation::{
             ArtifactRead, CheckoutManifestUse, DocumentRead, DraftReads, InventoryPath,
             OwnedCatalogReadRequest, OwnedCheckoutReadRequest, OwnedStlReadRequest,
@@ -246,9 +246,11 @@ fn rebase(
     let outcome = client.rebase(
         session(),
         id(call["profile"].as_u64().unwrap()),
-        id(call["draft"].as_u64().unwrap()),
-        call["key"].as_str().unwrap(),
-        request,
+        RebaseArgs {
+            draft_id: id(call["draft"].as_u64().unwrap()),
+            idempotency_key: call["key"].as_str().unwrap(),
+            request,
+        },
         cancelled,
         Duration::from_secs(5),
     )?;
@@ -539,9 +541,11 @@ fn a_client_without_observations_cannot_rebase() {
         .rebase(
             session(),
             id(1),
-            id(2),
-            "first",
-            serde_json::from_value(call["request"].clone()).unwrap(),
+            RebaseArgs {
+                draft_id: id(2),
+                idempotency_key: "first",
+                request: serde_json::from_value(call["request"].clone()).unwrap(),
+            },
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(5),
         )
