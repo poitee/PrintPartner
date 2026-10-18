@@ -2,19 +2,18 @@ use anyhow::{Result, ensure};
 use axum::{
     Extension, Json, Router,
     body::{Body, Bytes, to_bytes},
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{get, patch},
 };
 use pp_storage::{
     auth::{AuthFailure, Secret},
     read_model::Credential,
     required_units::{AdmissionFailure, Outcome as WorkspaceOutcome},
     working_drafts::{
-        AbandonOutcome, AbandonRequest, DraftIdentity, EditRequest, Failure, Outcome, PositiveId,
-        Request, WorkingDraftClient,
+        DraftIdentity, EditRequest, Failure, Outcome, PositiveId, Request, WorkingDraftClient,
     },
 };
 use serde::Deserialize;
@@ -59,7 +58,7 @@ impl DraftHttpConfig {
             "Listener must be loopback HTTP"
         );
         ensure!(
-            !api_key_tenant.trim().is_empty() && api_key_tenant.len() <= 4096,
+            !api_key_tenant.trim().is_empty() && api_key_tenant.len() <= 512,
             "Invalid API key tenant"
         );
         let origin = url.origin().ascii_serialization();
@@ -72,7 +71,7 @@ impl DraftHttpConfig {
                 std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
                 Some("1" | "true")
             ),
-            body_limit: 1024 * 1024,
+            body_limit: 8 * 1024 * 1024,
             wait: Duration::from_millis(100),
         })
     }
@@ -109,8 +108,10 @@ pub fn draft_router(config: DraftHttpConfig, client: WorkingDraftClient) -> Rout
     let routes = Router::new()
         .route("/plans/{id}/drafts", get(list))
         .route("/plans/{id}/drafts/{draft_id}", get(workspace))
-        .route("/plans/{id}/drafts/{draft_id}/parts", patch(edit))
-        .route("/plans/{id}/drafts/{draft_id}/abandon", post(abandon));
+        .route(
+            "/plans/{id}/drafts/{draft_id}/parts",
+            patch(edit).layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        );
     Router::new()
         .merge(routes.clone())
         .nest("/api/v2", routes)
@@ -137,8 +138,13 @@ async fn guard(
         None => return failure(401, "Authentication required"),
     };
     request.extensions_mut().insert(principal);
+    let limit = if request.method() == Method::PATCH {
+        app.config.body_limit
+    } else {
+        app.config.body_limit.min(1024 * 1024)
+    };
     let (parts, body) = request.into_parts();
-    let bytes = match to_bytes(body, app.config.body_limit).await {
+    let bytes = match to_bytes(body, limit).await {
         Ok(bytes) => bytes,
         Err(_) => return failure(413, "Request body too large"),
     };
@@ -305,34 +311,14 @@ async fn edit(
     )
     .await
 }
-async fn abandon(
-    State(app): State<App>,
-    Extension(principal): Extension<Principal>,
-    path: ExtractedPath<DraftPath>,
-    body: Bytes,
-) -> Response {
-    let (Ok(Path(path)), Ok(request)) = (path, serde_json::from_slice::<AbandonRequest>(&body))
-    else {
-        return invalid_request();
-    };
-    call(
-        app,
-        principal,
-        path.id,
-        Operation::Abandon(path.draft_id, request),
-    )
-    .await
-}
 
 enum Operation {
     Read(Request),
     Edit(PositiveId, EditRequest),
-    Abandon(PositiveId, AbandonRequest),
 }
 enum Reply {
     Read(Outcome),
     Edited(WorkspaceOutcome),
-    Abandoned(AbandonOutcome),
 }
 struct Cancellation(Arc<AtomicBool>);
 impl Drop for Cancellation {
@@ -364,10 +350,6 @@ async fn call(
                 .client
                 .edit(credential, profile, draft, request, flag, app.config.wait)
                 .map(Reply::Edited),
-            Operation::Abandon(draft, request) => app
-                .client
-                .abandon(credential, profile, draft, request, flag, app.config.wait)
-                .map(Reply::Abandoned),
         }
     })
     .await;
@@ -392,11 +374,10 @@ fn present(reply: Reply, profile: PositiveId) -> Response {
         Reply::Read(Outcome::Workspace { workspace })
         | Reply::Edited(WorkspaceOutcome::Ready { workspace }) => json_response(200, workspace),
         Reply::Read(Outcome::ProfileNotFound)
-        | Reply::Edited(WorkspaceOutcome::ProfileNotFound)
-        | Reply::Abandoned(AbandonOutcome::ProfileNotFound) => profile_missing(),
-        Reply::Read(Outcome::DraftNotFound)
-        | Reply::Edited(WorkspaceOutcome::DraftNotFound)
-        | Reply::Abandoned(AbandonOutcome::DraftNotFound) => draft_missing(),
+        | Reply::Edited(WorkspaceOutcome::ProfileNotFound) => profile_missing(),
+        Reply::Read(Outcome::DraftNotFound) | Reply::Edited(WorkspaceOutcome::DraftNotFound) => {
+            draft_missing()
+        }
         Reply::Edited(WorkspaceOutcome::DraftChanged { workspace }) => conflict(
             "draft_changed",
             workspace.map_or_else(|| json!({}), |workspace| json!({"workspace":workspace})),
@@ -404,8 +385,7 @@ fn present(reply: Reply, profile: PositiveId) -> Response {
         Reply::Edited(WorkspaceOutcome::BaseChanged { workspace }) => {
             conflict("base_changed", json!({"workspace":workspace}))
         }
-        Reply::Edited(WorkspaceOutcome::NotOpen { workspace })
-        | Reply::Abandoned(AbandonOutcome::NotOpen { workspace }) => {
+        Reply::Edited(WorkspaceOutcome::NotOpen { workspace }) => {
             conflict("not_open", json!({"workspace":workspace}))
         }
         Reply::Edited(WorkspaceOutcome::AcceptedBaselineRequired) => {
@@ -416,10 +396,6 @@ fn present(reply: Reply, profile: PositiveId) -> Response {
         }
         Reply::Edited(WorkspaceOutcome::DomainError { code }) => {
             coded_failure(422, "Plan draft update failed", code, json!({}))
-        }
-        Reply::Abandoned(AbandonOutcome::Ready { draft }) => json_response(200, draft),
-        Reply::Abandoned(AbandonOutcome::DraftChanged { workspace }) => {
-            conflict("draft_changed", json!({"workspace":workspace}))
         }
         Reply::Read(Outcome::Read { .. } | Outcome::Diff { .. }) => {
             failure(500, "Plan draft data is inconsistent")
@@ -559,6 +535,8 @@ mod tests {
         assert!(DraftHttpConfig::new("http://example.test", "default").is_err());
         assert!(DraftHttpConfig::new("http://[::1]:1234", "default").is_ok());
         assert!(DraftHttpConfig::new("http://127.0.0.1", " ").is_err());
+        assert!(DraftHttpConfig::new("http://127.0.0.1", &"t".repeat(512)).is_ok());
+        assert!(DraftHttpConfig::new("http://127.0.0.1", &"t".repeat(513)).is_err());
     }
     #[test]
     fn dropped_handlers_keep_blocking_capacity_reserved_until_the_worker_exits() {

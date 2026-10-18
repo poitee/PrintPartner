@@ -196,6 +196,8 @@ async fn listing_and_workspace_have_literal_wire_contracts() {
     }
     for path in [
         "/plans/1/drafts/recompute",
+        "/plans/1/drafts/2/abandon",
+        "/api/v2/plans/1/drafts/2/abandon",
         "/plans/1/drafts/2/rebase",
         "/plans/1/drafts/2/reconciliation",
         "/plans/1/drafts/2/apply",
@@ -215,8 +217,8 @@ async fn listing_and_workspace_have_literal_wire_contracts() {
 }
 
 #[tokio::test]
-async fn edits_and_abandon_persist_and_preserve_conflict_workspaces() {
-    if isolated("edits_and_abandon_persist_and_preserve_conflict_workspaces") {
+async fn edits_persist_and_preserve_conflict_workspaces() {
+    if isolated("edits_persist_and_preserve_conflict_workspaces") {
         return;
     }
     let s = Server::start(1024 * 1024, "default", "").await;
@@ -227,15 +229,6 @@ async fn edits_and_abandon_persist_and_preserve_conflict_workspaces() {
         response(
             s.request(Method::PATCH, "/plans/1/drafts/2/parts")
                 .json(&edit(&"0".repeat(64))),
-            409
-        )
-        .await,
-        expected
-    );
-    assert_eq!(
-        response(
-            s.request(Method::POST, "/api/v2/plans/1/drafts/2/abandon")
-                .json(&json!({"expected_lifecycle_version":3})),
             409
         )
         .await,
@@ -282,26 +275,9 @@ async fn edits_and_abandon_persist_and_preserve_conflict_workspaces() {
         response(s.request(Method::GET, "/plans/1/drafts/2"), 200).await,
         changed
     );
-    let abandoned = response(
-        s.request(Method::POST, "/plans/1/drafts/2/abandon")
-            .json(&json!({"expected_lifecycle_version":0})),
-        200,
-    )
-    .await;
-    assert_eq!(
-        abandoned,
-        json!({"draft_id":2,"state":"abandoned","lifecycle_version":1,"snapshot_digest":"9a9bc08be4b343d523a2915b4f9c4288edfc35103d24886bf731859a9128f035","base":{"revision_id":1,"plan_version":1}})
-    );
-    assert_eq!(
-        s.sql()
-            .query_row(
-                "SELECT state,lifecycle_version FROM plan_drafts WHERE id=2",
-                [],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            )
-            .unwrap(),
-        ("abandoned".into(), 1)
-    );
+    s.sql()
+        .execute_batch("UPDATE plan_drafts SET state='abandoned', lifecycle_version=1 WHERE id=2")
+        .unwrap();
     let current = response(s.request(Method::GET, "/plans/1/drafts/2"), 200).await;
     expected["workspace"] = current;
     expected["code"] = json!("not_open");
@@ -309,15 +285,6 @@ async fn edits_and_abandon_persist_and_preserve_conflict_workspaces() {
         response(
             s.request(Method::PATCH, "/plans/1/drafts/2/parts")
                 .json(&edit(DIGEST)),
-            409
-        )
-        .await,
-        expected
-    );
-    assert_eq!(
-        response(
-            s.request(Method::POST, "/plans/1/drafts/2/abandon")
-                .json(&json!({"expected_lifecycle_version":1})),
             409
         )
         .await,
@@ -337,11 +304,6 @@ async fn missing_resources_and_cross_tenant_reads_are_hidden() {
             (Method::GET, "", json!({})),
             (Method::GET, "/2", json!({})),
             (Method::PATCH, "/2/parts", edit(DIGEST)),
-            (
-                Method::POST,
-                "/2/abandon",
-                json!({"expected_lifecycle_version":0}),
-            ),
         ] {
             assert_eq!(
                 response(
@@ -357,11 +319,6 @@ async fn missing_resources_and_cross_tenant_reads_are_hidden() {
     for (method, suffix, body) in [
         (Method::GET, "", json!({})),
         (Method::PATCH, "/parts", edit(DIGEST)),
-        (
-            Method::POST,
-            "/abandon",
-            json!({"expected_lifecycle_version":0}),
-        ),
     ] {
         assert_eq!(
             response(
@@ -594,12 +551,12 @@ async fn bounds_and_typed_bodies_reject_before_mutation() {
         "null",
         "[]",
         "{}",
-        "{\"expected_lifecycle_version\":-1}",
-        "{\"expected_lifecycle_version\":0,\"extra\":true}",
+        "{\"expected_snapshot_digest\":-1}",
+        "{\"expected_snapshot_digest\":null,\"extra\":true}",
     ] {
         assert_eq!(
             response(
-                s.request(Method::POST, "/plans/1/drafts/2/abandon")
+                s.request(Method::PATCH, "/plans/1/drafts/2/parts")
                     .body(body.to_owned()),
                 400
             )
@@ -668,6 +625,34 @@ async fn bounds_and_typed_bodies_reject_before_mutation() {
             .unwrap(),
         0
     );
+    s.close().await;
+    let s = Server::start(8 * 1024 * 1024, "default", "").await;
+    let mut bulk = edit(DIGEST).to_string();
+    bulk.extend(std::iter::repeat_n(' ', 3 * 1024 * 1024));
+    let edited = response(
+        s.request(Method::PATCH, "/plans/1/drafts/2/parts")
+            .body(bulk.clone()),
+        200,
+    )
+    .await;
+    assert_eq!(edited["parts"][1]["included"], true);
+    assert_eq!(
+        s.sql()
+            .query_row(
+                "SELECT included FROM plan_draft_parts WHERE id=5",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    response(s.request(Method::GET, "/plans/1/drafts").body(bulk), 413).await;
+    response(
+        s.request(Method::PATCH, "/plans/1/drafts/2/parts")
+            .body(" ".repeat(8 * 1024 * 1024 + 1)),
+        413,
+    )
+    .await;
     s.close().await;
 }
 
@@ -752,7 +737,6 @@ async fn gate_probe() {
             (Method::GET, ""),
             (Method::GET, "/2"),
             (Method::PATCH, "/2/parts"),
-            (Method::POST, "/2/abandon"),
         ] {
             let status = if !enabled {
                 404
