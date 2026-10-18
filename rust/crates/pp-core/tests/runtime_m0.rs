@@ -20,10 +20,7 @@ mod process;
 
 #[test]
 fn scratch_root_is_empty_after_runtime_tests() {
-    let root = tempfile::Builder::new()
-        .prefix("pp-m0-check-")
-        .tempdir()
-        .unwrap();
+    let (root, _) = temporary("m0-check");
     let output = scratch::output(
         std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -1008,6 +1005,7 @@ async fn cleanup_error_publishes_failed_and_preserves_failure() {
     assert!(!receipt.complete());
     assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
     assert!(socket.is_dir());
+    receipt.prove_child_closed(pid);
     println!(
         "{}",
         serde_json::json!({"case":"compat_cleanup_terminal_status", "failed":true, "receipt":receipt})
@@ -1149,11 +1147,13 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         | CoreStatus::Failed => panic!("not ready"),
     };
     let runtime_dir = runtime.runtime_dir().to_owned();
-    let mut descendant = std::process::Command::new("sleep")
-        .arg("60")
-        .process_group(pid as i32)
-        .spawn()
-        .unwrap();
+    let mut descendant = process::ChildGuard(
+        std::process::Command::new("sleep")
+            .arg("60")
+            .process_group(pid as i32)
+            .spawn()
+            .unwrap(),
+    );
     let descendant_pid = descendant.id();
     caller.shutdown_timeout(Duration::from_secs(2));
     let lock = std::fs::OpenOptions::new()
@@ -1194,7 +1194,9 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
     let (_scratch_data, data) = temporary("compat-cleanup-failure");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let state = runtime.handle().subscribe();
-    assert!(matches!(*state.borrow(), CoreStatus::Ready { .. }));
+    let CoreStatus::Ready { pid, .. } = *state.borrow() else {
+        panic!("not ready")
+    };
     let runtime_dir = runtime.runtime_dir().to_owned();
     let socket = std::fs::read_dir(&runtime_dir)
         .unwrap()
@@ -1208,6 +1210,7 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
     assert!(!receipt.complete());
     assert!(receipt.errors.contains(&"compat_cleanup_unproved"));
     assert!(matches!(*state.borrow(), CoreStatus::Failed));
+    receipt.prove_child_closed(pid);
     std::fs::remove_dir_all(runtime_dir).unwrap();
     let error = CoreRuntime::start(launch(data.clone()))
         .await
@@ -1338,6 +1341,8 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let (_scratch_data, data) = temporary("core-death-live-child");
+    let pending = _scratch_data.path().join(scratch::CLOSURE_PENDING);
+    std::fs::write(&pending, b"pending").unwrap();
     let mut core = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "core_process_fixture", "--nocapture"])
         .env("PP_CORE_DEATH_FIXTURE", &data)
@@ -1450,8 +1455,16 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
         let _ = peer.kill();
         let _ = peer.wait();
     }
-    if let Some(path) = runtime_dir {
-        let _ = std::fs::remove_dir_all(path);
+    let deadline = std::time::Instant::now() + Duration::from_secs(16);
+    while child_pid.is_some_and(|pid| !pid_has_exited(pid)) && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if child_pid.is_some_and(pid_has_exited) {
+        std::fs::remove_file(pending).unwrap();
+        if let Some(path) = runtime_dir {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
     if let Err(error) = result {
         std::panic::resume_unwind(error);

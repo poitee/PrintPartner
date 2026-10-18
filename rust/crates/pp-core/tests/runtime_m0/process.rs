@@ -1,8 +1,32 @@
 use std::{
     io::{Read, Seek},
+    ops::{Deref, DerefMut},
     process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
 };
+
+pub struct ChildGuard(pub Child);
+
+impl Deref for ChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 // Fixtures must keep descendants attached until their owner finishes. This does
 // not supervise daemons that double-fork or otherwise deliberately detach.
@@ -63,6 +87,23 @@ mod tree {
     }
 
     impl Guard {
+        pub fn exited(&self) -> std::io::Result<bool> {
+            // Keep the root PID owned until cleanup has sent every signal.
+            let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.0.id() as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            if result == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(unsafe { info.si_pid() } != 0)
+        }
+
         pub fn spawn(command: &mut Command) -> Self {
             Self(
                 command.process_group(0).spawn().expect("spawn fixture"),
@@ -131,7 +172,6 @@ mod tree {
                 if !rows.iter().any(|(pid, _, group, state)| {
                     (owned.contains(pid) || groups.contains(group)) && !state.starts_with('Z')
                 }) {
-                    self.1 = complete;
                     return complete;
                 }
                 if Instant::now() >= deadline {
@@ -161,19 +201,20 @@ pub fn output(command: &mut Command, bound: Duration) -> Output {
         .stderr(stderr.try_clone().unwrap());
     let mut child = tree::Guard::spawn(command);
     let deadline = Instant::now() + bound;
-    let status = loop {
-        if let Some(status) = child.0.try_wait().expect("poll fixture") {
-            break Some(status);
+    let exited = loop {
+        if child.exited().expect("poll fixture") {
+            break true;
         }
         if Instant::now() >= deadline {
-            break None;
+            break false;
         }
         std::thread::sleep(Duration::from_millis(10));
     };
     let cleaned = child.cleanup();
+    let status = child.0.wait().expect("wait for fixture after cleanup");
     drop(child);
     assert!(cleaned, "fixture subprocess tree cleanup failed");
-    let status = status.expect("fixture subprocess timed out");
+    assert!(exited, "fixture subprocess timed out");
     let mut result = Output {
         status,
         stdout: Vec::new(),
@@ -195,6 +236,31 @@ pub fn output(_: &mut Command, _: Duration) -> Output {
 mod tests {
     use super::*;
     use std::{io::Write, os::unix::process::CommandExt};
+
+    #[test]
+    fn exit_observation_keeps_root_waitable_until_cleanup() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 23"]);
+        let mut child = tree::Guard::spawn(&mut command);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !child.exited().unwrap() {
+            assert!(Instant::now() < deadline, "fixture did not exit");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // A reaped child would make the second waitid fail with ECHILD.
+        assert!(child.exited().unwrap());
+        assert!(child.cleanup());
+        assert_eq!(child.0.wait().unwrap().code(), Some(23));
+        let mut status = 0;
+        assert_eq!(
+            unsafe { libc::waitpid(child.0.id() as i32, &mut status, libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
 
     fn fixture() -> Command {
         let mut command = Command::new(std::env::current_exe().unwrap());
@@ -242,7 +308,12 @@ mod tests {
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             output(&mut command, Duration::from_secs(5));
         }));
-        let message = failure.unwrap_err().downcast::<String>().unwrap();
+        let panic = failure.unwrap_err();
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap();
         assert!(
             message.contains("fixture subprocess timed out"),
             "{message}"
