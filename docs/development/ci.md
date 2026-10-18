@@ -135,12 +135,24 @@ Required Rust and lint jobs fail if their input-selection job fails, so a broken
 ## Ephemeral PR runners
 
 Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
-for Rust Linux, ast-grep, web checks, desktop contracts, desktop runtime,
+for Rust Linux, ast-grep, web checks, PR evidence lint, desktop contracts, desktop runtime,
 source artifacts, embedded-driver smoke, and the native
 macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
 `[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
 Each runner accepts one job and is destroyed afterward. Linux has three slots with
 3 vCPU and 8 GB each; macOS has two fresh Tart VM slots.
+Routing matches registration labels, not ephemeral runner names. Live PR jobs
+have used `pp-linux-*` registrations with the `pp-local` label. Runner join
+configuration belongs to the runner host and is not supplied through workflow env.
+
+PR evidence lint uses `pull_request`, including body edits, and checks out trusted
+default-branch tooling. Same-repository PRs use the Linux fleet; forks retain
+`ubuntu-latest`. The required check remains `Lint Evidence block`.
+
+Rust Linux selects the `pp-local-linux` nextest profile for same-repository PRs.
+Three real-process crash/restart tests reserve all nextest slots while remeasuring
+the release and starting Node. Their assertions and deadlines are unchanged.
+Hosted Rust Linux uses the default profile.
 
 Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
 manual dispatches and merge groups also keep their existing hosted runners.
