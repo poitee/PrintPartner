@@ -150,9 +150,10 @@ default-branch tooling. Same-repository PRs use the Linux fleet; forks retain
 `ubuntu-latest`. The required check remains `Lint Evidence block`.
 
 Rust Linux selects the `pp-local-linux` nextest profile for same-repository PRs.
-Three real-process crash/restart tests reserve all nextest slots while remeasuring
-the release and starting Node. Their assertions and deadlines are unchanged.
-Hosted Rust Linux uses the default profile.
+The real-Node `runtime_m0` suite and compatibility-process package reserve all
+three nextest slots while running. Their assertions and deadlines are unchanged.
+The local job has a 120-minute budget for this schedule. Hosted Rust Linux keeps
+the default profile and 90-minute job budget.
 
 Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
 manual dispatches and merge groups also keep their existing hosted runners.

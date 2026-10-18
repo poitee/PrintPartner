@@ -62,7 +62,7 @@ jobs:
       CARGO_SCOPE: --workspace
       NEXTEST_FILTER: all()
       NEXTEST_PROFILE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 'pp-local-linux' || 'default' }}
-    timeout-minutes: 90
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 120 || 90 }}
     steps: &rust-steps
       - name: Require successful input selection
         env:
