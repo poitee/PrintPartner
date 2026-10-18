@@ -179,14 +179,17 @@ fn parse_ascii(bytes: &[u8], limits: GeometryLimits) -> Result<ParsedMesh> {
         footer.starts_with("endsolid") && !footer.contains('\r'),
         "ASCII STL footer is invalid"
     );
-    let tokens = text[newline + 1..footer_start]
-        .split(is_ecmascript_whitespace)
-        .filter(|token| !token.is_empty())
-        .collect::<Vec<_>>();
-    let mut index = 0;
     let mut vertices = Vec::new();
     let mut triangles = 0;
-    while index < tokens.len() {
+    for facet in text[newline + 1..footer_start].split_inclusive("endfacet") {
+        let tokens = facet
+            .split(is_ecmascript_whitespace)
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>();
+        if tokens.is_empty() {
+            continue;
+        }
+        let mut index = 0;
         ensure!(
             tokens.get(index) == Some(&"facet") && tokens.get(index + 1) == Some(&"normal"),
             "ASCII STL facet is invalid"
@@ -231,7 +234,6 @@ fn parse_ascii(bytes: &[u8], limits: GeometryLimits) -> Result<ParsedMesh> {
             tokens.get(index) == Some(&"endloop") && tokens.get(index + 1) == Some(&"endfacet"),
             "ASCII STL facet is truncated"
         );
-        index += 2;
         triangles += 1;
         ensure!(
             triangles <= limits.max_triangles,
