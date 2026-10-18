@@ -1,4 +1,4 @@
-"""GRE-749 diagnostics. Passing tests confirm the races, not their prevention.
+"""GRE-749 diagnostics of unsafe outcomes and an independence control.
 
 Run explicitly with python3 -B scripts/linear/reproduce_concurrent_writes.py -v.
 These diagnostics intentionally stay outside test_*.py discovery until a fix
@@ -93,6 +93,7 @@ class ConcurrentWriteReproduction(unittest.TestCase):
         self.before = ("event", "commentCreate(", lambda: reconcile.reconcile(3))
         event.apply_event(opened, {"action": "opened"})
         self.assertIsNone(self.before)
+        self.assertEqual(self.writes, [("reconcile", "In Review"), ("event", "In Review")])
         self.assertEqual(self.comments, [
             {"issueId": "1", "body": "[pr-status-sync] PR #1 open: A slice"},
             {"issueId": "1", "body": "[pr-status-sync] PR #1 open: A slice"},

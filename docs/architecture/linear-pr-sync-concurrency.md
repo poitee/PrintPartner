@@ -5,9 +5,6 @@ not implement prevention, and no production code or workflow has changed.
 
 ## Evidence
 
-The checkout matches `origin/main` at `8511ab55`. The open-PR check found no
-overlapping Linear sync change on 2026-10-18.
-
 Run the diagnostics and existing tests locally:
 
 ```sh
@@ -15,10 +12,10 @@ python3 -B scripts/linear/reproduce_concurrent_writes.py -v
 python3 -B -m unittest discover -s scripts/linear -p 'test_*.py' -v
 ```
 
-All four diagnostics reproduce their asserted outcomes. All 28 existing tests
-pass. Diagnostic success means the unsafe outcome occurred, not that it was
-prevented. The diagnostics stay outside ordinary `test_*.py` discovery so that
-future regression tests do not require preserving these bugs.
+The diagnostics reproduce their asserted outcomes, and the existing suite
+passes. Diagnostic success confirms the unsafe outcomes and the independence
+control, not prevention. The diagnostics stay outside ordinary `test_*.py`
+discovery so that future regression tests do not require preserving these bugs.
 
 Each diagnostic loads separate copies of the production module, with independent
 PR and state caches, against one fake Linear store. A callback pauses one API
@@ -38,6 +35,10 @@ The controlled outcomes are:
   paused. Both issues finish In Review. Serialization must retain this
   independence.
 
+The current workflow uses separate `linear-pr-sync-<PR number>` groups and a
+`linear-pr-sync-reconcile` group, with `cancel-in-progress: false`. Shared-issue
+PRs and reconciliation can therefore execute these interleavings.
+
 `move()` checks the state from an earlier issue read, then sends an unconditional
 `issueUpdate`. Its comment lookup and creation are separate operations too.
 Refreshing the issue immediately before the mutation still leaves a gap between
@@ -54,7 +55,10 @@ A per-issue Actions job can serialize event and reconcile writers without new
 GitHub permissions. Preparation discovers identifiers only, including edited
 events' previous references. Each worker acquires its issue's concurrency group
 before reading GitHub PRs, the Linear issue, or comments, and writes only that
-issue. Reconciliation's stall sweep must use those same groups.
+issue. Every reconciliation write must use those groups, including both its
+PR replay and stall sweep. These groups would serialize this workflow only.
+Manual Linear edits and other automations could still race its unconditional
+updates.
 
 Under [GitHub's default concurrency policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency),
 a new pending job replaces the previous pending job, even with
@@ -68,15 +72,23 @@ worker, a pending removal event for GRE-1, and then a reconcile worker that
 replaces the removal job. The surviving worker cannot recover that removal's
 provenance from current PR snapshots.
 
-Two designs need different commitments:
+Possible recovery paths have different commitments:
 
 - An aggregate worker can move In Review issues with no current open PR to
   In Progress, using a generic explanation when removal provenance is missing.
   This changes behavior for manually placed In Review issues without PRs.
-- Preserving event-specific behavior requires retaining removed-reference
-  deltas before pending work can be replaced, or verifying an adequate historical
-  source. A new storage service or write permission must be explicitly approved
-  if the selected design needs it.
+- Historical recovery may preserve event-specific behavior without new storage.
+  GitHub exposes PR [userContentEdits](https://docs.github.com/en/graphql/reference/pulls)
+  and title [RenamedTitleEvent](https://docs.github.com/en/graphql/reference/issues)
+  records.
+  Existing `[pr-status-sync] PR #N open` Linear comments also identify prior
+  references. Their completeness must be verified before relying on them.
+  [GitHub allows deletion of edit-history content and limits retained edits](https://docs.github.com/en/communities/moderating-comments-and-conversations/tracking-changes-in-a-comment).
+  Sync comments are not a complete ledger either, because `move()` skips them
+  when the issue already has the target state.
+- Retaining removed-reference deltas before replaceable processing can preserve
+  event-specific behavior even when history is unavailable. A new storage
+  service or write permission must be explicitly approved if needed.
 
 GitHub also documents `queue: max`, which retains up to 100 pending jobs per
 group. A local syntax-only fixture with this property fails the repository's
@@ -97,8 +109,8 @@ leases would need unverified write semantics and cannot fence delayed
 
 ## Escalation and next slice
 
-Decide whether an aggregate orphaned-In-Review rule is acceptable, or whether
-removed-reference deltas and their event-specific behavior must be retained.
+Assess historical recovery before deciding whether an aggregate
+orphaned-In-Review rule is acceptable or removal deltas need durable retention.
 Then implement the per-issue writer with bounded fanout, queue handling, and a
 rollout plan. Reuse these interleavings as regression tests that assert Done and
 In Review are preserved and exactly one comment is created.
@@ -112,10 +124,12 @@ Prepared ticket comment, not posted because real Linear writes are prohibited:
 > ESCALATE GRE-749. Fake API interleavings reproduce stale Done and In Review
 > overwrites and duplicate comments. Per-issue Actions workers can use existing
 > permissions, but pending-job replacement can lose removed-reference deltas.
-> Choose an aggregate rule for In Review issues with no open PR, or require
-> retained removal deltas. `queue: max` is another candidate, but the pinned
-> actionlint rejects it and its queue is bounded. No production workflow or
-> Linear write was performed.
+> First assess recovery from GitHub userContentEdits, RenamedTitleEvent, and
+> prior sync comments. Edit history can be deleted, and sync comments omit
+> already-unchanged states. If recovery is insufficient, choose an aggregate
+> rule for In Review issues with no open PR or durable removal-delta retention.
+> `queue: max` is another candidate, but the pinned actionlint rejects it and
+> its queue is bounded. No production workflow or Linear write was performed.
 >
-> next slice: resolve the removal and queue policy, then implement and prove
+> next slice: verify historical recovery and resolve the queue policy, then prove
 > per-issue event/reconcile writers with bounded fanout and a safe rollout.
