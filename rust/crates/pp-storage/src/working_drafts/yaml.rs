@@ -204,6 +204,17 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     let mut line_indent = 0usize;
     let mut quoted_end = false;
     let mut block: Option<(usize, Option<usize>)> = None;
+    // js-yaml's indent for the outermost flow collection: one past its block
+    // parent, or the indent of the line the root node starts on.
+    let mut flow_indent = 0usize;
+    let mut document_indent: Option<usize> = None;
+    // js-yaml rejects a separating tab followed on the same line by a flow
+    // token when the line is indented less than the collection, which is the
+    // line a block value's flow opens on.
+    let mut shallow_flow = false;
+    let mut separation_tab = false;
+    // Line of a flow node's tag or anchor while its content has not started.
+    let mut flow_property: Option<usize> = None;
     let mut consumed = 0usize;
     let mut next_check = 4096usize;
     while i < chars.len() {
@@ -222,6 +233,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             line_begin = start;
             line_indent = i - start;
             node_column = None;
+            shallow_flow = false;
+            separation_tab = false;
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
             if let Some((base, required)) = block {
                 let required = required.or_else(|| (!blank).then_some(line_indent));
@@ -282,6 +295,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 consumed += 3;
                 i += 3;
                 parent = None;
+                document_indent = None;
                 plain = false;
                 node = true;
                 quoted_end = false;
@@ -398,6 +412,22 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i = end;
             continue;
         }
+        if !yaml_blank_break(c) {
+            if separation_tab && shallow_flow && flow > 0 {
+                return invalid();
+            }
+            // js-yaml counts no indent on the first line.
+            document_indent.get_or_insert(if line_begin == 0 { 0 } else { line_indent });
+            // js-yaml ends a flow node at its properties when a line break
+            // follows and the next line is not indented past the collection.
+            if flow_property.take().is_some_and(|line| {
+                line != line_begin
+                    && line_indent <= flow_indent
+                    && !matches!(c, ',' | ']' | '}' | ':')
+            }) {
+                return invalid();
+            }
+        }
         if node && !yaml_blank_break(c) && node_column.is_none() {
             node_column = Some(column);
         }
@@ -438,6 +468,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i = end;
             if c == '*' {
                 node = false;
+            } else if flow > 0 {
+                flow_property = Some(line_begin);
             }
             continue;
         }
@@ -449,7 +481,11 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i += 1;
             continue;
         }
-        if node && matches!(c, '|' | '>') && flow == 0 {
+        if node && matches!(c, '|' | '>') {
+            // js-yaml reads no block scalar inside a flow collection.
+            if flow > 0 {
+                return invalid();
+            }
             let end = line_end(&chars, i, budget)?;
             let mut explicit = None;
             for c in &chars[i + 1..end] {
@@ -493,6 +529,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             }
             node_column = None;
             if matches!(c, '[' | '{') {
+                if flow == 0 {
+                    flow_indent = parent.map_or(document_indent.unwrap_or(0), |p| p + 1);
+                    shallow_flow = line_indent < flow_indent;
+                }
                 flow += 1;
             } else if matches!(c, ']' | '}') {
                 flow = flow.saturating_sub(1);
@@ -507,6 +547,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             node = false;
             plain = true;
             quoted_end = false;
+        } else if c == '\t' && !plain && (node || flow > 0) {
+            separation_tab = true;
         }
         output.push(c);
         if plain && c == '\u{e000}' {
@@ -1234,6 +1276,51 @@ mod tests {
                 _ => panic!("{}: unexpected collection", case.name),
             }
         }
+    }
+
+    fn json(doc: &Document, id: usize, budget: &mut PreparationBudget<'_>) -> serde_json::Value {
+        let text = |s: &JsText| String::from_utf16(s.units()).unwrap();
+        match doc.node(id, budget).unwrap().clone() {
+            Node::Null => serde_json::Value::Null,
+            Node::Bool(b) => b.into(),
+            Node::Number(n) if n.fract() == 0.0 && n.abs() < 9e15 => (n as i64).into(),
+            Node::Number(n) => n.into(),
+            Node::String(s) => text(&s).into(),
+            Node::Sequence(items) => items.iter().map(|id| json(doc, *id, budget)).collect(),
+            Node::Mapping(entries) => entries
+                .iter()
+                .map(|(key, id)| (text(key), json(doc, *id, budget)))
+                .collect(),
+            Node::Alias(_) => unreachable!("node resolves aliases"),
+        }
+    }
+
+    #[test]
+    fn yaml_flow_collections_match_js_yaml() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            source: String,
+            expected: Option<serde_json::Value>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/yaml-flow-collections-node.json"
+        ))
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut mismatches = Vec::new();
+        for case in cases {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let actual = match Document::parse(case.source.as_bytes(), &mut budget) {
+                Ok(doc) => Some(json(&doc, doc.root, &mut budget)),
+                Err(ReadFailure::InvalidDocument) => None,
+                Err(err) => panic!("{}: {err:?}", case.name),
+            };
+            if actual != case.expected {
+                mismatches.push(format!("{}: {:?} gave {actual:?}", case.name, case.source));
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
     #[test]
