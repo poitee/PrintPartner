@@ -3356,10 +3356,12 @@ dependencies = [
  "rand 0.9.5",
  "regress 0.11.1",
  "reqwest",
+ "rusqlite",
  "ryu-js",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]
