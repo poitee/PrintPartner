@@ -2,6 +2,9 @@
 //! Supplied-import phases over the upload journal. Node writes supplied files in
 //! one call and has no journal, attempts or Source observations, so these cases
 //! port the reference `source_import_operation.rs` storage assertions.
+//! Fail and Cleanup retries adopt only a matching last attempt observation,
+//! after Source proof and authority checks. Run these regressions with
+//! `cargo test -p pp-storage --features desktop_rebuild --test import_phases`.
 use pp_storage::{
     Limits, WriterOwner,
     auth::{
@@ -289,6 +292,14 @@ impl Fixture {
         assert_eq!(self.snapshot(), before);
     }
 
+    fn assert_retry(&self, claim: &ClaimedAttempt, phase: Phase, expected: &Operation) {
+        let before = self.snapshot();
+        for _ in 0..2 {
+            assert_eq!(self.phase(claim, phase.clone()).unwrap(), *expected);
+            assert_eq!(self.snapshot(), before);
+        }
+    }
+
     fn job(&self, op: &Operation) -> (String, Option<String>, i64) {
         self.connection()
             .query_row(
@@ -369,6 +380,160 @@ fn published(op: &Operation) -> Phase {
 
 fn authority(error: &anyhow::Error) -> Option<&AuthorityFailure> {
     error.downcast_ref::<AuthorityFailure>()
+}
+
+#[test]
+fn exact_fail_retry_adopts_the_recorded_result_without_writes() {
+    let fixture = Fixture::open();
+    let op = fixture.admit(fixture.physical(), "fail-retry");
+    let claim = fixture.claim(&op);
+    let failed = fixture.phase(&claim, Phase::Fail).unwrap();
+    assert_eq!(failed.state, State::Failed);
+    assert_eq!(failed.observation_cursor, Some(1));
+    fixture.assert_retry(&claim, Phase::Fail, &failed);
+}
+
+#[test]
+fn exact_cleanup_retry_adopts_the_recorded_result_without_writes() {
+    let fixture = Fixture::open();
+    let op = fixture.admit(fixture.physical(), "cleanup-retry");
+    let claim = fixture.claim(&op);
+    fixture.phase(&claim, owned(&op)).unwrap();
+    fixture.phase(&claim, published(&op)).unwrap();
+    fixture.phase(&claim, Phase::Activate).unwrap();
+    let settled = fixture.phase(&claim, Phase::Cleanup).unwrap();
+    assert!(settled.cleanup_settled);
+    assert_eq!(fixture.job(&op).0, "succeeded");
+    fixture.assert_retry(&claim, Phase::Cleanup, &settled);
+    for phase in [
+        Phase::Read,
+        owned(&op),
+        published(&op),
+        Phase::Activate,
+        Phase::Fail,
+    ] {
+        fixture.rejected_phase(
+            &claim,
+            claim.source_work.as_ref().unwrap(),
+            phase,
+            "Stale attempt fence",
+        );
+    }
+}
+
+#[test]
+fn failed_cleanup_retries_preserve_the_released_quota() {
+    let fixture = Fixture::open();
+    let op = fixture.admit(fixture.physical(), "failed-cleanup");
+    let claim = fixture.claim(&op);
+    fixture.phase(&claim, Phase::Fail).unwrap();
+    let settled = fixture.phase(&claim, Phase::Cleanup).unwrap();
+    assert_eq!(fixture.quota(&op), (0, 0, true));
+    assert_eq!(fixture.job(&op).0, "failed");
+    assert_eq!(fixture.observations(&op).len(), 2);
+    fixture.assert_retry(&claim, Phase::Cleanup, &settled);
+    fixture.rejected_phase(
+        &claim,
+        claim.source_work.as_ref().unwrap(),
+        Phase::Fail,
+        "Stale attempt fence",
+    );
+    fixture.reopen();
+}
+
+#[test]
+fn a_recovered_fail_records_the_new_attempt_and_rejects_the_old_one() {
+    let fixture = Fixture::open();
+    let op = fixture.admit(fixture.physical(), "recovered-fail");
+    let old = fixture.claim(&op);
+    fixture.phase(&old, Phase::Fail).unwrap();
+    let fixture = fixture.reopen();
+    let claim = fixture.claim(&op);
+    let failed = fixture.phase(&claim, Phase::Fail).unwrap();
+    assert_eq!(failed.observation_cursor, Some(2));
+    let observations = fixture.observations(&op);
+    assert_ne!(observations[0].2, observations[1].2);
+    assert_ne!(observations[0].3, observations[1].3);
+    fixture.assert_retry(&claim, Phase::Fail, &failed);
+    let settled = fixture.phase(&claim, Phase::Cleanup).unwrap();
+    for phase in [Phase::Fail, Phase::Cleanup] {
+        fixture.rejected_phase(
+            &old,
+            claim.source_work.as_ref().unwrap(),
+            phase,
+            "Stale attempt fence",
+        );
+    }
+    fixture.assert_retry(&claim, Phase::Cleanup, &settled);
+    fixture.reopen();
+}
+
+#[test]
+fn cleanup_retry_requires_a_live_source_proof() {
+    let fixture = Fixture::open();
+    let op = fixture.admit(fixture.physical(), "cleanup-proof");
+    let mut claim = fixture.claim(&op);
+    fixture.phase(&claim, Phase::Fail).unwrap();
+    fixture.phase(&claim, Phase::Cleanup).unwrap();
+    claim.source_work.as_mut().unwrap().release().unwrap();
+    let replacement = fixture
+        .owner
+        .local_source_catalog()
+        .begin_work(
+            op.source_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    fixture.rejected_phase(
+        &claim,
+        claim.source_work.as_ref().unwrap(),
+        Phase::Cleanup,
+        "Lease already released",
+    );
+    drop(replacement);
+}
+
+#[test]
+fn cleanup_retry_revalidates_authority_without_mutating_the_terminal_job() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let op = fixture.admit(
+        Credential::Session(Secret::new(token.clone())),
+        "cleanup-authority",
+    );
+    let claim = fixture.claim(&op);
+    fixture.phase(&claim, Phase::Fail).unwrap();
+    fixture.phase(&claim, Phase::Cleanup).unwrap();
+    fixture.logout(&token);
+    let before = fixture.snapshot();
+    let error = fixture.phase(&claim, Phase::Cleanup).unwrap_err();
+    assert_eq!(
+        authority(&error),
+        Some(&AuthorityFailure::CredentialInvalid)
+    );
+    assert_eq!(fixture.snapshot(), before);
+    assert_eq!(fixture.job(&op).1, None);
+}
+
+#[test]
+fn terminal_settlement_without_cleanup_cannot_be_adopted_as_a_cleanup_retry() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let op = fixture.admit(
+        Credential::Session(Secret::new(token.clone())),
+        "refused-cleanup",
+    );
+    let claim = fixture.claim(&op);
+    fixture.phase(&claim, Phase::Fail).unwrap();
+    fixture.logout(&token);
+    assert!(fixture.phase(&claim, Phase::Cleanup).is_err());
+    fixture.rejected_phase(
+        &claim,
+        claim.source_work.as_ref().unwrap(),
+        Phase::Cleanup,
+        "Stale attempt fence",
+    );
 }
 
 #[test]
@@ -520,7 +685,8 @@ fn a_changed_source_conflicts_and_a_cancelled_import_settles_as_cancelled() {
         fixture.phase(&lease, Phase::Fail).unwrap_err().to_string(),
         "Import already completed"
     );
-    fixture.phase(&lease, Phase::Cleanup).unwrap();
+    let settled = fixture.phase(&lease, Phase::Cleanup).unwrap();
+    fixture.assert_retry(&lease, Phase::Cleanup, &settled);
     assert_eq!(fixture.job(&op).0, "failed");
     let current: Option<i64> = fixture
         .connection()
@@ -562,11 +728,11 @@ fn a_changed_source_conflicts_and_a_cancelled_import_settles_as_cancelled() {
         fixture.phase(&lease, owned(&op)).unwrap_err().to_string(),
         "Import cancelled"
     );
-    assert_eq!(
-        fixture.phase(&lease, Phase::Fail).unwrap().state,
-        State::Cancelled
-    );
-    fixture.phase(&lease, Phase::Cleanup).unwrap();
+    let failed = fixture.phase(&lease, Phase::Fail).unwrap();
+    assert_eq!(failed.state, State::Cancelled);
+    fixture.assert_retry(&lease, Phase::Fail, &failed);
+    let settled = fixture.phase(&lease, Phase::Cleanup).unwrap();
+    fixture.assert_retry(&lease, Phase::Cleanup, &settled);
     assert_eq!(fixture.job(&op).0, "cancelled");
     let phases: Vec<_> = fixture
         .observations(&op)
@@ -1014,6 +1180,7 @@ fn phases_reject_another_source_or_tenant_without_writes() {
             fixture.rejected_phase(&claim, &wrong, phase.clone(), "Wrong Source reservation");
             fixture.phase(&claim, phase).unwrap();
         }
+        fixture.rejected_phase(&claim, &wrong, Phase::Cleanup, "Wrong Source reservation");
         assert_eq!(fixture.job(&op).0, "succeeded");
         assert_eq!(fixture.quota(&op), (0, 9, true));
         fixture.reopen();
