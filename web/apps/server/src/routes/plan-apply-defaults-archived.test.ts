@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { saveRoleFilamentDefault } from "../services/role-filament-store.js";
@@ -14,9 +14,11 @@ const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
+  vi.unstubAllEnvs();
 });
 
-async function fixture(spoolman: boolean) {
+async function fixture(spoolman: boolean, desktop: boolean) {
+  vi.stubEnv("PP_DESKTOP_REBUILD", desktop ? "1" : "0");
   const root = mkdtempSync(join(tmpdir(), "pp-apply-defaults-archived-"));
   const ports = createSelfHostPorts(root);
   const app = Fastify();
@@ -69,39 +71,41 @@ async function fixture(spoolman: boolean) {
   };
 }
 
-describe.each([false, true])("apply role colors with Spoolman enabled=%s", (spoolman) => {
-  it("returns zero for an active unmatched default and rejects the same Plan after archiving", async () => {
-    const { repo, profileId, apply, archive } = await fixture(spoolman);
-    saveRoleFilamentDefault(repo, profileId, "accent", {
-      filament_color_id: "spoolman:inventory:filament:7",
-      spoolman_spool_id: "spoolman:inventory:spool:11",
+describe.each([false, true])("apply role colors with desktop enabled=%s", (desktop) => {
+  describe.each([false, true])("with Spoolman enabled=%s", (spoolman) => {
+    it("returns zero for an active unmatched default and rejects the same Plan after archiving", async () => {
+      const { repo, profileId, apply, archive } = await fixture(spoolman, desktop);
+      saveRoleFilamentDefault(repo, profileId, "accent", {
+        filament_color_id: "spoolman:inventory:filament:7",
+        spoolman_spool_id: "spoolman:inventory:spool:11",
+      });
+      const active = await apply();
+      expect(active.statusCode, active.body).toBe(200);
+      expect(active.json()).toMatchObject({ updated: 0, thumbnails_cleared: 0 });
+
+      archive();
+      const before = repo.readAcceptedPlanOperationalSnapshot(profileId);
+      const defaults = repo.getRoleFilaments(profileId);
+      const archived = await apply();
+      expect(archived.statusCode, archived.body).toBe(409);
+      expect(archived.json()).toEqual({ detail: "Archived Plan Progress cannot be changed" });
+      expect(repo.readAcceptedPlanOperationalSnapshot(profileId)).toEqual(before);
+      expect(repo.getRoleFilaments(profileId)).toEqual(defaults);
     });
-    const active = await apply();
-    expect(active.statusCode, active.body).toBe(200);
-    expect(active.json()).toMatchObject({ updated: 0, thumbnails_cleared: 0 });
 
-    archive();
-    const before = repo.readAcceptedPlanOperationalSnapshot(profileId);
-    const defaults = repo.getRoleFilaments(profileId);
-    const archived = await apply();
-    expect(archived.statusCode, archived.body).toBe(409);
-    expect(archived.json()).toEqual({ detail: "Archived Plan Progress cannot be changed" });
-    expect(repo.readAcceptedPlanOperationalSnapshot(profileId)).toEqual(before);
-    expect(repo.getRoleFilaments(profileId)).toEqual(defaults);
-  });
-
-  it.each(["local", "spoolman"])("rejects an archived included role with a %s default", async (inventory) => {
-    const { repo, profileId, apply, archive } = await fixture(spoolman);
-    saveRoleFilamentDefault(repo, profileId, "primary", inventory === "local"
-      ? { filament_custom_hex: "#123456" }
-      : { filament_color_id: "spoolman:inventory:filament:7", spoolman_spool_id: "spoolman:inventory:spool:11" });
-    archive();
-    const before = repo.readAcceptedPlanOperationalSnapshot(profileId);
-    const defaults = repo.getRoleFilaments(profileId);
-    const response = await apply();
-    expect(response.statusCode, response.body).toBe(409);
-    expect(response.json()).toEqual({ detail: "Archived Plan Progress cannot be changed" });
-    expect(repo.readAcceptedPlanOperationalSnapshot(profileId)).toEqual(before);
-    expect(repo.getRoleFilaments(profileId)).toEqual(defaults);
+    it.each(["local", "spoolman"])("rejects an archived included role with a %s default", async (inventory) => {
+      const { repo, profileId, apply, archive } = await fixture(spoolman, desktop);
+      saveRoleFilamentDefault(repo, profileId, "primary", inventory === "local"
+        ? { filament_custom_hex: "#123456" }
+        : { filament_color_id: "spoolman:inventory:filament:7", spoolman_spool_id: "spoolman:inventory:spool:11" });
+      archive();
+      const before = repo.readAcceptedPlanOperationalSnapshot(profileId);
+      const defaults = repo.getRoleFilaments(profileId);
+      const response = await apply();
+      expect(response.statusCode, response.body).toBe(409);
+      expect(response.json()).toEqual({ detail: "Archived Plan Progress cannot be changed" });
+      expect(repo.readAcceptedPlanOperationalSnapshot(profileId)).toEqual(before);
+      expect(repo.getRoleFilaments(profileId)).toEqual(defaults);
+    });
   });
 });
