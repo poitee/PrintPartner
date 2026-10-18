@@ -1,5 +1,9 @@
+mod builder;
 mod json;
 mod model;
+pub(crate) mod observation;
+#[cfg(test)]
+mod observation_tests;
 
 pub use model::KitManifest;
 
@@ -30,7 +34,8 @@ impl ManifestInputDetail {
     }
 }
 
-pub struct ManifestJsonBody(Vec<u8>);
+#[derive(Debug)]
+pub struct ManifestJsonBody(pub(crate) Vec<u8>);
 
 impl ManifestJsonBody {
     pub fn into_bytes(self) -> Vec<u8> {

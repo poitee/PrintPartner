@@ -39,7 +39,7 @@ export type SourceRelativePath = string & {
 };
 
 export type SnapshotFileKind = "stl" | "artifact" | "readme" | "md" | "pdf";
-export type SnapshotDocumentationKind = Exclude<SnapshotFileKind, "stl" | "artifact">;
+type SnapshotDocumentationKind = Exclude<SnapshotFileKind, "stl" | "artifact">;
 
 export type SnapshotFile = {
   path: SourceRelativePath;
@@ -60,7 +60,7 @@ export type SnapshotSelection = {
   omittedFiles: readonly OmittedSnapshotFile[];
 };
 
-export type SnapshotContentFile = {
+type SnapshotContentFile = {
   path: SourceRelativePath;
   kind: SnapshotFileKind;
   sizeBytes: number;

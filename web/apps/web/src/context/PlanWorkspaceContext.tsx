@@ -711,7 +711,9 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
                     await rebaseWorkspace(open);
                   } else {
                     const refreshed = await fetchPlanReview(profileId, { includeExcluded: true });
-                    queryClient.setQueryData(queryKeys.planReview(profileId, true), refreshed);
+                    for (const allowed of [true, false]) {
+                      queryClient.setQueryData(queryKeys.planReview(profileId, true, allowed), refreshed);
+                    }
                     if (open) storeWorkspace(await fetchPlanDraftWorkspace(profileId, open.draft.draft_id), false);
                   }
                   continue;
@@ -856,8 +858,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         if (ambiguousSave) {
           await queryClient.cancelQueries({ queryKey: ["planReview", profileId] }, { revert: false });
           const accepted = await fetchPlanReview(profileId, { includeExcluded: true });
-          queryClient.setQueryData(queryKeys.planReview(profileId, true), accepted);
-          queryClient.setQueryData(queryKeys.planReview(profileId, false), includedPlanReview(accepted));
+          for (const allowed of [true, false]) {
+            queryClient.setQueryData(queryKeys.planReview(profileId, true, allowed), accepted);
+            queryClient.setQueryData(queryKeys.planReview(profileId, false, allowed), includedPlanReview(accepted));
+          }
         }
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: queryKeys.planDrafts(profileId) }),
@@ -912,7 +916,6 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           partId,
           unitIndex,
           completed,
-          optimisticReview: review,
         });
       } finally {
         updateDraftUi(profileId, (current) => ({
@@ -937,7 +940,6 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           partId,
           unitIndex,
           assembled,
-          optimisticReview: review,
         });
       } finally {
         updateDraftUi(profileId, (current) => ({

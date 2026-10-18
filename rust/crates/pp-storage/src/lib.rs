@@ -7,6 +7,8 @@ pub mod auth;
 pub mod build_graph;
 pub mod catalog;
 #[cfg(feature = "desktop_rebuild")]
+pub mod checkoff_progress;
+#[cfg(feature = "desktop_rebuild")]
 pub mod features;
 pub mod jobs;
 pub mod lease;
@@ -17,14 +19,24 @@ pub mod manifest_text;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_secrets;
 #[cfg(feature = "desktop_rebuild")]
+pub mod plan_publication;
+#[cfg(feature = "desktop_rebuild")]
 pub mod profiles;
 pub mod read_model;
+#[cfg(feature = "desktop_rebuild")]
+pub mod required_units;
 mod schema;
+#[cfg(feature = "desktop_rebuild")]
+pub mod source_scan;
+#[cfg(feature = "desktop_rebuild")]
+pub mod source_sync;
+#[cfg(feature = "desktop_rebuild")]
+pub mod uploads;
 #[cfg(feature = "desktop_rebuild")]
 pub mod working_drafts;
 mod writer_admission;
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 pub use schema::SchemaReady;
 use serde::{Deserialize, Serialize};
@@ -85,6 +97,13 @@ enum WriterControl {
 }
 enum Envelope {
     #[cfg(feature = "desktop_rebuild")]
+    WorkingDraft {
+        command: working_drafts::Command,
+        reply: mpsc::Sender<Result<working_drafts::Outcome>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    WorkingDraftWrite { command: working_drafts::Write },
+    #[cfg(feature = "desktop_rebuild")]
     BuildGraph {
         command: build_graph::Command,
         reply: build_graph::Reply,
@@ -98,6 +117,26 @@ enum Envelope {
     Features {
         command: features::Command,
         reply: mpsc::Sender<Result<features::View>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Publication {
+        command: plan_publication::Command,
+        reply: mpsc::Sender<Result<plan_publication::Outcome>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    RequiredUnits {
+        command: required_units::Command,
+        reply: mpsc::Sender<Result<required_units::Outcome>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Uploads {
+        command: uploads::Command,
+        reply: mpsc::Sender<Result<uploads::Operation>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Checkoff {
+        command: checkoff_progress::Command,
+        reply: mpsc::Sender<Result<checkoff_progress::Response>>,
     },
     Read {
         command: read_model::Command,
@@ -155,6 +194,14 @@ struct Shared {
     changed: Condvar,
     capacity: usize,
     job_admission: Mutex<Option<Arc<jobs::WorkerAdmission>>>,
+    #[cfg(feature = "desktop_rebuild")]
+    orphaned_source_leases: Mutex<Vec<u64>>,
+    #[cfg(feature = "desktop_rebuild")]
+    job_subscriptions: jobs::JobSubscriptions,
+    #[cfg(feature = "desktop_rebuild")]
+    import_epoch: std::sync::atomic::AtomicU64,
+    #[cfg(feature = "desktop_rebuild")]
+    import_quota: Mutex<Option<u64>>,
 }
 #[derive(Clone)]
 pub struct SettingsClient {
@@ -309,6 +356,13 @@ impl SettingsClient {
         cancelled: &AtomicBool,
         wait: Duration,
     ) -> Result<WriteReply> {
+        let (SettingCommand::Set(setting) | SettingCommand::CompareAndSet { setting, .. }) =
+            &command;
+        ensure!(
+            !auth::OWNED_SETTINGS.contains(&setting.key.as_str()),
+            "Setting {} is owned by auth and changes only through auth requests",
+            setting.key
+        );
         self.enqueue(Work::Setting(command), cancelled, wait)
     }
     pub fn reader(&self, wait: Duration) -> Result<ReaderCheckout> {
@@ -435,13 +489,23 @@ impl WriterOwner {
             limits.queued_writes > 0 && limits.readers > 0,
             "Storage limits must be positive"
         );
-        let admitted = lease::admit_directory(directory)?;
-        admitted.preflight()?;
-        let lease = lease::StorageLease::acquire_admitted(admitted)?;
+        let locked = lease::admit_directory(directory)?.lock()?;
+        locked.preflight()?;
+        let lease = lease::StorageLease::acquire_locked(locked)?;
         let path = lease.data_dir().join("print-partner.db");
         let version = lease.preflight()?;
-        for name in ["repos", "sources", "exports", "thumbs", "covers"] {
-            std::fs::create_dir_all(lease.data_dir().join(name))?;
+        #[rustfmt::skip]
+        let directories = [
+            "repos",
+            "sources",
+            "exports",
+            "thumbs",
+            // ast-grep-ignore: no-writer-family-literal -- Creates the empty directory, not cover files; see GRE-675.
+            "covers",
+        ];
+        for name in directories {
+            std::fs::create_dir_all(lease.data_dir().join(name))
+                .with_context(|| format!("WriterOwner::open: create storage directory {name}"))?;
         }
         let (mut connection, ready) = schema::initialize(&path, version, seed_timestamp)?;
         jobs::recover(&mut connection)?;
@@ -474,9 +538,19 @@ impl WriterOwner {
             changed: Condvar::new(),
             capacity: limits.queued_writes,
             job_admission: Mutex::new(None),
+            #[cfg(feature = "desktop_rebuild")]
+            orphaned_source_leases: Mutex::new(Vec::new()),
+            #[cfg(feature = "desktop_rebuild")]
+            job_subscriptions: jobs::JobSubscriptions::new(),
+            #[cfg(feature = "desktop_rebuild")]
+            import_epoch: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(feature = "desktop_rebuild")]
+            import_quota: Mutex::new(None),
         });
         let worker = shared.clone();
         let mut catalog_state = catalog::State::new(lease.data_dir().to_owned());
+        #[cfg(feature = "desktop_rebuild")]
+        let mut publication_tokens = plan_publication::random_tokens();
         let join = thread::spawn(move || {
             loop {
                 #[cfg(not(feature = "desktop_rebuild"))]
@@ -550,6 +624,13 @@ impl WriterOwner {
                         continue;
                     }
                 };
+                #[cfg(feature = "desktop_rebuild")]
+                catalog_state.reap(std::mem::take(
+                    &mut *worker
+                        .orphaned_source_leases
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                ));
                 match envelope {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::NativeSecrets { command, reply } => {
@@ -567,6 +648,49 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::BuildGraph { command, reply } => {
                         reply.send(build_graph::execute(&mut connection, command, admission));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Publication { command, reply } => {
+                        let _ = reply.send(plan_publication::execute(
+                            &mut connection,
+                            command,
+                            publication_tokens.as_mut(),
+                            admission,
+                        ));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::RequiredUnits { command, reply } => {
+                        let _ = reply.send(required_units::execute(
+                            &mut connection,
+                            command,
+                            admission,
+                        ));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Uploads { command, reply } => {
+                        let changes_accounting = command.changes_accounting();
+                        let result =
+                            uploads::execute(&mut connection, &catalog_state, command, admission);
+                        if result.is_ok() && changes_accounting {
+                            worker.import_epoch.fetch_add(1, Ordering::AcqRel);
+                        }
+                        let _ = reply.send(result);
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Checkoff { command, reply } => {
+                        let _ = reply.send(checkoff_progress::execute(
+                            &mut connection,
+                            command,
+                            admission,
+                        ));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::WorkingDraft { command, reply } => {
+                        let _ = reply.send(working_drafts::execute(&mut connection, command));
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::WorkingDraftWrite { command } => {
+                        working_drafts::write(&mut connection, command, admission);
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
@@ -593,12 +717,30 @@ impl WriterOwner {
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ = reply.send(jobs::execute(
+                        // A cancel can settle an import's reservation.
+                        #[cfg(feature = "desktop_rebuild")]
+                        let cancels = matches!(
+                            &command,
+                            jobs::Command::User {
+                                operation: jobs::UserOperation::Cancel { .. },
+                                ..
+                            }
+                        );
+                        let result = jobs::execute(
                             &mut connection,
                             command,
                             effect_policy,
                             admission,
-                        ));
+                            #[cfg(feature = "desktop_rebuild")]
+                            &worker.job_subscriptions,
+                            #[cfg(feature = "desktop_rebuild")]
+                            &mut catalog_state,
+                        );
+                        #[cfg(feature = "desktop_rebuild")]
+                        if cancels && result.is_ok() {
+                            worker.import_epoch.fetch_add(1, Ordering::AcqRel);
+                        }
+                        let _ = reply.send(result);
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work, admission));
@@ -608,8 +750,15 @@ impl WriterOwner {
                         policy,
                         reply,
                     } => {
-                        let _ =
-                            reply.send(auth::execute(&mut connection, command, policy, admission));
+                        #[cfg(not(feature = "desktop_rebuild"))]
+                        let result = auth::execute(&mut connection, command, policy, admission);
+                        #[cfg(feature = "desktop_rebuild")]
+                        let result = jobs::authority_change(
+                            &mut connection,
+                            &worker.job_subscriptions,
+                            |connection| auth::execute(connection, command, policy, admission),
+                        );
+                        let _ = reply.send(result);
                     }
                     Envelope::WriterControl { control, reply } => {
                         let _ = reply.send(writer_control(&connection, control));
@@ -714,6 +863,8 @@ impl WriterOwner {
         if self.join.is_none() && self.lease.is_none() {
             return Ok(());
         }
+        #[cfg(feature = "desktop_rebuild")]
+        self.client.shared.job_subscriptions.stop_owner();
         {
             let mut queue = self
                 .client

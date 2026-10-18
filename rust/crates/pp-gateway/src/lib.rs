@@ -549,6 +549,18 @@ fn is_spa_client_path(path: &str) -> bool {
         .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+fn legal_summary_cors(response: &mut Response<Body>, origin: Option<&HeaderValue>) {
+    let headers = response.headers_mut();
+    headers.append("vary", HeaderValue::from_static("Origin"));
+    headers.insert(
+        "access-control-allow-credentials",
+        HeaderValue::from_static("true"),
+    );
+    if let Some(origin) = origin {
+        headers.insert("access-control-allow-origin", origin.clone());
+    }
+}
+
 async fn handle(
     State(state): State<Arc<GatewayState>>,
     mut request: Request<Body>,
@@ -723,10 +735,11 @@ async fn handle(
             } else {
                 None
             };
-            if let Some(response) = quota
+            if let Some(mut response) = quota
                 .as_ref()
                 .and_then(|quota| quota.rejection(request.method() == "HEAD"))
             {
+                legal_summary_cors(&mut response, origin);
                 return response.map(|body| {
                     Body::new(TrackedBody {
                         body,
@@ -756,6 +769,7 @@ async fn handle(
             if let Some(quota) = quota {
                 quota.apply(&mut response);
             }
+            legal_summary_cors(&mut response, origin);
             return response.map(|body| {
                 Body::new(TrackedBody {
                     body,

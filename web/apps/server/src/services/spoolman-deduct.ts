@@ -1,3 +1,4 @@
+import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 /**
  * spoolman-deduct.ts
  *
@@ -38,7 +39,7 @@ export async function deductSpoolmanFilamentAfterVerify(
   confirmedDecisions: PrintVerifyDecision[],
   totalUnitsInLink: number,
 ): Promise<void> {
-  if (!confirmedDecisions.length) return;
+  if (!confirmedDecisions.length || readSpoolmanAccess(repo, profileId).kind !== "allowed") return;
 
   const log = getLogger();
 
@@ -106,6 +107,7 @@ export async function deductSpoolmanFilamentAfterVerify(
     const deductMm = scaledMm * fraction;
     if (deductMm < 0.1) continue; // Skip negligible amounts
 
+    if (readSpoolmanAccess(repo, profileId).kind !== "allowed") return;
     try {
       await deductSpoolFilament(spoolmanIntegration.config, parsed.spoolId, deductMm);
       log.log("info", `spoolman-deduct: deducted ${Math.round(deductMm)} mm from spool #${parsed.spoolId}`);

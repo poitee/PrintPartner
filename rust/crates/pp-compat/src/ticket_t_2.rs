@@ -81,7 +81,7 @@ fn bundle(scratch: &Scratch) -> super::Bundle {
 }
 
 fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
-    let lease_file = std::fs::OpenOptions::new()
+    let storage_lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create_new(true)
@@ -89,14 +89,14 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         .unwrap();
     super::SpawnSpec {
         account_pin: super::DesktopAccountPin::Disabled,
-        bundle: bundle(scratch),
+        bundle: super::release::MeasuredBundle::unchecked(bundle(scratch)),
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
-        lease: "lease".into(),
-        lease_file,
+        setup_padding: String::new(),
+        storage_lock,
         port: 0,
         gateway_rate_limit: false,
-        record_child: ignore_child,
+        before_setup: Box::new(ignore_child),
     }
 }
 
@@ -107,7 +107,7 @@ fn shell_spec(scratch: &Scratch) -> super::ShellSpec {
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
         pidfile: scratch.pidfile(),
-        lease: "test".into(),
+        setup_padding: "test".into(),
         port: 0,
     }
 }
@@ -169,7 +169,7 @@ async fn ticket_t_3_drain_supervisor_shutdown_reports_graceful_exit() {
     assert!(live_pids(&scratch.pidfile()).is_empty());
 }
 
-const READY: &str = r#"exec /usr/bin/node -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); http.createServer((req,res)=>{res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:true,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
+const READY: &str = r#"exec "$NODE" -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); http.createServer((req,res)=>{res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:true,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
 
 #[tokio::test]
 async fn ticket_t_3_drain_supervisor_crash_after_disarm_is_not_graceful() {
@@ -582,7 +582,7 @@ async fn ticket_t_2_crash_signal_is_distinct_from_parent_cleanup() {
 async fn health_failure_shutdown(disarm_while_ready: bool) {
     let scratch = Scratch::new("health-facts");
     let mut spec = shell_spec(&scratch);
-    spec.script = r#"exec /usr/bin/node -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); let checks=0; http.createServer((req,res)=>{checks++; res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:checks===1,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
+    spec.script = r#"exec "$NODE" -e 'const http=require("node:http"); const input=require("node:readline").createInterface({input:process.stdin}); input.on("close",()=>process.exit(0)); input.once("line",line=>{const setup=JSON.parse(line); let checks=0; http.createServer((req,res)=>{checks++; res.setHeader("Content-Type","application/json"); res.end(JSON.stringify({ok:checks===1,version:"ticket-t-2-unreleased",release:{commit:"ticket-t-2-unreleased"}}));}).listen(setup.socket_path);});'"#;
     let supervisor =
         super::Supervisor::launch_shell(spec, super::SupervisorConfig::default()).unwrap();
     let mut status = supervisor.handle.status.clone();
@@ -1221,7 +1221,7 @@ async fn ticket_t_3_drain_repeated_eof_interrupts_mutation_without_resend() {
         let supervisor = super::Supervisor::launch_shell(
             super::ShellSpec {
                 script: concat!(
-                    "exec /usr/bin/node -e '",
+                    "exec \"$NODE\" -e '",
                     include_str!("fixtures/drain-upload.cjs"),
                     "'"
                 ),
@@ -1685,8 +1685,8 @@ async fn ticket_t_3_drain_shutdown_cancels_backpressured_startup_setup() {
     let scratch = Scratch::new("blocked-startup-setup");
     let supervisor = super::Supervisor::launch_shell(
         super::ShellSpec {
-            script: "exec /usr/bin/node -e 'setInterval(() => {}, 1e9)'",
-            lease: "x".repeat(1024 * 1024),
+            script: "exec \"$NODE\" -e 'setInterval(() => {}, 1e9)'",
+            setup_padding: "x".repeat(1024 * 1024),
             ..shell_spec(&scratch)
         },
         super::SupervisorConfig::default(),
@@ -1782,7 +1782,7 @@ async fn startup_owner_death_fixture() {
     let quote = |path: &Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\"'\"'"));
     let script = Box::leak(
         format!(
-            "exec /usr/bin/node {} {}",
+            "exec \"$NODE\" {} {}",
             quote(&node_fixture),
             quote(&scratch.root.join("node-execed"))
         )
@@ -1791,7 +1791,7 @@ async fn startup_owner_death_fixture() {
     let supervisor = super::Supervisor::launch_shell(
         super::ShellSpec {
             script,
-            lease: "x".repeat(1024 * 1024),
+            setup_padding: "x".repeat(1024 * 1024),
             ..shell_spec(&scratch)
         },
         super::SupervisorConfig::default(),
@@ -1827,7 +1827,7 @@ async fn startup_owner_death_fixture() {
 
 const MEASURED_STARTUP_STAGE: &str = "PP_COMPAT_MEASURED_STARTUP_STAGE";
 
-fn measured_startup_record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
+fn measured_startup_before_setup(data: &Path, pid: u32) -> anyhow::Result<()> {
     let root = data.parent().unwrap();
     super::record_test_pid(&root.join("pids"), pid)?;
     if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
@@ -1846,10 +1846,6 @@ fn measured_startup_record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
     startup_wait(Duration::from_secs(5), "measured Node did not stop", || {
         startup_process_state(pid) == Some('T')
     });
-    std::fs::write(
-        data.join(".desktop-owner.json"),
-        br#"{"child_process_identity":"gre448-startup-fixture"}"#,
-    )?;
     Ok(())
 }
 
@@ -1860,6 +1856,8 @@ async fn measured_startup_owner_death_fixture() {
     };
     let scratch = Scratch { root: root.into() };
     let bundle = measured_startup_bundle();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
     if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
         let executed = PathBuf::from(stage).join("web/startup-executed.json");
         if executed.exists() {
@@ -1869,12 +1867,10 @@ async fn measured_startup_owner_death_fixture() {
     let spec = super::SpawnSpec {
         bundle,
         gateway_rate_limit: false,
-        record_child: measured_startup_record_child,
-        lease: "x".repeat(1024 * 1024),
+        before_setup: Box::new(measured_startup_before_setup),
+        setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
-    super::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
-        .unwrap();
     let supervisor = super::Supervisor::start(spec).unwrap();
     let started = std::time::Instant::now();
     while recorded_pids(&scratch.pidfile()).is_empty() {
@@ -1884,7 +1880,7 @@ async fn measured_startup_owner_death_fixture() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    // On this current-thread runtime, reaching here means spawn yielded after record_child returned.
+    // On this current-thread runtime, reaching here means spawn yielded after before_setup returned.
     tokio::task::yield_now().await;
     let pid = recorded_pids(&scratch.pidfile());
     assert_eq!(pid.len(), 1);
@@ -1912,7 +1908,7 @@ async fn measured_startup_owner_death_fixture() {
 fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
     startup_owner_death_cycles(
         "ticket_t_2::startup_owner_death_fixture",
-        Path::new("/usr/bin/node"),
+        &crate::tests::node_binary(),
         Duration::from_secs(8),
     );
 }
@@ -1929,7 +1925,7 @@ fn measured_startup_bundle() -> super::Bundle {
             (stage.join("node"), stage.join("web"))
         }
         None => (
-            PathBuf::from("/usr/bin/node"),
+            crate::tests::node_binary(),
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../web"),
         ),
     };
@@ -1945,7 +1941,8 @@ fn measured_startup_bundle() -> super::Bundle {
 #[test]
 fn ticket_t_3_drain_measured_release_startup_parent_death() {
     let bundle = measured_startup_bundle();
-    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
     startup_owner_death_cycles(
         "ticket_t_2::measured_startup_owner_death_fixture",
         &bundle.node,
@@ -2064,7 +2061,7 @@ async fn ticket_t_3_drain_repeated_eof_joins_unread_response_body() {
         let supervisor = super::Supervisor::launch_shell(
             super::ShellSpec {
                 script: concat!(
-                    "exec /usr/bin/node -e '",
+                    "exec \"$NODE\" -e '",
                     include_str!("fixtures/drain-stream.cjs"),
                     "'"
                 ),
@@ -2164,12 +2161,8 @@ impl MeasuredLifecycleCycle {
         assert_eq!(recorded_pids(&self.scratch.pidfile()), vec![self.pid]);
     }
 
-    fn record_child(data: &Path, pid: u32) -> anyhow::Result<()> {
+    fn before_setup(data: &Path, pid: u32) -> anyhow::Result<()> {
         super::record_test_pid(&data.parent().unwrap().join("pids"), pid)?;
-        std::fs::write(
-            data.join(".desktop-owner.json"),
-            br#"{"child_process_identity":"gre448-lifecycle-fixture"}"#,
-        )?;
         Ok(())
     }
 }
@@ -2180,7 +2173,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
     use axum::{body::Body, http::Request};
 
     let bundle = measured_startup_bundle();
-    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    let assets = bundle.web_root.join("apps/web/dist");
     assert_eq!(bundle.runtime_version, "0.0.0-gre448-simulator-web");
     let mut completed: Vec<MeasuredLifecycleCycle> = Vec::new();
     for cycle in 0..3 {
@@ -2190,9 +2183,9 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
         let scratch = Scratch::new("measured-lifecycle");
         let events = scratch.root.join("data/lifecycle-events");
         let supervisor = super::Supervisor::start(super::SpawnSpec {
-            bundle: bundle.clone(),
+            bundle: super::release::verify_bundle(bundle.clone(), &assets).unwrap(),
             gateway_rate_limit: false,
-            record_child: MeasuredLifecycleCycle::record_child,
+            before_setup: Box::new(MeasuredLifecycleCycle::before_setup),
             ..release_spec(&scratch)
         })
         .unwrap();
@@ -2370,4 +2363,33 @@ fn ticket_t_3_drain_rate_limit_debits_require_current_generation_signature() {
         let (encoded, signature) = debit(generation, bucket, time);
         assert_eq!(endpoint.rate_limit_bucket(&encoded, &signature), None);
     }
+}
+
+#[tokio::test]
+async fn ticket_t_2_respawn_blocked_during_verification_starts_no_child() {
+    let scratch = Scratch::new("respawn-disarmed");
+    let bundle = measured_startup_bundle();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let executed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let recorded = executed.clone();
+    let spec = super::SpawnSpec {
+        bundle: super::release::verify_bundle(bundle, &assets).unwrap(),
+        before_setup: Box::new(move |_, _| {
+            recorded.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }),
+        ..release_spec(&scratch)
+    };
+    let logs = super::logs::Logs::open(spec.data_dir.join("logs")).unwrap();
+    let disarmed = CancellationToken::new();
+    disarmed.cancel();
+    let error = super::Process::spawn(&spec, &logs, &CancellationToken::new(), Some(&disarmed))
+        .await
+        .err()
+        .expect("a blocked respawn must not start a child");
+    assert_eq!(
+        error.to_string(),
+        "Compatibility restart blocked during release verification"
+    );
+    assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
 }

@@ -1,6 +1,6 @@
 # Live production observation
 
-You observe the current production desk loop from a client computer. Production runs on apps VM 111. Open `http://192.168.200.81:8080`. The print-partner MCP endpoint is `http://192.168.200.81:8080/api/v1/mcp`. Cloud agents cannot reach `192.168.200.80:8080` or `192.168.200.81:8080`. Do not report a cloud run as this checklist. Agent proof uses the isolated Docker launch in `SKILL.md`.
+You observe the current production desk loop from a client computer. Production runs on apps VM 111. Open `http://192.168.200.81:8080`. The server-side MCP route is `/api/v1/mcp` on that host. For a remote MCP client, use HTTPS or an authenticated tunnel as required by [the MCP connection guide](../../../../docs/assistant-mcp.md#move-the-production-connector-to-apps-vm-111). Do not send the API key over raw LAN HTTP. Do not report a cloud run as this checklist. Agent proof uses the isolated Docker launch in `SKILL.md`.
 
 ## Sub-features
 

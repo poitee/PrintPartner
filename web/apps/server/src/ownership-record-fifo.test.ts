@@ -89,18 +89,18 @@ describe("FIFO ownership records", () => {
     expect(admitWithinBound(owner, () => parentReservedCopy(dir))).toBe(false);
   });
 
-  it("refuses a FIFO desktop owner marker during desktop setup", () => {
+  it("requires the core lock without opening a FIFO legacy marker during desktop setup", () => {
     const dir = dataDir();
     const marker = join(dir, ".desktop-owner.json");
     fifo(marker);
     const setup = {
       version: 1, data_dir: dir, socket_path: join(dir, "pp.sock"), generation: "ab".repeat(16),
-      key: "cd".repeat(32), lease: "ef".repeat(32), parent_pid: process.ppid, port: 1, child_process_identity: "child",
+      key: "cd".repeat(32), parent_pid: process.ppid, port: 1,
     };
-    expect(() => admitWithinBound(marker, () => installDesktopContext(setup))).toThrow("Ownership record is not a regular file");
+    expect(() => admitWithinBound(marker, () => installDesktopContext(setup))).toThrow("Core storage lock required");
   });
 
-  it("keeps the socket when the desktop owner marker is a FIFO during orphaned shutdown", () => {
+  it("removes its private socket without opening a FIFO legacy marker during orphaned shutdown", () => {
     const dir = dataDir();
     const marker = join(dir, ".desktop-owner.json");
     fifo(marker);
@@ -108,6 +108,7 @@ describe("FIFO ownership records", () => {
     const socket = join(dir, "run", "pp.sock");
     writeFileSync(socket, "");
     admitWithinBound(marker, () => releaseOrphanedDesktopOwner({ data_dir: dir, socket_path: socket, parent_pid: process.ppid }));
-    expect(existsSync(socket)).toBe(true);
+    expect(existsSync(socket)).toBe(false);
+    expect(existsSync(join(dir, "run"))).toBe(false);
   });
 });

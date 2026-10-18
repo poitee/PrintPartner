@@ -60,9 +60,9 @@ through the public API. No production data or mocked backend is used.
 ## Cleanup
 
 The helper always terminates only its own server. A successful run requires a
-zero shutdown exit, removal of the owner marker and private socket directory,
-and reacquisition of the data lock. It deletes its credentials and disposable
-data; the captured transcript survives. Confirm `test -s /tmp/pp-verify-rust.log`
+zero shutdown exit, removal of the `.desktop-lease` compatibility file and private
+socket directory, and reacquisition of the advisory `printpartner.lock`. The lock
+file stays on disk. The helper deletes its credentials and disposable data; the captured transcript survives. Confirm `test -s /tmp/pp-verify-rust.log`
 after the run.
 
 ## Helpers

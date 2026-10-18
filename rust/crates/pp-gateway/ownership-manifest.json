@@ -349,6 +349,10 @@
         ]
       },
       {
+        "operation": "tool.check_hardware_interfaces",
+        "resources": []
+      },
+      {
         "operation": "tool.get_job_status",
         "resources": []
       },
@@ -489,6 +493,156 @@
           {
             "kind": "file",
             "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.compare_source_revisions",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.audit_source_provenance",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.analyze_stl_mesh",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.get_kit_catalog",
+        "resources": [
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          }
+        ]
+      },
+      {
+        "operation": "tool.get_plan_snapshot",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "parts"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "plan_accepted_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_inputs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          },
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          }
+        ]
+      },
+      {
+        "operation": "tool.get_plan_option_groups",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          },
+          {
+            "kind": "file",
+            "name": "path-hints"
+          },
+          {
+            "kind": "file",
+            "name": "community-manifests"
           }
         ]
       }
@@ -848,16 +1002,12 @@
       "startup.sweepExpiredTransferArtifacts",
       "tool.add_addon",
       "tool.analyze_build_request",
-      "tool.analyze_stl_mesh",
       "tool.apply_build_recipe",
       "tool.apply_stack_preset",
       "tool.archive_plan",
       "tool.audit_build_coverage",
-      "tool.audit_source_provenance",
-      "tool.check_hardware_interfaces",
       "tool.check_stack_compatibility",
       "tool.compare_plans",
-      "tool.compare_source_revisions",
       "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
       "tool.duplicate_plan",
@@ -868,12 +1018,9 @@
       "tool.get_build_workflow",
       "tool.get_farm_status",
       "tool.get_interaction_graph",
-      "tool.get_kit_catalog",
       "tool.get_plan_checkoff",
       "tool.get_plan_draft",
-      "tool.get_plan_option_groups",
       "tool.get_plan_review",
-      "tool.get_plan_snapshot",
       "tool.get_print_stats",
       "tool.get_printer_checkoff",
       "tool.get_remaining",
@@ -932,7 +1079,19 @@
     },
     "source-covers": {
       "node_reads": 1,
-      "rust_writes": null
+      "rust_writes": "none"
+    },
+    "kit-catalog": {
+      "node_reads": 1,
+      "rust_writes": "none"
+    },
+    "path-hints": {
+      "node_reads": 1,
+      "rust_writes": "none"
+    },
+    "community-manifests": {
+      "node_reads": 1,
+      "rust_writes": "none"
     }
   }
 }

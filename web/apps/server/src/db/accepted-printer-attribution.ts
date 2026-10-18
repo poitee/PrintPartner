@@ -54,7 +54,7 @@ export type AcceptedPrinterAttribution = Readonly<{
   fallback: "unused" | "used" | "recognized_observation";
 }>;
 
-export type AcceptedPrinterLinkMetadata = Readonly<{
+type AcceptedPrinterLinkMetadata = Readonly<{
   integrationId: string;
   printerId: string;
   hostName: string;

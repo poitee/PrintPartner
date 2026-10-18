@@ -30,7 +30,7 @@ type MaterializeDirectExport3mfCommand = Readonly<{
   tokens: readonly string[];
 }>;
 
-export type MaterializedDirectExport3mf = Readonly<{
+type MaterializedDirectExport3mf = Readonly<{
   kind: "materialized";
   basis: AcceptedPlanBasis;
   filename: string;

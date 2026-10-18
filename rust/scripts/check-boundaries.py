@@ -3,7 +3,9 @@ from pathlib import Path
 import shutil
 import subprocess
 
-ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-storage": {"pp-domain"}, "pp-core": {"pp-gateway", "pp-compat", "pp-storage", "pp-source", "pp-net"}, "pp-gateway": {"pp-compat", "pp-drivers", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+ALLOWED = {"pp-api": {"pp-storage"}, "pp-source": set(), "pp-storage": {"pp-domain", "pp-contracts"}, "pp-core": {"pp-gateway", "pp-compat", "pp-storage", "pp-source", "pp-net", "pp-api"}, "pp-gateway": {"pp-compat", "pp-drivers", "pp-net"}, "pp-compat": set(), "pp-server": {"pp-core"}, "pp-contracts": {"pp-api-types"}, "pp-desktop": {"pp-core"}, "pp-domain": set(), "pp-api-types": {"pp-domain"}, "pp-net": set(), "pp-drivers": {"pp-net", "pp-api-types"}, "pp-services": set()}
+GATED = {"pp-core": {"pp-source", "pp-net", "pp-api"}, "pp-storage": {"pp-domain", "pp-contracts"}}
+assert all(GATED[package] <= ALLOWED[package] for package in GATED), GATED
 
 
 def rebuild_edge_is_gated(package, dependency):
@@ -32,7 +34,7 @@ def violations(packages):
             for dependency in package["dependencies"]
             if dependency["name"].startswith("pp-") and (
                 dependency["name"] not in ALLOWED[package["name"]]
-                or (package["name"] == "pp-core" and dependency["name"] in {"pp-source", "pp-net"}
+                or (dependency["name"] in GATED.get(package["name"], set())
                     and not rebuild_edge_is_gated(package, dependency))
             )]
 
@@ -57,14 +59,16 @@ def planted_edges_rejected():
         ([{"name": "pp-contracts", "dependencies": [{"name": "pp-gateway"}]}], [("pp-contracts", "pp-gateway")]),
         ([{"name": "pp-domain", "dependencies": [{"name": "pp-net"}]}], [("pp-domain", "pp-net")]),
     )
-    source = {"name": "pp-core", "dependencies": [{"name": "pp-source", "optional": True}],
-              "features": {"default": [], "desktop_rebuild": ["dep:pp-source", "pp-source/desktop_rebuild"]}}
-    ungated = {**source, "dependencies": [{"name": "pp-source", "optional": False}]}
-    default_on = {**source, "features": {**source["features"], "default": ["dep:pp-source"]}}
-    alternate = {**source, "features": {**source["features"], "other": ["pp-source/other"]}}
-    transitive = {**source, "features": {**source["features"], "default": ["desktop_rebuild"]}}
-    cases += (([transitive], [("pp-core", "pp-source")]), ([alternate], [("pp-core", "pp-source")]), ([source], []), ([ungated], [("pp-core", "pp-source")]),
-              ([default_on], [("pp-core", "pp-source")]))
+    for package, dependencies in GATED.items():
+        for dependency in sorted(dependencies):
+            gated = {"name": package, "dependencies": [{"name": dependency, "optional": True}],
+                     "features": {"default": [], "desktop_rebuild": [f"dep:{dependency}", f"{dependency}/desktop_rebuild"]}}
+            refused = [(package, dependency)]
+            cases += (([gated], []),
+                      ([{**gated, "dependencies": [{"name": dependency, "optional": False}]}], refused),
+                      ([{**gated, "features": {**gated["features"], "default": [f"dep:{dependency}"]}}], refused),
+                      ([{**gated, "features": {**gated["features"], "default": ["desktop_rebuild"]}}], refused),
+                      ([{**gated, "features": {**gated["features"], "other": [f"{dependency}/other"]}}], refused))
     return all(violations(packages) == expected for packages, expected in cases)
 
 

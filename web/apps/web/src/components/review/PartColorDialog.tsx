@@ -1,8 +1,12 @@
 import { useId, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "../../queries/keys";
 import type { ReviewPart } from "../../api/endpoints/planManifests";
 import { useFilamentCatalogQuery } from "../../queries/filaments";
 import { usePatchPartMutation } from "../../queries/planReview";
 import { useRoleFilamentsQuery } from "../../queries/roleFilaments";
+import { useSpoolmanWorkflowAccess } from "../../hooks/useSpoolmanWorkflowAccess";
+import { hasSpoolmanAssignment } from "../../lib/spoolmanIds";
 import { catalogColorGroups } from "../FilamentSwatch";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -15,9 +19,12 @@ export default function PartColorDialog({ part, profileId, onClose }: {
   onClose: () => void;
 }) {
   const id = useId();
+  const client = useQueryClient();
+  const [accessError, setAccessError] = useState<string | null>(null);
   const mutation = usePatchPartMutation(profileId);
   const rolesQuery = useRoleFilamentsQuery(profileId);
-  const catalogQuery = useFilamentCatalogQuery();
+  const catalogQuery = useFilamentCatalogQuery({ profileId });
+  const spoolmanAccess = useSpoolmanWorkflowAccess(profileId);
   const options = rolesQuery.data && catalogQuery.data
     ? { roles: rolesQuery.data, catalog: catalogQuery.data }
     : null;
@@ -27,10 +34,24 @@ export default function PartColorDialog({ part, profileId, onClose }: {
     if (catalogQuery.isError) void catalogQuery.refetch();
   };
   const [selection, setSelection] = useState("current");
-  const [hex, setHex] = useState(part.filament_hex ?? "#808080");
+  const [enteredHex, setEnteredHex] = useState<string | null>(null);
+
+  const isSpoolmanAssigned = hasSpoolmanAssignment(part);
+  const liveColor = catalogQuery.data?.spoolman_colors?.find((color) => color.id === part.filament_color_id);
+  const currentDisplay = isSpoolmanAssigned
+    ? (part.filament_custom_hex || liveColor?.combo_label || liveColor?.display_name
+      || (!spoolmanAccess.gated && part.filament_display) || part.filament_color_id || "Unassigned")
+    : (part.filament_display || part.filament_hex || "Unassigned");
+  const defaultHex = part.filament_custom_hex
+    ?? (isSpoolmanAssigned ? liveColor?.hex : part.filament_hex) ?? "#808080";
+  const hex = enteredHex ?? defaultHex;
+
+  const allowedRoles = (options?.roles ?? []).filter(
+    (role) => spoolmanAccess.allowed || !hasSpoolmanAssignment(role),
+  );
 
   const choices = new Map<string, ColorChoice>();
-  options?.roles.forEach((role, index) => choices.set(`build:${index}`, { colorId: role.filament_color_id, hex: role.filament_custom_hex ?? role.filament_hex }));
+  allowedRoles.forEach((role) => choices.set(`build:${role.role}`, { colorId: role.filament_color_id, hex: role.filament_custom_hex ?? role.filament_hex }));
   const groups = catalogColorGroups(options?.catalog ?? null);
   groups.forEach((group) => group.colors.forEach((color) => choices.set(`catalog:${color.id}`, { colorId: color.id, hex: null })));
   const selected = choices.get(selection);
@@ -39,13 +60,22 @@ export default function PartColorDialog({ part, profileId, onClose }: {
   const save = async () => {
     const choice = selection === "custom" ? { colorId: null, hex: hex.trim() } : selected;
     if (!choice) return;
+    const refreshAccess = () => { void client.invalidateQueries({ queryKey: queryKeys.planFeatures(profileId) }); };
+    if (hasSpoolmanAssignment({ filament_color_id: choice.colorId }) && !spoolmanAccess.currentAccessAllowed()) {
+      refreshAccess();
+      setAccessError("Spoolman access changed. Choose another color or try again.");
+      return;
+    }
+    setAccessError(null);
     try {
       await mutation.mutateAsync({ partId: part.id, body: {
         filament_color_id: choice.colorId,
         filament_custom_hex: choice.colorId ? null : choice.hex,
       } });
       onClose();
-    } catch { /* The mutation error stays in the dialog for retry. */ }
+    } catch {
+      if (hasSpoolmanAssignment({ filament_color_id: choice.colorId })) refreshAccess();
+    }
   };
 
   return <Dialog open onOpenChange={(open) => { if (!open && !mutation.isPending) onClose(); }}>
@@ -54,27 +84,28 @@ export default function PartColorDialog({ part, profileId, onClose }: {
         <DialogTitle>Change part color</DialogTitle>
         <DialogDescription className="break-all">{part.filename}. This changes only this part, not its {part.role || "primary"} role or the other parts.</DialogDescription>
       </DialogHeader>
-      <p className="text-sm">Current color: {part.filament_display || part.filament_hex || "Unassigned"}</p>
+      <p className="text-sm">Current color: {currentDisplay}</p>
       {loadError ? <div role="alert">Could not load colors. <Button variant="outline" onClick={retryLoad}>Retry</Button></div> : !options ? <p role="status">Loading colors…</p> : null}
       <fieldset disabled={mutation.isPending} className="space-y-3 min-w-0">
         <label htmlFor={`${id}-choice`} className="block text-sm font-medium">Part color</label>
         <select id={`${id}-choice`} className="w-full min-w-0 rounded border bg-background p-2" value={selection} onChange={(event) => setSelection(event.target.value)}>
           <option value="current">Keep current color</option>
-          <optgroup label="Build colors">
-            {options?.roles.map((role, index) => <option key={role.role} value={`build:${index}`}>{role.role}: {role.filament_display || role.filament_hex || "Unassigned"}</option>)}
-          </optgroup>
+          {allowedRoles.length > 0 && <optgroup label="Build colors">
+            {allowedRoles.map((role) => <option key={role.role} value={`build:${role.role}`}>{role.role}: {role.filament_display || role.filament_hex || "Unassigned"}</option>)}
+          </optgroup>}
           {groups.map((group) => <optgroup key={group.label} label={group.label}>{group.colors.map((color) => <option key={color.id} value={`catalog:${color.id}`}>{color.combo_label || color.display_name}</option>)}</optgroup>)}
           <option value="custom">Custom color…</option>
         </select>
         {selection === "custom" && <div className="space-y-2">
           <label htmlFor={`${id}-hex`} className="block text-sm">Hex color</label>
           <div className="flex gap-2">
-            <input aria-label="Pick custom color" type="color" value={customValid ? `#${hex.trim().replace(/^#/, "")}` : "#808080"} onChange={(event) => setHex(event.target.value)} />
-            <input id={`${id}-hex`} className="min-w-0 rounded border bg-background p-2" value={hex} onChange={(event) => setHex(event.target.value)} placeholder="#RRGGBB" />
+            <input aria-label="Pick custom color" type="color" value={customValid ? `#${hex.trim().replace(/^#/, "")}` : "#808080"} onChange={(event) => setEnteredHex(event.target.value)} />
+            <input id={`${id}-hex`} className="min-w-0 rounded border bg-background p-2" value={hex} onChange={(event) => setEnteredHex(event.target.value)} placeholder="#RRGGBB" />
           </div>
           {!customValid && <p role="alert">Enter a six-digit hex color, such as #FF6600.</p>}
         </div>}
         <p className="text-xs text-muted-foreground">Build colors copy the current color of that role. Later changes to that role apply to all its parts.</p>
+        {accessError && <p role="alert" className="text-sm text-destructive">{accessError}</p>}
         {mutation.isError && <p role="alert" className="text-sm text-destructive">{mutation.error instanceof Error ? mutation.error.message : "Could not save this color. Try again."}</p>}
         <div className="flex gap-2"><Button disabled={!canSave || mutation.isPending} onClick={() => void save()}>Save part color</Button><Button variant="outline" onClick={onClose}>Cancel</Button></div>
       </fieldset>

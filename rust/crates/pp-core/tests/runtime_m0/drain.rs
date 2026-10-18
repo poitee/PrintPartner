@@ -7,6 +7,9 @@ use pp_gateway::ownership::cutover::{CUTOVER_FILE, CutoverRefusal};
 use serde_json::json;
 use std::{fs, path::PathBuf, time::Duration};
 
+#[path = "ticket_t_3_drain_compression.rs"]
+mod compression;
+
 async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
     if std::env::var("PP_DRAIN_CASE").ok().as_deref() == Some(name) {
         return Some(PathBuf::from(std::env::var_os("PP_DRAIN_DATA").unwrap()));
@@ -95,7 +98,7 @@ async fn ticket_t_3_drain_runtime_cancels_rejects_and_restarts() {
         .await
         .unwrap();
     assert!(handle.track_shutdown_work().is_err());
-    let lock = fs::File::open(data.join(".desktop.lock")).unwrap();
+    let lock = fs::File::open(data.join("printpartner.lock")).unwrap();
     assert!(lock.try_lock_exclusive().is_err());
     assert_eq!(
         request(
@@ -178,7 +181,7 @@ async fn tracked_timeout(data: PathBuf, cutover: bool) {
     assert!(handle.track_shutdown_work().is_err());
     assert!(work.cancellation().is_cancelled());
     assert!(!data.join(CUTOVER_FILE).exists());
-    let lock = fs::File::open(data.join(".desktop.lock")).unwrap();
+    let lock = fs::File::open(data.join("printpartner.lock")).unwrap();
     assert!(lock.try_lock_exclusive().is_err());
     let error = CoreRuntime::start(launch(data.clone()))
         .await
@@ -876,5 +879,368 @@ async fn ticket_t_3_drain_legal_shared_rate_limit_parity() {
             assert_clean(&runtime.shutdown().await, child);
             break;
         }
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn legal_representation_request(
+    origin: &str,
+    cookie: &str,
+    method: &str,
+    path: &str,
+    with_origin: bool,
+    encoding: Option<&str>,
+    accept: Option<&str>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    use http_body_util::BodyExt;
+    let socket = tokio::net::TcpStream::connect(origin.strip_prefix("http://").unwrap())
+        .await
+        .unwrap();
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(socket))
+            .await
+            .unwrap();
+    tokio::spawn(async move { connection.await.unwrap() });
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("host", origin.strip_prefix("http://").unwrap())
+        .header("cookie", cookie);
+    if with_origin {
+        request = request.header("origin", origin);
+    }
+    if let Some(encoding) = encoding {
+        request = request.header("accept-encoding", encoding);
+    }
+    if let Some(accept) = accept {
+        request = request.header("accept", accept);
+    }
+    let response = sender
+        .send_request(request.body(axum::body::Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let (head, body) = response.into_parts();
+    (
+        head.status,
+        head.headers,
+        body.collect().await.unwrap().to_bytes().to_vec(),
+    )
+}
+
+#[cfg(feature = "desktop_rebuild")]
+const LEGAL_ENCODINGS: [Option<&str>; 12] = [
+    None,
+    Some(""),
+    Some("identity"),
+    Some("identity;q=0"),
+    Some("gzip"),
+    Some("br"),
+    Some("br, gzip"),
+    Some("gzip;q=0.8, br;q=0.2"),
+    Some("*"),
+    Some("deflate"),
+    Some("gzip;q=0, br;q=0, identity;q=0"),
+    Some("*;q=0"),
+];
+
+#[cfg(feature = "desktop_rebuild")]
+const LEGAL_ACCEPTS: [Option<&str>; 4] = [
+    None,
+    Some("text/plain"),
+    Some("application/json"),
+    Some("*/*;q=0"),
+];
+
+#[cfg(feature = "desktop_rebuild")]
+const LEGAL_REPRESENTATION_FIXTURES: usize = LEGAL_ENCODINGS.len() * LEGAL_ACCEPTS.len() * 16;
+
+#[cfg(feature = "desktop_rebuild")]
+async fn legal_representation_matrix(
+    origin: &str,
+    cookie: &str,
+) -> Vec<std::collections::BTreeMap<String, String>> {
+    for method in ["GET", "HEAD"] {
+        for path in ["/legal/summary", "/api/v1/legal/summary"] {
+            let (status, headers, _) = request(
+                origin,
+                path,
+                method,
+                Some(cookie),
+                None,
+                Some("http://foreign.invalid"),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert!(!headers.contains_key("access-control-allow-origin"));
+        }
+    }
+    let mut fixtures = Vec::new();
+    let successful = LEGAL_REPRESENTATION_FIXTURES / 2;
+    for status in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+        for method in ["GET", "HEAD"] {
+            for path in ["/legal/summary", "/api/v1/legal/summary"] {
+                for with_origin in [true, false] {
+                    for encoding in LEGAL_ENCODINGS {
+                        for accept in LEGAL_ACCEPTS {
+                            let (actual, headers, body) = legal_representation_request(
+                                origin,
+                                cookie,
+                                method,
+                                path,
+                                with_origin,
+                                encoding,
+                                accept,
+                            )
+                            .await;
+                            assert_eq!(actual, status, "{method} {path}, Origin={with_origin}");
+                            assert_eq!(
+                                headers
+                                    .get("access-control-allow-origin")
+                                    .map(|v| v.to_str().unwrap()),
+                                with_origin.then_some(origin),
+                                "{status} {method} {path}, Origin={with_origin}"
+                            );
+                            assert_eq!(headers["access-control-allow-credentials"], "true");
+                            let vary: Vec<_> = headers
+                                .get_all("vary")
+                                .iter()
+                                .flat_map(|v| v.to_str().unwrap().split(','))
+                                .map(str::trim)
+                                .collect();
+                            assert!(
+                                !headers.contains_key("content-encoding"),
+                                "{encoding:?} {headers:?}"
+                            );
+                            assert_eq!(
+                                vary.iter()
+                                    .map(|token| token.to_ascii_lowercase())
+                                    .collect::<std::collections::BTreeSet<_>>(),
+                                std::collections::BTreeSet::from(["origin".to_owned()])
+                            );
+                            assert_eq!(headers["cache-control"], "no-store");
+                            assert_eq!(headers["x-ratelimit-limit"], "1000");
+                            let remaining = if status == StatusCode::OK {
+                                999 - fixtures.len()
+                            } else {
+                                0
+                            };
+                            assert_eq!(headers["x-ratelimit-remaining"], remaining.to_string());
+                            let reset: u64 = headers["x-ratelimit-reset"]
+                                .to_str()
+                                .unwrap()
+                                .parse()
+                                .unwrap();
+                            assert!((1..=60).contains(&reset));
+                            let expected = if status == StatusCode::OK {
+                                assert_eq!(headers["content-type"], "text/plain; charset=utf-8");
+                                assert!(!headers.contains_key("retry-after"));
+                                include_bytes!("../../../../../web/apps/server/src/data/legal/LICENSE-SUMMARY.md").to_vec()
+                            } else {
+                                assert_eq!(
+                                    headers["content-type"],
+                                    "application/json; charset=utf-8"
+                                );
+                                assert_eq!(headers["retry-after"], reset.to_string());
+                                let after = match reset {
+                                    60 => "1 minute".to_owned(),
+                                    1 => "1 second".to_owned(),
+                                    n => format!("{n} seconds"),
+                                };
+                                format!(r#"{{"statusCode":429,"error":"Too Many Requests","message":"Rate limit exceeded, retry in {after}"}}"#).into_bytes()
+                            };
+                            assert_eq!(headers["content-length"], expected.len().to_string());
+                            if method == "HEAD" {
+                                assert!(body.is_empty());
+                            } else {
+                                assert_eq!(
+                                    body, expected,
+                                    "{status} {method} {path} {encoding:?} {accept:?}"
+                                );
+                            }
+                            let metadata = headers
+                                .iter()
+                                .filter(|(name, _)| {
+                                    name.as_str().starts_with("access-control-")
+                                        || matches!(
+                                            name.as_str(),
+                                            "vary"
+                                                | "content-type"
+                                                | "content-encoding"
+                                                | "cache-control"
+                                                | "x-ratelimit-limit"
+                                                | "x-ratelimit-remaining"
+                                        )
+                                })
+                                .map(|(name, value)| {
+                                    let value = if name.as_str() == "access-control-allow-origin" {
+                                        "<request-origin>".to_owned()
+                                    } else {
+                                        value.to_str().unwrap().to_owned()
+                                    };
+                                    (name.to_string(), value)
+                                })
+                                .collect();
+                            fixtures.push(metadata);
+                        }
+                    }
+                }
+            }
+        }
+        if status == StatusCode::OK {
+            for n in successful..1000 {
+                assert_eq!(
+                    legal_representation_request(
+                        origin,
+                        cookie,
+                        "GET",
+                        "/legal/summary",
+                        false,
+                        None,
+                        None
+                    )
+                    .await
+                    .0,
+                    StatusCode::OK,
+                    "quota filler {n}"
+                );
+            }
+        }
+    }
+    assert_eq!(fixtures.len(), successful * 2);
+    fixtures
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn ticket_t_3_drain_legal_summary_representation_parity() {
+    let Some(data) =
+        isolated_case("ticket_t_3_drain_legal_summary_representation_parity", true).await
+    else {
+        return;
+    };
+    const LEGAL: &str = "http:GET /legal/summary current";
+    let index = pp_gateway::ownership::manifest::admit_bundled_manifest().unwrap();
+    let receipt = |passed, failed| {
+        json!({
+            "schema":"pp-operation-parity-v1", "operation":LEGAL,
+            "manifest_sha256":index.digest(), "fixtures":LEGAL_REPRESENTATION_FIXTURES, "passed":passed, "failed":failed,
+        })
+        .to_string()
+    };
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let cookie = bootstrap(&mut runtime).await;
+    let golden = legal_representation_matrix(runtime.origin(), &cookie).await;
+    println!(
+        "legal representation Node: {LEGAL_REPRESENTATION_FIXTURES} passed; 0 failed; allowed/absent Origin, GET/HEAD, both aliases, 200/429"
+    );
+    let (returned, refusal) = *runtime
+        .shutdown_with_cutover(LEGAL, &receipt(LEGAL_REPRESENTATION_FIXTURES - 1, 1))
+        .await
+        .expect_err("incomplete representation parity must refuse cutover");
+    assert!(matches!(refusal, CutoverRefusal::ParityFailures { .. }));
+    assert!(!data.join(CUTOVER_FILE).exists());
+
+    let candidate_data = data.join("representation-candidate");
+    fs::create_dir(&candidate_data).unwrap();
+    let plan = pp_gateway::ownership::cutover::plan(
+        Some(&index),
+        &pp_gateway::ownership::cutover::OperationOwners::node_only(),
+        LEGAL,
+        &receipt(LEGAL_REPRESENTATION_FIXTURES, 0),
+    )
+    .unwrap();
+    assert!(matches!(
+        plan.commit(
+            &candidate_data,
+            pp_gateway::ownership::cutover::DrainEvidence {
+                tracked_idle: true,
+                gateway_idle: true,
+                compat: Some(CompatExit::Graceful),
+            }
+        ),
+        pp_gateway::ownership::cutover::CutoverReceipt::Committed { .. }
+    ));
+    let (owners, _) =
+        pp_gateway::ownership::cutover::recover(&candidate_data, Some(&index)).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut candidate = pp_gateway::Gateway::start(
+        listener,
+        PathBuf::new(),
+        pp_compat::CompatHandle::unpublished(),
+        &owners,
+    )
+    .unwrap();
+    let target = candidate.take_launch_target().unwrap().into_url();
+    let (status, headers, _) = request(
+        candidate.origin(),
+        target.strip_prefix(candidate.origin()).unwrap(),
+        "GET",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let cookie = headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    let actual = legal_representation_matrix(candidate.origin(), cookie).await;
+    assert_eq!(
+        actual, golden,
+        "candidate representation metadata differs from Node"
+    );
+    candidate.stop().await.unwrap();
+    assert!(!data.join(CUTOVER_FILE).exists());
+    println!(
+        "legal representation candidate: {LEGAL_REPRESENTATION_FIXTURES} passed; 0 failed; desktop authority still Node"
+    );
+
+    let child = pid(&returned);
+    let (shutdown, cutover) = returned
+        .shutdown_with_cutover(LEGAL, &receipt(actual.len(), 0))
+        .await
+        .unwrap_or_else(|e| panic!("{:?}", e.1));
+    assert_clean(&shutdown, child);
+    assert!(matches!(
+        cutover,
+        pp_gateway::ownership::cutover::CutoverReceipt::Committed {
+            participants: 4,
+            ..
+        }
+    ));
+    let record = fs::read(data.join(CUTOVER_FILE)).unwrap();
+    for restart in 1..=2 {
+        let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+        let child = pid(&runtime);
+        let cookie = bootstrap(&mut runtime).await;
+        struct Resume(u32);
+        impl Drop for Resume {
+            fn drop(&mut self) {
+                unsafe { libc::kill(self.0 as i32, libc::SIGCONT) };
+            }
+        }
+        assert_eq!(unsafe { libc::kill(child as i32, libc::SIGSTOP) }, 0);
+        let resume = Resume(child);
+        let actual = tokio::time::timeout(
+            Duration::from_secs(30),
+            legal_representation_matrix(runtime.origin(), &cookie),
+        )
+        .await
+        .expect("Rust representation matrix must not wait for stopped Node");
+        drop(resume);
+        assert_eq!(
+            actual, golden,
+            "recovered representation metadata differs from Node"
+        );
+        assert_clean(&runtime.shutdown().await, child);
+        assert_eq!(fs::read(data.join(CUTOVER_FILE)).unwrap(), record);
+        println!(
+            "legal representation restart {restart}: {LEGAL_REPRESENTATION_FIXTURES} passed; 0 failed; Node stopped; authority unchanged"
+        );
     }
 }

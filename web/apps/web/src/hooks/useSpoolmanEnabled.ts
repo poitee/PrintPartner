@@ -28,8 +28,8 @@ export function isSpoolmanIntegrationConfigured(
   return status !== "disabled" && status !== "not_found";
 }
 
-export function useSpoolmanEnabled(): SpoolmanCatalogState {
-  const catalogQuery = useFilamentCatalogQuery();
+export function useSpoolmanEnabled(profileId: number): SpoolmanCatalogState {
+  const catalogQuery = useFilamentCatalogQuery({ profileId });
   const catalog = catalogQuery.data ?? null;
   const integrationId = catalog?.default_spoolman_integration_id?.trim() ?? null;
   const enabled = isSpoolmanIntegrationActive(catalog);

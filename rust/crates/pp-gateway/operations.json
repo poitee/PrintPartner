@@ -723,21 +723,21 @@
       "method": "GET",
       "path": "/api/v1/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "HEAD",
       "path": "/api/v1/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "GET",
@@ -4873,21 +4873,21 @@
       "method": "GET",
       "path": "/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "HEAD",
       "path": "/legal/summary",
       "owner": "compat",
-      "effect": "external_effect",
+      "effect": "observation",
       "operation": "GET /legal/summary current",
       "contract": "current",
       "websocket": false,
-      "effect_reason": "Conservatively guarded GET/HEAD: no audited pure-read exception; provider or local effects may occur"
+      "effect_reason": "routes/legal.ts registerLegalRoutes reads LICENSE-SUMMARY.md; Rust serves the same bundled document without mutations or provider calls"
     },
     {
       "method": "GET",

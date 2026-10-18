@@ -42,6 +42,8 @@ defaults:
     shell: bash
 
 jobs:
+  # Unit tests, clippy and fmt run in Rust cross-OS. This job keeps the proofs
+  # that need the built server: lifecycle evidence, Python drivers and smoke tests.
   runtime:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -97,36 +99,25 @@ jobs:
           cargo build --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
           python3 rust/scripts/check-boundaries.py --self-test 2>&1 | tee "$PP_EVIDENCE/boundaries.log"
           python3 rust/scripts/check-domain-deps.py --self-test 2>&1 | tee "$PP_EVIDENCE/domain-deps.log"
-          cargo fmt --manifest-path rust/Cargo.toml --all --check 2>&1 | tee "$PP_EVIDENCE/fmt.log"
           git diff --exit-code -- rust/Cargo.lock web/package-lock.json
       - name: Run eight real core lifecycle tests
         run: |
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
-      - name: Run backend units and lint
-        run: |
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage 2>&1 | tee "$PP_EVIDENCE/pp-storage-tests.log"
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
-          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
       - name: Prove measured compat repeated EOF cleanup
         run: |
           python3 rust/scripts/prove-measured-startup-death.py --scenario lifecycle --evidence "$PP_EVIDENCE/measured-lifecycle" 2>&1 | tee "$PP_EVIDENCE/measured-lifecycle-driver.log"
       - name: Prove built backend repeated EOF cleanup
         run: |
           python3 rust/tests/built_backend_lifecycle.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-backend-lifecycle" 2>&1 | tee "$PP_EVIDENCE/built-backend-lifecycle.log"
+      - name: Prove built backend listens only on its private socket
+        run: |
+          python3 rust/tests/built_backend_listeners.py --node /usr/bin/node --evidence "$PP_EVIDENCE/built-backend-listeners" 2>&1 | tee "$PP_EVIDENCE/built-backend-listeners.log"
       - name: Prove built backend interrupted upload never resends
         run: |
           python3 rust/tests/built_backend_upload.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-backend-upload" 2>&1 | tee "$PP_EVIDENCE/built-backend-upload.log"
       - name: Prove full built backend startup parent-death cleanup
         run: |
           python3 rust/scripts/prove-built-startup-death.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-startup" 2>&1 | tee "$PP_EVIDENCE/built-startup-driver.log"
-      - name: Require nonzero API and storage test evidence
-        run: |
-          for suite in pp-api-http pp-storage-tests; do
-            passed="$(awk '/^test result: ok\./ { passed += $4 } END { print passed + 0 }' "$PP_EVIDENCE/$suite.log")"
-            test "$passed" -gt 0
-            echo "$suite: $passed tests passed" | tee -a "$PP_EVIDENCE/test-counts.txt" "$GITHUB_STEP_SUMMARY"
-          done
       - name: Verify authenticated workflow and process cleanup
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"

@@ -1,0 +1,71 @@
+{
+  "baseline_commit": "2f24c9b42ba637bb13138837356099b32f5704aa",
+  "harness_sha256": "0812f4fcb2c113f088fd97804ba470b028690c0d7b2035280c41fc597a0f0443",
+  "output_sha256": "d6a21ee8ecb65ba02620b80b9a7cb0ac92c85bfa8e2ce78aa5b888b83249a98c",
+  "legacy": {
+    "schema": 1,
+    "cases": {
+      "files": {
+        "input": {
+          "utf8": "{\"kind\":\"files\",\"paths\":[\"part.stl\"]}",
+          "sha256": "9e452dbeee163ed8bc383b6bd32b1ba8b0d496e94cc12a794a22bf6477a9cba1"
+        },
+        "admission": {
+          "utf8": "{\"key\":\"legacy-files-1\",\"target\":{\"kind\":\"existing\",\"source_id\":42},\"input\":{\"kind\":\"files\",\"paths\":[\"part.stl\"]},\"reserved_bytes\":3506438144,\"max_input_bytes\":268435456,\"max_prepared_bytes\":1073741824}",
+          "sha256": "fa2828bb78522eba53d7fcdaa16789f8f105561dd49f91cc13ad486a6ba74372"
+        },
+        "operation": {
+          "utf8": "{\"tenant\":\"default\",\"actor\":\"physical-owner\",\"key\":\"legacy-files-1\",\"intent_digest\":\"d9fcf9d46a37077026a5d4196068549aae70b1c5f8ee824b40c7841ca067b9ad\",\"source_id\":42,\"job_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"input_version\":1,\"input\":{\"kind\":\"files\",\"paths\":[\"part.stl\"]},\"requested_files\":[{\"path\":\"part.stl\",\"size\":3,\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"input\"}],\"requested_digest\":\"3af4f0649c456e01be56c51c1f8066f7b2d6c9c1d77e24279c043db4f1e1cc4a\",\"state\":\"admitted\",\"basis\":{\"current_source_revision_id\":null,\"url\":\"\",\"branch\":\"main\",\"tag\":null,\"source_kind\":\"local\",\"source_type\":\"local\",\"local_path\":null,\"last_commit_sha\":null,\"legacy_manifest_cutover\":false},\"default_rules\":true,\"original_rules\":null,\"reserved_bytes\":3506438144,\"max_input_bytes\":268435456,\"max_prepared_bytes\":1073741824,\"owned\":null,\"artifact\":null,\"receipt\":null,\"cleanup_settled\":false}",
+          "sha256": "417aef4642dd4a17f958df18a27d61fd471c23403db6619f31ebf497f2c3ba31"
+        },
+        "supplied_job_payload": {
+          "utf8": "{\"kind\":\"supplied-source-import\",\"payload\":{\"project_id\":42,\"operation_key\":\"legacy-files-1\",\"input_version\":1}}",
+          "sha256": "9628c152900302b6adc91d3f47df8d2265eb48913d5c8b4875a27e0ea74502c6"
+        },
+        "requested": {
+          "utf8": "[{\"path\":\"part.stl\",\"size\":3,\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"input\"}]",
+          "sha256": "3af4f0649c456e01be56c51c1f8066f7b2d6c9c1d77e24279c043db4f1e1cc4a"
+        },
+        "intent": {
+          "utf8": "[{\"key\":\"legacy-files-1\",\"target\":{\"kind\":\"existing\",\"source_id\":42},\"input\":{\"kind\":\"files\",\"paths\":[\"part.stl\"]},\"reserved_bytes\":3506438144,\"max_input_bytes\":268435456,\"max_prepared_bytes\":1073741824},[{\"path\":\"part.stl\",\"size\":3,\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"input\"}]]",
+          "sha256": "d9fcf9d46a37077026a5d4196068549aae70b1c5f8ee824b40c7841ca067b9ad"
+        },
+        "job_intent": {
+          "utf8": "[1,{\"kind\":\"supplied-source-import\",\"payload\":{\"project_id\":42,\"operation_key\":\"legacy-files-1\",\"input_version\":1}}]",
+          "sha256": "31dd942476020dfb2d363c90f88c95258487f8d6b5291922a744bc95b98e5d98"
+        }
+      },
+      "zip": {
+        "input": {
+          "utf8": "{\"kind\":\"zip\",\"path\":\"upload.zip\"}",
+          "sha256": "54dfaf776c00f548e06c50315d078e51cbe81aa7863125c4fd7b890ff9ee4912"
+        },
+        "admission": {
+          "utf8": "{\"key\":\"legacy-zip-1\",\"target\":{\"kind\":\"existing\",\"source_id\":42},\"input\":{\"kind\":\"zip\",\"path\":\"upload.zip\"},\"reserved_bytes\":3506438144,\"max_input_bytes\":268435456,\"max_prepared_bytes\":1073741824}",
+          "sha256": "9b81ce931684a12f87db440fe1ad4eeaf5045d401cce5734aa9baf8f42c3ef37"
+        },
+        "operation": {
+          "utf8": "{\"tenant\":\"default\",\"actor\":\"physical-owner\",\"key\":\"legacy-zip-1\",\"intent_digest\":\"3c3121aafb14ddfcddb51c81edeeb959200472a0774794be5999c7f5c70abf2a\",\"source_id\":42,\"job_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"input_version\":1,\"input\":{\"kind\":\"zip\",\"path\":\"upload.zip\"},\"requested_files\":[{\"path\":\"upload.zip\",\"size\":3,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"input\"}],\"requested_digest\":\"f899630814622c45dfd14ca743b578ee45870a5166101aaeb9e22b63bbc5b15e\",\"state\":\"admitted\",\"basis\":{\"current_source_revision_id\":null,\"url\":\"\",\"branch\":\"main\",\"tag\":null,\"source_kind\":\"local\",\"source_type\":\"local\",\"local_path\":null,\"last_commit_sha\":null,\"legacy_manifest_cutover\":false},\"default_rules\":true,\"original_rules\":null,\"reserved_bytes\":3506438144,\"max_input_bytes\":268435456,\"max_prepared_bytes\":1073741824,\"owned\":null,\"artifact\":null,\"receipt\":null,\"cleanup_settled\":false}",
+          "sha256": "fbe5dab7f40bcf1cb1559037283032dccd52522fec86c90b92df9f3df4e0b29b"
+        },
+        "supplied_job_payload": {
+          "utf8": "{\"kind\":\"supplied-source-import\",\"payload\":{\"project_id\":42,\"operation_key\":\"legacy-zip-1\",\"input_version\":1}}",
+          "sha256": "26597f3d6d1dcd4be45a4921a157990de15b5972a0d4f52d0ba8c01c1bd6671d"
+        },
+        "requested": {
+          "utf8": "[{\"path\":\"upload.zip\",\"size\":3,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"input\"}]",
+          "sha256": "f899630814622c45dfd14ca743b578ee45870a5166101aaeb9e22b63bbc5b15e"
+        },
+        "intent": {
+          "utf8": "[{\"key\":\"legacy-zip-1\",\"target\":{\"kind\":\"existing\",\"source_id\":42},\"input\":{\"kind\":\"zip\",\"path\":\"upload.zip\"},\"reserved_bytes\":3506438144,\"max_input_bytes\":268435456,\"max_prepared_bytes\":1073741824},[{\"path\":\"upload.zip\",\"size\":3,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"input\"}]]",
+          "sha256": "3c3121aafb14ddfcddb51c81edeeb959200472a0774794be5999c7f5c70abf2a"
+        },
+        "job_intent": {
+          "utf8": "[1,{\"kind\":\"supplied-source-import\",\"payload\":{\"project_id\":42,\"operation_key\":\"legacy-zip-1\",\"input_version\":1}}]",
+          "sha256": "80ab3bf9137fd1cbd06d5c80b08cd124e5b6e1ce66cf5845b9ac192c8683751f"
+        }
+      }
+    },
+    "type_control": "pp_storage::catalog::CreateSource"
+  }
+}

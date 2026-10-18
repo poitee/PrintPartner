@@ -7,15 +7,21 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = ["serde_json/raw_value", "dep:pp-domain", "pp-domain/desktop_rebuild"]
+desktop_rebuild = ["serde_json/raw_value", "dep:pp-domain", "pp-domain/desktop_rebuild", "dep:saphyr-parser", "dep:pp-contracts", "pp-contracts/desktop_rebuild"]
+
+[[bin]]
+name = "required-unit-fixture"
+required-features = ["desktop_rebuild"]
 
 [dependencies]
+pp-contracts = { path = "../pp-contracts", optional = true }
 pp-domain = { path = "../pp-domain", optional = true }
 anyhow.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 fs2.workspace = true
+fs4.workspace = true
 libc.workspace = true
 rand.workspace = true
 sha2.workspace = true
@@ -30,3 +36,7 @@ getrandom = "=0.3.4"
 icu_collator = "=2.3.1"
 regress = "=0.11.1"
 ryu-js = "=1.0.2"
+saphyr-parser = { version = "=0.1.0", default-features = false, optional = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true, features = ["hooks"] }

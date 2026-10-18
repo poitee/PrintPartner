@@ -14,7 +14,7 @@ pub use rebuild::{
 
 mod categories;
 mod json;
-mod naming;
+pub(crate) mod naming;
 
 use crate::{Envelope, SettingsClient, WriterOwner, auth};
 use anyhow::{Result, anyhow, ensure};
@@ -225,26 +225,148 @@ pub(super) enum Command {
 }
 pub(super) enum Reply {
     Outcome(Outcome),
-    Lease(u64),
+    Lease(SourceWorkProof),
     Released,
 }
-#[derive(Default)]
+/// Another live lease already holds work on this Source.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceBusy;
+#[cfg(feature = "desktop_rebuild")]
+impl std::fmt::Display for SourceBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Source work is already active")
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+impl std::error::Error for SourceBusy {}
 pub(super) struct State {
-    next: u64,
-    active: HashMap<u64, (String, i64)>,
+    /// Distinguishes this writer's tokens from those of an earlier writer.
+    #[cfg(feature = "desktop_rebuild")]
+    incarnation: String,
+    issued_high_water: u64,
+    active: HashMap<u64, SourceBinding>,
     pub directory: PathBuf,
+}
+impl Default for State {
+    fn default() -> Self {
+        Self::new(PathBuf::new())
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceBinding {
+    pub(crate) tenant: String,
+    pub(crate) id: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceWorkProof {
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) incarnation: String,
+    pub(crate) token: u64,
+}
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) enum IssuedTokenState<'a> {
+    Active(&'a SourceBinding),
+    Retired,
+    NeverIssued,
+    WrongIncarnation,
+}
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) enum Retirement {
+    RetiredNow,
+    AlreadyRetired,
 }
 impl State {
     pub(super) fn new(directory: PathBuf) -> Self {
         Self {
+            #[cfg(feature = "desktop_rebuild")]
+            incarnation: loop {
+                let bytes = rand::random::<[u8; 32]>();
+                if bytes.iter().any(|byte| *byte != 0) {
+                    break hex::encode(bytes);
+                }
+            },
+            issued_high_water: 0,
+            active: HashMap::new(),
             directory,
-            ..Default::default()
+        }
+    }
+    pub(crate) fn source_busy(&self, tenant: &str, id: i64) -> bool {
+        self.active
+            .values()
+            .any(|binding| binding.tenant == tenant && binding.id == id)
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
+    pub(crate) fn next_token(&self) -> Result<u64> {
+        self.issued_high_water
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("Work lease overflow"))
+    }
+    pub(crate) fn activate(&mut self, token: u64, tenant: String, id: i64) {
+        debug_assert_eq!(token, self.issued_high_water + 1);
+        self.issued_high_water = token;
+        self.active.insert(token, SourceBinding { tenant, id });
+    }
+    /// Drops the bindings of leases whose release could not be queued.
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn reap(&mut self, tokens: Vec<u64>) {
+        for token in tokens {
+            self.active.remove(&token);
+        }
+    }
+    pub(crate) fn proof(&self, token: u64) -> Result<SourceWorkProof> {
+        ensure!(self.active.contains_key(&token), "Unknown work lease");
+        Ok(SourceWorkProof {
+            #[cfg(feature = "desktop_rebuild")]
+            incarnation: self.incarnation.clone(),
+            token,
+        })
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn classify_issued(&self, incarnation: &str, token: u64) -> IssuedTokenState<'_> {
+        if incarnation != self.incarnation {
+            return IssuedTokenState::WrongIncarnation;
+        }
+        if let Some(binding) = self.active.get(&token) {
+            return IssuedTokenState::Active(binding);
+        }
+        if token > 0 && token <= self.issued_high_water {
+            IssuedTokenState::Retired
+        } else {
+            IssuedTokenState::NeverIssued
+        }
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn retire_issued(
+        &mut self,
+        proof: &SourceWorkProof,
+        expected: &SourceBinding,
+    ) -> Result<Retirement> {
+        match self.classify_issued(&proof.incarnation, proof.token) {
+            IssuedTokenState::Active(actual) => {
+                ensure!(actual == expected, "Source reservation binding conflict");
+                self.active.remove(&proof.token);
+                Ok(Retirement::RetiredNow)
+            }
+            IssuedTokenState::Retired => Ok(Retirement::AlreadyRetired),
+            IssuedTokenState::NeverIssued => Err(anyhow!("Never-issued Source reservation")),
+            IssuedTokenState::WrongIncarnation => Err(anyhow!("Wrong Source writer incarnation")),
         }
     }
 }
 pub struct SourceWorkLease {
     client: SettingsClient,
-    token: Option<u64>,
+    proof: Option<SourceWorkProof>,
+}
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn lease(client: SettingsClient, proof: SourceWorkProof) -> SourceWorkLease {
+    SourceWorkLease {
+        client,
+        proof: Some(proof),
+    }
 }
 impl WriterOwner {
     pub fn source_catalog(&self, credentials: Credentials) -> SourceCatalogClient {
@@ -405,9 +527,9 @@ impl SourceCatalogClient {
         )?
         .recv()??;
         match reply {
-            Reply::Lease(token) => Ok(SourceWorkLease {
+            Reply::Lease(proof) => Ok(SourceWorkLease {
                 client: self.client.clone(),
-                token: Some(token),
+                proof: Some(proof),
             }),
             _ => Err(anyhow!("Unexpected lease reply")),
         }
@@ -428,18 +550,32 @@ pub(crate) fn begin_job_work(
     )?
     .recv()??
     {
-        Reply::Lease(token) => Ok(SourceWorkLease {
+        Reply::Lease(proof) => Ok(SourceWorkLease {
             client: client.clone(),
-            token: Some(token),
+            proof: Some(proof),
         }),
         _ => Err(anyhow!("Unexpected lease reply")),
     }
 }
 impl SourceWorkLease {
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn proof(&self) -> Result<SourceWorkProof> {
+        self.proof
+            .clone()
+            .ok_or_else(|| anyhow!("Lease already released"))
+    }
+    /// Forgets a token the writer already retired, so dropping the lease
+    /// sends no release.
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn consume_retired(&mut self) -> Result<()> {
+        ensure!(self.proof.take().is_some(), "Lease already released");
+        Ok(())
+    }
     pub fn release(&mut self) -> Result<()> {
-        let token = *self
-            .token
+        let token = self
+            .proof
             .as_ref()
+            .map(|proof| proof.token)
             .ok_or_else(|| anyhow!("Lease already released"))?;
         let reply = enqueue(
             &self.client,
@@ -447,20 +583,39 @@ impl SourceWorkLease {
             &AtomicBool::new(false),
             Duration::from_secs(5),
         )?;
-        self.token = None;
+        #[cfg(not(feature = "desktop_rebuild"))]
+        {
+            self.proof = None;
+        }
         reply.recv()??;
+        #[cfg(feature = "desktop_rebuild")]
+        {
+            self.proof = None;
+        }
         Ok(())
     }
 }
 impl Drop for SourceWorkLease {
     fn drop(&mut self) {
-        if let Some(token) = self.token.take() {
-            let _ = enqueue(
+        if let Some(token) = self.proof.take().map(|proof| proof.token) {
+            let queued = enqueue(
                 &self.client,
                 Command::End(token),
                 &AtomicBool::new(false),
                 Duration::ZERO,
             );
+            #[cfg(feature = "desktop_rebuild")]
+            if queued.is_err() {
+                self.client
+                    .shared
+                    .orphaned_source_leases
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(token);
+                self.client.shared.changed.notify_all();
+            }
+            #[cfg(not(feature = "desktop_rebuild"))]
+            drop(queued);
         }
     }
 }
@@ -470,6 +625,19 @@ pub(super) fn execute(
     command: Command,
     admission: crate::writer_admission::Deadline,
 ) -> Result<Reply> {
+    #[cfg(feature = "desktop_rebuild")]
+    if let Command::End(token) = command {
+        match state.classify_issued(&state.incarnation, token) {
+            IssuedTokenState::Active(_) => {
+                state.active.remove(&token);
+            }
+            IssuedTokenState::Retired => {}
+            IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                return Err(anyhow!("Unknown work lease"));
+            }
+        }
+        return Ok(Reply::Released);
+    }
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
     match command {
         Command::End(token) => {
@@ -480,26 +648,22 @@ pub(super) fn execute(
         Command::BeginJob { lease, source_id } => {
             let (tenant, id) = crate::jobs::claimed_source(&tx, &lease, source_id)?;
             require(&tx, &tenant, id)?;
-            let token = state
-                .next
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("Work lease overflow"))?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(!state.source_busy(&tenant, id), SourceBusy);
+            let token = state.next_token()?;
             tx.commit()?;
-            state.next = token;
-            state.active.insert(token, (tenant, id));
-            Ok(Reply::Lease(token))
+            state.activate(token, tenant, id);
+            Ok(Reply::Lease(state.proof(token)?))
         }
         Command::Begin { authority, id } => {
             let tenant = authority.tenant(&tx)?;
             require(&tx, &tenant, id)?;
-            let token = state
-                .next
-                .checked_add(1)
-                .ok_or_else(|| anyhow!("Work lease overflow"))?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(!state.source_busy(&tenant, id), SourceBusy);
+            let token = state.next_token()?;
             tx.commit()?;
-            state.next = token;
-            state.active.insert(token, (tenant, id));
-            Ok(Reply::Lease(token))
+            state.activate(token, tenant, id);
+            Ok(Reply::Lease(state.proof(token)?))
         }
         Command::Run { authority, request } => {
             let tenant = authority.tenant(&tx)?;
@@ -577,7 +741,7 @@ fn read_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceSummary> {
     })
 }
 const SELECT: &str = "SELECT p.id,p.name,p.url,p.source_kind,p.source_type,p.role,p.branch,p.tag,p.local_path,p.last_synced_at,p.last_commit_sha,p.current_source_revision_id,p.docs_url,p.manifest_community_slug,(SELECT count(*) FROM source_docs d WHERE d.project_id=p.id AND d.tenant_id=p.tenant_id),p.metadata_json FROM projects p";
-fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSummary>> {
+pub(crate) fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSummary>> {
     Ok(tx
         .query_row(
             &format!("{SELECT} WHERE p.tenant_id=?1 AND p.id=?2"),
@@ -585,6 +749,19 @@ fn get(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Option<SourceSumma
             read_source,
         )
         .optional()?)
+}
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn validate_capture_existing(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<()> {
+    require(tx, tenant, id).map(drop)
+}
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn validate_capture_create(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    source: &mut CreateSource,
+) -> Result<()> {
+    *source = rebuild::create(tx, tenant, std::mem::take(source))?;
+    Ok(())
 }
 fn require(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<SourceSummary> {
     get(tx, tenant, id)?.ok_or_else(|| anyhow!("Source not found"))
@@ -692,7 +869,12 @@ fn normalize_rule(s: &str) -> String {
         format!("{s}/")
     }
 }
-fn run(tx: &Transaction<'_>, state: &State, tenant: &str, request: Request) -> Result<Outcome> {
+pub(crate) fn run(
+    tx: &Transaction<'_>,
+    state: &State,
+    tenant: &str,
+    request: Request,
+) -> Result<Outcome> {
     Ok(match request {
         #[cfg(feature = "desktop_rebuild")]
         Request::SourceActivity { limit } => Outcome::Activity(activity::list(tx, tenant, limit)?),
@@ -919,9 +1101,11 @@ fn delete(tx: &Transaction<'_>, state: &State, tenant: &str, id: i64) -> Result<
     let Some(source) = get(tx, tenant, id)? else {
         return Ok(Deletion::NotFound);
     };
-    if state.active.values().any(|(t, s)| t == tenant && *s == id)
-        || crate::jobs::source_reserved(tx, tenant, id)?
-    {
+    if state.source_busy(tenant, id) || crate::jobs::source_reserved(tx, tenant, id)? {
+        return Ok(Deletion::ActiveWork);
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    if crate::uploads::source_reserved(tx, tenant, id)? {
         return Ok(Deletion::ActiveWork);
     }
     if tx.query_row(

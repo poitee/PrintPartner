@@ -250,9 +250,6 @@ async fn protected_real_node_lifecycle() {
     let build: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(build["id"].as_u64().is_some());
     assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
-    assert_eq!(marker["pid"], std::process::id());
     let child_pid = match runtime.handle().subscribe().borrow().clone() {
         CoreStatus::Ready { pid, .. } => pid,
         CoreStatus::Starting
@@ -330,9 +327,7 @@ async fn authenticated_logout_requests_complete_shutdown() {
             "rejected logout requested shutdown"
         );
     }
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
-    let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let runtime_dir = runtime.runtime_dir().to_owned();
     let child_pid = match runtime.handle().subscribe().borrow().clone() {
         CoreStatus::Ready { pid, .. } => pid,
         CoreStatus::Starting
@@ -375,7 +370,7 @@ async fn authenticated_logout_requests_complete_shutdown() {
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(data.join(".desktop.lock"))
+        .open(data.join("printpartner.lock"))
         .unwrap();
     lock.try_lock_exclusive().unwrap();
     println!(
@@ -398,7 +393,7 @@ async fn ticket_t_12_hostile_lock_is_refused_before_supervised_node_startup() {
     std::fs::write(&database, b"must remain unopened").unwrap();
     std::fs::write(&config, b"port = 43123\n").unwrap();
     std::fs::write(&marker, br#"{"pid":2147483647,"kind":"standalone"}"#).unwrap();
-    symlink(&database, data.join(".desktop.lock")).unwrap();
+    symlink(&database, data.join("printpartner.lock")).unwrap();
     let before = [&database, &config, &marker].map(|path| std::fs::read(path).unwrap());
     let error = CoreRuntime::start(launch(data.clone()))
         .await
@@ -410,7 +405,7 @@ async fn ticket_t_12_hostile_lock_is_refused_before_supervised_node_startup() {
         before
     );
     assert_eq!(
-        std::fs::read_link(data.join(".desktop.lock")).unwrap(),
+        std::fs::read_link(data.join("printpartner.lock")).unwrap(),
         database
     );
     assert_eq!(std::fs::read_dir(&data).unwrap().count(), 4);
@@ -927,9 +922,7 @@ async fn cleanup_error_publishes_failed_and_preserves_failure() {
         | CoreStatus::Stopped
         | CoreStatus::Failed => panic!("Runtime was not ready"),
     };
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
-    let directory = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let directory = runtime.runtime_dir().to_owned();
     let socket = std::fs::read_dir(&directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1017,7 +1010,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
 async fn unexpected_marker_directory_is_preserved_and_reported() {
     let data = temporary("cleanup-failure");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
-    let marker = data.join(".desktop-owner.json");
+    let marker = data.join(".desktop-lease");
     std::fs::remove_file(&marker).unwrap();
     std::fs::create_dir(&marker).unwrap();
     std::fs::write(marker.join("retain"), b"must not delete").unwrap();
@@ -1026,7 +1019,11 @@ async fn unexpected_marker_directory_is_preserved_and_reported() {
     assert!(!receipt.storage_released);
     assert!(!receipt.marker_removed);
     assert!(!receipt.complete());
-    assert!(receipt.errors.contains(&"owner_marker_cleanup_failed"));
+    assert!(
+        receipt
+            .errors
+            .contains(&"compatibility_reservation_cleanup_failed")
+    );
     assert!(marker.join("retain").is_file());
     println!(
         "{}",
@@ -1040,14 +1037,13 @@ async fn same_process_restart_retries_failed_storage_release_without_double_owne
 
     let data = temporary("restart-after-failed-release");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
-    let marker = data.join(".desktop-owner.json");
+    let marker = data.join(".desktop-lease");
     std::fs::remove_file(&marker).unwrap();
     std::fs::create_dir(&marker).unwrap();
     let blocker = marker.join("retain");
     std::fs::write(&blocker, b"must not delete").unwrap();
-    let lease = data.join(".desktop-lease/owner.json");
-    let owner = std::fs::read(&lease).unwrap();
-    let lock = std::fs::File::open(data.join(".desktop.lock")).unwrap();
+    let lease = data.join(".desktop-lease");
+    let lock = std::fs::File::open(data.join("printpartner.lock")).unwrap();
 
     let receipt = runtime.shutdown().await;
     assert!(receipt.compat_reaped && receipt.gateway_stopped && receipt.runtime_removed);
@@ -1056,7 +1052,7 @@ async fn same_process_restart_retries_failed_storage_release_without_double_owne
     assert!(lock.try_lock_exclusive().is_err());
 
     assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-    assert_eq!(std::fs::read(&lease).unwrap(), owner);
+    assert!(lease.is_dir());
     assert_eq!(std::fs::read(&blocker).unwrap(), b"must not delete");
     assert!(lock.try_lock_exclusive().is_err());
 
@@ -1065,7 +1061,7 @@ async fn same_process_restart_retries_failed_storage_release_without_double_owne
     let restarted = CoreRuntime::start(launch(data.clone()))
         .await
         .expect("same-process restart retries the retained failed release");
-    assert_ne!(std::fs::read(&lease).unwrap(), owner);
+    assert!(lease.is_file());
     assert!(lock.try_lock_exclusive().is_err());
     assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
     assert!(restarted.shutdown().await.complete());
@@ -1093,9 +1089,7 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
         | CoreStatus::Stopped
         | CoreStatus::Failed => panic!("not ready"),
     };
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
-    let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let runtime_dir = runtime.runtime_dir().to_owned();
     let mut descendant = std::process::Command::new("sleep")
         .arg("60")
         .process_group(pid as i32)
@@ -1106,7 +1100,7 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(data.join(".desktop.lock"))
+        .open(data.join("printpartner.lock"))
         .unwrap();
     assert!(lock.try_lock_exclusive().is_err());
     drop(runtime);
@@ -1135,58 +1129,12 @@ fn drop_after_caller_runtime_teardown_reaps_writer_and_descendant() {
 }
 
 #[tokio::test]
-async fn crash_left_marker_allows_later_start() {
-    let data = temporary("stale-owner");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data)
-        .unwrap();
-    let mut child = std::process::Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    std::fs::write(
-        data.join(".desktop-owner.json"),
-        serde_json::json!({"pid": pid, "kind": "standalone"}).to_string(),
-    )
-    .unwrap();
-    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
-    assert!(matches!(
-        *runtime.handle().subscribe().borrow(),
-        CoreStatus::Ready { .. }
-    ));
-    assert!(runtime.shutdown().await.complete());
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
-async fn live_marker_owner_still_blocks_start() {
-    let data = temporary("live-marker-owner");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data)
-        .unwrap();
-    let marker = data.join(".desktop-owner.json");
-    let contents = serde_json::json!({"pid": std::process::id(), "kind": "standalone"}).to_string();
-    std::fs::write(&marker, &contents).unwrap();
-    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-    assert_eq!(std::fs::read_to_string(marker).unwrap(), contents);
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
 async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
     let data = temporary("compat-cleanup-failure");
     let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
     let state = runtime.handle().subscribe();
     assert!(matches!(*state.borrow(), CoreStatus::Ready { .. }));
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
-    let runtime_dir = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let runtime_dir = runtime.runtime_dir().to_owned();
     let socket = std::fs::read_dir(&runtime_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1205,57 +1153,6 @@ async fn compatibility_cleanup_failure_reports_failed_instead_of_ready() {
         .err()
         .expect("unproved child closure must prevent same-process restart");
     assert!(error.to_string().contains("Closure was not proved"));
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
-async fn stale_owner_recovery_admits_only_one_concurrent_start() {
-    let data = temporary("stale-owner-race");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data)
-        .unwrap();
-    let mut child = std::process::Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    std::fs::write(
-        data.join(".desktop-owner.json"),
-        serde_json::json!({"pid": pid, "kind": "standalone"}).to_string(),
-    )
-    .unwrap();
-    let (first, second) = tokio::join!(
-        CoreRuntime::start(launch(data.clone())),
-        CoreRuntime::start(launch(data.clone()))
-    );
-    let runtime = match (first, second) {
-        (Ok(runtime), Err(_)) | (Err(_), Ok(runtime)) => runtime,
-        _ => panic!("exactly one concurrent owner must acquire storage"),
-    };
-    assert!(runtime.shutdown().await.complete());
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
-async fn reused_pid_with_different_identity_recovers_marker_and_lease() {
-    let data = temporary("reused-pid");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(data.join(".desktop-lease"))
-        .unwrap();
-    let owner = serde_json::json!({"pid": std::process::id(), "kind": "standalone", "process_identity": "prior-boot:prior-start", "instance": "ab".repeat(16)});
-    std::fs::write(data.join(".desktop-owner.json"), owner.to_string()).unwrap();
-    std::fs::write(data.join(".desktop-lease/owner.json"), owner.to_string()).unwrap();
-    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
-    let current: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(data.join(".desktop-owner.json")).unwrap()).unwrap();
-    assert_ne!(current["process_identity"], owner["process_identity"]);
-    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-    assert!(runtime.shutdown().await.complete());
     std::fs::remove_dir_all(data).unwrap();
 }
 
@@ -1321,8 +1218,15 @@ async fn core_process_fixture() {
     let Some(data) = std::env::var_os("PP_CORE_DEATH_FIXTURE") else {
         return;
     };
-    let _runtime = CoreRuntime::start(launch(data.into())).await.unwrap();
-    println!("PP_CORE_READY");
+    let runtime = CoreRuntime::start(launch(data.into())).await.unwrap();
+    let state = runtime.handle().subscribe().borrow().clone();
+    let CoreStatus::Ready { pid, .. } = state else {
+        panic!("not ready")
+    };
+    println!(
+        "PP_CORE_READY {}",
+        serde_json::json!({"pid":pid,"runtime_dir":runtime.runtime_dir()})
+    );
     use std::io::Write;
     std::io::stdout().flush().unwrap();
     std::future::pending::<()>().await;
@@ -1354,6 +1258,7 @@ fn linux_proc_state(pid: u32) -> Option<char> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn canonical_node(node: &Path) -> PathBuf {
     let candidate = if node.is_absolute() || node.components().count() > 1 {
         node.to_path_buf()
@@ -1385,24 +1290,16 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
     let mut runtime_dir = None;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let output = BufReader::new(core.stdout.take().unwrap());
-        assert!(
-            output
-                .lines()
-                .any(|line| line.unwrap().contains("PP_CORE_READY"))
-        );
-        let marker_path = data.join(".desktop-owner.json");
-        let contents = std::fs::read(&marker_path).unwrap();
-        let marker: serde_json::Value = serde_json::from_slice(&contents).unwrap();
-        assert_eq!(marker["pid"], core.id());
-        let pid = marker["child_pid"].as_u64().unwrap() as i32;
+        let line = output
+            .lines()
+            .map(Result::unwrap)
+            .find(|line| line.contains("PP_CORE_READY "))
+            .unwrap();
+        let ready: serde_json::Value =
+            serde_json::from_str(line.split_once("PP_CORE_READY ").unwrap().1).unwrap();
+        let pid = ready["pid"].as_u64().unwrap() as i32;
         child_pid = Some(pid);
-        runtime_dir = Some(PathBuf::from(marker["runtime_dir"].as_str().unwrap()));
-        assert!(
-            !marker["child_process_identity"]
-                .as_str()
-                .unwrap()
-                .is_empty()
-        );
+        runtime_dir = Some(PathBuf::from(ready["runtime_dir"].as_str().unwrap()));
         // The peer only keeps the group from being orphaned. POSIX would
         // SIGHUP a stopped orphan group.
         group_peer = Some(
@@ -1445,23 +1342,19 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
             !peer_is_running(group_peer.as_mut().unwrap()),
             "Node group member outlived its owner"
         );
-        assert_eq!(std::fs::read(&marker_path).unwrap(), contents);
-        let input = launch(data.clone());
-        let node = canonical_node(&input.bundle.node);
         let caller = tokio::runtime::Runtime::new().unwrap();
         let runtime = caller
             .block_on(CoreRuntime::start(launch(data.clone())))
             .expect("dead owner and terminated Node allow recovery");
-        assert_eq!(
-            std::fs::read(data.join(".desktop-lease/previous-marker.json")).unwrap(),
-            contents
-        );
-        let current: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&marker_path).unwrap()).unwrap();
-        let new_pid = current["child_pid"].as_u64().unwrap() as i32;
+        let state = runtime.handle().subscribe().borrow().clone();
+        let CoreStatus::Ready { pid: new_pid, .. } = state else {
+            panic!("not ready")
+        };
+        let new_pid = new_pid as i32;
         assert_ne!(new_pid, pid);
         #[cfg(target_os = "linux")]
         {
+            let node = canonical_node(&launch(data.clone()).bundle.node);
             let exe = std::fs::read_link(format!("/proc/{new_pid}/exe")).unwrap();
             assert_eq!(
                 std::fs::canonicalize(&exe).unwrap_or(exe),
@@ -1508,137 +1401,6 @@ fn core_death_terminates_stopped_node_and_allows_recovery() {
 }
 
 #[tokio::test]
-async fn dead_core_marker_without_child_info_allows_start() {
-    let data = temporary("missing-child-info");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data)
-        .unwrap();
-    let mut dead = std::process::Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
-        .spawn()
-        .unwrap();
-    let pid = dead.id();
-    dead.wait().unwrap();
-    let marker = data.join(".desktop-owner.json");
-    let contents =
-        serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)})
-            .to_string();
-    std::fs::write(&marker, &contents).unwrap();
-    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
-    assert_eq!(
-        std::fs::read_to_string(data.join(".desktop-lease/previous-marker.json")).unwrap(),
-        contents
-    );
-    let current: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
-    assert_eq!(current["storage_protocol_version"], 1);
-    assert!(current["child_pid"].as_u64().is_some());
-    assert!(runtime.shutdown().await.complete());
-    assert!(!marker.exists());
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
-async fn dead_core_marker_with_partial_or_invalid_child_info_refuses_start() {
-    let data = temporary("invalid-child-info");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data)
-        .unwrap();
-    let mut dead = std::process::Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
-        .spawn()
-        .unwrap();
-    let pid = dead.id();
-    dead.wait().unwrap();
-    let marker = data.join(".desktop-owner.json");
-    for child in [
-        serde_json::json!({"child_pid": pid}),
-        serde_json::json!({"child_process_identity": "prior"}),
-        serde_json::json!({"child_pid": null, "child_process_identity": null}),
-        serde_json::json!({"child_pid": 0, "child_process_identity": "prior"}),
-        serde_json::json!({"child_pid": pid, "child_process_identity": ""}),
-    ] {
-        let mut owner = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)});
-        owner
-            .as_object_mut()
-            .unwrap()
-            .extend(child.as_object().unwrap().clone());
-        let contents = owner.to_string();
-        std::fs::write(&marker, &contents).unwrap();
-        assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), contents);
-    }
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
-async fn childless_core_marker_without_known_protocol_refuses_start() {
-    let data = temporary("legacy-childless");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data)
-        .unwrap();
-    let mut dead = std::process::Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
-        .spawn()
-        .unwrap();
-    let pid = dead.id();
-    dead.wait().unwrap();
-    let marker = data.join(".desktop-owner.json");
-    for version in [
-        serde_json::json!({}),
-        serde_json::json!({"storage_protocol_version": 0}),
-        serde_json::json!({"storage_protocol_version": 2}),
-        serde_json::json!({"storage_protocol_version": "1"}),
-        serde_json::json!({"storage_protocol_version": null}),
-    ] {
-        let mut owner = serde_json::json!({"pid": pid, "process_identity": "prior", "lease_hash": "cd".repeat(32)});
-        owner
-            .as_object_mut()
-            .unwrap()
-            .extend(version.as_object().unwrap().clone());
-        let contents = owner.to_string();
-        std::fs::write(&marker, &contents).unwrap();
-        assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
-        assert_eq!(std::fs::read_to_string(&marker).unwrap(), contents);
-    }
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
-async fn desktop_marker_with_both_processes_dead_allows_start() {
-    let data = temporary("both-processes-dead");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&data)
-        .unwrap();
-    let mut dead = std::process::Command::new("/bin/sh")
-        .args(["-c", "exit 0"])
-        .spawn()
-        .unwrap();
-    let pid = dead.id();
-    dead.wait().unwrap();
-    std::fs::write(
-        data.join(".desktop-owner.json"),
-        serde_json::json!({
-            "pid": pid, "process_identity": "prior-core", "child_pid": pid,
-            "child_process_identity": "prior-child", "lease_hash": "cd".repeat(32)
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
-    assert!(runtime.shutdown().await.complete());
-    std::fs::remove_dir_all(data).unwrap();
-}
-
-#[tokio::test]
 async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
     use std::sync::{
         Arc,
@@ -1662,9 +1424,13 @@ async fn ticket_t_4_real_gateway_hidden_status_and_config_cancellation() {
             assert!(request.contains("x-api-key: recorded-test-key"));
             seen.fetch_add(1, Ordering::SeqCst);
             let fixture: &[u8] = match served_mode.load(Ordering::SeqCst) {
-                1 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-error.json"),
-                2 => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-offline.json"),
-                _ => include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json"),
+                1 => include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-error.json"),
+                2 => {
+                    include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-offline.json")
+                }
+                _ => {
+                    include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-success.json")
+                }
             };
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
@@ -1966,7 +1732,7 @@ async fn gre_335_shared_status_route_keeps_node_path_for_other_printers() {
         let body = serde_json::from_slice(&response.2).unwrap_or(serde_json::Value::Null);
         (response.0, body, started.elapsed())
     }
-    let success = include_bytes!("../../pp-drivers/tests/fixtures/moonraker-success.json");
+    let success = include_bytes!("../../../../fixtures/drivers/moonraker/moonraker-success.json");
     let moonraker_reply: &'static [u8] = Box::leak(
         [
             format!(

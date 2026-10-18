@@ -1,4 +1,4 @@
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, types::Value};
 use serde::Deserialize;
 use std::{
@@ -8,6 +8,11 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) const CURRENT_VERSION: u64 = 41;
+#[cfg(not(feature = "desktop_rebuild"))]
+pub(crate) const CURRENT_VERSION: u64 = 35;
 
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -47,39 +52,27 @@ thread_local! {
 
 pub(crate) fn preflight(
     #[cfg(test)] path: &Path,
-    owned: bool,
+    #[cfg(test)] owned: bool,
     open_file: impl Fn(&str) -> std::io::Result<File>,
     validate_directory: impl Fn() -> Result<()>,
 ) -> Result<u64> {
     #[cfg(test)]
     PREFLIGHT_CALLS.update(|calls| calls + 1);
-    #[cfg(test)]
-    let owner_checkpoint = std::cell::Cell::new(3);
-    let check_owner = || -> Result<()> {
-        validate_directory()?;
-        #[cfg(test)]
-        owner_checkpoint.update(|checkpoint| checkpoint + 1);
-        #[cfg(test)]
-        capture_tests::transient_swap(path, owner_checkpoint.get(), false)?;
-        let blocked = if owned {
-            Ok(false)
-        } else {
-            crate::lease::prior_owner_blocks_unowned(&open_file)
-        };
-        #[cfg(test)]
-        capture_tests::transient_swap(path, owner_checkpoint.get(), true)?;
-        validate_directory()?;
-        ensure!(!blocked?, "Data directory already owned");
-        Ok(())
-    };
-    check_owner()?;
+    validate_directory()?;
     #[cfg(test)]
     if owned {
         capture_tests::arm_owned_swap();
     }
     #[cfg(test)]
     capture_tests::transient_swap(path, 0, false)?;
-    let metadata = open_file("print-partner.db").and_then(|file| file.metadata());
+    let metadata = open_file("print-partner.db").and_then(|file| {
+        file.metadata().map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("schema::preflight: fstat print-partner.db: {error}"),
+            )
+        })
+    });
     #[cfg(test)]
     capture_tests::transient_swap(path, 0, true)?;
     #[cfg(test)]
@@ -108,7 +101,12 @@ pub(crate) fn preflight(
                 capture_tests::transient_swap(path, checkpoint, false)?;
                 let read = open_file(&name).and_then(|mut file| {
                     let mut bytes = Vec::new();
-                    file.read_to_end(&mut bytes)?;
+                    file.read_to_end(&mut bytes).map_err(|error| {
+                        std::io::Error::new(
+                            error.kind(),
+                            format!("schema::preflight: read {name}: {error}"),
+                        )
+                    })?;
                     Ok(bytes)
                 });
                 #[cfg(test)]
@@ -142,17 +140,27 @@ pub(crate) fn preflight(
     )));
     #[cfg(test)]
     PREFLIGHT_COPIES.update(|copies| copies + 1);
-    std::fs::DirBuilder::new().mode(0o700).create(&copy.0)?;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&copy.0)
+        .with_context(|| {
+            format!(
+                "schema::preflight: create temporary directory {}",
+                copy.0.display()
+            )
+        })?;
     for (suffix, bytes) in &source {
         if let Some(bytes) = bytes {
-            std::fs::write(copy.0.join(format!("print-partner.db{suffix}")), bytes)?;
+            std::fs::write(copy.0.join(format!("print-partner.db{suffix}")), bytes).with_context(
+                || format!("schema::preflight: write captured print-partner.db{suffix}"),
+            )?;
         }
     }
     ensure!(
         source == capture()?,
         "Database changed during preflight capture"
     );
-    check_owner()?;
+    validate_directory()?;
     let conn = Connection::open(copy.0.join("print-partner.db"))?;
     let integrity: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(
@@ -187,14 +195,22 @@ pub(crate) fn preflight(
         }
     };
     ensure!(
-        version <= 35,
-        "Database schema version {version} is newer than supported version 35"
+        version <= CURRENT_VERSION,
+        "Database schema version {version} is newer than supported version {CURRENT_VERSION}"
     );
     ensure!(
         version == 0 || version >= 31,
         "Cannot upgrade database schema version {version}; install Print Partner v3.3.0 first"
     );
     crate::jobs::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::plan_publication::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::uploads::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::source_scan::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::source_sync::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -224,14 +240,23 @@ pub(crate) fn backup(conn: &Connection, path: &Path, replace: bool) -> Result<()
         && let Some(source) = conn.path()
     {
         ensure!(
-            path.canonicalize()? != Path::new(source).canonicalize()?,
+            path.canonicalize()
+                .context("schema::backup: canonicalize destination")?
+                != Path::new(source)
+                    .canonicalize()
+                    .context("schema::backup: canonicalize source")?,
             "Backup cannot replace the open database"
         );
     }
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Backup parent missing"))?;
-    std::fs::create_dir_all(parent)?;
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "schema::backup: create parent directory {}",
+            parent.display()
+        )
+    })?;
     let temp = parent.join(format!(
         ".backup-{}.db",
         hex::encode(rand::random::<[u8; 16]>())
@@ -242,18 +267,26 @@ pub(crate) fn backup(conn: &Connection, path: &Path, replace: bool) -> Result<()
         let integrity: String = check.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
         ensure!(integrity == "ok", "Backup integrity failed");
         drop(check);
-        File::open(&temp)?.sync_all()?;
+        File::open(&temp)
+            .context("schema::backup: open temporary backup")?
+            .sync_all()
+            .context("schema::backup: sync temporary backup")?;
         if replace {
-            std::fs::rename(&temp, path)?;
+            std::fs::rename(&temp, path).context("schema::backup: rename temporary backup")?;
         } else {
-            std::fs::hard_link(&temp, path)?;
-            std::fs::remove_file(&temp)?;
+            std::fs::hard_link(&temp, path).context("schema::backup: link temporary backup")?;
+            std::fs::remove_file(&temp).context("schema::backup: unlink temporary backup")?;
         }
-        File::open(parent)?.sync_all()?;
+        File::open(parent)
+            .context("schema::backup: open parent directory")?
+            .sync_all()
+            .context("schema::backup: sync parent directory")?;
         Ok(())
     })();
-    if temp.exists() {
-        let _ = std::fs::remove_file(temp);
+    for suffix in ["", "-wal", "-shm"] {
+        let mut member = temp.clone().into_os_string();
+        member.push(suffix);
+        let _ = std::fs::remove_file(member);
     }
     result
 }
@@ -264,9 +297,35 @@ pub(crate) fn initialize(
     now: &str,
 ) -> Result<(Connection, SchemaReady)> {
     let mut conn = Connection::open(path)?;
-    let backup_path = if version < 35 && path.metadata()?.len() > 0 {
-        let target = path.parent().unwrap().join("backups/pre-schema35.db");
-        if !target.exists() {
+    let populated = path
+        .metadata()
+        .with_context(|| {
+            format!(
+                "schema::initialize: stat {} after SQLite open",
+                path.display()
+            )
+        })?
+        .len()
+        > 0;
+    let legacy_version = if cfg!(feature = "desktop_rebuild") {
+        37
+    } else {
+        CURRENT_VERSION
+    };
+    // The first backup is the database exactly as opened, before configure
+    // or any repair, seed, or step write. A legacy upgrade keeps an earlier
+    // copy because its pass is not one transaction.
+    let first_step = if version < legacy_version {
+        legacy_version
+    } else {
+        version + 1
+    };
+    let backup_path = if version < CURRENT_VERSION && populated {
+        let target = path
+            .parent()
+            .unwrap()
+            .join(format!("backups/pre-schema{first_step}.db"));
+        if version >= legacy_version || !target.exists() {
             backup(&conn, &target, true)?;
         }
         Some(target)
@@ -310,6 +369,39 @@ pub(crate) fn initialize(
     conn.execute_batch(&data.extras[1])?;
     if version < 34 {
         conn.execute("INSERT INTO app_settings(tenant_id,key,value) VALUES('default','schema_version','34') ON CONFLICT(tenant_id,key) DO UPDATE SET value=excluded.value",[])?;
+    }
+    {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if version < 35 {
+            tx.execute_batch(include_str!("jobs/schema.sql"))?;
+        }
+        tx.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
+        if version < 35 {
+            tx.execute(
+                "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
+                [],
+            )?;
+        }
+        tx.commit()?;
+    }
+    // Steps run after the common restoration and tenant repair, whose writes
+    // their triggers would refuse, and before starter seeding.
+    #[cfg(feature = "desktop_rebuild")]
+    let backup_path = {
+        if version < legacy_version {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
+            tx.execute("UPDATE app_settings SET value='37' WHERE tenant_id='default' AND key='schema_version'", [])?;
+            tx.commit()?;
+        }
+        install_steps(&mut conn, path, version, populated, backup_path)?
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
+        crate::uploads::validate_schema(&conn, CURRENT_VERSION)?;
+        crate::source_scan::validate_schema(&conn, CURRENT_VERSION)?;
+        crate::source_sync::validate_schema(&conn, CURRENT_VERSION)?;
     }
     // Node's fixture builder connects once to create the input and again to
     // create the expected database. The first Rust open must repeat that
@@ -359,28 +451,58 @@ pub(crate) fn initialize(
         }
         tx.commit()?;
     }
-    {
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if version < 35 {
-            tx.execute_batch(include_str!("jobs/schema.sql"))?;
-        }
-        tx.execute_batch(include_str!("jobs/printer-start-indexes.sql"))?;
-        if version < 35 {
-            tx.execute(
-                "UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'",
-                [],
-            )?;
-        }
-        tx.commit()?;
-    }
     Ok((
         conn,
         SchemaReady {
-            version: 35,
+            version: CURRENT_VERSION,
             previous_version: version,
             backup: backup_path,
         },
     ))
+}
+
+// Each step validates and commits with its version stamp, so a refused or
+// interrupted step leaves the from-version intact and a fresh copy is always
+// current. `first` is the backup already taken at open, if any.
+#[cfg(feature = "desktop_rebuild")]
+fn install_steps(
+    conn: &mut Connection,
+    path: &Path,
+    version: u64,
+    populated: bool,
+    first: Option<PathBuf>,
+) -> Result<Option<PathBuf>> {
+    let mut first = first;
+    let install_scan: fn(&Connection) -> Result<()> =
+        |connection| Ok(connection.execute_batch(include_str!("source_scan/schema.sql"))?);
+    let install_sync: fn(&Connection) -> Result<()> =
+        |connection| Ok(connection.execute_batch(include_str!("source_sync/schema.sql"))?);
+    for (step, install) in crate::uploads::SCHEMA_STEPS
+        .into_iter()
+        .chain([(40, install_scan), (41, install_sync)])
+    {
+        if version < step {
+            let target =
+                populated.then(|| path.with_file_name(format!("backups/pre-schema{step}.db")));
+            if let Some(target) = &target
+                && first.as_ref() != Some(target)
+            {
+                backup(conn, target, true)?;
+            }
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            install(&tx)?;
+            crate::uploads::validate_schema(&tx, step)?;
+            crate::source_scan::validate_schema(&tx, step)?;
+            crate::source_sync::validate_schema(&tx, step)?;
+            tx.execute(
+                "UPDATE app_settings SET value=?1 WHERE tenant_id='default' AND key='schema_version'",
+                [step.to_string()],
+            )?;
+            tx.commit()?;
+            first = first.or(target);
+        }
+    }
+    Ok(first)
 }
 
 pub(crate) fn sql_identity(sql: &str) -> String {
@@ -641,7 +763,7 @@ fn execute_migration(conn: &Connection, sql: &str) -> Result<()> {
     }
 }
 
-fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
+pub(crate) fn add_column(conn: &Connection, table: &str, column: &str, sql: &str) -> Result<()> {
     let columns = conn
         .prepare(&format!("PRAGMA table_info({table})"))?
         .query_map([], |r| r.get::<_, String>(1))?
@@ -811,105 +933,6 @@ mod capture_tests {
             TRANSIENT_SWAP.set(Some((checkpoint, true)));
         }
         Ok(())
-    }
-
-    #[test]
-    fn ticket_t_12_preflight_marker_ignores_transient_directory_swap() {
-        for checkpoint in [4, 5] {
-            for live in [None, Some(false), Some(true)] {
-                if checkpoint == 5 && live == Some(true) {
-                    continue;
-                }
-                let path = std::env::temp_dir().join(format!(
-                    "pp-marker-descriptor-{}",
-                    hex::encode(rand::random::<[u8; 8]>())
-                ));
-                let admitted = crate::lease::admit_directory(&path).unwrap();
-                let conn = Connection::open(path.join("print-partner.db")).unwrap();
-                conn.execute_batch("CREATE TABLE capture_fixture(value TEXT);")
-                    .unwrap();
-                drop(conn);
-                let replacement = path.with_extension("replacement");
-                std::fs::DirBuilder::new()
-                    .mode(0o700)
-                    .create(&replacement)
-                    .unwrap();
-                let marker = |is_live| {
-                    serde_json::json!({
-                        "pid": if is_live { std::process::id() } else { i32::MAX as u32 },
-                        "kind": "standalone"
-                    })
-                    .to_string()
-                };
-                let original = live.map(marker);
-                let decoy = marker(!live.unwrap_or(false));
-                if let Some(original) = &original {
-                    std::fs::write(path.join(".desktop-owner.json"), original).unwrap();
-                }
-                std::fs::write(replacement.join(".desktop-owner.json"), &decoy).unwrap();
-                let before = std::fs::read(path.join("print-partner.db")).unwrap();
-                TRANSIENT_SWAP.set(Some((checkpoint, false)));
-                let result = admitted.preflight();
-                let swap = TRANSIENT_SWAP.take();
-                assert_eq!(swap, None, "marker checkpoint was not reached");
-                assert_eq!(
-                    std::fs::read(path.join("print-partner.db")).unwrap(),
-                    before
-                );
-                assert_eq!(
-                    std::fs::read_to_string(replacement.join(".desktop-owner.json")).unwrap(),
-                    decoy
-                );
-                assert_eq!(
-                    std::fs::read_to_string(path.join(".desktop-owner.json")).ok(),
-                    original
-                );
-                assert!(!path.join(".desktop.lock").exists());
-                assert!(!path.join(".desktop-lease").exists());
-                std::fs::remove_dir_all(&path).unwrap();
-                std::fs::remove_dir_all(replacement).unwrap();
-                if live == Some(true) {
-                    assert_eq!(
-                        result.unwrap_err().to_string(),
-                        "Data directory already owned"
-                    );
-                } else {
-                    assert!(
-                        result.is_ok(),
-                        "checkpoint {checkpoint}, live {live:?}: {result:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn ticket_t_12_preflight_marker_refuses_symlink_to_regular_record() {
-        for live in [false, true] {
-            let path = std::env::temp_dir().join(format!(
-                "pp-marker-link-{}",
-                hex::encode(rand::random::<[u8; 8]>())
-            ));
-            let admitted = crate::lease::admit_directory(&path).unwrap();
-            let target = path.join("private-marker");
-            let bytes = serde_json::json!({
-                "pid": if live { std::process::id() } else { i32::MAX as u32 },
-                "kind": "standalone"
-            })
-            .to_string();
-            std::fs::write(&target, &bytes).unwrap();
-            let marker = path.join(".desktop-owner.json");
-            std::os::unix::fs::symlink("private-marker", &marker).unwrap();
-            let error = admitted.preflight().unwrap_err();
-            assert_eq!(error.to_string(), "storage_lease_marker_invalid");
-            assert_eq!(std::fs::read_to_string(&target).unwrap(), bytes);
-            assert_eq!(
-                std::fs::read_link(&marker).unwrap(),
-                Path::new("private-marker")
-            );
-            assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
-            std::fs::remove_dir_all(path).unwrap();
-        }
     }
 
     #[test]
@@ -1236,6 +1259,7 @@ mod capture_tests {
         let snapshot = |directory: &Path| -> Vec<_> {
             let mut files: Vec<_> = std::fs::read_dir(directory)
                 .unwrap()
+                .filter(|entry| entry.as_ref().unwrap().file_name() != ".desktop-lease")
                 .map(|entry| {
                     let entry = entry.unwrap();
                     (entry.file_name(), std::fs::read(entry.path()).unwrap())
@@ -1244,6 +1268,9 @@ mod capture_tests {
             files.sort();
             files
         };
+        if database == 0 {
+            std::fs::write(path.join("printpartner.lock"), b"").unwrap();
+        }
         let before = snapshot(&path);
         PREFLIGHT_COPIES.set(0);
         let admitted = crate::lease::admit_directory(&path).unwrap();

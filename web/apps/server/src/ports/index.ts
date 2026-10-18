@@ -7,7 +7,7 @@ export interface DbStore {
   ping(): Promise<boolean>;
 }
 
-export type JobKind = string;
+type JobKind = string;
 
 export interface JobRunner {
   start(kind: JobKind, payload: Record<string, unknown>, tenantId?: string): Promise<string>;

@@ -12,6 +12,7 @@ export function useTenantFeaturesQuery(enabled = true) {
     queryFn: fetchTenantFeatures,
     enabled,
     staleTime: 30_000,
+    notifyOnChangeProps: "all",
   });
 }
 

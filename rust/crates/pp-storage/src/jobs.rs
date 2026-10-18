@@ -1,5 +1,11 @@
+#[cfg(feature = "desktop_rebuild")]
+mod checklist;
 mod filename;
 mod model;
+#[cfg(feature = "desktop_rebuild")]
+mod results;
+#[cfg(feature = "desktop_rebuild")]
+mod subscriptions;
 use crate::{
     Envelope, SettingsClient, WriterOwner,
     auth::{self, AuthPolicy, Secret},
@@ -7,6 +13,8 @@ use crate::{
 use anyhow::{Result, anyhow, ensure};
 pub use filename::*;
 pub use model::*;
+#[cfg(feature = "desktop_rebuild")]
+pub use results::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
@@ -16,6 +24,12 @@ use std::{
         mpsc,
     },
     time::{Duration, Instant},
+};
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) use subscriptions::JobSubscriptions;
+#[cfg(feature = "desktop_rebuild")]
+pub use subscriptions::{
+    FrameAdmission, JobSubscription, NonblockingSend, PreparedEvent, PreparedFrame, StreamClose,
 };
 
 #[derive(Clone, Copy)]
@@ -44,11 +58,27 @@ pub struct AtomicJobClient {
     storage: SettingsClient,
     policy: AuthPolicy,
 }
+/// A tenant's retained public snapshots, newest first.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone)]
+pub struct RetainedJobs {
+    snapshots: Arc<[JobSnapshot]>,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl std::ops::Deref for RetainedJobs {
+    type Target = [JobSnapshot];
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshots
+    }
+}
 #[derive(Clone)]
 pub struct ServerWorkerClient {
     storage: SettingsClient,
     identity: String,
     admission: Arc<WorkerAdmission>,
+    #[cfg(feature = "desktop_rebuild")]
+    policy: Option<AuthPolicy>,
 }
 #[derive(Clone)]
 pub struct AttemptLease {
@@ -59,9 +89,36 @@ pub struct AttemptLease {
     fence: String,
     worker: String,
 }
+#[cfg(feature = "desktop_rebuild")]
+pub struct ClaimedAttempt {
+    pub job: JobRecord,
+    pub lease: AttemptLease,
+    pub source_work: Option<crate::catalog::SourceWorkLease>,
+}
+#[cfg(not(feature = "desktop_rebuild"))]
+pub type ClaimedAttempt = (JobRecord, AttemptLease);
 impl AttemptLease {
     pub fn job_id(&self) -> &str {
         &self.job_id
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+impl AttemptLease {
+    pub(crate) fn generation(&self) -> i64 {
+        self.generation
+    }
+    #[cfg(test)]
+    pub(crate) fn version(&self) -> i64 {
+        self.version
+    }
+    pub(crate) fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    pub(crate) fn worker(&self) -> &str {
+        &self.worker
+    }
+    pub(crate) fn fence(&self) -> &str {
+        &self.fence
     }
 }
 #[derive(Clone, PartialEq, Eq)]
@@ -100,7 +157,13 @@ pub enum UserOperation {
     Get {
         job_id: String,
     },
+    #[cfg(feature = "desktop_rebuild")]
+    GetPublic {
+        job_id: String,
+    },
     List(JobListQuery),
+    #[cfg(feature = "desktop_rebuild")]
+    ListRetained(LegacyListFilter),
     /// Operator-visible damaged rows, with uncertain reservations explicitly flagged.
     Quarantined {
         before: Option<(i64, String)>,
@@ -134,6 +197,12 @@ pub enum WorkerOperation {
     BeginEffect(EffectIntent),
     ConfirmEffect(ResultArtifact),
     Finish(Option<ResultArtifact>),
+    /// Finishes with the result the public job API reports.
+    #[cfg(feature = "desktop_rebuild")]
+    FinishPublic {
+        artifact: Option<ResultArtifact>,
+        result: Box<CompletedResult>,
+    },
     Fail,
 }
 /// A damaged document is retained for inspection and repair, never executed.
@@ -147,13 +216,83 @@ pub struct QuarantinedJob {
     pub uncertain_resource: Option<String>,
 }
 pub enum Outcome {
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanObservation(crate::source_scan::LocalScanObservation),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanSettled(JobRecord, crate::source_scan::LocalScanApplied),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanCompletion(crate::source_scan::LocalCompletionInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    HeldLocalScan(crate::source_scan::HeldLocalScanInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanReconciled(JobRecord),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncOpened,
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncTarget(crate::source_sync::NextSyncTarget, i64),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
+    #[cfg(feature = "desktop_rebuild")]
+    PublicList(RetainedJobs),
+    #[cfg(feature = "desktop_rebuild")]
+    PublicJob(JobSnapshot),
+    #[cfg(feature = "desktop_rebuild")]
+    Observed(JobSubscription),
     Quarantined(Vec<QuarantinedJob>),
     History(Vec<HistoryEntry>),
     Reconciliations(Vec<ReconciliationRecord>),
-    Claimed(Option<(JobRecord, AttemptLease)>),
+    Claimed(Option<ClaimedAttempt>),
     Retained(usize),
+    #[cfg(feature = "desktop_rebuild")]
+    Authorized(ValidatedAuthority),
+}
+/// What the writer does once the transaction commits.
+enum TransactionDecision {
+    Outcome(Outcome),
+    #[cfg(feature = "desktop_rebuild")]
+    Claimed(ClaimPlan),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanCompleted(crate::source_scan::PendingLocalCompletion),
+    #[cfg(feature = "desktop_rebuild")]
+    LocalScanReconciled(crate::source_scan::PendingLocalReconciliation),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncReserved(crate::source_sync::ReservedTarget, SettingsClient),
+    /// Report this error only after committing the refusals recorded before it.
+    #[cfg(feature = "desktop_rebuild")]
+    ErrorAfterCommit(anyhow::Error),
+    /// Report the authority failure after committing the refusal it caused.
+    #[cfg(feature = "desktop_rebuild")]
+    Refused(CommittedRefusal),
+    /// Register the stream only once the snapshot it starts from has committed.
+    #[cfg(feature = "desktop_rebuild")]
+    Observation {
+        credential: Credential,
+        authority: auth::StreamAuthority,
+        policy: AuthPolicy,
+        snapshot: JobSnapshot,
+    },
+}
+#[cfg(feature = "desktop_rebuild")]
+struct CommittedRefusal {
+    job: JobRecord,
+    failure: auth::AuthorityFailure,
+}
+/// The original credential of a claimed attempt, revalidated under the
+/// current policy.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedAuthority {
+    tenant: String,
+    subject: String,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl ValidatedAuthority {
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
 }
 pub(crate) enum Command {
     User {
@@ -165,11 +304,82 @@ pub(crate) enum Command {
     Claim {
         worker: String,
         admission: Arc<WorkerAdmission>,
+        #[cfg(feature = "desktop_rebuild")]
+        job_id: Option<String>,
+        #[cfg(feature = "desktop_rebuild")]
+        kind: Option<JobKind>,
+        #[cfg(feature = "desktop_rebuild")]
+        policy: Option<AuthPolicy>,
+        #[cfg(feature = "desktop_rebuild")]
+        storage: SettingsClient,
     },
     Worker {
         lease: AttemptLease,
         operation: WorkerOperation,
         admission: Arc<WorkerAdmission>,
+        #[cfg(feature = "desktop_rebuild")]
+        policy: Option<AuthPolicy>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Authorize {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Observe {
+        credential: Credential,
+        policy: AuthPolicy,
+        job_id: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ObserveLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    SettleLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        settlement: crate::source_scan::LocalScanSettlement,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    CompleteLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        policy: AuthPolicy,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectLocalScan {
+        lease: AttemptLease,
+        worker: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectHeldLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        worker: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ReconcileLocalScan {
+        lease: AttemptLease,
+        source_work: crate::catalog::SourceWorkProof,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    OpenSourceSync {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    ClaimSourceSyncTarget {
+        lease: AttemptLease,
+        policy: AuthPolicy,
+        storage: SettingsClient,
     },
     Retain {
         per_tenant: usize,
@@ -204,9 +414,29 @@ impl std::fmt::Display for JobFailure {
     }
 }
 impl std::error::Error for JobFailure {}
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobAccessFailure {
+    NotFound,
+    InternalOnly,
+    Capacity,
+    Stopped,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl std::fmt::Display for JobAccessFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotFound | Self::InternalOnly => "Job not found",
+            Self::Capacity => "Job stream capacity reached",
+            Self::Stopped => "Jobs owner stopped",
+        })
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+impl std::error::Error for JobAccessFailure {}
 pub struct PendingClaim(Pending);
 impl PendingClaim {
-    pub fn receive(self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn receive(self) -> Result<Option<ClaimedAttempt>> {
         match self.0.receive()? {
             Outcome::Claimed(value) => Ok(value),
             _ => unreachable!(),
@@ -268,6 +498,31 @@ impl WriterOwner {
         }
     }
     pub fn job_worker(&self, admission: WorkerAdmission) -> Result<ServerWorkerClient> {
+        Ok(ServerWorkerClient {
+            storage: self.client(),
+            identity: random(),
+            admission: self.worker_admission(admission)?,
+            #[cfg(feature = "desktop_rebuild")]
+            policy: None,
+        })
+    }
+    /// A worker that can claim jobs carrying an original credential. Each
+    /// claim revalidates that credential under `policy`.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn job_worker_with_policy(
+        &self,
+        policy: AuthPolicy,
+        admission: WorkerAdmission,
+    ) -> Result<ServerWorkerClient> {
+        self.auth_with_policy(policy)?;
+        Ok(ServerWorkerClient {
+            storage: self.client(),
+            identity: random(),
+            admission: self.worker_admission(admission)?,
+            policy: Some(policy),
+        })
+    }
+    fn worker_admission(&self, admission: WorkerAdmission) -> Result<Arc<WorkerAdmission>> {
         admission.validate()?;
         let mut configured = self
             .client
@@ -281,14 +536,9 @@ impl WriterOwner {
                 "Worker admission already configured"
             );
         }
-        let admission = configured
+        Ok(configured
             .get_or_insert_with(|| Arc::new(admission))
-            .clone();
-        Ok(ServerWorkerClient {
-            storage: self.client(),
-            identity: random(),
-            admission,
-        })
+            .clone())
     }
     pub fn retain_jobs(&self, per_tenant: usize, global: usize) -> Result<usize> {
         ensure!(
@@ -332,6 +582,11 @@ impl AtomicJobClient {
                 grouping.normalize();
             }
             payload.validate()?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(
+                !matches!(payload, Payload::SuppliedSourceImport { .. }),
+                "Supplied imports require atomic domain admission"
+            );
         }
         submit(
             &self.storage,
@@ -344,6 +599,76 @@ impl AtomicJobClient {
             cancelled,
             wait,
         )
+    }
+    /// Reads the snapshot the public job API reports.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn read_public(
+        &self,
+        credential: Credential,
+        job_id: String,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<JobSnapshot> {
+        match self
+            .submit(
+                credential,
+                UserOperation::GetPublic { job_id },
+                cancelled,
+                wait,
+            )?
+            .receive()?
+        {
+            Outcome::PublicJob(snapshot) => Ok(snapshot),
+            _ => unreachable!(),
+        }
+    }
+    /// Lists the tenant's retained jobs with Node's filters and ordering.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn list_retained(
+        &self,
+        credential: Credential,
+        filter: LegacyListFilter,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<RetainedJobs> {
+        match self
+            .submit(
+                credential,
+                UserOperation::ListRetained(filter),
+                cancelled,
+                wait,
+            )?
+            .receive()?
+        {
+            Outcome::PublicList(snapshots) => Ok(snapshots),
+            _ => unreachable!(),
+        }
+    }
+    /// Streams the job's committed snapshots, starting from the current one,
+    /// for as long as the credential stays valid.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn subscribe(
+        &self,
+        credential: Credential,
+        job_id: String,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<JobSubscription> {
+        match submit(
+            &self.storage,
+            Command::Observe {
+                credential,
+                policy: self.policy,
+                job_id,
+            },
+            cancelled,
+            wait,
+        )?
+        .receive()?
+        {
+            Outcome::Observed(subscription) => Ok(subscription),
+            _ => unreachable!(),
+        }
     }
 }
 impl ServerWorkerClient {
@@ -364,14 +689,109 @@ impl ServerWorkerClient {
             Command::Claim {
                 worker: self.identity.clone(),
                 admission: self.admission.clone(),
+                #[cfg(feature = "desktop_rebuild")]
+                job_id: None,
+                #[cfg(feature = "desktop_rebuild")]
+                kind: None,
+                #[cfg(feature = "desktop_rebuild")]
+                policy: self.policy,
+                #[cfg(feature = "desktop_rebuild")]
+                storage: self.storage.clone(),
             },
             cancelled,
             wait,
         )?))
     }
-    pub fn claim(&self) -> Result<Option<(JobRecord, AttemptLease)>> {
+    pub fn claim(&self) -> Result<Option<ClaimedAttempt>> {
         self.claim_pending(&AtomicBool::new(false), Duration::from_secs(5))?
             .receive()
+    }
+    /// Claims the oldest admissible job of one admitted kind.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn claim_kind(&self, kind: JobKind) -> Result<Option<ClaimedAttempt>> {
+        ensure!(
+            self.admission
+                .kinds
+                .iter()
+                .any(|(admitted, _)| *admitted == kind),
+            "Job kind is not admitted"
+        );
+        PendingClaim(submit(
+            &self.storage,
+            Command::Claim {
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                job_id: None,
+                kind: Some(kind),
+                policy: self.policy,
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?)
+        .receive()
+    }
+    /// Claims one queued supplied import by id. A refused original authority
+    /// commits the refusal and returns the typed failure instead of moving on.
+    /// A busy Source returns `SourceBusy` and leaves the queued job unchanged.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn claim_import(&self, job_id: &str) -> Result<Option<ClaimedAttempt>> {
+        PendingClaim(submit(
+            &self.storage,
+            Command::Claim {
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                job_id: Some(job_id.into()),
+                kind: Some(JobKind::SuppliedSourceImport),
+                policy: self.policy,
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?)
+        .receive()
+    }
+    /// Runs one phase of a claimed supplied import. A refused original authority
+    /// commits the refusal and its Source observation before returning the typed
+    /// failure.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn import_phase(
+        &self,
+        lease: &AttemptLease,
+        phase: crate::uploads::Phase,
+    ) -> Result<crate::uploads::Operation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        crate::uploads::submit(
+            &self.storage,
+            crate::uploads::Command::Phase {
+                lease: lease.clone(),
+                phase,
+                policy,
+            },
+            &AtomicBool::new(false),
+        )
+    }
+    /// Revalidates the original credential of a live attempt. The check does
+    /// not change the job.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn authorize(&self, lease: &AttemptLease) -> Result<ValidatedAuthority> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::Authorize {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::Authorized(authority) => Ok(authority),
+            _ => unreachable!(),
+        }
     }
     pub fn update(
         &self,
@@ -385,6 +805,8 @@ impl ServerWorkerClient {
                 lease: lease.clone(),
                 operation,
                 admission: self.admission.clone(),
+                #[cfg(feature = "desktop_rebuild")]
+                policy: self.policy,
             },
             &AtomicBool::new(false),
             Duration::from_secs(5),
@@ -399,11 +821,231 @@ impl ServerWorkerClient {
         }
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+impl ServerWorkerClient {
+    pub fn observe_local_scan(
+        &self,
+        lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::LocalScanObservation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::ObserveLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanObservation(observation) => Ok(observation),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn settle_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+        settlement: crate::source_scan::LocalScanSettlement,
+    ) -> Result<crate::source_scan::LocalScanApplied> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::SettleLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                settlement,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanSettled(job, applied) => {
+                lease.version = job.state_version;
+                Ok(applied)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn complete_local_scan(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        result: SourceScanResult,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        let outcome = match submit(
+            &self.storage,
+            Command::CompleteLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                policy,
+                applied,
+                result,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        if matches!(
+            outcome,
+            crate::source_scan::LocalCompletionInspection::Completed(_)
+        ) {
+            source_work.consume_retired()?;
+        }
+        Ok(outcome)
+    }
+
+    pub fn inspect_local_scan_completion(
+        &self,
+        lease: &AttemptLease,
+    ) -> Result<crate::source_scan::LocalCompletionInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::InspectLocalScan {
+                lease: lease.clone(),
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanCompletion(outcome) => Ok(outcome),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn inspect_local_scan_while_held(
+        &self,
+        lease: &mut AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+    ) -> Result<crate::source_scan::HeldLocalScanInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let outcome = match submit(
+            &self.storage,
+            Command::InspectHeldLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                worker: self.identity.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::HeldLocalScan(outcome) => outcome,
+            _ => unreachable!(),
+        };
+        lease.version = match &outcome {
+            crate::source_scan::HeldLocalScanInspection::NotApplied(job)
+            | crate::source_scan::HeldLocalScanInspection::Applied(job, _) => job.state_version,
+        };
+        Ok(outcome)
+    }
+
+    pub fn record_local_scan_reconciliation(
+        &self,
+        lease: &AttemptLease,
+        source_work: &mut crate::catalog::SourceWorkLease,
+        applied: crate::source_scan::LocalScanApplied,
+        reason: String,
+    ) -> Result<JobRecord> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let job = match submit(
+            &self.storage,
+            Command::ReconcileLocalScan {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                applied,
+                reason,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::LocalScanReconciled(job) => job,
+            _ => unreachable!(),
+        };
+        source_work.consume_retired()?;
+        Ok(job)
+    }
+
+    pub fn open_source_sync(&self, lease: &AttemptLease) -> Result<()> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::OpenSourceSync {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncOpened => Ok(()),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Claims the next target of an open batch. A Local target's lease holds
+    /// its Source reservation; release or drop it promptly.
+    pub fn claim_next_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+    ) -> Result<crate::source_sync::NextSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::ClaimSourceSyncTarget {
+                lease: lease.clone(),
+                policy,
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncTarget(target, version) => {
+                lease.version = version;
+                Ok(target)
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 fn random() -> String {
     hex::encode(rand::random::<[u8; 32]>())
 }
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
+}
+/// Rounds the start up to a whole second so a lease checked against the
+/// truncated `now()` lasts at least `lease_seconds` of real time.
+fn lease_expiry(at: time::OffsetDateTime, lease_seconds: u32) -> i64 {
+    at.unix_timestamp() + i64::from(at.nanosecond() > 0) + i64::from(lease_seconds)
 }
 pub const JOB_DOC_SIZE_LIMIT: usize = 131072;
 
@@ -471,11 +1113,30 @@ fn encode(job: &JobRecord) -> Result<String> {
     let mut document = serde_json::to_value(job)?;
     document["_attempt_worker"] = serde_json::to_value(&job.worker)?;
     document["_attempt_fence"] = serde_json::to_value(&job.fence)?;
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        match job.authority_disposition {
+            AuthorityDisposition::Original => {
+                document["_authority"] = auth::authority::encode(
+                    job.authority
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("Missing durable authority"))?,
+                )?;
+            }
+            AuthorityDisposition::PhysicalOwner => {
+                document["_authority"] = serde_json::Value::Null;
+            }
+            AuthorityDisposition::LegacyMissing => {}
+        }
+        if let Some(observation) = &job.authority_refusal {
+            document["_authority_refusal"] = serde_json::to_value(observation)?;
+        }
+    }
     let document = serde_json::to_string(&document)?;
     check_document_size(document.len())?;
     Ok(document)
 }
-fn decode(document: &str) -> Result<JobRecord> {
+pub(crate) fn decode(document: &str) -> Result<JobRecord> {
     check_document_size(document.len())?;
     let value: serde_json::Value = serde_json::from_str(document)?;
     let mut job: JobRecord = serde_json::from_value(value.clone())?;
@@ -491,6 +1152,22 @@ fn decode(document: &str) -> Result<JobRecord> {
             .cloned()
             .unwrap_or(serde_json::Value::Null),
     )?;
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        (job.authority, job.authority_disposition) = match value.get("_authority") {
+            Some(serde_json::Value::Null) => (None, AuthorityDisposition::PhysicalOwner),
+            Some(authority) => (
+                Some(auth::authority::decode(authority.clone())?),
+                AuthorityDisposition::Original,
+            ),
+            None => (None, AuthorityDisposition::LegacyMissing),
+        };
+        job.authority_refusal = value
+            .get("_authority_refusal")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?;
+    }
     for timestamp in [
         Some(job.created_at),
         Some(job.updated_at),
@@ -509,7 +1186,7 @@ fn decode(document: &str) -> Result<JobRecord> {
     job.validate_state()?;
     Ok(job)
 }
-fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
+pub(crate) fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
     let document: Option<String> = tx
         .query_row(
             "SELECT document FROM durable_jobs WHERE id=?1 AND state!='quarantined'",
@@ -517,12 +1194,23 @@ fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> {
             |r| r.get(0),
         )
         .optional()?;
-    document.map(|v| decode(&v)).transpose()
+    document
+        .map(|document| {
+            let job = decode(&document)?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(job.job_id == id, "Stored Job identity mismatch");
+            Ok(job)
+        })
+        .transpose()
 }
 fn owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
-    let record = load(tx, id)?.ok_or_else(|| anyhow!("Job not found"))?;
-    ensure!(record.tenant == tenant, "Job not found");
-    Ok(record)
+    #[cfg(not(feature = "desktop_rebuild"))]
+    let missing = || anyhow!("Job not found");
+    #[cfg(feature = "desktop_rebuild")]
+    let missing = || anyhow!(JobAccessFailure::NotFound);
+    load(tx, id)?
+        .filter(|record| record.tenant == tenant)
+        .ok_or_else(missing)
 }
 fn retained_owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
     if let Some(record) = load(tx, id)? {
@@ -590,7 +1278,13 @@ fn bind_printer_start(tx: &Transaction<'_>, tenant: &str, mut payload: Payload) 
     payload.bind_printer_start(printer_id, upload)?;
     Ok(payload)
 }
-fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn fail_source_unavailable(tx: &Transaction<'_>, job: &mut JobRecord) -> Result<()> {
+    job.state = PersistentState::Failed;
+    job.recovery = Some("Source is unavailable for this job".into());
+    save(tx, job, "source_unavailable")
+}
+pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     job.payload.validate_stored()?;
     job.state_version += 1;
     job.updated_at = now();
@@ -613,6 +1307,8 @@ fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
             event
         ],
     )?;
+    #[cfg(feature = "desktop_rebuild")]
+    subscriptions::record(job);
     Ok(())
 }
 fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
@@ -649,6 +1345,8 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
         if !all && !lease_until.is_some_and(|until| until <= now()) {
             continue;
         }
+        // A cancelled import goes back to its owner, as `Cancel` does.
+        let owner_cleanup = job.awaits_owner_cleanup();
         job.generation += 1;
         job.fence = None;
         job.worker = None;
@@ -660,9 +1358,9 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             job.state = PersistentState::ReconciliationRequired;
             job.recovery =
                 Some("Resume from confirmed receipts requires handler reconciliation".into());
-        } else if job.cancel_requested {
+        } else if job.cancel_requested && !owner_cleanup {
             job.state = PersistentState::Cancelled;
-        } else if job.attempt >= 100 {
+        } else if job.attempt >= 100 && !owner_cleanup {
             job.state = PersistentState::Failed;
             job.recovery = Some("Attempt limit reached".into());
         } else {
@@ -684,6 +1382,8 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
 pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     recover_in(&tx, true)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::uploads::settle_ended(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -692,9 +1392,13 @@ pub(crate) fn execute(
     command: Command,
     effect_policy: EffectAdmissionPolicy,
     admission: crate::writer_admission::Deadline,
+    #[cfg(feature = "desktop_rebuild")] subscriptions: &JobSubscriptions,
+    #[cfg(feature = "desktop_rebuild")] catalog_state: &mut crate::catalog::State,
 ) -> Result<Outcome> {
+    #[cfg(feature = "desktop_rebuild")]
+    subscriptions::begin_collection();
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
-    let outcome = match command {
+    let decision = match command {
         Command::User {
             credential,
             policy,
@@ -702,39 +1406,309 @@ pub(crate) fn execute(
             storage,
         } => {
             let auth_committed = matches!(&credential, Credential::RoutedKey { .. });
-            let (tenant, subject) = match credential {
-                Credential::Session(token) => auth::job_session_actor(&tx, token.expose(), policy)?,
-                Credential::RoutedKey { tenant, key } => auth::job_key_actor(&tx, &tenant, key)?,
-                Credential::PhysicalOwner(owner) => {
-                    ensure!(
-                        Arc::ptr_eq(&storage, &owner.storage),
-                        "Foreign physical owner"
-                    );
-                    ("default".into(), "physical-owner".into())
-                }
+            #[cfg(not(feature = "desktop_rebuild"))]
+            let mut outcome = {
+                let (tenant, subject) = actor(&tx, credential, policy, &storage)?;
+                user(&tx, &tenant, &subject, operation)?
             };
-            let mut outcome = user(&tx, &tenant, &subject, operation)?;
+            #[cfg(feature = "desktop_rebuild")]
+            let mut outcome = if matches!(operation, UserOperation::Enqueue { .. }) {
+                let (tenant, subject, authority) =
+                    auth::authority::admit(&tx, credential, policy, &storage)?;
+                user(&tx, &tenant, &subject, authority, operation)?
+            } else {
+                let (tenant, subject) = actor(&tx, credential, policy, &storage)?;
+                user(&tx, &tenant, &subject, None, operation)?
+            };
             if auth_committed && let Outcome::Job(_, commit) = &mut outcome {
                 *commit = LocalCommit::Committed;
             }
-            outcome
+            TransactionDecision::Outcome(outcome)
         }
+        #[cfg(not(feature = "desktop_rebuild"))]
         Command::Claim { worker, admission } => claim(&tx, &worker, &admission)?,
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Claim {
+            worker,
+            admission,
+            job_id,
+            kind,
+            policy,
+            storage,
+        } => claim(
+            &tx,
+            &worker,
+            &admission,
+            ClaimFilter {
+                job_id: job_id.as_deref(),
+                kind,
+            },
+            policy,
+            catalog_state,
+            storage,
+        )?,
+        #[cfg(not(feature = "desktop_rebuild"))]
         Command::Worker {
             lease,
             operation,
             admission,
         } => advance(&tx, lease, operation, &admission, effect_policy)?,
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Worker {
+            lease,
+            operation,
+            admission,
+            policy,
+        } => advance(&tx, lease, operation, &admission, effect_policy, policy)?,
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Authorize { lease, policy } => {
+            let job = claimed_job(&tx, &lease)?;
+            TransactionDecision::Outcome(Outcome::Authorized(require_original_authority(
+                &tx, &job, policy,
+            )?))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::Observe {
+            credential,
+            policy,
+            job_id,
+        } => {
+            let authority = auth::resolve_stream_authority(&tx, &credential, policy, true)?;
+            let job = owned(&tx, &job_id, &authority.tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
+            TransactionDecision::Observation {
+                credential,
+                authority,
+                policy,
+                snapshot: job.snapshot(),
+            }
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ObserveLocalScan {
+            lease,
+            source_work,
+            policy,
+        } => TransactionDecision::Outcome(Outcome::LocalScanObservation(
+            crate::source_scan::observe(&tx, catalog_state, &lease, &source_work, policy)?,
+        )),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::SettleLocalScan {
+            lease,
+            source_work,
+            policy,
+            settlement,
+        } => {
+            let (job, applied) = crate::source_scan::settle(
+                &tx,
+                catalog_state,
+                &lease,
+                &source_work,
+                policy,
+                settlement,
+            )?;
+            TransactionDecision::Outcome(Outcome::LocalScanSettled(job, applied))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::CompleteLocalScan {
+            lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        } => TransactionDecision::LocalScanCompleted(crate::source_scan::complete(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            policy,
+            applied,
+            result,
+        )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectLocalScan { lease, worker } => {
+            TransactionDecision::Outcome(Outcome::LocalScanCompletion(crate::source_scan::inspect(
+                &tx,
+                catalog_state,
+                &worker,
+                &lease,
+            )?))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectHeldLocalScan {
+            lease,
+            source_work,
+            worker,
+        } => TransactionDecision::Outcome(Outcome::HeldLocalScan(
+            crate::source_scan::inspect_held(&tx, catalog_state, &worker, &lease, &source_work)?,
+        )),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ReconcileLocalScan {
+            lease,
+            source_work,
+            applied,
+            reason,
+        } => TransactionDecision::LocalScanReconciled(crate::source_scan::reconcile(
+            &tx,
+            catalog_state,
+            &lease,
+            source_work,
+            &applied,
+            &reason,
+        )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::OpenSourceSync { lease, policy } => {
+            crate::source_sync::open(&tx, &lease, policy)?;
+            TransactionDecision::Outcome(Outcome::SourceSyncOpened)
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ClaimSourceSyncTarget {
+            lease,
+            policy,
+            storage,
+        } => match crate::source_sync::next(&tx, catalog_state, &lease, policy)? {
+            crate::source_sync::Next::Reserve(target) => {
+                TransactionDecision::SourceSyncReserved(target, storage)
+            }
+            crate::source_sync::Next::Done(target, version) => {
+                TransactionDecision::Outcome(Outcome::SourceSyncTarget(target, version))
+            }
+        },
         Command::Retain { per_tenant, global } => {
-            Outcome::Retained(prune(&tx, per_tenant, global)?)
+            TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
     };
-    if matches!(&outcome,Outcome::Job(job,LocalCommit::Committed) if job.state.terminal()) {
+    let terminal = match &decision {
+        TransactionDecision::Outcome(Outcome::Job(job, LocalCommit::Committed)) => {
+            job.state.terminal()
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Refused(CommittedRefusal { job, .. }) => job.state.terminal(),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanCompleted(_) => true,
+        _ => false,
+    };
+    if terminal {
         prune(&tx, 1000, 10000)?;
     }
+    #[cfg(not(feature = "desktop_rebuild"))]
     tx.commit()
         .map_err(|_| anyhow!(JobFailure::CommitUnknown))?;
-    Ok(outcome)
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        if tx.commit().is_err() {
+            subscriptions::finish_collection();
+            subscriptions.stop();
+            return Err(anyhow!(JobFailure::CommitUnknown));
+        }
+        subscriptions::mark_committed();
+        subscriptions.publish(subscriptions::finish_collection());
+    }
+    match decision {
+        TransactionDecision::Outcome(outcome) => Ok(outcome),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Claimed(plan) => {
+            Ok(Outcome::Claimed(Some(plan.into_claimed(catalog_state)?)))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::ErrorAfterCommit(error) => Err(error),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Refused(CommittedRefusal { failure, .. }) => Err(failure.into()),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanCompleted(pending) => {
+            use crate::catalog::IssuedTokenState;
+            let outcome = match catalog_state
+                .classify_issued(&pending.proof.incarnation, pending.proof.token)
+            {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Retired => {
+                    crate::source_scan::LocalCompletionInspection::Completed(pending.completion)
+                }
+                IssuedTokenState::Active(_) => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationConflict(
+                        pending.completion,
+                    )
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    crate::source_scan::LocalCompletionInspection::CommittedReservationCorrupt(
+                        pending.completion,
+                    )
+                }
+            };
+            Ok(Outcome::LocalScanCompletion(outcome))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::LocalScanReconciled(pending) => {
+            use crate::catalog::IssuedTokenState;
+            match catalog_state.classify_issued(&pending.proof.incarnation, pending.proof.token) {
+                IssuedTokenState::Active(actual) if actual == &pending.binding => {
+                    catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+                }
+                IssuedTokenState::Retired => {}
+                IssuedTokenState::Active(_) => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a Source reservation conflict"
+                    ));
+                }
+                IssuedTokenState::NeverIssued | IssuedTokenState::WrongIncarnation => {
+                    return Err(anyhow!(
+                        "Committed Local scan reconciliation has a corrupt Source reservation"
+                    ));
+                }
+            }
+            Ok(Outcome::LocalScanReconciled(pending.job))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::SourceSyncReserved(target, storage) => {
+            let (target, version) = target.activate(catalog_state, storage)?;
+            Ok(Outcome::SourceSyncTarget(target, version))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Observation {
+            credential,
+            authority,
+            policy,
+            snapshot,
+        } => subscriptions
+            .register(credential, authority, policy, snapshot)
+            .map(Outcome::Observed),
+    }
+}
+/// Runs an authority write under the stream admission gate, then revokes the
+/// streams whose credential no longer resolves to the same tenant and subject.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn authority_change<T>(
+    connection: &mut Connection,
+    subscriptions: &JobSubscriptions,
+    change: impl FnOnce(&mut Connection) -> Result<T>,
+) -> Result<T> {
+    subscriptions.authority_change(|| {
+        let result = change(connection);
+        if subscriptions.revalidate(connection).is_err() {
+            subscriptions.stop_under_authority_gate();
+        }
+        result
+    })
+}
+pub(crate) fn actor(
+    tx: &Transaction<'_>,
+    credential: Credential,
+    policy: AuthPolicy,
+    storage: &Arc<crate::Shared>,
+) -> Result<(String, String)> {
+    match credential {
+        Credential::Session(token) => auth::job_session_actor(tx, token.expose(), policy),
+        Credential::RoutedKey { tenant, key } => auth::job_key_actor(tx, &tenant, key),
+        Credential::PhysicalOwner(owner) => {
+            ensure!(
+                Arc::ptr_eq(storage, &owner.storage),
+                "Foreign physical owner"
+            );
+            Ok(("default".into(), "physical-owner".into()))
+        }
+    }
 }
 fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize> {
     let mut statement=tx.prepare(
@@ -763,10 +1737,11 @@ fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize
     }
     Ok(removed.len())
 }
-fn user(
+pub(crate) fn user(
     tx: &Transaction<'_>,
     tenant: &str,
     subject: &str,
+    #[cfg(feature = "desktop_rebuild")] authority: Option<auth::authority::AuthorityBasis>,
     operation: UserOperation,
 ) -> Result<Outcome> {
     match operation {
@@ -817,7 +1792,19 @@ fn user(
                 progress: None,
                 effects: vec![],
                 result: None,
+                #[cfg(feature = "desktop_rebuild")]
+                public_result: None,
                 recovery: None,
+                #[cfg(feature = "desktop_rebuild")]
+                authority_disposition: if authority.is_some() {
+                    AuthorityDisposition::Original
+                } else {
+                    AuthorityDisposition::PhysicalOwner
+                },
+                #[cfg(feature = "desktop_rebuild")]
+                authority,
+                #[cfg(feature = "desktop_rebuild")]
+                authority_refusal: None,
                 fence: None,
                 worker: None,
             };
@@ -832,6 +1819,62 @@ fn user(
             owned(tx, &job_id, tenant)?,
             LocalCommit::ReadOnly,
         )),
+        #[cfg(feature = "desktop_rebuild")]
+        UserOperation::GetPublic { job_id } => {
+            let job = owned(tx, &job_id, tenant)?;
+            ensure!(!job.internal_only(), JobAccessFailure::NotFound);
+            Ok(Outcome::PublicJob(job.snapshot()))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        UserOperation::ListRetained(filter) => {
+            prune(tx, 1000, 10000)?;
+            let rows = tx
+                .prepare("SELECT rowid,id,document FROM durable_jobs WHERE tenant=?1 AND state!='quarantined'")?
+                .query_map([tenant], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut diagnostics = DocumentDiagnostics::default();
+            let mut jobs = rows
+                .into_iter()
+                .filter_map(|(sequence, id, document)| {
+                    decode_row(&id, &document, &mut diagnostics).map(|job| (sequence, job))
+                })
+                .filter(|(_, job)| {
+                    if job.internal_only() {
+                        return false;
+                    }
+                    let status = match &filter.status {
+                        LegacyStatusFilter::Any => true,
+                        LegacyStatusFilter::Exact(status) => job.snapshot().status == status,
+                        LegacyStatusFilter::NoMatch => false,
+                    };
+                    let since = filter.since_millis.is_none_or(|cutoff| {
+                        job.finished_at
+                            .unwrap_or(job.updated_at)
+                            .saturating_mul(1000)
+                            >= cutoff
+                    });
+                    let profile = match filter.profile {
+                        LegacyProfileFilter::Any => true,
+                        LegacyProfileFilter::Exact(profile) => {
+                            job.payload.profile_id() == Some(profile)
+                        }
+                        LegacyProfileFilter::NoMatch => false,
+                    };
+                    status && since && profile
+                })
+                .collect::<Vec<_>>();
+            // Newest first; ties keep enqueue order, as Node's stable sort does.
+            jobs.sort_by(|(left_sequence, left), (right_sequence, right)| {
+                right
+                    .finished_at
+                    .unwrap_or(right.updated_at)
+                    .cmp(&left.finished_at.unwrap_or(left.updated_at))
+                    .then_with(|| left_sequence.cmp(right_sequence))
+            });
+            Ok(Outcome::PublicList(RetainedJobs {
+                snapshots: jobs.into_iter().map(|(_, job)| job.snapshot()).collect(),
+            }))
+        }
         UserOperation::List(query) => {
             prune(tx, 1000, 10000)?;
             ensure!((1..=200).contains(&query.limit), "Invalid list limit");
@@ -962,9 +2005,30 @@ fn user(
         UserOperation::Cancel { job_id } => {
             let mut job = owned(tx, &job_id, tenant)?;
             if job.state.terminal() || job.cancel_requested {
+                // An import that ended before its cleanup phase settles here.
+                #[cfg(feature = "desktop_rebuild")]
+                if crate::uploads::settle_terminal(tx, &job)? {
+                    return Ok(Outcome::Job(job, LocalCommit::Committed));
+                }
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;
+            #[cfg(feature = "desktop_rebuild")]
+            if job.kind == JobKind::Sync {
+                let job = crate::source_sync::halt_job(tx, job, "cancelled", "Sync was cancelled")?;
+                return Ok(Outcome::Job(job, LocalCommit::Committed));
+            }
+            // The import's owner reclaims it to release its input and quota.
+            #[cfg(feature = "desktop_rebuild")]
+            if job.kind == JobKind::SuppliedSourceImport {
+                job.state = PersistentState::Queued;
+                job.generation += 1;
+                job.fence = None;
+                job.worker = None;
+                job.lease_until = None;
+                save(tx, &mut job, "cancellation_requested")?;
+                return Ok(Outcome::Job(job, LocalCommit::Committed));
+            }
             if job.effects.is_empty() {
                 job.state = PersistentState::Cancelled;
                 job.generation += 1;
@@ -988,6 +2052,15 @@ fn user(
             receipt,
         } => {
             let mut job = owned(tx, &job_id, tenant)?;
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(
+                decision != Decision::ConfirmSucceeded
+                    || job
+                        .effects
+                        .iter()
+                        .all(|effect| effect.checklist_completion.is_none()),
+                "Checklist completion requires its owning reconciler"
+            );
             ensure!(
                 job.state == PersistentState::ReconciliationRequired
                     && job.state_version == expected_version
@@ -1023,6 +2096,8 @@ fn user(
                             ensure!(stored == &receipt, "Receipt mismatch")
                         }
                         EffectOutcome::Unresolved => effect.confirm(receipt.clone())?,
+                        #[cfg(feature = "desktop_rebuild")]
+                        EffectOutcome::Observed(_) => effect.confirm(receipt.clone())?,
                         EffectOutcome::Denied => return Err(anyhow!("Effect already resolved")),
                     }
                     subject_receipt = Some(receipt.clone());
@@ -1076,7 +2151,70 @@ fn user(
         }
     }
 }
-fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Result<Outcome> {
+#[cfg(feature = "desktop_rebuild")]
+struct SourceReservation {
+    token: u64,
+    tenant: String,
+    id: i64,
+    client: SettingsClient,
+}
+#[cfg(feature = "desktop_rebuild")]
+struct ClaimPlan {
+    job: JobRecord,
+    lease: AttemptLease,
+    source: Option<SourceReservation>,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl ClaimPlan {
+    fn into_claimed(self, state: &mut crate::catalog::State) -> Result<ClaimedAttempt> {
+        let source_work = self
+            .source
+            .map(|source| -> Result<_> {
+                state.activate(source.token, source.tenant, source.id);
+                let proof = state.proof(source.token)?;
+                Ok(crate::catalog::lease(source.client, proof))
+            })
+            .transpose()?;
+        Ok(ClaimedAttempt {
+            job: self.job,
+            lease: self.lease,
+            source_work,
+        })
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+enum SourceBinding {
+    None,
+    Individual(i64),
+    Wildcard,
+}
+/// Sync reserves each target's Source when it claims the target.
+#[cfg(feature = "desktop_rebuild")]
+fn source_binding(payload: &Payload) -> Result<SourceBinding> {
+    Ok(match payload {
+        Payload::ImportScan { project_id }
+        | Payload::ExtractSourceDocs { project_id }
+        | Payload::SuppliedSourceImport { project_id, .. } => {
+            SourceBinding::Individual(i64::try_from(*project_id)?)
+        }
+        Payload::CheckSourceUpdates {} => SourceBinding::Wildcard,
+        _ => SourceBinding::None,
+    })
+}
+#[cfg(feature = "desktop_rebuild")]
+struct ClaimFilter<'a> {
+    job_id: Option<&'a str>,
+    kind: Option<JobKind>,
+}
+fn claim(
+    tx: &Transaction<'_>,
+    worker: &str,
+    admission: &WorkerAdmission,
+    #[cfg(feature = "desktop_rebuild")] filter: ClaimFilter<'_>,
+    #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
+    #[cfg(feature = "desktop_rebuild")] catalog_state: &crate::catalog::State,
+    #[cfg(feature = "desktop_rebuild")] storage: SettingsClient,
+) -> Result<TransactionDecision> {
     let mut diagnostics = DocumentDiagnostics::default();
     recover_in(tx, false)?;
     let active: i64 = tx.query_row(
@@ -1085,18 +2223,32 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
         |r| r.get(0),
     )?;
     if active >= admission.total as i64 {
-        return Ok(Outcome::Claimed(None));
+        return Ok(TransactionDecision::Outcome(Outcome::Claimed(None)));
     }
+    #[cfg(feature = "desktop_rebuild")]
+    let mut refused = false;
     for (kind, capacity) in &admission.kinds {
+        #[cfg(feature = "desktop_rebuild")]
+        if filter.kind.is_some_and(|requested| requested != *kind) {
+            continue;
+        }
         let count:i64=tx.query_row("SELECT COUNT(*) FROM durable_jobs WHERE kind=?1 AND state IN ('running','effect_admitted')",[kind.name()],|r|r.get(0))?;
         if count >= *capacity as i64 {
             continue;
         }
         let documents=tx.prepare("SELECT id,document FROM durable_jobs WHERE state='queued' AND kind=?1 ORDER BY created,id")?.query_map([kind.name()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, document) in documents {
+            #[cfg(feature = "desktop_rebuild")]
+            if filter.job_id.is_some_and(|target| target != id) {
+                continue;
+            }
             let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
                 continue;
             };
+            #[cfg(feature = "desktop_rebuild")]
+            if filter.job_id.is_none() && crate::uploads::awaits_owner_input(tx, &job)? {
+                continue;
+            }
             let resource = job.payload.resource();
             if !resource.is_empty() {
                 let count = reserved_resources(tx, &job.tenant, false)?
@@ -1107,12 +2259,81 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
                     continue;
                 }
             }
-            ensure!(job.attempt < 100, "Job attempt limit reached");
+            ensure!(
+                job.attempt < 100 || job.awaits_owner_cleanup(),
+                "Job attempt limit reached"
+            );
+            #[cfg(feature = "desktop_rebuild")]
+            {
+                let refusal = match job.authority_disposition {
+                    AuthorityDisposition::PhysicalOwner => None,
+                    AuthorityDisposition::LegacyMissing => {
+                        Some(AuthorityRefusalReason::MissingOriginal)
+                    }
+                    AuthorityDisposition::Original => {
+                        let Some(policy) = policy else {
+                            if refused {
+                                prune(tx, 1000, 10000)?;
+                            }
+                            return Ok(TransactionDecision::ErrorAfterCommit(
+                                auth::AuthorityFailure::PolicyRequired.into(),
+                            ));
+                        };
+                        refusal_reason(tx, &job, policy)?
+                    }
+                };
+                if let Some(reason) = refusal {
+                    if filter.job_id.is_some() {
+                        crate::uploads::record_targeted_authority_refusal(tx, &job)?;
+                    }
+                    let phase = if filter.job_id.is_some() {
+                        AuthorityRefusalPhase::TargetedClaim
+                    } else {
+                        AuthorityRefusalPhase::Claim
+                    };
+                    record_refusal(tx, &mut job, reason, phase, None)?;
+                    if filter.job_id.is_some() {
+                        return Ok(TransactionDecision::Refused(CommittedRefusal {
+                            job,
+                            failure: reason.failure(),
+                        }));
+                    }
+                    refused |= job.state.terminal();
+                    continue;
+                }
+            }
+            #[cfg(feature = "desktop_rebuild")]
+            let source = match source_binding(&job.payload)? {
+                SourceBinding::Individual(id) => {
+                    if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
+                        fail_source_unavailable(tx, &mut job)?;
+                        continue;
+                    }
+                    if catalog_state.source_busy(&job.tenant, id) {
+                        if filter.job_id.is_some() {
+                            return Ok(TransactionDecision::ErrorAfterCommit(anyhow!(
+                                crate::catalog::SourceBusy
+                            )));
+                        }
+                        continue;
+                    }
+                    Some(SourceReservation {
+                        token: catalog_state.next_token()?,
+                        tenant: job.tenant.clone(),
+                        id,
+                        client: storage,
+                    })
+                }
+                SourceBinding::None | SourceBinding::Wildcard => None,
+            };
             job.state = PersistentState::Running;
             job.attempt += 1;
             job.generation += 1;
             let fence = random();
-            job.lease_until = Some(now() + i64::from(admission.lease_seconds));
+            job.lease_until = Some(lease_expiry(
+                time::OffsetDateTime::now_utc(),
+                admission.lease_seconds,
+            ));
             job.fence = Some(fence.clone());
             job.worker = Some(worker.into());
             save(tx, &mut job, "claimed")?;
@@ -1124,10 +2345,27 @@ fn claim(tx: &Transaction<'_>, worker: &str, admission: &WorkerAdmission) -> Res
                 fence,
                 worker: worker.into(),
             };
-            return Ok(Outcome::Claimed(Some((job, lease))));
+            #[cfg(feature = "desktop_rebuild")]
+            if refused {
+                prune(tx, 1000, 10000)?;
+            }
+            #[cfg(feature = "desktop_rebuild")]
+            return Ok(TransactionDecision::Claimed(ClaimPlan {
+                job,
+                lease,
+                source,
+            }));
+            #[cfg(not(feature = "desktop_rebuild"))]
+            return Ok(TransactionDecision::Outcome(Outcome::Claimed(Some((
+                job, lease,
+            )))));
         }
     }
-    Ok(Outcome::Claimed(None))
+    #[cfg(feature = "desktop_rebuild")]
+    if refused {
+        prune(tx, 1000, 10000)?;
+    }
+    Ok(TransactionDecision::Outcome(Outcome::Claimed(None)))
 }
 fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
     if let Payload::PrinterStart(request) = &job.payload {
@@ -1142,7 +2380,7 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
             }
             match effect.outcome().ok()? {
                 EffectOutcome::Confirmed(receipt) => Some(receipt),
-                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+                _ => None,
             }
         });
     }
@@ -1159,7 +2397,7 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
             }
             match effect.outcome().ok()? {
                 EffectOutcome::Confirmed(receipt) => Some(receipt),
-                EffectOutcome::Unresolved | EffectOutcome::Denied => None,
+                _ => None,
             }
         })
     };
@@ -1175,6 +2413,8 @@ fn proven_primary_printer_receipt(job: &JobRecord) -> Option<&ResultArtifact> {
 }
 fn completion_proven(job: &JobRecord, result: Option<&ResultArtifact>) -> bool {
     match &job.payload {
+        #[cfg(feature = "desktop_rebuild")]
+        Payload::SuppliedSourceImport { .. } => false,
         Payload::PrinterUpload { .. } => {
             proven_primary_printer_receipt(job).is_some_and(|primary| result == Some(primary))
         }
@@ -1224,7 +2464,10 @@ fn resolved_printer_failure(job: &JobRecord) -> bool {
                     | EffectOperation::PrinterStart
                     | EffectOperation::PrinterUploadAndStart
                     | EffectOperation::SpoolmanDeduction
-            ) && !matches!(effect.outcome(), Ok(EffectOutcome::Unresolved) | Err(_))
+            ) && matches!(
+                effect.outcome(),
+                Ok(EffectOutcome::Confirmed(_) | EffectOutcome::Denied)
+            )
         })
         && !job.effects.iter().any(|effect| {
             matches!(effect.outcome(), Ok(EffectOutcome::Confirmed(_)))
@@ -1236,7 +2479,7 @@ fn resolved_printer_failure(job: &JobRecord) -> bool {
                 )
         })
 }
-fn claimed_job(tx: &Transaction<'_>, lease: &AttemptLease) -> Result<JobRecord> {
+pub(crate) fn claimed_job(tx: &Transaction<'_>, lease: &AttemptLease) -> Result<JobRecord> {
     let job = owned(tx, &lease.job_id, &lease.tenant)?;
     ensure!(
         job.worker.as_deref() == Some(lease.worker.as_str())
@@ -1258,6 +2501,7 @@ pub(crate) fn claimed_source(
     source_id: Option<i64>,
 ) -> Result<(String, i64)> {
     let job = claimed_job(tx, lease)?;
+    #[cfg(not(feature = "desktop_rebuild"))]
     let id = match job.payload {
         Payload::ImportScan { project_id } | Payload::ExtractSourceDocs { project_id } => {
             ensure!(
@@ -1280,6 +2524,20 @@ pub(crate) fn claimed_source(
             source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
         }
         _ => return Err(anyhow!("Attempt is not Source work")),
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    let id = match source_binding(&job.payload)? {
+        SourceBinding::Individual(id) => {
+            ensure!(
+                source_id.is_none(),
+                "Individual Source attempt uses its stored Source"
+            );
+            id
+        }
+        SourceBinding::Wildcard => {
+            source_id.ok_or_else(|| anyhow!("Wildcard Source attempt requires Source"))?
+        }
+        SourceBinding::None => return Err(anyhow!("Attempt is not Source work")),
     };
     Ok((job.tenant, id))
 }
@@ -1340,8 +2598,30 @@ fn advance(
     operation: WorkerOperation,
     admission: &WorkerAdmission,
     _effect_policy: EffectAdmissionPolicy,
-) -> Result<Outcome> {
+    #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
+) -> Result<TransactionDecision> {
     let mut job = claimed_job(tx, &lease)?;
+    #[cfg(feature = "desktop_rebuild")]
+    if let Some(refusal) = refuse_advance(tx, &mut job, &operation, policy)? {
+        return Ok(TransactionDecision::Refused(refusal));
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    ensure!(
+        job.kind != JobKind::SuppliedSourceImport
+            || matches!(
+                operation,
+                WorkerOperation::Heartbeat | WorkerOperation::Progress(_)
+            ),
+        "Supplied imports advance through owned phases"
+    );
+    #[cfg(feature = "desktop_rebuild")]
+    if job.kind == JobKind::Sync && matches!(operation, WorkerOperation::Fail) {
+        let job = crate::source_sync::halt_job(tx, job, "fatal", "Source Sync worker failed")?;
+        return Ok(TransactionDecision::Outcome(Outcome::Job(
+            job,
+            LocalCommit::Committed,
+        )));
+    }
     let event = match operation {
         WorkerOperation::Heartbeat => "heartbeat",
         WorkerOperation::Progress(progress) => {
@@ -1451,6 +2731,8 @@ fn advance(
                 confirmed: false,
                 no_effect: false,
                 receipt: None,
+                #[cfg(feature = "desktop_rebuild")]
+                checklist_completion: None,
             });
             job.state = PersistentState::EffectAdmitted;
             "effect_intent"
@@ -1475,29 +2757,13 @@ fn advance(
             job.state = PersistentState::Running;
             "effect_confirmed"
         }
-        WorkerOperation::Finish(result) => {
-            ensure!(
-                job.state == PersistentState::Running && !job.cancel_requested,
-                "Job cannot finish"
-            );
-            let result = result.or_else(|| proven_primary_printer_receipt(&job).cloned());
-            if let Some(result) = &result {
-                result.validate()?;
-                ensure!(
-                    job.effects
-                        .iter()
-                        .any(|e| e.confirmed && e.receipt.as_ref() == Some(result)),
-                    "Result requires confirmed artifact receipt"
-                );
-            }
-            ensure!(
-                completion_proven(&job, result.as_ref()),
-                "Completion requires effect receipts"
-            );
-            job.result = result;
-            job.progress = Some(100);
-            job.state = PersistentState::Succeeded;
-            "finished"
+        WorkerOperation::Finish(result) => finish(&mut job, result)?,
+        #[cfg(feature = "desktop_rebuild")]
+        WorkerOperation::FinishPublic { artifact, result } => {
+            ensure!(result.kind() == job.kind, "Completed result kind mismatch");
+            let event = finish(&mut job, artifact)?;
+            job.public_result = Some(*result);
+            event
         }
         WorkerOperation::Fail => {
             if job.state == PersistentState::EffectAdmitted {
@@ -1522,10 +2788,103 @@ fn advance(
         job.state,
         PersistentState::Running | PersistentState::EffectAdmitted
     ) {
-        job.lease_until = Some(now() + i64::from(admission.lease_seconds));
+        job.lease_until = Some(lease_expiry(
+            time::OffsetDateTime::now_utc(),
+            admission.lease_seconds,
+        ));
     }
     save(tx, &mut job, event)?;
-    Ok(Outcome::Job(job, LocalCommit::Committed))
+    Ok(TransactionDecision::Outcome(Outcome::Job(
+        job,
+        LocalCommit::Committed,
+    )))
+}
+
+fn finish(job: &mut JobRecord, result: Option<ResultArtifact>) -> Result<&'static str> {
+    #[cfg(feature = "desktop_rebuild")]
+    ensure!(
+        job.effects
+            .iter()
+            .all(|effect| effect.checklist_completion.is_none()),
+        "Job requires its owning finalizer"
+    );
+    ensure!(
+        job.state == PersistentState::Running && !job.cancel_requested,
+        "Job cannot finish"
+    );
+    let result = result.or_else(|| proven_primary_printer_receipt(job).cloned());
+    if let Some(result) = &result {
+        result.validate()?;
+        ensure!(
+            job.effects
+                .iter()
+                .any(|e| e.confirmed && e.receipt.as_ref() == Some(result)),
+            "Result requires confirmed artifact receipt"
+        );
+    }
+    ensure!(
+        completion_proven(job, result.as_ref()),
+        "Completion requires effect receipts"
+    );
+    job.result = result;
+    job.progress = Some(100);
+    job.state = PersistentState::Succeeded;
+    Ok("finished")
+}
+
+/// Revalidates the attempt's original authority before any worker operation.
+/// A refusal fences the attempt. A receipt that matches the admitted effect is
+/// kept as observed evidence for reconciliation; it never confirms the effect.
+#[cfg(feature = "desktop_rebuild")]
+fn refuse_advance(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    operation: &WorkerOperation,
+    policy: Option<AuthPolicy>,
+) -> Result<Option<CommittedRefusal>> {
+    let reason = match job.authority_disposition {
+        AuthorityDisposition::PhysicalOwner => return Ok(None),
+        AuthorityDisposition::LegacyMissing => AuthorityRefusalReason::MissingOriginal,
+        AuthorityDisposition::Original => {
+            let policy = policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+            match refusal_reason(tx, job, policy)? {
+                Some(reason) => reason,
+                None => return Ok(None),
+            }
+        }
+    };
+    let matching_receipt = match operation {
+        WorkerOperation::ConfirmEffect(receipt) => {
+            ensure!(
+                job.state == PersistentState::EffectAdmitted,
+                "No admitted effect"
+            );
+            receipt.validate()?;
+            let effect = job
+                .effects
+                .last()
+                .ok_or_else(|| anyhow!("No effect intent"))?;
+            ensure!(
+                !effect.confirmed
+                    && receipt.content_hash == effect.intent.content_hash
+                    && receipt.target == effect.intent.target,
+                "Receipt mismatch"
+            );
+            Some(receipt.clone())
+        }
+        _ => None,
+    };
+    record_refusal(
+        tx,
+        job,
+        reason,
+        AuthorityRefusalPhase::WorkerAdvance,
+        matching_receipt,
+    )?;
+    Ok(Some(CommittedRefusal {
+        job: job.clone(),
+        failure: reason.failure(),
+    }))
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -1547,6 +2906,152 @@ fn require_spoolman(tx: &Transaction<'_>, job: &JobRecord) -> Result<()> {
         }
     );
     Ok(())
+}
+
+/// Revalidates the credential that enqueued `job` under the current policy.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn require_original_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<ValidatedAuthority> {
+    ensure!(
+        job.authority_disposition == AuthorityDisposition::Original,
+        auth::AuthorityFailure::Missing
+    );
+    let basis = job
+        .authority
+        .as_ref()
+        .ok_or(auth::AuthorityFailure::Missing)?;
+    let (tenant, subject) = auth::authority::resolve(tx, basis, policy)?;
+    ensure!(tenant == job.tenant, auth::AuthorityFailure::TenantChanged);
+    Ok(ValidatedAuthority { tenant, subject })
+}
+
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn revalidate_source_authority(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<()> {
+    if job.authority_disposition == AuthorityDisposition::PhysicalOwner {
+        return Ok(());
+    }
+    require_original_authority(tx, job, policy).map(drop)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn commit_source_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    error: &anyhow::Error,
+) -> Result<bool> {
+    let Some(reason) = AuthorityRefusalReason::of_source_writer(job, error) else {
+        return Ok(false);
+    };
+    record_refusal(tx, job, reason, AuthorityRefusalPhase::SourceWriter, None)?;
+    Ok(true)
+}
+
+/// Records a Source-writer refusal on a Sync Job without saving it. The
+/// Sync halt that follows saves the Job.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn set_sync_source_writer_authority_refusal(
+    job: &mut JobRecord,
+    error: &anyhow::Error,
+) -> bool {
+    let Some(reason) = AuthorityRefusalReason::of_source_writer(job, error) else {
+        return false;
+    };
+    job.authority_refusal = Some(AuthorityRefusalObservation {
+        version: 1,
+        reason,
+        phase: AuthorityRefusalPhase::SourceWriter,
+        observed_at: now(),
+        generation: job.generation,
+    });
+    true
+}
+
+#[cfg(feature = "desktop_rebuild")]
+impl AuthorityRefusalReason {
+    /// The refusal to record for a failed revalidation. Other failures stay
+    /// hard errors and change nothing.
+    fn of(error: &anyhow::Error) -> Option<Self> {
+        match error.downcast_ref::<auth::AuthorityFailure>()? {
+            auth::AuthorityFailure::CredentialInvalid => Some(Self::CredentialInvalid),
+            auth::AuthorityFailure::PolicyChanged => Some(Self::PolicyChanged),
+            auth::AuthorityFailure::TenantChanged => Some(Self::TenantChanged),
+            auth::AuthorityFailure::SubjectChanged => Some(Self::SubjectChanged),
+            auth::AuthorityFailure::Missing | auth::AuthorityFailure::PolicyRequired => None,
+        }
+    }
+    fn of_source_writer(job: &JobRecord, error: &anyhow::Error) -> Option<Self> {
+        if job.authority_disposition == AuthorityDisposition::LegacyMissing {
+            Some(Self::MissingOriginal)
+        } else {
+            Self::of(error)
+        }
+    }
+    fn failure(self) -> auth::AuthorityFailure {
+        match self {
+            Self::MissingOriginal => auth::AuthorityFailure::Missing,
+            Self::CredentialInvalid => auth::AuthorityFailure::CredentialInvalid,
+            Self::PolicyChanged => auth::AuthorityFailure::PolicyChanged,
+            Self::TenantChanged => auth::AuthorityFailure::TenantChanged,
+            Self::SubjectChanged => auth::AuthorityFailure::SubjectChanged,
+        }
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn refusal_reason(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    policy: AuthPolicy,
+) -> Result<Option<AuthorityRefusalReason>> {
+    match require_original_authority(tx, job, policy) {
+        Ok(_) => Ok(None),
+        Err(error) => AuthorityRefusalReason::of(&error).ok_or(error).map(Some),
+    }
+}
+
+/// Records why the original authority was refused and fences the attempt. A job
+/// without effects fails; one with effects waits for reconciliation, keeping
+/// `matching_receipt` on the last effect as observed evidence.
+#[cfg(feature = "desktop_rebuild")]
+fn record_refusal(
+    tx: &Transaction<'_>,
+    job: &mut JobRecord,
+    reason: AuthorityRefusalReason,
+    phase: AuthorityRefusalPhase,
+    matching_receipt: Option<ResultArtifact>,
+) -> Result<()> {
+    if let Some(receipt) = matching_receipt {
+        job.effects
+            .last_mut()
+            .ok_or_else(|| anyhow!("No effect intent"))?
+            .receipt = Some(receipt);
+    }
+    job.authority_refusal = Some(AuthorityRefusalObservation {
+        version: 1,
+        reason,
+        phase,
+        observed_at: now(),
+        generation: job.generation,
+    });
+    job.generation += 1;
+    job.fence = None;
+    job.worker = None;
+    job.lease_until = None;
+    if job.effects.is_empty() {
+        job.state = PersistentState::Failed;
+        job.recovery = Some("Original authority is no longer valid".into());
+    } else {
+        job.state = PersistentState::ReconciliationRequired;
+        job.recovery = Some("Inspect retained effect evidence and reconcile explicitly".into());
+    }
+    save(tx, job, "authority_refused")
 }
 
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
@@ -1620,8 +3125,128 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     Ok(())
 }
 
+#[cfg(feature = "desktop_rebuild")]
+fn printer_upload_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    profile_id: Option<u64>,
+    checkoff_units: &[CheckoffUnit],
+) -> Result<bool> {
+    let mut owners = std::collections::HashSet::new();
+    let mut unresolved = false;
+    for unit in checkoff_units {
+        let owner: Option<i64> = tx
+            .query_row(
+                "SELECT p.profile_id FROM parts p JOIN build_profiles b ON b.id=p.profile_id AND b.tenant_id=p.tenant_id WHERE p.tenant_id=? AND p.id=?",
+                params![tenant, unit.part_id as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(owner) = owner {
+            owners.insert(owner);
+        } else {
+            unresolved = true;
+        }
+    }
+    ensure!(
+        owners.len() <= 1
+            && profile_id.is_none_or(|id| owners.iter().all(|owner| *owner as u64 == id)),
+        "Job coordinate ownership mismatch"
+    );
+    Ok(unresolved || profile_id == Some(profile as u64) || owners.contains(&profile))
+}
+
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn publication_conflicts(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+) -> Result<Vec<pp_contracts::publication::ExecutionConflict>> {
+    let records = tx
+        .prepare("SELECT id,kind,state,document FROM durable_jobs WHERE tenant=? ORDER BY id")?
+        .query_map([tenant], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut result = Vec::new();
+    for (id, kind, state, document) in records {
+        let record = decode(&document)?;
+        ensure!(
+            record.tenant == tenant
+                && record.job_id == id
+                && record.kind == record.payload.kind()
+                && record.kind.name() == kind
+                && record.state.name() == state,
+            "Job identity mismatch"
+        );
+        if record.state.terminal() {
+            continue;
+        }
+        let affected = match &record.payload {
+            Payload::Sync { .. }
+            | Payload::ImportScan { .. }
+            | Payload::ExtractSourceDocs { .. }
+            | Payload::CheckSourceUpdates {} => false,
+            Payload::SuppliedSourceImport { .. } => false,
+            Payload::ExportStlPack { profile_id, .. }
+            | Payload::ExportChecklistHtml { profile_id }
+            | Payload::ExportKitBundle { profile_id, .. }
+            | Payload::ExportAcceptedPlate3mf { profile_id, .. }
+            | Payload::ExportDirect3mf { profile_id, .. } => *profile_id == profile as u64,
+            Payload::PrinterUpload {
+                profile_id,
+                checkoff_units,
+                ..
+            } => printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?,
+            Payload::PrinterStart(request) => {
+                let parent = retained_owned(tx, &request.uploaded_job_id, tenant)?;
+                ensure!(
+                    parent.kind == JobKind::PrinterUpload
+                        && parent.state == PersistentState::UploadedOnly,
+                    "Parent job is not an uploaded-only print"
+                );
+                let proof = parent
+                    .uploaded_only_proof()
+                    .ok_or_else(|| anyhow!("Parent job is not an uploaded-only print"))?;
+                ensure!(
+                    request.printer_id() == Some(proof.printer_id)
+                        && request.upload_effect() == Some(proof.upload),
+                    "Printer start binding mismatch"
+                );
+                let Payload::PrinterUpload {
+                    profile_id,
+                    checkoff_units,
+                    ..
+                } = &parent.payload
+                else {
+                    return Err(anyhow!("Parent job is not an uploaded-only print"));
+                };
+                printer_upload_conflicts(tx, tenant, profile, *profile_id, checkoff_units)?
+            }
+        };
+        if affected {
+            result.push(pp_contracts::publication::ExecutionConflict {
+                operation_id: id,
+                kind,
+                state,
+            });
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/common/claimed_attempt.rs"
+    ));
     use super::*;
 
     fn record() -> JobRecord {
@@ -1643,10 +3268,35 @@ mod tests {
             progress: None,
             effects: vec![],
             result: None,
+            #[cfg(feature = "desktop_rebuild")]
+            public_result: None,
             recovery: Some(String::new()),
+            #[cfg(feature = "desktop_rebuild")]
+            authority: None,
+            #[cfg(feature = "desktop_rebuild")]
+            authority_disposition: AuthorityDisposition::PhysicalOwner,
+            #[cfg(feature = "desktop_rebuild")]
+            authority_refusal: None,
             fence: None,
             worker: None,
         }
+    }
+
+    #[cfg(not(feature = "desktop_rebuild"))]
+    fn owner_user(
+        tx: &Transaction<'_>,
+        subject: &str,
+        operation: UserOperation,
+    ) -> Result<Outcome> {
+        user(tx, "default", subject, operation)
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    fn owner_user(
+        tx: &Transaction<'_>,
+        subject: &str,
+        operation: UserOperation,
+    ) -> Result<Outcome> {
+        user(tx, "default", subject, None, operation)
     }
 
     fn sized_record(size: usize) -> JobRecord {
@@ -1682,7 +3332,7 @@ mod tests {
                 let tx = connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)
                     .unwrap();
-                match user(&tx, "default", "disk-full-test", enqueue(&key)) {
+                match owner_user(&tx, "disk-full-test", enqueue(&key)) {
                     Ok(outcome) => tx.commit().map(|()| outcome).map_err(anyhow::Error::from),
                     Err(error) => Err(error),
                 }
@@ -1725,7 +3375,7 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
         let Outcome::Job(retried, LocalCommit::Committed) =
-            user(&tx, "default", "disk-full-test", enqueue(&failed_key)).unwrap()
+            owner_user(&tx, "disk-full-test", enqueue(&failed_key)).unwrap()
         else {
             panic!("retry must commit one job");
         };
@@ -1734,7 +3384,7 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
         let Outcome::Job(duplicate, LocalCommit::ReadOnly) =
-            user(&tx, "default", "disk-full-test", enqueue(&failed_key)).unwrap()
+            owner_user(&tx, "disk-full-test", enqueue(&failed_key)).unwrap()
         else {
             panic!("duplicate must replay the committed job");
         };
@@ -1760,9 +3410,8 @@ mod tests {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
-        let Outcome::Job(job, LocalCommit::Committed) = user(
+        let Outcome::Job(job, LocalCommit::Committed) = owner_user(
             &tx,
-            "default",
             "disk-full-claim",
             UserOperation::Enqueue {
                 key: key.into(),
@@ -1777,6 +3426,18 @@ mod tests {
         job
     }
 
+    fn run(connection: &mut Connection, command: Command) -> Result<Outcome> {
+        execute(
+            connection,
+            command,
+            EffectAdmissionPolicy::Legacy,
+            crate::writer_admission::Deadline::at_dequeue(),
+            #[cfg(feature = "desktop_rebuild")]
+            &JobSubscriptions::new(),
+            #[cfg(feature = "desktop_rebuild")]
+            &mut crate::catalog::State::new(std::env::temp_dir()),
+        )
+    }
     fn claim_command(worker: &str) -> Command {
         Command::Claim {
             worker: worker.into(),
@@ -1786,7 +3447,26 @@ mod tests {
                 per_resource: 4,
                 lease_seconds: 60,
             }),
+            #[cfg(feature = "desktop_rebuild")]
+            job_id: None,
+            #[cfg(feature = "desktop_rebuild")]
+            kind: None,
+            #[cfg(feature = "desktop_rebuild")]
+            policy: None,
+            #[cfg(feature = "desktop_rebuild")]
+            storage: test_storage(),
         }
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    fn test_storage() -> SettingsClient {
+        let (owner, _) = WriterOwner::open(
+            &std::env::temp_dir().join(format!("pp-claim-unit-{}", random())),
+            crate::Limits::default(),
+        )
+        .unwrap();
+        let client = owner.client();
+        owner.shutdown().unwrap();
+        client
     }
 
     fn job_row(connection: &Connection, id: &str) -> (String, i64, i64) {
@@ -1808,13 +3488,9 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) = execute(
-            &mut connection,
-            claim_command("holder"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(claimed, _))) =
+            run(&mut connection, claim_command("holder")).unwrap()
+        else {
             panic!("held claim");
         };
         assert_eq!(claimed.job_id, held.job_id);
@@ -1867,12 +3543,7 @@ mod tests {
             }
         }
         assert!(blocked, "page budget never rejected a larger job document");
-        let error = match execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        ) {
+        let error = match run(&mut connection, claim_command("second")) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed under the page budget"),
         };
@@ -1906,13 +3577,9 @@ mod tests {
         connection
             .pragma_update(None, "max_page_count", limit + 64)
             .unwrap();
-        let Outcome::Claimed(Some((retried, _))) = execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(retried, _))) =
+            run(&mut connection, claim_command("second")).unwrap()
+        else {
             panic!("claim after raising the quota");
         };
         assert_eq!(retried.job_id, victim.job_id);
@@ -1938,13 +3605,9 @@ mod tests {
             .execute_batch(include_str!("jobs/schema.sql"))
             .unwrap();
         let held = enqueue_job(&mut connection, "held");
-        let Outcome::Claimed(Some((claimed, _))) = execute(
-            &mut connection,
-            claim_command("holder"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(claimed, _))) =
+            run(&mut connection, claim_command("holder")).unwrap()
+        else {
             panic!("held claim");
         };
         assert_eq!(claimed.job_id, held.job_id);
@@ -1957,12 +3620,7 @@ mod tests {
                 std::ptr::null_mut(),
             );
         }
-        let error = match execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        ) {
+        let error = match run(&mut connection, claim_command("second")) {
             Err(error) => error,
             Ok(_) => panic!("in-flight claim committed"),
         };
@@ -1989,13 +3647,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(running, 1);
-        let Outcome::Claimed(Some((retried, _))) = execute(
-            &mut connection,
-            claim_command("second"),
-            EffectAdmissionPolicy::Legacy,
-            crate::writer_admission::Deadline::at_dequeue(),
-        )
-        .unwrap() else {
+        let Outcome::Claimed(Some(claimed_attempt!(retried, _))) =
+            run(&mut connection, claim_command("second")).unwrap()
+        else {
             panic!("claim after the commit failure");
         };
         assert_eq!(retried.job_id, victim.job_id);
@@ -2068,5 +3722,191 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// The reference stores a rich result past 128 KiB because it predates
+    /// main's document limit; here the limit also bounds the public result.
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn rich_completed_result_round_trips_through_durable_codec_within_the_limit() {
+        let skipped = |reason: String| {
+            Some(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                checked: vec![],
+                skipped: vec![SkippedSourceUpdate {
+                    source_id: 1,
+                    name: "Source".into(),
+                    reason,
+                }],
+                updates_available: 0,
+                checked_count: 0,
+            }))
+        };
+        let mut job = record();
+        job.state = PersistentState::Succeeded;
+        job.state_version = 1;
+        job.progress = Some(100);
+        job.finished_at = Some(job.updated_at);
+        job.public_result = skipped("x".repeat(16 * 1024));
+        job.validate_state().unwrap();
+        let decoded = decode(&encode(&job).unwrap()).unwrap();
+        assert_eq!(decoded.public_result, job.public_result);
+
+        job.public_result = skipped("x".repeat(JOB_DOC_SIZE_LIMIT));
+        assert!(matches!(
+            encode(&job).unwrap_err().downcast_ref::<JobFailure>(),
+            Some(JobFailure::JobDocTooLarge { .. })
+        ));
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn snapshot_defaults_progress_only_for_queued_jobs_and_reports_the_public_result() {
+        let mut job = record();
+        job.created_at = 1;
+        job.updated_at = 1;
+        assert_eq!(job.snapshot().progress, Some(0));
+        assert_eq!(job.snapshot().created_at, "1970-01-01T00:00:01.000Z");
+        for state in [
+            PersistentState::Running,
+            PersistentState::Failed,
+            PersistentState::Cancelled,
+        ] {
+            job.state = state;
+            assert_eq!(job.snapshot().progress, None, "{state:?}");
+        }
+        job.state = PersistentState::Running;
+        job.progress = Some(37);
+        assert_eq!(job.snapshot().progress, Some(37));
+        job.state = PersistentState::Succeeded;
+        job.progress = Some(100);
+        job.result = Some(ResultArtifact {
+            receipt_id: "internal-receipt".into(),
+            content_hash: "b".repeat(64),
+            target: "internal-target".into(),
+        });
+        assert_eq!(job.snapshot().progress, Some(100));
+        assert_eq!(job.snapshot().result, None);
+        let result = CompletedResult::SourceUpdates(SourceUpdatesResult {
+            checked: vec![],
+            skipped: vec![],
+            updates_available: 0,
+            checked_count: 0,
+        });
+        job.public_result = Some(result.clone());
+        assert_eq!(job.snapshot().result, Some(result));
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn observed_spoolman_receipt_does_not_prove_uploaded_only() {
+        let path = std::env::temp_dir().join(format!(
+            "pp-observed-spoolman-unit-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let owner = WriterOwner::open(&path, crate::Limits::default())
+            .unwrap()
+            .0;
+        owner
+            .jobs(AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            })
+            .unwrap()
+            .submit(
+                Credential::PhysicalOwner(owner.job_physical_owner()),
+                UserOperation::Enqueue {
+                    key: "observed-spoolman".into(),
+                    payload_version: 1,
+                    payload: Payload::PrinterUpload {
+                        printer_id: "observed-printer".into(),
+                        artifact_path: "exports/observed.gcode".into(),
+                        filename: "observed.gcode".into(),
+                        start: true,
+                        profile_id: None,
+                        host_name: None,
+                        checkoff_units: vec![],
+                        unlabeled_names: vec![],
+                    },
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .unwrap();
+        let worker = owner
+            .job_worker(WorkerAdmission {
+                kinds: vec![(JobKind::PrinterUpload, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            })
+            .unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
+        let upload = EffectIntent {
+            operation: EffectOperation::PrinterUpload,
+            basis_hash: "a".repeat(64),
+            content_hash: "b".repeat(64),
+            target: "observed-printer".into(),
+        };
+        worker
+            .update(&mut lease, WorkerOperation::BeginEffect(upload.clone()))
+            .unwrap();
+        worker
+            .update(
+                &mut lease,
+                WorkerOperation::ConfirmEffect(ResultArtifact {
+                    receipt_id: "observed-upload".into(),
+                    content_hash: upload.content_hash,
+                    target: upload.target,
+                }),
+            )
+            .unwrap();
+        let spoolman = EffectIntent {
+            operation: EffectOperation::SpoolmanDeduction,
+            basis_hash: "c".repeat(64),
+            content_hash: "d".repeat(64),
+            target: "spoolman:observed".into(),
+        };
+        worker
+            .update(&mut lease, WorkerOperation::BeginEffect(spoolman.clone()))
+            .unwrap();
+        let mut uncertain = worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+        uncertain.effects.last_mut().unwrap().receipt = Some(ResultArtifact {
+            receipt_id: "observed-deduction".into(),
+            content_hash: spoolman.content_hash,
+            target: spoolman.target,
+        });
+        uncertain.authority_refusal = Some(AuthorityRefusalObservation {
+            version: 1,
+            reason: AuthorityRefusalReason::CredentialInvalid,
+            phase: AuthorityRefusalPhase::WorkerAdvance,
+            observed_at: now(),
+            generation: uncertain.generation,
+        });
+        uncertain.validate_state().unwrap();
+        assert!(uncertain.uploaded_only_proof().is_none());
+        uncertain.authority_refusal = None;
+        assert!(uncertain.validate_state().is_err());
+        owner.shutdown().unwrap();
+    }
+    #[test]
+    fn lease_expiry_grants_at_least_lease_seconds_at_second_boundaries() {
+        const SECOND: i128 = 1_000_000_000;
+        let k = 1_800_000_000_i128 * SECOND;
+        for offset in [0, 1, 1_000_000, 999_000_000, SECOND - 1] {
+            let start = time::OffsetDateTime::from_unix_timestamp_nanos(k + offset).unwrap();
+            for lease_seconds in [1, 60] {
+                let granted =
+                    i128::from(lease_expiry(start, lease_seconds)) * SECOND - (k + offset);
+                let wanted = i128::from(lease_seconds) * SECOND;
+                assert!(
+                    (wanted..wanted + SECOND).contains(&granted),
+                    "offset {offset} ns, lease {lease_seconds} s: granted {granted} ns"
+                );
+            }
+        }
     }
 }

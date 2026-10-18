@@ -189,7 +189,7 @@ npm run dev   # predev builds @print-partner/contracts and @print-partner/domain
 
 API: `http://127.0.0.1:18765` · Vite UI: `http://127.0.0.1:5173`
 
-The versioned integration API is available at `http://127.0.0.1:18765/api/v1`. See [`../docs/API.md`](../docs/API.md). Connect optional [Spoolman](../docs/integrations/SPOOLMAN.md) filament inventory in **Settings > Integrations**.
+The versioned integration API is available at `http://127.0.0.1:18765/api/v1`. See [`../docs/api.md`](../docs/api.md). Connect optional [Spoolman](../docs/integrations/SPOOLMAN.md) filament inventory in **Settings > Integrations**.
 
 ## SaaS mode (`DEPLOY_MODE=saas`)
 

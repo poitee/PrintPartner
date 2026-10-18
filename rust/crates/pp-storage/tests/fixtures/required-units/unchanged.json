@@ -1,0 +1,103 @@
+{
+  "profile": 1,
+  "draft": 2,
+  "key": "selection",
+  "request": {
+    "expected_snapshot_digest": "ae11e670337e3e5eab736b29b4e294edbea8b564661cf15972625783f8930ee3",
+    "decisions": []
+  },
+  "result": {
+    "kind": "ready",
+    "workspace": {
+      "profile_id": 1,
+      "draft": {
+        "draft_id": 2,
+        "state": "open",
+        "lifecycle_version": 0,
+        "snapshot_digest": "7aede566782b7712a7cc113a0706829a501ba98b2f3d9e6a5cd645ff20048f8f",
+        "base": {
+          "revision_id": 1,
+          "plan_version": 1
+        }
+      },
+      "parts": [
+        {
+          "draft_part_id": 4,
+          "base_revision_part_id": 1,
+          "part_key": "bracket.stl",
+          "filename": "bracket.stl",
+          "relative_path": "bracket.stl",
+          "source_layer": "base:Fixture Source",
+          "role": "primary",
+          "quantity_inferred": 1,
+          "quantity_override": 3,
+          "quantity_effective": 3,
+          "included": true
+        },
+        {
+          "draft_part_id": 5,
+          "base_revision_part_id": 2,
+          "part_key": "excluded.stl",
+          "filename": "excluded.stl",
+          "relative_path": "excluded.stl",
+          "source_layer": "base:Fixture Source",
+          "role": "primary",
+          "quantity_inferred": 1,
+          "quantity_override": 1,
+          "quantity_effective": 1,
+          "included": false
+        },
+        {
+          "draft_part_id": 6,
+          "base_revision_part_id": 3,
+          "part_key": "gear.stl",
+          "filename": "gear.stl",
+          "relative_path": "gear.stl",
+          "source_layer": "base:Fixture Source",
+          "role": "primary",
+          "quantity_inferred": 1,
+          "quantity_override": 2,
+          "quantity_effective": 2,
+          "included": true
+        }
+      ],
+      "diff": {
+        "base_is_current": true,
+        "added": [],
+        "removed": [],
+        "changed": [
+          {
+            "before": {
+              "revision_part_id": 2,
+              "filename": "excluded.stl",
+              "relative_path": "excluded.stl",
+              "source_layer": "base:Fixture Source"
+            },
+            "after": {
+              "draft_part_id": 5,
+              "base_revision_part_id": 2,
+              "part_key": "excluded.stl",
+              "filename": "excluded.stl",
+              "relative_path": "excluded.stl",
+              "source_layer": "base:Fixture Source",
+              "role": "primary",
+              "quantity_inferred": 1,
+              "quantity_override": 1,
+              "quantity_effective": 1,
+              "included": false
+            },
+            "fields": [
+              "status"
+            ]
+          }
+        ]
+      },
+      "reconciliation": {
+        "kind": "ready",
+        "reused_units": 6,
+        "new_units": 0,
+        "surplus_units": 0
+      }
+    }
+  }
+}

@@ -55,7 +55,7 @@ fn declared_versions_match_the_node_and_rust_sources() {
     );
     let rust_schema = number_after(
         include_str!("../../pp-storage/src/schema.rs"),
-        "is newer than supported version ",
+        "#[cfg(not(feature = \"desktop_rebuild\"))]\npub(crate) const CURRENT_VERSION: u64 = ",
     );
     let node_snapshot = number_after(
         include_str!("../../../../web/apps/server/src/services/local-source-snapshot.ts"),
@@ -65,14 +65,22 @@ fn declared_versions_match_the_node_and_rust_sources() {
         include_str!("../../pp-source/src/lib.rs"),
         "manifest.version != ",
     );
+    let node_path_hints = number_after(
+        include_str!("../../../../web/apps/server/src/services/path-hints.ts"),
+        "document.version !== ",
+    );
     assert_eq!((node_schema, rust_schema), (34, 35));
     assert_eq!((node_snapshot, rust_snapshot), (1, 1));
+    assert_eq!(node_path_hints, 1);
     assert_eq!(
         formats,
         &json!({
             "sqlite-schema": {"node_reads": node_schema, "rust_writes": rust_schema},
             "source-revision-workspace": {"node_reads": node_snapshot, "rust_writes": rust_snapshot},
-            "source-covers": {"node_reads": 1, "rust_writes": null},
+            "source-covers": {"node_reads": 1, "rust_writes": "none"},
+            "kit-catalog": {"node_reads": 1, "rust_writes": "none"},
+            "path-hints": {"node_reads": node_path_hints, "rust_writes": "none"},
+            "community-manifests": {"node_reads": 1, "rust_writes": "none"},
         })
     );
 }
@@ -90,6 +98,7 @@ fn bundled_rollback_refuses_every_reviewed_operation_on_the_newer_schema() {
         ("tool.preview_source_naming", "tool.preview_source_naming"),
         ("tool.list_sources", "tool.list_sources"),
         ("tool.list_source_categories", "tool.list_source_categories"),
+        ("tool.get_plan_snapshot", "tool.get_plan_snapshot"),
     ] {
         assert_eq!(
             index.admit_rollback(participant),
@@ -142,19 +151,13 @@ fn rollback_admits_only_when_node_reads_every_written_format() {
         index.admit_rollback("tool.preview_source_naming"),
         Ok(&BTreeSet::from([Table(Projects), Table(AppSettings)]))
     );
-    let no_writer = index.admit_rollback("job.sync").unwrap_err();
     assert_eq!(
-        no_writer,
-        AdmissionError::IncompatibleLiveFormat {
-            operation: "source.sync".into(),
-            format: "source-covers".into(),
-            node_reads: 1,
-            rust_writes: None,
-        }
+        index.admit_rollback("job.sync"),
+        index.resources_for("job.sync")
     );
     assert_eq!(
-        no_writer.to_string(),
-        "rollback of source.sync refused: no Rust writer for source-covers"
+        index.admit_rollback("tool.get_plan_snapshot"),
+        index.resources_for("tool.get_plan_snapshot")
     );
 
     value["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(2);
@@ -225,7 +228,7 @@ fn malformed_live_format_declarations_fail_admission() {
         ),
         (
             |v| v["live_formats"]["sqlite-schema"]["rust_writes"] = json!("35"),
-            "invalid type",
+            "unknown variant",
         ),
         (
             |v| v["live_formats"]["source-covers"]["node_reads"] = json!(-1),
@@ -270,4 +273,119 @@ fn workspace_format_must_match_the_source_sync_record() {
             value: "source-revision-workspace-v2".into()
         }
     );
+}
+
+#[test]
+fn no_writer_declarations_have_family_literal_rules() {
+    let families = std::collections::BTreeMap::from([
+        ("source-covers", "covers"),
+        ("kit-catalog", "kit-catalog"),
+        ("path-hints", "path-hints"),
+        ("community-manifests", "manifests"),
+    ]);
+    let manifest = manifest();
+    let no_writers: std::collections::BTreeSet<_> = manifest["live_formats"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, format)| format["rust_writes"] == "none")
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(no_writers, families.keys().copied().collect());
+
+    let rule = include_str!("../../../rules/no-writer-family-literal.yml");
+    let mut regexes = rule
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("- regex: '"));
+    let regex = regexes.next().expect("family literal regex");
+    assert!(
+        regexes.next().is_none(),
+        "expected one family literal regex"
+    );
+    let alternation = regex
+        .strip_suffix('\'')
+        .and_then(|regex| regex.strip_prefix(r#"(?i)(^|["/\\])("#))
+        .and_then(|regex| regex.strip_suffix(r##")([./\\"#]|$)"##))
+        .expect("family literal regex must retain its path-component boundaries");
+    let tokens: std::collections::BTreeSet<_> = alternation.split('|').collect();
+    assert_eq!(tokens, families.values().copied().collect());
+}
+
+#[test]
+fn read_only_formats_require_explicit_none_and_fail_closed_otherwise() {
+    for (format, participant, operation) in [
+        (
+            "kit-catalog",
+            "tool.get_kit_catalog",
+            "tool.get_kit_catalog",
+        ),
+        ("source-covers", "job.sync", "source.sync"),
+        (
+            "path-hints",
+            "tool.get_plan_option_groups",
+            "tool.get_plan_option_groups",
+        ),
+        (
+            "community-manifests",
+            "tool.get_plan_option_groups",
+            "tool.get_plan_option_groups",
+        ),
+    ] {
+        let mut value = manifest();
+        value["live_formats"]["sqlite-schema"]["node_reads"] = json!(35);
+        value["live_formats"][format]["rust_writes"] = json!("none");
+        let index = admit(&value).unwrap();
+        assert_eq!(
+            index.admit_rollback(participant),
+            index.resources_for(participant)
+        );
+
+        for (writer, rust_writes) in [(Value::Null, None), (json!(2), Some(2))] {
+            value["live_formats"][format]["rust_writes"] = writer.clone();
+            assert_eq!(
+                admit(&value).unwrap().admit_rollback(participant),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: operation.into(),
+                    format: format.into(),
+                    node_reads: 1,
+                    rust_writes,
+                })
+            );
+        }
+        value["live_formats"][format]["rust_writes"] = Value::Null;
+        assert_eq!(
+            admit(&value)
+                .unwrap()
+                .admit_rollback(participant)
+                .unwrap_err()
+                .to_string(),
+            format!("rollback of {operation} refused: Rust writer for {format} is undeclared")
+        );
+        for writer in [
+            json!(0),
+            json!("unknown"),
+            json!("1"),
+            json!("None"),
+            json!(false),
+            json!(-1),
+            json!(1.5),
+            json!(4294967296_u64),
+            json!({}),
+            json!({"none": null}),
+            json!([]),
+        ] {
+            value["live_formats"][format]["rust_writes"] = writer;
+            assert!(
+                matches!(admit(&value), Err(AdmissionError::Malformed(_))),
+                "{format}: {value}"
+            );
+        }
+        value["live_formats"][format]
+            .as_object_mut()
+            .unwrap()
+            .remove("rust_writes");
+        assert!(
+            matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains("missing field `rust_writes`"))
+        );
+    }
 }

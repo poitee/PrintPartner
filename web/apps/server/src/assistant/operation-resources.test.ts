@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, isAbsolute, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, join, relative, isAbsolute, sep } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -16,11 +18,15 @@ import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
 import { createJobRunner } from "../services/job-runner.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
+import { getLogger } from "../services/logger.js";
+import { loadManifestYaml } from "../services/manifest-apply.js";
+import { inferOptionGroupsFromPaths } from "../services/path-hints.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
   type Access = { api: string; args: unknown[]; result?: unknown };
-  const state: { active: boolean; files: Access[] } = { active: false, files: [] };
+  // `virtual` serves a shipped-data path from a test fixture so tests never write shipped data.
+  const state: { active: boolean; files: Access[]; virtual: Map<string, string> } = { active: false, files: [], virtual: new Map() };
   function wrap(module: object, prefix = ""): object {
     return Object.fromEntries(Object.entries(module).map(([name, value]) => {
       if (name === "default" || name === "promises") return [name, wrap(value, prefix + (name === "promises" ? "promises." : ""))];
@@ -29,7 +35,9 @@ const observer = vi.hoisted(() => {
         apply(target, receiver, args: unknown[]) {
           const access: Access = { api: prefix + name, args };
           if (state.active) state.files.push(access);
-          const result: unknown = Reflect.apply(target, receiver, args);
+          const backing = typeof args[0] === "string" ? state.virtual.get(args[0]) : undefined;
+          const result: unknown = backing === undefined ? Reflect.apply(target, receiver, args)
+            : name === "realpathSync" ? args[0] : Reflect.apply(target, receiver, [backing, ...args.slice(1)]);
           access.result = result;
           return result;
         },
@@ -52,9 +60,12 @@ vi.mock("node:fs/promises", async (original) => observer.wrap(await original<obj
 const TOOL_IDS = ["read_source_file", "list_sources", "list_source_categories"] as const;
 const TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
 const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source_docs"];
-const manifest = z.object({ resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
+const manifest = z.object({ live_formats: z.object({
+  "path-hints": z.object({ node_reads: z.number() }),
+  "community-manifests": z.object({ node_reads: z.number() }),
+}), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -464,6 +475,75 @@ it("rejects an undeclared read against the empty get_workflow_help resource set"
   if (!entry || entry.operation === "source.sync") throw new Error("Missing workflow help declaration");
   const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
   expect(() => expect(observed).toEqual(declared)).toThrow();
+});
+
+it("traces check_hardware_interfaces inputs, comparisons and tenants against its reviewed empty union", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.check_hardware_interfaces");
+  expect(entry).toEqual({ operation: "tool.check_hardware_interfaces", resources: [] });
+  const left = { name: "Motor", mounting_pattern: [20, 20], connector: "JST", voltage: 24, envelope: { x: 40 }, clearance: 2 };
+  const right = { name: "Board", mounting_pattern: [30, 30], connector: "XT60", voltage: 12, envelope: { x: 50 }, clearance: 3 };
+  const cases: [Record<string, unknown>, unknown][] = [
+    ...[{}, { interfaces: null }, { interfaces: false }, { interfaces: 3 }, { interfaces: "invalid" }, { interfaces: {} }]
+      .map((input): [Record<string, unknown>, unknown] => [input, { error: "interfaces required" }]),
+    [{ interfaces: [] }, { interfaces: [], conflicts: [], compatible: true }],
+    [{ interfaces: [null, false, 0, "invalid", []] }, { interfaces: [], conflicts: [], compatible: true }],
+    [{ interfaces: [left] }, { interfaces: [left], conflicts: [], compatible: true }],
+    [{ interfaces: [left, { ...left, name: "Matching" }] }, { interfaces: [left, { ...left, name: "Matching" }], conflicts: [], compatible: true }],
+    [{ interfaces: [{ voltage: null, connector: "JST" }, { voltage: 24 }, {}] }, {
+      interfaces: [{ voltage: null, connector: "JST" }, { voltage: 24 }, {}], conflicts: [], compatible: true,
+    }],
+    [{ interfaces: [left, right] }, {
+      interfaces: [left, right], compatible: false,
+      conflicts: [
+        { field: "mounting_pattern", left: "Motor", right: "Board", left_value: [20, 20], right_value: [30, 30], status: "review_required" },
+        { field: "connector", left: "Motor", right: "Board", left_value: "JST", right_value: "XT60", status: "review_required" },
+        { field: "voltage", left: "Motor", right: "Board", left_value: 24, right_value: 12, status: "review_required" },
+        { field: "envelope", left: "Motor", right: "Board", left_value: { x: 40 }, right_value: { x: 50 }, status: "review_required" },
+        { field: "clearance", left: "Motor", right: "Board", left_value: 2, right_value: 3, status: "review_required" },
+      ],
+    }],
+    [{ interfaces: [null, { voltage: 0 }, [], { name: null, voltage: 12 }, "ignored", { name: "Third", voltage: 24 }] }, {
+      interfaces: [{ voltage: 0 }, { name: null, voltage: 12 }, { name: "Third", voltage: 24 }], compatible: false,
+      conflicts: [
+        { field: "voltage", left: "interface_0", right: "interface_1", left_value: 0, right_value: 12, status: "review_required" },
+        { field: "voltage", left: "interface_0", right: "Third", left_value: 0, right_value: 24, status: "review_required" },
+        { field: "voltage", left: "interface_1", right: "Third", left_value: 12, right_value: 24, status: "review_required" },
+      ],
+    }],
+  ];
+  for (const tenantId of ["default", "tenant-b"]) {
+    for (const [input, expected] of cases) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try {
+        output = await tenantStorage.run(tenantId, () => invokeAssistantTool("check_hardware_interfaces", {
+          ...input, plan_id: 999999, profile_id: sourceId, draft_id: 123, source_id: sourceId,
+        }, { repo, activePlanId: 888888, tenantId }));
+      } finally { observer.state.active = false; }
+      expect(JSON.parse(output.content)).toEqual(expected);
+      expect(statements).toEqual([]);
+      expect(observer.state.files).toEqual([]);
+    }
+  }
+});
+
+it("rejects observed reads against the empty check_hardware_interfaces declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("check_hardware_interfaces", { interfaces: [] }, { repo });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql)))]).toEqual(["table:projects", "table:source_docs"]);
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.check_hardware_interfaces");
+  expect(entry).toEqual({ operation: "tool.check_hardware_interfaces", resources: [] });
+  expect(() => expect(statements).toEqual([])).toThrow();
+  expect(() => expect(observer.state.files).toEqual([])).toThrow();
 });
 
 it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation against its declaration", async () => {
@@ -1341,4 +1421,1024 @@ it.each(["trusted", "isolated"])("traces get_source_inventory %s SQL and workspa
     { kind: "table", name: "source_notes" }, { kind: "table", name: "source_revisions" },
     { kind: "table", name: "app_settings" }, { kind: "file", name: "source-workspace" },
   ] });
+});
+
+it.each(["trusted", "isolated"])("traces compare_source_revisions %s SQL and snapshot paths", async (policy) => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  const a = join(workspace, "revisions", "a");
+  const b = join(workspace, "revisions", "b");
+  for (const dir of [a, b]) fs.mkdirSync(dir, { recursive: true });
+  repo.updateSource(sourceId, { local_path: workspace });
+  const db = drizzle(sqlite, { schema });
+  const comparisonRepo = policy === "isolated" ? new AppRepository(db, undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  const revisionA = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+  const revisionB = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "b", manifestDigest: "b".repeat(64), snapshotLocator: `${sourceId}/revisions/b`, syncedAt: "2026-01-02", completeness: "complete" });
+  for (const [dir, files] of [[a, { "changed.txt": "old", "removed.txt": "removed", "old-name.txt": "renamed", "same.txt": "same" }], [b, { "changed.txt": "new", "added.txt": "added", "new-name.txt": "renamed", "same.txt": "same" }]] satisfies [string, Record<string, string>][]) {
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(join(dir, name), content);
+    fs.mkdirSync(join(dir, "nested"));
+    fs.writeFileSync(join(dir, "nested", "part.stl"), "solid identical");
+    for (const excluded of [".git", "node_modules", ".docs-text"]) {
+      fs.mkdirSync(join(dir, excluded));
+      fs.writeFileSync(join(dir, excluded, "hidden.txt"), dir);
+    }
+    fs.symlinkSync(join(dataDir, "outside.txt"), join(dir, "escape.txt"));
+    fs.symlinkSync(join(dir, "same.txt"), join(dir, "inside.txt"));
+    fs.symlinkSync(userRoot, join(dir, "linked-directory"));
+  }
+  const otherRevision = repo.recordSourceRevision({ sourceId: userId, upstreamRevisionKey: "other-source", manifestDigest: "c".repeat(64), snapshotLocator: `${userId}/revisions/c`, syncedAt: "2026-01-01", completeness: "complete" });
+  const foreign = tenantStorage.run("other", () => {
+    const source = repo.createSource({ name: "Foreign", source_kind: "local" });
+    const revision = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "foreign", manifestDigest: "d".repeat(64), snapshotLocator: `${source.id}/revisions/d`, syncedAt: "2026-01-01", completeness: "complete" });
+    return { source, revision };
+  });
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, tenantId = "default", allowedRoots = [workspace]) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("compare_source_revisions", input, { repo: comparisonRepo })); }
+    finally { observer.state.active = false; }
+    const observed = new Set<string>();
+    for (const statement of statements) {
+      const sql = z.string().parse(statement);
+      const revisionSelect = new RegExp(`^select "[a-z_]+"(?:, "[a-z_]+")* from "source_revisions" where \\("source_revisions"\\."tenant_id" = '${tenantId}' and "source_revisions"\\."id" = -?[0-9]+(?:\\.0)?\\)$`);
+      observed.add(revisionSelect.test(sql) ? "table:source_revisions" : tableForObservedSelect(sql, tenantId));
+    }
+    for (const { api, args, result } of observer.state.files) {
+      expect(["realpathSync", "lstatSync", "statSync", "existsSync", "readdirSync", "readFileSync"], api).toContain(api);
+      const path = z.string().parse(args[0]);
+      expect(path === repos || allowedRoots.some((allowed) => under(allowed, path)), `${api} ${path}`).toBe(true);
+      if (api === "readdirSync") expect(args).toEqual([path, { withFileTypes: true }]);
+      if (api === "readFileSync") {
+        expect(args).toEqual([path]);
+        expect(allowedRoots.some((allowed) => under(allowed, path))).toBe(true);
+        expect(path).not.toMatch(/(?:escape|inside)\.txt|linked-directory|\/(?:\.git|node_modules|\.docs-text)\//);
+        expect(Buffer.isBuffer(result)).toBe(true);
+      }
+      observed.add("file:source-workspace");
+    }
+    for (const resource of observed) {
+      expect(["table:projects", "table:source_docs", "table:source_revisions", "file:source-workspace"]).toContain(resource);
+      union.add(resource);
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  const input = { source_id: sourceId, revision_a_id: revisionA.id, revision_b_id: revisionB.id };
+  for (const invalid of [{}, { ...input, source_id: "invalid" }, { ...input, revision_a_id: null }, { ...input, revision_b_id: "invalid" }]) {
+    expect(await trace(invalid)).toEqual({ error: "source_id and both revision ids are required" });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+  }
+  for (const invalid of [{ ...input, source_id: 999999 }, { ...input, revision_a_id: 999999 }, { ...input, revision_b_id: otherRevision.id }, { ...input, revision_a_id: foreign.revision.id }]) {
+    expect(await trace(invalid)).toEqual({ error: "Source revisions not found for Source" });
+    expect(observer.state.files.every(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
+  }
+  expect(await trace(input, "other")).toEqual({ error: "Source revisions not found for Source" });
+  expect(observer.state.files).toEqual([]);
+  const differences = [
+    { kind: "added", path_b: "added.txt" },
+    { kind: "changed", path_a: "changed.txt", path_b: "changed.txt" },
+    { kind: "renamed", path_a: "old-name.txt", path_b: "new-name.txt" },
+    { kind: "removed", path_a: "removed.txt" },
+  ];
+  for (const selectors of [input, { source_id: String(sourceId), revision_a_id: String(revisionA.id), revision_b_id: String(revisionB.id) }]) {
+    expect(await trace(selectors)).toEqual({ source: { id: sourceId, name: "Fixture" }, revision_a: revisionA, revision_b: revisionB, differences, counts: { added: 1, changed: 1, renamed: 1, removed: 1 } });
+    expect(observer.state.files.filter(({ api }) => api === "readFileSync")).toHaveLength(10);
+  }
+  expect((await trace({ ...input, revision_b_id: revisionA.id })).differences).toEqual([]);
+  const unavailable = { error: "Source revision snapshots are unavailable" };
+  for (const locator of ["", "../outside", "/tmp/outside", `${sourceId}\\revisions\\a`, `${sourceId}/./revisions/a`, `${sourceId}//revisions/a`, `${sourceId}/revisions/missing`]) {
+    sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(locator, revisionA.id);
+    expect(await trace(input)).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  }
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(revisionA.snapshot_locator, revisionA.id);
+  fs.symlinkSync(userRoot, join(workspace, "escape-root"));
+  fs.writeFileSync(join(userRoot, "same.txt"), "same");
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(`${sourceId}/escape-root`, revisionA.id);
+  const escaped = await trace(input, "default", policy === "trusted" ? [workspace, userRoot] : [workspace]);
+  if (policy === "isolated") {
+    expect(escaped).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  } else {
+    expect(escaped.differences).toBeInstanceOf(Array);
+    expect(observer.state.files.some(({ api, args }) => api === "readFileSync" && args[0] === join(userRoot, "same.txt"))).toBe(true);
+  }
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(revisionA.snapshot_locator, revisionA.id);
+  const otherWorkspace = join(repos, String(userId));
+  fs.mkdirSync(otherWorkspace, { recursive: true });
+  fs.writeFileSync(join(otherWorkspace, "other.txt"), "other source snapshot");
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(String(userId), revisionB.id);
+  const crossSource = await trace(input, "default", policy === "trusted" ? [workspace, otherWorkspace] : [workspace]);
+  if (policy === "isolated") {
+    expect(crossSource).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  } else {
+    expect(crossSource.differences).toEqual([
+      { kind: "removed", path_a: "changed.txt" },
+      { kind: "removed", path_a: "nested/part.stl" },
+      { kind: "removed", path_a: "old-name.txt" },
+      { kind: "added", path_b: "other.txt" },
+      { kind: "removed", path_a: "removed.txt" },
+      { kind: "removed", path_a: "same.txt" },
+    ]);
+  }
+  sqlite.prepare("UPDATE source_revisions SET snapshot_locator = ? WHERE id = ?").run(`${sourceId}/revisions/a/same.txt`, revisionB.id);
+  const fileRoot = await trace(input);
+  if (policy === "isolated") {
+    expect(fileRoot).toEqual(unavailable);
+    expect(observer.state.files.some(({ api }) => ["readFileSync", "readdirSync"].includes(api))).toBe(false);
+  } else {
+    expect(fileRoot.differences).toEqual([
+      { kind: "removed", path_a: "changed.txt" },
+      { kind: "removed", path_a: "nested/part.stl" },
+      { kind: "removed", path_a: "old-name.txt" },
+      { kind: "removed", path_a: "removed.txt" },
+      { kind: "removed", path_a: "same.txt" },
+    ]);
+  }
+  expect([...union].sort()).toEqual(["file:source-workspace", "table:projects", "table:source_docs", "table:source_revisions"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.compare_source_revisions");
+  expect(entry, "Missing compare_source_revisions declaration").toEqual({ operation: "tool.compare_source_revisions", resources: [
+    { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" },
+    { kind: "table", name: "source_revisions" }, { kind: "file", name: "source-workspace" },
+  ] });
+});
+
+it.each(["trusted", "isolated"])("traces audit_source_provenance %s SQL, provenance and README paths", async (policy) => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const auditRoot = policy === "isolated" ? workspace : root;
+  const db = drizzle(sqlite, { schema });
+  const auditRepo = policy === "isolated" ? new AppRepository(db, undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  repo.updateSource(sourceId, { local_path: auditRoot, last_commit_sha: "audit-head", url: "https://example.test/audit" });
+  fs.writeFileSync(join(auditRoot, "README.md"), "Fixture\nAuthor: Ada Example\nMaintainer: Later match\n");
+  fs.writeFileSync(join(auditRoot, "LICENSE.txt"), "License contents are not opened");
+  fs.mkdirSync(join(auditRoot, "nested"));
+  fs.writeFileSync(join(auditRoot, "nested", "COPYING"), "Nested license");
+  fs.writeFileSync(join(auditRoot, "nested", "notice.md"), "Notice");
+  fs.writeFileSync(join(auditRoot, "not-license.txt"), "Not a license filename");
+  for (const excluded of [".git", "node_modules", ".docs-text"]) {
+    fs.mkdirSync(join(auditRoot, excluded));
+    fs.writeFileSync(join(auditRoot, excluded, "LICENSE"), "Excluded");
+  }
+  for (const [name, target] of [["NOTICE.link", join(auditRoot, "LICENSE.txt")], ["COPYING.link", join(dataDir, "outside.txt")], ["linked-directory", userRoot]]) {
+    fs.symlinkSync(target, join(auditRoot, name));
+  }
+  const revisionA = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "audit-old", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/old`, syncedAt: "2026-01-01", completeness: "complete" });
+  const revisionB = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "audit-head", manifestDigest: "b".repeat(64), snapshotLocator: `${sourceId}/revisions/head`, syncedAt: "2026-01-02", completeness: "complete" });
+  repo.recordSourceRevision({ sourceId: userId, upstreamRevisionKey: "unrelated", manifestDigest: "c".repeat(64), snapshotLocator: "unrelated", syncedAt: "2026-01-03", completeness: "complete" });
+  const foreign = tenantStorage.run("other", () => {
+    const source = repo.createSource({ name: "Fixture", source_kind: "local" });
+    repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "foreign", manifestDigest: "d".repeat(64), snapshotLocator: "foreign", syncedAt: "2026-01-04", completeness: "complete" });
+    return source;
+  });
+  const tables = ["table:projects", "table:source_docs", "table:source_revisions"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, tenantId = "default", allowedRoots = [auditRoot, userRoot, workspace, join(repos, String(userId)), join(repos, String(unsyncedId)), join(repos, String(foreign.id))]) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("audit_source_provenance", input, { repo: auditRepo })); }
+    finally { observer.state.active = false; }
+    for (const statement of statements) {
+      const sql = z.string().parse(statement);
+      const revisions = new RegExp(`^select "[a-z_]+"(?:, "[a-z_]+")* from "source_revisions" where \\("source_revisions"\\."tenant_id" = '${tenantId}' and "source_revisions"\\."project_id" = [1-9][0-9]*(?:\\.0)?\\) order by "source_revisions"\\."id" asc$`);
+      const resource = revisions.test(sql) ? "table:source_revisions" : tableForObservedSelect(sql, tenantId);
+      expect(tables).toContain(resource);
+      union.add(resource);
+    }
+    for (const { api, args } of observer.state.files) {
+      expect(["realpathSync", "lstatSync", "statSync", "readdirSync", "readFileSync"], api).toContain(api);
+      const path = z.string().parse(args[0]);
+      expect(path === repos || allowedRoots.some((allowed) => under(allowed, path)), `${api} ${path}`).toBe(true);
+      if (api === "readdirSync") expect(args).toEqual([path, { withFileTypes: true }]);
+      else if (api === "readFileSync") {
+        expect(args).toEqual([path, "utf8"]);
+        expect(path).toMatch(/\/(?:README\.md|Readme\.md|readme\.md|ReadMe\.md|README\.MD|author\.txt)$/);
+      } else expect(args).toEqual([path]);
+      union.add("file:source-workspace");
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  function reads() {
+    return observer.state.files.filter(({ api }) => api === "readFileSync").map(({ args, result }) => ({ path: args[0], text: result }));
+  }
+  const missing = { error: "source_id or source_name required" };
+  for (const input of [{}, { source_name: "  " }, { source_id: -1 }, { source_id: 999999, source_name: "Fixture" }, { source_name: "Absent" }, { source_id: foreign.id }]) {
+    expect(await trace(input)).toEqual(missing);
+    expect(reads()).toEqual([]);
+  }
+  expect(await trace({ source_id: sourceId }, "other")).toEqual(missing);
+  expect(observer.state.files).toEqual([]);
+  const expectedProvenance = {
+    url: "https://example.test/audit", pinned_revision: "audit-head", manifest_hashes: ["a".repeat(64), "b".repeat(64)],
+    author_signal: "Author: Ada Example", license_files: ["LICENSE.txt", "nested/COPYING", "nested/notice.md"],
+    commercial_print_permission: "review_license_file", confidence: "revision_pinned",
+  };
+  for (const input of [{ source_id: sourceId }, { source_id: String(sourceId), source_name: "Absent" }, { source_name: " Fixture " }, { source_name: "fixture" }, { source_name: "fix_ture" }, { source_name: "Fixture @ v2" }, { source_id: "invalid", source_name: "Fixture" }]) {
+    const result = await trace(input);
+    expect(result.provenance).toEqual(expectedProvenance);
+    expect(result.source).toEqual(expect.objectContaining({ id: sourceId, name: "Fixture", doc_count: 1, local_path: policy === "isolated" ? null : auditRoot, content_available: true, last_commit_sha: "audit-head" }));
+    expect(result.revisions).toEqual([
+      { id: revisionA.id, source_id: sourceId, upstream_revision_key: "audit-old", manifest_digest: "a".repeat(64), snapshot_locator: `${sourceId}/revisions/old`, synced_at: "2026-01-01", completeness: "complete" },
+      { id: revisionB.id, source_id: sourceId, upstream_revision_key: "audit-head", manifest_digest: "b".repeat(64), snapshot_locator: `${sourceId}/revisions/head`, synced_at: "2026-01-02", completeness: "complete" },
+    ]);
+    expect(reads()).toEqual([{ path: join(auditRoot, "README.md"), text: "Fixture\nAuthor: Ada Example\nMaintainer: Later match\n" }]);
+    expect(statements.filter((sql) => z.string().parse(sql).includes('from "source_revisions"'))).toHaveLength(2);
+    expect(observer.state.files.some(({ args }) => typeof args[0] === "string" && /\/(?:\.git|node_modules|\.docs-text)\//.test(args[0]))).toBe(false);
+    expect(observer.state.files.some(({ api, args }) => api === "readdirSync" && args[0] === join(auditRoot, "linked-directory"))).toBe(false);
+  }
+  const other = await trace({ source_name: "Fixture" }, "other");
+  expect(other.source).toEqual(expect.objectContaining({ id: foreign.id, doc_count: 0 }));
+  expect(other.provenance).toEqual({ url: null, pinned_revision: null, manifest_hashes: ["d".repeat(64)], author_signal: null, license_files: [], commercial_print_permission: "unknown", confidence: "unverified" });
+  expect(reads()).toEqual([]);
+  repo.updateSource(sourceId, { last_commit_sha: null });
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified" });
+
+  fs.writeFileSync(join(auditRoot, "Readme.md"), "Maintainer: Second candidate");
+  fs.rmSync(join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+  expect(reads()).toEqual([{ path: join(auditRoot, "Readme.md"), text: "Maintainer: Second candidate" }]);
+  for (const spelling of ["readme.md", "ReadMe.md", "README.MD"]) {
+    fs.renameSync(join(auditRoot, "Readme.md"), join(auditRoot, spelling));
+    expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+    expect(reads()).toEqual([{ path: join(auditRoot, spelling), text: "Maintainer: Second candidate" }]);
+    fs.renameSync(join(auditRoot, spelling), join(auditRoot, "Readme.md"));
+  }
+  fs.writeFileSync(join(auditRoot, "README.md"), "x".repeat(48000) + "\nAuthor: Beyond cap");
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: null });
+  expect(reads()).toEqual([{ path: join(auditRoot, "README.md"), text: "x".repeat(48000) + "\nAuthor: Beyond cap" }]);
+  fs.rmSync(join(auditRoot, "README.md"));
+  fs.writeFileSync(join(auditRoot, "author.txt"), "Copyright 2026 Inside author");
+  fs.symlinkSync(join(auditRoot, "author.txt"), join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Copyright 2026 Inside author" });
+  expect(reads()).toEqual([{ path: join(auditRoot, "author.txt"), text: "Copyright 2026 Inside author" }]);
+  fs.rmSync(join(auditRoot, "README.md"));
+  fs.symlinkSync(join(userRoot, "README.md"), join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+  expect(reads()).toEqual([{ path: join(auditRoot, "Readme.md"), text: "Maintainer: Second candidate" }]);
+  fs.rmSync(join(auditRoot, "README.md"));
+  fs.mkdirSync(join(auditRoot, "README.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: "Maintainer: Second candidate" });
+  fs.rmSync(join(auditRoot, "README.md"), { recursive: true });
+  fs.rmSync(join(auditRoot, "Readme.md"));
+  expect((await trace({ source_id: sourceId })).provenance).toEqual({ ...expectedProvenance, pinned_revision: null, confidence: "unverified", author_signal: null });
+  expect(reads()).toEqual([]);
+
+  const empty = join(workspace, "empty");
+  fs.mkdirSync(empty);
+  const noFiles = { url: "https://example.test/audit", pinned_revision: null, manifest_hashes: ["a".repeat(64), "b".repeat(64)], author_signal: null, license_files: [], commercial_print_permission: "unknown", confidence: "unverified" };
+  fs.writeFileSync(join(workspace, "file-root"), "A file root");
+  for (const path of [empty, join(workspace, "missing"), join(workspace, "file-root"), "", null]) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    expect((await trace({ source_id: sourceId })).provenance).toEqual(noFiles);
+    expect(reads()).toEqual([]);
+  }
+  fs.writeFileSync(join(userRoot, "README.md"), "Author: Followed root");
+  fs.writeFileSync(join(userRoot, "LICENSE"), "External license");
+  const link = join(workspace, "root-link");
+  fs.symlinkSync(userRoot, link);
+  for (const path of [link, join(link, "nested")]) {
+    fs.mkdirSync(join(userRoot, "nested"), { recursive: true });
+    fs.writeFileSync(join(userRoot, "nested", "README.md"), "Author: Followed ancestor");
+    repo.updateSource(sourceId, { local_path: path });
+    const result = await trace({ source_id: sourceId });
+    expect(result.provenance).toEqual(policy === "isolated" ? noFiles : { ...noFiles, author_signal: path === link ? "Author: Followed root" : "Author: Followed ancestor", license_files: path === link ? ["LICENSE"] : [], commercial_print_permission: path === link ? "review_license_file" : "unknown" });
+    expect(reads()).toEqual(policy === "isolated" ? [] : [{ path: join(userRoot, ...(path === link ? [] : ["nested"]), "README.md"), text: path === link ? "Author: Followed root" : "Author: Followed ancestor" }]);
+  }
+  const physical = join(workspace, "physical", "child");
+  fs.mkdirSync(physical, { recursive: true });
+  fs.writeFileSync(join(physical, "README.md"), "Author: Internal ancestor");
+  fs.writeFileSync(join(physical, "LICENSE"), "Internal license");
+  fs.symlinkSync(join(workspace, "physical"), join(workspace, "internal-link"));
+  repo.updateSource(sourceId, { local_path: join(workspace, "internal-link", "child") });
+  const internalProvenance = { ...noFiles, author_signal: "Author: Internal ancestor", license_files: ["LICENSE"], commercial_print_permission: "review_license_file" };
+  expect((await trace({ source_id: sourceId })).provenance).toEqual(internalProvenance);
+  expect(reads()).toEqual([{ path: join(physical, "README.md"), text: "Author: Internal ancestor" }]);
+  const canonicalRepos = join(dataDir, "canonical-repos");
+  fs.renameSync(repos, canonicalRepos);
+  fs.symlinkSync(canonicalRepos, repos);
+  try {
+    expect((await trace({ source_id: sourceId }, "default", [workspace, join(canonicalRepos, String(sourceId))])).provenance).toEqual(internalProvenance);
+    expect(reads()).toEqual([{ path: join(canonicalRepos, String(sourceId), "physical", "child", "README.md"), text: "Author: Internal ancestor" }]);
+  } finally {
+    fs.rmSync(repos);
+    fs.renameSync(canonicalRepos, repos);
+  }
+  repo.updateSource(sourceId, { local_path: workspace });
+  fs.rmSync(workspace, { recursive: true });
+  fs.symlinkSync(userRoot, workspace);
+  expect((await trace({ source_id: sourceId })).provenance).toEqual(policy === "isolated" ? noFiles : { ...noFiles, author_signal: "Author: Followed root", license_files: ["LICENSE"], commercial_print_permission: "review_license_file" });
+  expect(reads()).toEqual(policy === "isolated" ? [] : [{ path: join(userRoot, "README.md"), text: "Author: Followed root" }]);
+  expect([...union].sort()).toEqual(["file:source-workspace", ...tables]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.audit_source_provenance");
+  expect(entry, "Missing audit_source_provenance declaration").toEqual({ operation: "tool.audit_source_provenance", resources: [
+    { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" },
+    { kind: "table", name: "source_revisions" }, { kind: "file", name: "source-workspace" },
+  ] });
+});
+
+it.each(["trusted", "isolated"])("traces analyze_stl_mesh %s SQL, real meshes and workspace refusals", async (policy) => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const meshRoot = policy === "isolated" ? workspace : root;
+  const db = drizzle(sqlite, { schema });
+  const meshRepo = policy === "isolated" ? new AppRepository(db, undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  repo.updateSource(sourceId, { local_path: meshRoot });
+  const faces = [
+    [[0, 0, 0], [2, 0, 0], [0, 3, 0]],
+    [[0, 0, 0], [0, 0, 4], [2, 0, 0]],
+    [[0, 0, 0], [0, 3, 0], [0, 0, 4]],
+    [[2, 0, 0], [0, 0, 4], [0, 3, 0]],
+  ];
+  const ascii = `solid tetrahedron\n${faces.map((face) => `facet normal 0 0 0\nouter loop\n${face.map((vertex) => `vertex ${vertex.join(" ")}`).join("\n")}\nendloop\nendfacet`).join("\n")}\nendsolid tetrahedron\n`;
+  const binary = Buffer.alloc(134);
+  binary.writeUInt32LE(1, 80);
+  [0, 0, 0, 2, 0, 0, 0, 3, 4].forEach((coordinate, index) => binary.writeFloatLE(coordinate, 96 + index * 4));
+  fs.writeFileSync(join(meshRoot, "closed.stl"), ascii);
+  fs.writeFileSync(join(meshRoot, "open.stl"), binary);
+  fs.writeFileSync(join(meshRoot, "invalid.stl"), "not an STL");
+  fs.mkdirSync(join(meshRoot, "mesh-directory"));
+  fs.writeFileSync(join(userRoot, "outside.stl"), ascii);
+  fs.symlinkSync(join(meshRoot, "closed.stl"), join(meshRoot, "inside.stl"));
+  fs.symlinkSync(join(userRoot, "outside.stl"), join(meshRoot, "escape.stl"));
+  fs.symlinkSync(userRoot, join(meshRoot, "escape-directory"));
+  db.update(schema.projects).set({ localPath: null }).where(eq(schema.projects.id, unsyncedId)).run();
+  const foreign = tenantStorage.run("other", () => {
+    const source = repo.createSource({ name: "Other mesh", source_kind: "local" });
+    db.update(schema.projects).set({ localPath: null }).where(eq(schema.projects.id, source.id)).run();
+    return source;
+  });
+  const tables = ["table:projects", "table:source_docs"];
+  const resources = ["file:source-workspace", ...tables];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], reads: string[] = [], tenantId = "default") {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("analyze_stl_mesh", input, { repo: meshRepo })); }
+    finally { observer.state.active = false; }
+    const observed = new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)));
+    for (const { api, args } of observer.state.files) {
+      expect(["realpathSync", "lstatSync", "statSync", "existsSync", "readFileSync"], api).toContain(api);
+      const path = z.string().parse(args[0]);
+      expect(args).toEqual([path]);
+      expect(path === repos || under(meshRoot, path) || (policy === "trusted" && under(userRoot, path)), `${api} ${path}`).toBe(true);
+      observed.add("file:source-workspace");
+    }
+    expect(observer.state.files.filter(({ api }) => api === "readFileSync").map(({ args }) => args[0])).toEqual(reads);
+    expect([...observed].sort()).toEqual(expected);
+    for (const resource of observed) union.add(resource);
+    expect(output.proposedAction).toBeUndefined();
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  const closed = (path: string) => ({
+    path, valid: true, triangles: 4, vertices: 12,
+    bounds_mm: { minX: 0, minY: 0, minZ: 0, maxX: 2, maxY: 3, maxZ: 4, widthMm: 2, depthMm: 3, heightMm: 4 },
+    dimensions_um: { widthUm: 2000, depthUm: 3000, heightUm: 4000 },
+    shells_estimate: 1, watertight: true, boundary_edges: 0,
+  });
+  for (const input of [{}, { source_id: sourceId, path: " \n " }]) {
+    expect(await trace(input, [])).toEqual({ error: "path required" });
+  }
+  for (const input of [{ path: "closed.stl" }, { source_id: "invalid", path: "closed.stl" }, { source_name: "Fixture", path: "closed.stl" }]) {
+    expect(await trace(input, [])).toEqual({ error: "STL path not found" });
+  }
+  for (const id of [999999, foreign.id]) {
+    expect(await trace({ source_id: id, path: "closed.stl" }, ["table:projects"])).toEqual({ error: "Source is not synchronized" });
+  }
+  expect(await trace({ source_id: unsyncedId, path: "closed.stl" }, tables)).toEqual({ error: "Source is not synchronized" });
+  expect(await trace({ source_id: sourceId, path: "closed.stl" }, ["table:projects"], [], "other")).toEqual({ error: "Source is not synchronized" });
+  expect(await trace({ source_id: foreign.id, path: "closed.stl" }, tables, [], "other")).toEqual({ error: "Source is not synchronized" });
+  for (const id of [sourceId, String(sourceId)]) {
+    expect(await trace({ source_id: id, source_name: "Ignored", path: " closed.stl\n" }, resources, [join(meshRoot, "closed.stl")])).toEqual(closed("closed.stl"));
+  }
+  expect(await trace({ source_id: sourceId, path: "inside.stl" }, resources, [join(meshRoot, "closed.stl")])).toEqual(closed("inside.stl"));
+  expect(await trace({ source_id: sourceId, path: join(meshRoot, "closed.stl") }, resources, [join(meshRoot, "closed.stl")])).toEqual(closed(join(meshRoot, "closed.stl")));
+  expect(await trace({ source_id: sourceId, path: "open.stl" }, resources, [join(meshRoot, "open.stl")])).toEqual({
+    ...closed("open.stl"), triangles: 1, vertices: 3, shells_estimate: null, watertight: false, boundary_edges: 3,
+  });
+  expect(await trace({ source_id: sourceId, path: "invalid.stl" }, resources, [join(meshRoot, "invalid.stl")])).toEqual({ path: "invalid.stl", valid: false, error: "STL mesh could not be parsed" });
+  for (const path of ["missing.stl", "mesh-directory", "escape.stl", "escape-directory/outside.stl"]) {
+    expect(await trace({ source_id: sourceId, path }, resources)).toEqual({ error: "STL path not found" });
+  }
+  for (const path of [join(userRoot, "outside.stl"), "../outside.stl"]) {
+    expect(await trace({ source_id: sourceId, path }, policy === "isolated" ? resources : tables)).toEqual({ error: "STL path not found" });
+    expect(observer.state.files.some(({ args }) => args[0] === join(userRoot, "outside.stl"))).toBe(false);
+  }
+  repo.updateSource(sourceId, { local_path: userRoot });
+  const outsideRoot = await trace({ source_id: sourceId, path: "outside.stl" }, resources, policy === "trusted" ? [join(userRoot, "outside.stl")] : []);
+  expect(outsideRoot).toEqual(policy === "trusted" ? closed("outside.stl") : { error: "Source is not synchronized" });
+  if (policy === "isolated") {
+    expect(observer.state.files.map(({ api, args }) => [api, args[0]])).toEqual([["realpathSync", repos]]);
+    repo.updateSource(sourceId, { local_path: join(workspace, "escape-root") });
+    fs.symlinkSync(userRoot, join(workspace, "escape-root"));
+    expect(await trace({ source_id: sourceId, path: "outside.stl" }, resources)).toEqual({ error: "Source is not synchronized" });
+    repo.updateSource(sourceId, { local_path: workspace });
+    fs.rmSync(workspace, { recursive: true });
+    fs.symlinkSync(userRoot, workspace);
+    expect(await trace({ source_id: sourceId, path: "outside.stl" }, resources)).toEqual({ error: "Source is not synchronized" });
+    expect(observer.state.files.map(({ api, args }) => [api, args[0]])).toEqual([["realpathSync", repos], ["lstatSync", workspace]]);
+  }
+  expect([...union].sort()).toEqual(resources);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.analyze_stl_mesh");
+  expect(entry, "Missing analyze_stl_mesh declaration").toEqual({ operation: "tool.analyze_stl_mesh", resources: [
+    { kind: "table", name: "projects" }, { kind: "table", name: "source_docs" }, { kind: "file", name: "source-workspace" },
+  ] });
+});
+
+const SNAPSHOT_TABLES = ["table:app_settings", "table:build_profiles", "table:parts", "table:plan_accepted_input_sets", "table:plan_revision_input_sets", "table:plan_revision_inputs", "table:profile_layers", "table:projects", "table:source_revisions"];
+const SNAPSHOT_UNION = ["file:kit-catalog", "file:source-workspace", ...SNAPSHOT_TABLES];
+function resourcesForSnapshotSelect(statement: unknown, tenantId: string, planId?: number): string[] {
+  const sql = z.string().parse(statement);
+  if (planId !== undefined) {
+    if (sql === `select count(*) from "parts" where "parts"."profile_id" = ${planId}.0`) return ["table:parts"];
+    const columns = '"[a-z_]+"(?:, "[a-z_]+")*';
+    if (new RegExp(`^select ${columns} from "profile_layers" where "profile_layers"\\."profile_id" = ${planId}\\.0 order by "profile_layers"\\."layer_order" asc$`).test(sql)) return ["table:profile_layers"];
+  }
+  const tenant = tenantId.replaceAll("'", "''");
+  const profile = /^select "[a-z_]+"(?:, "[a-z_]+")* from "build_profiles" where \("build_profiles"\."tenant_id" = ('(?:[^']|'')*') and "build_profiles"\."id" = -?[0-9]+(?:\.0)?\)$/;
+  const match = profile.exec(sql);
+  if (match) {
+    expect(match[1]).toBe(`'${tenant}'`);
+    return ["table:build_profiles"];
+  }
+  return resourcesForPlanSelect(sql, tenantId);
+}
+
+async function tracePlanSnapshot({ input = {}, expected, files = [], tenantId = "default", activePlanId, planId, repository = repo, catalogDir = dataDir }: {
+  input?: Record<string, unknown>; expected: string[]; files?: [string, ...unknown[]][]; tenantId?: string; activePlanId?: number; planId?: number; repository?: AppRepository; catalogDir?: string | null;
+}) {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("get_plan_snapshot", input, { repo: repository, activePlanId, dataDir: catalogDir })); }
+  finally { observer.state.active = false; }
+  const observed = [...new Set(statements.flatMap((sql) => resourcesForSnapshotSelect(sql, tenantId, planId)))].sort();
+  expect(observed).toEqual(expected);
+  expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+  const union = unions.get("get_plan_snapshot") ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  if (files.some(([api]) => api === "readFileSync")) union.add("file:kit-catalog");
+  if (files.some(([api]) => api !== "readFileSync")) union.add("file:source-workspace");
+  unions.set("get_plan_snapshot", union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+it("traces get_plan_snapshot identity, freshness, kit data and active-context tenant isolation", async () => {
+  const plan = repo.createProfile("Snapshot", sourceId);
+  repo.addAddonLayer(plan.id, userId);
+  const empty = repo.createProfile("Empty");
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+  repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ name: "Local kit", selections: { size: "large" } }));
+  tenantStorage.run("other", () => {
+    repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ name: "Hidden kit", selections: { size: "private" } }));
+    repo.setSetting(`kit_manifest_${foreign.id}`, JSON.stringify({ name: "Foreign kit" }));
+  });
+  const catalogPath = join(dataDir, "kit-catalog.json");
+  fs.writeFileSync(catalogPath, JSON.stringify({ version: 1, bases: { fixture: { source_name: "Fixture" } }, stack_presets: { fixture_stack: { base: "fixture", addon_sources: ["UserLocal"] } } }));
+  const files: [string, ...unknown[]][] = [["readFileSync", catalogPath, "utf8"]];
+  const partial = SNAPSHOT_TABLES.filter((table) => !["table:source_revisions", "table:plan_revision_input_sets", "table:plan_revision_inputs"].includes(table));
+  const noLayers = partial.filter((table) => table !== "table:projects");
+  const layers = repo.getProfileLayers(plan.id).map((layer) => ({ id: layer.id, order: layer.layer_order, type: layer.layer_type, source: layer.project_name, project_id: layer.project_id }));
+  const snapshot = { id: plan.id, name: "Snapshot", part_count: 0, build_stale: false, layers, kit_selections: { size: "large" }, kit_name: "Local kit", inferred_stack_preset: "fixture_stack" };
+  for (const input of [{}, { plan_id: "invalid" }, { plan_id: null }, { plan_id: false }]) {
+    expect(await tracePlanSnapshot({ input, expected: [] })).toEqual({ error: "plan_id required" });
+    expect(await tracePlanSnapshot({ input, expected: partial, files, activePlanId: plan.id, planId: plan.id })).toEqual(snapshot);
+  }
+  for (const plan_id of [999999, foreign.id, 0, -1]) {
+    expect(await tracePlanSnapshot({ input: { plan_id }, expected: ["table:build_profiles"] })).toEqual({ error: "plan_id required" });
+    expect(await tracePlanSnapshot({ input: { plan_id }, expected: partial, files, activePlanId: plan.id, planId: plan.id })).toEqual(snapshot);
+  }
+  for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+    expect(await tracePlanSnapshot({ input: { plan_id }, expected: partial, files, activePlanId: empty.id, planId: plan.id })).toEqual(snapshot);
+  }
+  expect(await tracePlanSnapshot({ expected: ["table:build_profiles"], activePlanId: 999999 })).toEqual({ error: "Plan not found" });
+  expect(await tracePlanSnapshot({ expected: ["table:build_profiles"], activePlanId: foreign.id })).toEqual({ error: "Plan not found" });
+  expect(await tracePlanSnapshot({ input: { plan_id: plan.id }, tenantId: "other", expected: ["table:build_profiles"] })).toEqual({ error: "plan_id required" });
+  expect(await tracePlanSnapshot({ tenantId: "other", activePlanId: plan.id, expected: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+  const otherDir = join(dataDir, "other");
+  fs.mkdirSync(otherDir);
+  fs.writeFileSync(join(otherDir, "kit-catalog.yaml"), "version: 1\n");
+  expect(await tracePlanSnapshot({ input: { plan_id: foreign.id }, tenantId: "other", planId: foreign.id, expected: noLayers, catalogDir: otherDir, files: [["readFileSync", join(otherDir, "kit-catalog.json"), "utf8"], ["readFileSync", join(otherDir, "kit-catalog.yaml"), "utf8"]] })).toEqual({ id: foreign.id, name: "Foreign", part_count: 0, build_stale: false, layers: [], kit_selections: {}, kit_name: "Foreign kit", inferred_stack_preset: null });
+  sqlite.prepare("INSERT INTO parts (tenant_id, profile_id, match_key, relative_path, filename, quantity_effective, included) VALUES (?, ?, ?, ?, ?, ?, ?)").run("default", plan.id, "part.stl", "part.stl", "part.stl", 7, 0);
+  const revision = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+  sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, sourceId);
+  const inputSet = sqlite.prepare("INSERT INTO plan_revision_input_sets (tenant_id, profile_id, input_set_digest, expected_input_count, format_version, recorded_at, published_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("default", plan.id, "fixture", 0, 2, "2026-01-01", "2026-01-01");
+  sqlite.prepare("INSERT INTO plan_accepted_input_sets (tenant_id, profile_id, input_set_id, accepted_at) VALUES (?, ?, ?, ?)").run("default", plan.id, Number(inputSet.lastInsertRowid), "2026-01-01");
+  expect(await tracePlanSnapshot({ input: { plan_id: plan.id }, planId: plan.id, expected: SNAPSHOT_TABLES, files })).toEqual({ ...snapshot, part_count: 1, build_stale: true });
+  expect([...unions.get("get_plan_snapshot") ?? []].sort()).toEqual(["file:kit-catalog", ...SNAPSHOT_TABLES]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_plan_snapshot");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_snapshot declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(SNAPSHOT_UNION);
+});
+
+it("traces get_plan_snapshot workspace probes and exact catalog candidates including missing catalogs", async () => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  const revisionRoot = join(workspace, "revisions", "a");
+  fs.mkdirSync(revisionRoot, { recursive: true });
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  const isolated = new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM });
+  const plan = repo.createProfile("Isolated", sourceId);
+  const revision = repo.recordSourceRevision({ sourceId, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${sourceId}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+  sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, sourceId);
+  const inputSet = sqlite.prepare("INSERT INTO plan_revision_input_sets (tenant_id, profile_id, input_set_digest, expected_input_count, format_version, recorded_at, published_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("default", plan.id, "fixture", 0, 2, "2026-01-01", "2026-01-01");
+  sqlite.prepare("INSERT INTO plan_accepted_input_sets (tenant_id, profile_id, input_set_id, accepted_at) VALUES (?, ?, ?, ?)").run("default", plan.id, Number(inputSet.lastInsertRowid), "2026-01-01");
+  const prefix: [string, ...unknown[]][] = [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace]];
+  const probes: [string, ...unknown[]][] = [...prefix, ["realpathSync", workspace], ["statSync", workspace], ...prefix, ["realpathSync", revisionRoot], ["statSync", revisionRoot], ...prefix, ["realpathSync", workspace], ["statSync", workspace]];
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  const options = { input: { plan_id: plan.id }, planId: plan.id, expected: SNAPSHOT_TABLES, repository: isolated };
+  const snapshot = { id: plan.id, name: "Isolated", part_count: 0, build_stale: true, layers: repo.getProfileLayers(plan.id).map((layer) => ({ id: layer.id, order: layer.layer_order, type: layer.layer_type, source: layer.project_name, project_id: layer.project_id })), kit_selections: {}, kit_name: null, inferred_stack_preset: null };
+  fs.mkdirSync(join(dataDir, "manifests"));
+  for (const [index, path] of candidates.entries()) {
+    fs.writeFileSync(path, path.endsWith(".json") ? '{"version":1}' : 'version: 1\n');
+    expect(await tracePlanSnapshot({ ...options, files: [...probes, ...candidates.slice(0, index + 1).map((candidate): [string, ...unknown[]] => ["readFileSync", candidate, "utf8"])] })).toEqual(snapshot);
+    fs.rmSync(path);
+  }
+  const read = (paths: string[]): [string, ...unknown[]][] => paths.map((path) => ["readFileSync", path, "utf8"]);
+  for (const [index, path] of candidates.entries()) fs.writeFileSync(path, ["[]", "[invalid", "null", "version: 1\n"][index]!);
+  expect(await tracePlanSnapshot({ ...options, files: [...probes, ...read(candidates)] })).toEqual(snapshot);
+  for (const path of candidates) fs.rmSync(path);
+  expect(await tracePlanSnapshot({ ...options, files: [...probes, ...read([...candidates, ...shipped.slice(0, 2)])] })).toEqual(snapshot);
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    fs.writeFileSync(candidates[0]!, '{"version":1}');
+    expect(await tracePlanSnapshot({ ...options, catalogDir: null, files: [...probes, ...read(candidates.slice(0, 1))] })).toEqual(snapshot);
+    fs.rmSync(candidates[0]!);
+    vi.stubEnv("PRINT_PARTNER_DATA_DIR", "");
+    expect(await tracePlanSnapshot({ ...options, catalogDir: null, files: [...probes, ...read(shipped.slice(0, 2))] })).toEqual(snapshot);
+    const originalRead = fs.readFileSync;
+    const missingCatalogs = vi.spyOn(fs, "readFileSync").mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+      if (typeof args[0] === "string" && [...candidates, ...shipped].includes(args[0])) {
+        observer.state.files.push({ api: "readFileSync", args });
+        throw Object.assign(new Error("missing fixture catalog"), { code: "ENOENT" });
+      }
+      return originalRead(...args);
+    });
+    try { expect(await tracePlanSnapshot({ ...options, files: [...probes, ...read([...candidates, ...shipped])] })).toEqual(snapshot); }
+    finally { missingCatalogs.mockRestore(); }
+  } finally { vi.unstubAllEnvs(); }
+  expect([...unions.get("get_plan_snapshot") ?? []].sort()).toEqual(SNAPSHOT_UNION);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_plan_snapshot");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_snapshot declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(SNAPSHOT_UNION);
+  expect(() => resourcesForSnapshotSelect('select * from "source_docs"', "default", plan.id)).toThrow("Unsupported SQL:");
+});
+
+
+it("rejects extra real table and file reads after get_plan_snapshot dispatch", async () => {
+  const plan = repo.createProfile("Observer control");
+  const catalog = join(dataDir, "kit-catalog.json");
+  fs.writeFileSync(catalog, '{"version":1}');
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try {
+    output = await invokeAssistantTool("get_plan_snapshot", { plan_id: plan.id }, { repo, dataDir });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect(JSON.parse(output.content)).toMatchObject({ id: plan.id, name: "Observer control" });
+  const observed = [...new Set(statements.flatMap((sql) => resourcesForSnapshotSelect(sql, "default", plan.id)))];
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_plan_snapshot");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_snapshot declaration");
+  const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`);
+  expect(observed.filter((resource) => !declared.includes(resource))).toEqual(["table:source_docs"]);
+  expect(() => expect(observed.every((resource) => declared.includes(resource))).toBe(true)).toThrow();
+  const files = observer.state.files.map(({ api, args }) => [api, ...args]);
+  expect(files).toEqual([["readFileSync", catalog, "utf8"], ["readFileSync", join(root, "README.md"), "utf8"]]);
+  expect(() => expect(files).toEqual([["readFileSync", catalog, "utf8"]])).toThrow();
+});
+
+function deploymentCatalogCandidates(root: string): string[] {
+  return ["kit-catalog.json", "kit-catalog.yaml", "manifests/kit-catalog.json", "manifests/kit-catalog.yaml"].map((name) => join(root, name));
+}
+const SHIPPED_CATALOG_CANDIDATES = ["../data/manifests/kit-catalog.json", "../data/kit-catalog.yaml", "../data/manifests/kit-catalog.yaml", "../../src/data/kit-catalog.yaml", "../../src/data/manifests/kit-catalog.yaml"].map((path) => fileURLToPath(new URL(path, new URL("../services/kit-catalog.ts", import.meta.url))));
+
+function kitCatalogResources(candidates: string[]): string[] {
+  const resources = new Set<string>();
+  for (const { api, args } of observer.state.files) {
+    expect(api).toBe("readFileSync");
+    expect(args).toEqual([expect.any(String), "utf8"]);
+    expect(candidates).toContain(args[0]);
+    resources.add("file:kit-catalog");
+  }
+  return [...resources];
+}
+
+it("traces get_kit_catalog real catalogs, fallbacks and tenant independence with zero SQL", async () => {
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  const union = new Set<string>();
+  async function trace(expected: string, reads: string[], catalogDir: string | null = dataDir) {
+    for (const tenantId of ["default", "other"]) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("get_kit_catalog", {}, { repo, dataDir: catalogDir })); }
+      finally { observer.state.active = false; }
+      expect(output).toEqual({ content: expected });
+      expect(statements).toEqual([]);
+      for (const resource of kitCatalogResources([...candidates, ...shipped])) union.add(resource);
+      expect(observer.state.files.map(({ args }) => args[0])).toEqual(reads);
+    }
+  }
+  const empty = "## Kit catalog (summarized)\n### Bases\n### Addon categories\n### Stack presets";
+  const catalog = {
+    version: 1,
+    bases: { fixture: { label: "Fixture base", source_name: "Fixture", compatible_addons: ["toolhead"] } },
+    addon_categories: { toolhead: { rule: "pick_one", sources: [{ name: "Addon" }] } },
+    stack_presets: { fixture_stack: { base: "fixture", addon_sources: ["Addon"], default_selections: { size: "large", colors: ["red", "blue"] } } },
+  };
+  const summary = ["## Kit catalog (summarized)", "### Bases", "- fixture: Fixture base (source: Fixture; addons: toolhead)", "### Addon categories", "- toolhead [pick_one]: Addon", "### Stack presets", "- fixture_stack: base=fixture; addons=[Addon]; selections={size=large, colors=red, blue}"].join("\n");
+  fs.mkdirSync(join(dataDir, "manifests"));
+  for (const [index, path] of candidates.entries()) {
+    fs.writeFileSync(path, JSON.stringify(catalog));
+    await trace(summary, candidates.slice(0, index + 1));
+    fs.rmSync(path);
+  }
+  const shippedSummary = ["## Kit catalog (summarized)", "### Bases", "### Addon categories", ...["toolhead", "extruder", "hotend", "toolhead_electronics", "probe", "controller", "cable_routing", "z_drives"].map((id) => `- ${id} [pick_one]: —`), "- skirts_panels [pick_any]: —", "- accent [pick_any]: —", "### Stack presets"].join("\n");
+  await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)]);
+  for (const [index, path] of candidates.entries()) fs.writeFileSync(path, ["[]", "[invalid", "null", "[invalid"][index]!);
+  await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)]);
+  for (const path of candidates) fs.rmSync(path);
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    fs.writeFileSync(candidates[0]!, JSON.stringify(catalog));
+    await trace(summary, candidates.slice(0, 1), null);
+    vi.stubEnv("PRINT_PARTNER_DATA_DIR", join(dataDir, "ignored"));
+    await trace(summary, candidates.slice(0, 1));
+    fs.rmSync(candidates[0]!);
+    vi.stubEnv("PRINT_PARTNER_DATA_DIR", "");
+    await trace(shippedSummary, shipped.slice(0, 2), null);
+    const originalRead = fs.readFileSync;
+    const missingShipped = vi.spyOn(fs, "readFileSync").mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+      if (typeof args[0] === "string" && shipped.includes(args[0])) {
+        if (observer.state.active) observer.state.files.push({ api: "readFileSync", args });
+        throw Object.assign(new Error("missing fixture catalog"), { code: "ENOENT" });
+      }
+      return originalRead(...args);
+    });
+    try { await trace(empty, [...candidates, ...shipped]); }
+    finally { missingShipped.mockRestore(); }
+  } finally { vi.unstubAllEnvs(); }
+  expect([...union]).toEqual(["file:kit-catalog"]);
+  expect(manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_kit_catalog")).toEqual({
+    operation: "tool.get_kit_catalog", resources: [{ kind: "file", name: "kit-catalog" }],
+  });
+  observer.state.files.push({ api: "readFileSync", args: [join(root, "README.md"), "utf8"] });
+  expect(() => kitCatalogResources([...candidates, ...shipped])).toThrow();
+});
+
+const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "table:profile_layers", "table:projects"];
+const OPTION_GROUP_UNION = ["file:community-manifests", "file:path-hints", "file:source-workspace", ...OPTION_GROUP_TABLES];
+const SHIPPED_PATH_HINTS = fileURLToPath(new URL("../data/path-hints.yaml", import.meta.url));
+const COMMUNITY_MANIFEST_DIR = fileURLToPath(new URL("../data/manifests", import.meta.url));
+const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml");
+type FileCall = [string, ...unknown[]];
+
+function optionGroupSelect(statement: unknown, tenantId: string, planId?: number): string {
+  const sql = z.string().parse(statement);
+  if (planId !== undefined) {
+    if (sql === `select "id" from "build_profiles" where ("build_profiles"."tenant_id" = '${tenantId}' and "build_profiles"."id" = ${planId}.0)`) return "table:build_profiles";
+    if (sql === `select "id", "tenant_id", "profile_id", "layer_order", "layer_type", "project_id" from "profile_layers" where "profile_layers"."profile_id" = ${planId}.0 order by "profile_layers"."layer_order" asc`) return "table:profile_layers";
+  }
+  return tableForObservedSelect(sql, tenantId);
+}
+
+function optionGroupFileResources(files: FileCall[]): string[] {
+  const resources = new Set<string>();
+  const workspaceRoots = [join(dataDir, "repos"), userRoot, join(dataDir, "moved-checkout")];
+  for (const [api, candidate] of files) {
+    const path = z.string().parse(candidate);
+    if (path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml")) resources.add("file:path-hints");
+    else if (path === COMMUNITY_MANIFEST_DIR && api === "realpathSync"
+      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!kit-catalog\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
+    else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
+    else throw new Error(`Unclassified option group path: ${api} ${path}`);
+  }
+  return [...resources];
+}
+
+function communityManifestCalls(path: string, exists = true): FileCall[] {
+  return [["realpathSync", COMMUNITY_MANIFEST_DIR], ["realpathSync", path],
+    ...(exists ? [["statSync", path], ["readFileSync", path, "utf8"]] satisfies FileCall[] : [])];
+}
+
+async function traceOptionGroups({ input = {}, repository = repo, tenantId = "default", activePlanId, planId, tables, files = [], hintDir = dataDir }: {
+  input?: Record<string, unknown>; repository?: AppRepository; tenantId?: string; activePlanId?: number;
+  planId?: number; tables: string[]; files?: FileCall[]; hintDir?: string | null;
+}) {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("get_plan_option_groups", input, { repo: repository, activePlanId, dataDir: hintDir })); }
+  finally { observer.state.active = false; }
+  const observed = [...new Set(statements.map((sql) => optionGroupSelect(sql, tenantId, planId)))].sort();
+  expect(observed).toEqual(tables);
+  expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+  const union = unions.get("get_plan_option_groups") ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  for (const resource of optionGroupFileResources(observer.state.files.map(({ api, args }) => [api, ...args]))) union.add(resource);
+  unions.set("get_plan_option_groups", union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+function optionGroupCheckout(name: string, revision = false) {
+  const source = repo.createSource({ name, source_kind: "local" });
+  const workspace = join(dataDir, "repos", String(source.id));
+  const checkout = revision ? join(workspace, "revisions", "a") : workspace;
+  fs.mkdirSync(checkout, { recursive: true });
+  execFileSync("git", ["init", "--quiet", "--separate-git-dir", join(dataDir, `${name}-git`), checkout]);
+  sqlite.prepare("UPDATE projects SET local_path = ?, imported_paths = ? WHERE id = ?").run(checkout, JSON.stringify(["chosen.stl"]), source.id);
+  fs.writeFileSync(join(checkout, "chosen.stl"), "solid fixture\nendsolid fixture\n");
+  fs.writeFileSync(join(checkout, "ignored.stl"), "solid ignored\nendsolid ignored\n");
+  fs.writeFileSync(join(checkout, "import-rules.json"), '["ignored.stl"]');
+  fs.writeFileSync(join(checkout, "print-partner.manifest.yaml"), `format: print-partner-manifest-v2
+version: 2
+option_groups:
+  fixture_mode:
+    rule: pick_one
+    label: Mode
+    variants:
+      - id: chosen
+        parts: [chosen.stl]
+      - id: ignored
+        parts: [ignored.stl]
+`);
+  execFileSync("git", ["-C", checkout, "add", "."]);
+  execFileSync("git", ["-C", checkout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Source fixture"]);
+  if (revision) {
+    const recorded = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${source.id}/revisions/a`, syncedAt: "2026-01-01", completeness: "complete" });
+    sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(recorded.id, source.id);
+  }
+  return { id: source.id, workspace, checkout, name };
+}
+
+function optionGroupManifestCalls(checkout: string): FileCall[] {
+  const path = join(checkout, "print-partner.manifest.yaml");
+  return [["realpathSync", checkout], ["realpathSync", path], ["statSync", path], ["readFileSync", path, "utf8"]];
+}
+function optionGroupScanCalls(checkout: string, entries = [".git", "chosen.stl", "ignored.stl", "import-rules.json", "print-partner.manifest.yaml"]): FileCall[] {
+  return [["lstatSync", checkout], ["readdirSync", checkout], ...entries.map((entry): FileCall => ["lstatSync", join(checkout, entry)])];
+}
+function optionGroupPathProbes(source: ReturnType<typeof optionGroupCheckout>, isolated: boolean): FileCall[] {
+  return isolated ? [["realpathSync", join(dataDir, "repos")], ["lstatSync", source.workspace], ["realpathSync", source.workspace], ["realpathSync", source.checkout], ["statSync", source.checkout]] : [];
+}
+function optionGroupHintCalls(custom = true): FileCall[] {
+  return [["readFileSync", SHIPPED_PATH_HINTS, "utf8"], ...(custom ? [["existsSync", join(dataDir, "path-hints.yaml")], ["readFileSync", join(dataDir, "path-hints.yaml"), "utf8"]] satisfies FileCall[] : [])];
+}
+function assertOptionGroupDeclaration() {
+  expect([...unions.get("get_plan_option_groups") ?? []].sort()).toEqual(OPTION_GROUP_UNION);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_plan_option_groups");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_option_groups declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(OPTION_GROUP_UNION);
+}
+
+for (const isolated of [false, true]) {
+  it(`traces get_plan_option_groups selectors, checkouts, rules and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const declared = optionGroupCheckout("Declared");
+    const inferred = optionGroupCheckout("Inferred", true);
+    fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
+    fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
+    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("registry-index", inferred.id);
+    const plan = repo.createProfile("Options", declared.id);
+    repo.addAddonLayer(plan.id, inferred.id);
+    const empty = repo.createProfile("Empty");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ selections: { fixture_mode: "chosen" } }));
+    tenantStorage.run("other", () => repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ selections: { fixture_mode: "hidden" } })));
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const declaredProbes = optionGroupPathProbes(declared, isolated);
+    const inferredProbes = optionGroupPathProbes(inferred, isolated);
+    const files = [...declaredProbes, ...inferredProbes,
+      ...declaredProbes, ...optionGroupManifestCalls(declared.checkout), ...optionGroupScanCalls(declared.checkout),
+      ...inferredProbes, ...optionGroupManifestCalls(inferred.checkout), ...optionGroupScanCalls(inferred.checkout), ...optionGroupHintCalls(),
+      ...declaredProbes, ...inferredProbes,
+      ...declaredProbes, ...optionGroupManifestCalls(declared.checkout),
+      ...inferredProbes, ...optionGroupManifestCalls(inferred.checkout), ...communityManifestCalls(COMMUNITY_MANIFEST)];
+    const output = { plan_id: plan.id, selections: { fixture_mode: "chosen" }, option_groups: {
+      fixture_mode: { rule: "pick_one", label: "Mode", parts: [], min: null, max: null, variants: [
+        { id: "chosen", label: null, parts: ["chosen.stl"], excludes: [], source_id: declared.id, source_name: "Declared" },
+        { id: "ignored", label: null, parts: ["ignored.stl"], excludes: [] },
+      ] },
+      fixture_hint: { rule: "pick_one", label: "Custom", parts: [], min: null, max: null, variants: [
+        { id: "custom", label: "Custom", parts: ["chosen.stl"], excludes: [], source_id: inferred.id, source_name: "Inferred" },
+      ] },
+    }, sources: [
+      { source_id: declared.id, name: "Declared", layer_type: "base", exists: true, scanned_part_count: 1 },
+      { source_id: inferred.id, name: "Inferred", layer_type: "addon", exists: true, scanned_part_count: 1 },
+    ] };
+    const options = { repository, planId: plan.id, tables: OPTION_GROUP_TABLES, files };
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceOptionGroups({ ...options, input: { plan_id }, activePlanId: empty.id })).toEqual(output);
+    }
+    for (const input of [{}, { plan_id: "bad" }, { plan_id: null }, { plan_id: false }]) {
+      expect(await traceOptionGroups({ input, repository, tables: [] })).toEqual({ error: "plan_id required" });
+      expect(await traceOptionGroups({ ...options, input, activePlanId: plan.id })).toEqual(output);
+    }
+    for (const plan_id of [999999, foreign.id, 0, -1]) {
+      expect(await traceOptionGroups({ input: { plan_id }, repository, activePlanId: plan.id, tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceOptionGroups({ repository, activePlanId: foreign.id, tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    expect(await traceOptionGroups({ repository, input: { plan_id: plan.id }, tenantId: "other", tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    expect(await traceOptionGroups({ repository, activePlanId: plan.id, tenantId: "other", tables: ["table:build_profiles"] })).toEqual({ error: "Plan not found" });
+    const noSources = ["table:app_settings", "table:build_profiles", "table:profile_layers"];
+    expect(await traceOptionGroups({ repository, input: { plan_id: empty.id }, planId: empty.id, tables: noSources })).toEqual({ plan_id: empty.id, selections: {}, option_groups: {}, sources: [] });
+    tenantStorage.run("other", () => repo.setSetting(`kit_manifest_${foreign.id}`, JSON.stringify({ selections: { private: "other" } })));
+    expect(await traceOptionGroups({ repository, input: { plan_id: foreign.id }, planId: foreign.id, tenantId: "other", tables: noSources })).toEqual({ plan_id: foreign.id, selections: { private: "other" }, option_groups: {}, sources: [] });
+    sqlite.prepare("INSERT INTO profile_layers (tenant_id, profile_id, layer_order, layer_type, project_id) VALUES (?, ?, ?, ?, ?)").run("other", foreign.id, 0, "base", declared.id);
+    expect(await traceOptionGroups({ repository, input: { plan_id: foreign.id }, planId: foreign.id, tenantId: "other", tables: OPTION_GROUP_TABLES })).toEqual({ plan_id: foreign.id, selections: { private: "other" }, option_groups: {}, sources: [] });
+    repo.setSetting(`kit_manifest_${plan.id}`, "malformed");
+    expect(await traceOptionGroups({ ...options, input: { plan_id: plan.id } })).toEqual({ ...output, selections: {} });
+    assertOptionGroupDeclaration();
+  });
+}
+
+for (const isolated of [false, true]) {
+  it(`traces get_plan_option_groups manifest links and root refusals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const source = optionGroupCheckout("Links");
+    const plan = repo.createProfile("Links", source.id);
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const options = { input: { plan_id: plan.id }, planId: plan.id, repository, tables: OPTION_GROUP_TABLES };
+    const probes = optionGroupPathProbes(source, isolated);
+    const sourceFiles = (manifestCalls: FileCall[], scanCalls: FileCall[], hints: FileCall[] = [], pathProbes = probes): FileCall[] => [
+      ...pathProbes, ...pathProbes, ...manifestCalls, ...scanCalls, ...hints, ...pathProbes, ...pathProbes, ...manifestCalls,
+    ];
+    const summary = { source_id: source.id, name: "Links", layer_type: "base", exists: true, scanned_part_count: 1 };
+    const groups = { fixture_mode: { rule: "pick_one", label: "Mode", parts: [], min: null, max: null, variants: [
+      { id: "chosen", label: null, parts: ["chosen.stl"], excludes: [], source_id: source.id, source_name: "Links" },
+      { id: "ignored", label: null, parts: ["ignored.stl"], excludes: [] },
+    ] } };
+    const output = { plan_id: plan.id, selections: {}, option_groups: groups, sources: [summary] };
+    const manifestPath = join(source.checkout, "print-partner.manifest.yaml");
+    const inside = join(source.checkout, "inside.yaml");
+    fs.renameSync(manifestPath, inside);
+    fs.symlinkSync(inside, manifestPath);
+    fs.symlinkSync(join(source.checkout, "chosen.stl"), join(source.checkout, "linked.stl"));
+    fs.symlinkSync(userRoot, join(source.checkout, "linked-directory"));
+    fs.symlinkSync(join(userRoot, "hidden.stl"), join(source.checkout, "outside.stl"));
+    fs.writeFileSync(join(userRoot, "hidden.stl"), "solid hidden\nendsolid hidden\n");
+    const entries = [".git", "chosen.stl", "ignored.stl", "import-rules.json", "inside.yaml", "linked-directory", "linked.stl", "outside.stl", "print-partner.manifest.yaml"];
+    const scan = optionGroupScanCalls(source.checkout, entries);
+    const linkedManifest: FileCall[] = [["realpathSync", source.checkout], ["realpathSync", manifestPath], ["statSync", inside], ["readFileSync", inside, "utf8"]];
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(linkedManifest, scan) })).toEqual(output);
+    const outsideManifest = join(userRoot, "outside.yaml");
+    fs.writeFileSync(outsideManifest, fs.readFileSync(inside));
+    fs.unlinkSync(manifestPath);
+    fs.symlinkSync(outsideManifest, manifestPath);
+    const refusedManifest: FileCall[] = [["realpathSync", source.checkout], ["realpathSync", manifestPath]];
+    const customHints = join(dataDir, "path-hints.yaml");
+    fs.writeFileSync(customHints, "version: 1\nrules: []\n");
+    const noGroups = { ...output, option_groups: {}, sources: [{ ...summary, exists: false }] };
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(refusedManifest, scan, optionGroupHintCalls()) })).toEqual(noGroups);
+    expect(observer.state.files.some(({ api, args }) => api === "readFileSync" && args[0] === outsideManifest)).toBe(false);
+    fs.unlinkSync(manifestPath);
+    fs.writeFileSync(manifestPath, "[invalid");
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(optionGroupManifestCalls(source.checkout), scan, optionGroupHintCalls()) })).toEqual(noGroups);
+    fs.rmSync(customHints);
+    const absentCustom: FileCall[] = [["readFileSync", SHIPPED_PATH_HINTS, "utf8"], ["existsSync", customHints]];
+    expect(await traceOptionGroups({ ...options, files: sourceFiles(optionGroupManifestCalls(source.checkout), scan, absentCustom) })).toEqual(noGroups);
+    expect(await traceOptionGroups({ ...options, hintDir: null, files: sourceFiles(optionGroupManifestCalls(source.checkout), scan, optionGroupHintCalls(false)) })).toEqual(noGroups);
+    fs.writeFileSync(customHints, "version: 2\nrules: []\n");
+    const invalidHintFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...scan, ...optionGroupHintCalls()];
+    const hintError = await traceOptionGroups({ ...options, tables: OPTION_GROUP_TABLES.filter((table) => table !== "table:app_settings"), files: invalidHintFiles });
+    expect(hintError).toEqual({ error: `${customHints}: version must be 1` });
+    fs.writeFileSync(customHints, "version: 1\nrules: []\n");
+    fs.unlinkSync(manifestPath);
+    fs.copyFileSync(inside, manifestPath);
+    sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(source.id);
+    const empty = { plan_id: plan.id, selections: {}, option_groups: {}, sources: [] };
+    expect(await traceOptionGroups(options)).toEqual(empty);
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(userRoot, source.id);
+    if (isolated) {
+      const outsideProbe: FileCall[] = [["realpathSync", join(dataDir, "repos")]];
+      expect(await traceOptionGroups({ ...options, files: sourceFiles([], [], [], outsideProbe) })).toEqual(empty);
+      const escape = join(source.workspace, "escape");
+      fs.symlinkSync(userRoot, escape);
+      sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(escape, source.id);
+      const escapeProbe: FileCall[] = [...probes.slice(0, 3), ["realpathSync", escape]];
+      expect(await traceOptionGroups({ ...options, files: sourceFiles([], [], [], escapeProbe) })).toEqual(empty);
+    }
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(source.workspace, source.id);
+    const moved = join(dataDir, "moved-checkout");
+    fs.renameSync(source.workspace, moved);
+    fs.symlinkSync(moved, source.workspace);
+    if (isolated) {
+      expect(await traceOptionGroups({ ...options, files: sourceFiles([], [], [], probes.slice(0, 2)) })).toEqual(empty);
+    } else {
+      const canonicalManifest = join(moved, "print-partner.manifest.yaml");
+      const manifestCalls: FileCall[] = [["realpathSync", source.workspace], ["realpathSync", manifestPath], ["statSync", canonicalManifest], ["readFileSync", canonicalManifest, "utf8"]];
+      const variants = groups.fixture_mode.variants.map(({ source_id: _id, source_name: _name, ...variant }) => variant);
+      expect(await traceOptionGroups({ ...options, files: sourceFiles(manifestCalls, [["lstatSync", source.workspace]]) })).toEqual({ ...output, option_groups: { fixture_mode: { ...groups.fixture_mode, variants } }, sources: [{ ...summary, scanned_part_count: 0 }] });
+    }
+  });
+}
+
+it("rejects extra real reads against get_plan_option_groups observers", async () => {
+  const plan = repo.createProfile("Control");
+  const original = repo.getSetting.bind(repo);
+  const read = vi.spyOn(repo, "getSetting").mockImplementation((key) => {
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+    return original(key);
+  });
+  try {
+    await expect(traceOptionGroups({ input: { plan_id: plan.id }, planId: plan.id, tables: ["table:app_settings", "table:build_profiles", "table:profile_layers"] })).rejects.toThrow();
+    expect(statements.map((sql) => {
+      try { return optionGroupSelect(sql, "default", plan.id); } catch { return "unsupported"; }
+    })).toContain("table:source_docs");
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([
+      ["readFileSync", join(root, "README.md"), "utf8"], ["readFileSync", join(root, "README.md"), "utf8"],
+    ]);
+    expect(() => optionGroupSelect('select * from "projects"', "default", plan.id)).toThrow("Unsupported SQL:");
+  } finally { read.mockRestore(); }
+});
+
+for (const isolated of [false, true]) {
+  it(`traces get_plan_option_groups valid, missing and legacy community slugs under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const source = optionGroupCheckout("Community");
+    const plan = repo.createProfile("Community", source.id);
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const probes = optionGroupPathProbes(source, isolated);
+    const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
+    const options = { input: { plan_id: plan.id }, planId: plan.id, repository, tables: OPTION_GROUP_TABLES };
+    const fixture = join(COMMUNITY_MANIFEST_DIR, "gre402-fixture.yaml");
+    observer.state.virtual.set(fixture, fileURLToPath(new URL("../test-fixtures/community-manifest.yaml", import.meta.url)));
+    try {
+      sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-fixture", source.id);
+      const output = await traceOptionGroups({ ...options, files: [...sourceFiles, ...communityManifestCalls(fixture)] });
+      expect(loadManifestYaml(fs.readFileSync(fixture, "utf8")).selections).toEqual({ fixture_mode: "chosen" });
+      expect(output).toMatchObject({ plan_id: plan.id, selections: {}, sources: [{ source_id: source.id }] });
+      sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-missing", source.id);
+      expect(await traceOptionGroups({ ...options, files: [...sourceFiles, ...communityManifestCalls(join(COMMUNITY_MANIFEST_DIR, "gre402-missing.yaml"), false)] })).toEqual(output);
+      sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("../kit-catalog", source.id);
+      expect(await traceOptionGroups({ ...options, files: sourceFiles })).toEqual(output);
+      expect(observer.state.files.every(({ args }) => typeof args[0] === "string" && under(join(dataDir, "repos"), args[0]))).toBe(true);
+      expect(observer.state.files.some(({ args }) => typeof args[0] === "string" && args[0].includes("kit-catalog"))).toBe(false);
+    } finally { observer.state.virtual.clear(); }
+    expect(fs.existsSync(fixture)).toBe(false);
+  });
+}
+
+it("traces get_plan_option_groups reserved kit-catalog slug as no community manifest", async () => {
+  const source = optionGroupCheckout("Reserved");
+  const plan = repo.createProfile("Reserved", source.id);
+  const probes = optionGroupPathProbes(source, false);
+  const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
+  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("kit-catalog", source.id);
+  const log = vi.spyOn(getLogger(), "log");
+  try {
+    const output = await traceOptionGroups({ input: { plan_id: plan.id }, planId: plan.id, tables: OPTION_GROUP_TABLES, files: sourceFiles });
+    expect(output).toMatchObject({ plan_id: plan.id, selections: {}, sources: [{ source_id: source.id }] });
+    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug: "kit-catalog" });
+  } finally { log.mockRestore(); }
+});
+
+it("classifies option group files by family roots and rejects every unknown path", () => {
+  expect(optionGroupFileResources([
+    ["readFileSync", join(dataDir, "repos", "1", "chosen.stl")],
+    ["readFileSync", SHIPPED_PATH_HINTS],
+    ["readFileSync", join(dataDir, "path-hints.yaml")],
+    ["readFileSync", COMMUNITY_MANIFEST],
+  ])).toEqual(["file:source-workspace", "file:path-hints", "file:community-manifests"]);
+  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(dataDir, "repos-other", "part.stl")]) {
+    expect(() => optionGroupFileResources([["readFileSync", path]])).toThrow("Unclassified option group path:");
+  }
+});
+
+it("pins community manifests to the unversioned Node object reader contract", () => {
+  expect(manifest.live_formats["community-manifests"].node_reads).toBe(1);
+  const fixture = fs.readFileSync(fileURLToPath(new URL("../test-fixtures/community-manifest.yaml", import.meta.url)), "utf8");
+  const expected = loadManifestYaml(fixture);
+  for (const header of ["", "version: 1", "version: 2", "version: 999", "version: future", "format: unknown\nversion: -1"]) {
+    expect(loadManifestYaml(`${header}\n${fixture.replace(/^format:.*\nversion:.*\n/, "")}`)).toEqual(expected);
+  }
+  expect(() => loadManifestYaml("[]")).toThrow("manifest must be an object");
+});
+
+it("pins path hints to Node's exact version 1 reader", () => {
+  expect(manifest.live_formats["path-hints"].node_reads).toBe(1);
+  const path = join(dataDir, "path-hints.yaml");
+  fs.writeFileSync(path, "version: 1\nrules:\n  - path: gre402.stl\n    option_group: gre402\n    variant_id: chosen\n");
+  expect(inferOptionGroupsFromPaths(["gre402.stl"], dataDir).gre402?.variants?.map(({ id }) => id)).toEqual(["chosen"]);
+  for (const header of ["", "version: 0", "version: 2", "version: 999", "version: future"]) {
+    fs.writeFileSync(path, `${header}\nrules: []\n`);
+    expect(() => inferOptionGroupsFromPaths(["gre402.stl"], dataDir)).toThrow(`${path}: version must be 1`);
+  }
 });

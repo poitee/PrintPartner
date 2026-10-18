@@ -1,3 +1,4 @@
+import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 /**
  * Farm filament + activity derivations shared by the get_farm_status /
  * get_print_stats assistant tools and the Discord morning digest.
@@ -205,6 +206,7 @@ export async function buildSpoolLookup(
   repo: AppRepository,
   colorIds: Iterable<string | null | undefined>,
 ): Promise<SpoolLookup> {
+  if (readSpoolmanAccess(repo).kind !== "allowed") return () => null;
   const integrationIds = new Set<string>();
   for (const raw of colorIds) {
     const parsed = parseSpoolmanFilamentId((raw ?? "").trim());
@@ -227,6 +229,7 @@ export async function buildSpoolLookup(
   );
 
   return (colorId: string): SpoolSummary[] | null => {
+    if (readSpoolmanAccess(repo).kind !== "allowed") return null;
     const parsed = parseSpoolmanFilamentId((colorId ?? "").trim());
     if (!parsed) return null;
     const spools = spoolsByIntegration.get(parsed.integrationId);

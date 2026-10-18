@@ -3,7 +3,7 @@
 //! A rollback returns an operation to Node after Rust wrote its resources.
 //! Node can resume only when it reads every format Rust leaves behind. Code
 //! maps each resource to one format. The manifest declares the newest version
-//! each side handles. A format with no Rust writer has no rollback.
+//! each side handles, or explicitly says Rust never writes the format.
 use super::resources::{FileFamily, ResourceId};
 use super::{AdmissionError, SOURCE_SYNC_LIVE_FORMAT};
 use serde::Deserialize;
@@ -13,6 +13,9 @@ pub enum LiveFormatId {
     SqliteSchema,
     SourceRevisionWorkspace,
     SourceCovers,
+    KitCatalog,
+    PathHints,
+    CommunityManifests,
 }
 
 impl LiveFormatId {
@@ -21,6 +24,13 @@ impl LiveFormatId {
             Self::SqliteSchema => "sqlite-schema",
             Self::SourceRevisionWorkspace => "source-revision-workspace",
             Self::SourceCovers => "source-covers",
+            // Names the format, does not write it.
+            // ast-grep-ignore: no-writer-family-literal
+            Self::KitCatalog => "kit-catalog",
+            // Names the format, does not write it.
+            // ast-grep-ignore: no-writer-family-literal
+            Self::PathHints => "path-hints",
+            Self::CommunityManifests => "community-manifests",
         }
     }
 }
@@ -32,6 +42,58 @@ impl ResourceId {
             Self::Table(_) => LiveFormatId::SqliteSchema,
             Self::File(FileFamily::SourceWorkspace) => LiveFormatId::SourceRevisionWorkspace,
             Self::File(FileFamily::SourceCovers) => LiveFormatId::SourceCovers,
+            Self::File(FileFamily::KitCatalog) => LiveFormatId::KitCatalog,
+            Self::File(FileFamily::PathHints) => LiveFormatId::PathHints,
+            Self::File(FileFamily::CommunityManifests) => LiveFormatId::CommunityManifests,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RustWrites {
+    Version(u32),
+    Never,
+    Unknown,
+}
+
+impl<'de> Deserialize<'de> for RustWrites {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct WriterVisitor;
+
+        impl serde::de::Visitor<'_> for WriterVisitor {
+            type Value = RustWrites;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(r#"a Rust format version, "none", or null"#)
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                u32::try_from(value)
+                    .map(RustWrites::Version)
+                    .map_err(E::custom)
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                match value {
+                    "none" => Ok(RustWrites::Never),
+                    other => Err(E::unknown_variant(other, &["none"])),
+                }
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(RustWrites::Unknown)
+            }
+        }
+
+        deserializer.deserialize_any(WriterVisitor)
+    }
+}
+
+impl RustWrites {
+    pub(super) fn version(self) -> Option<u32> {
+        match self {
+            Self::Version(version) => Some(version),
+            Self::Never | Self::Unknown => None,
         }
     }
 }
@@ -40,16 +102,17 @@ impl ResourceId {
 #[serde(deny_unknown_fields)]
 pub struct LiveFormat {
     pub node_reads: u32,
-    /// `null` when no Rust writer exists. `deserialize_with` makes the field
-    /// required, so an omitted writer is malformed rather than `None`.
-    #[serde(deserialize_with = "Option::deserialize")]
-    pub rust_writes: Option<u32>,
+    /// Required: a version, explicit "none" for no writer by design, or null for unknown.
+    pub rust_writes: RustWrites,
 }
 
 impl LiveFormat {
     pub fn rollback_compatible(self) -> bool {
-        self.rust_writes
-            .is_some_and(|written| written <= self.node_reads)
+        match self.rust_writes {
+            RustWrites::Version(written) => written <= self.node_reads,
+            RustWrites::Never => true,
+            RustWrites::Unknown => false,
+        }
     }
 }
 
@@ -62,6 +125,16 @@ pub(super) struct LiveFormats {
     source_revision_workspace: LiveFormat,
     #[serde(rename = "source-covers")]
     source_covers: LiveFormat,
+    // Names the format, does not write it.
+    // ast-grep-ignore: no-writer-family-literal
+    #[serde(rename = "kit-catalog")]
+    kit_catalog: LiveFormat,
+    // Names the format, does not write it.
+    // ast-grep-ignore: no-writer-family-literal
+    #[serde(rename = "path-hints")]
+    path_hints: LiveFormat,
+    #[serde(rename = "community-manifests")]
+    community_manifests: LiveFormat,
 }
 
 impl LiveFormats {
@@ -70,6 +143,9 @@ impl LiveFormats {
             LiveFormatId::SqliteSchema => self.sqlite_schema,
             LiveFormatId::SourceRevisionWorkspace => self.source_revision_workspace,
             LiveFormatId::SourceCovers => self.source_covers,
+            LiveFormatId::KitCatalog => self.kit_catalog,
+            LiveFormatId::PathHints => self.path_hints,
+            LiveFormatId::CommunityManifests => self.community_manifests,
         }
     }
 
@@ -78,9 +154,12 @@ impl LiveFormats {
             LiveFormatId::SqliteSchema,
             LiveFormatId::SourceRevisionWorkspace,
             LiveFormatId::SourceCovers,
+            LiveFormatId::KitCatalog,
+            LiveFormatId::PathHints,
+            LiveFormatId::CommunityManifests,
         ] {
             let format = self.get(id);
-            if format.node_reads == 0 || format.rust_writes == Some(0) {
+            if format.node_reads == 0 || format.rust_writes == RustWrites::Version(0) {
                 return Err(AdmissionError::Malformed(format!(
                     "live format {} has version 0",
                     id.as_str()

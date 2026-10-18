@@ -8,10 +8,12 @@ export type UnmappableCheckoffLink = {
   readonly reason: string;
 };
 
+export type CheckoffRemapTarget = { readonly draftPartId: number; readonly unitIndex: number };
+
 export type CheckoffRemapPlan = {
   readonly checkoffLinksRaw: string | null;
   readonly sendQueueRaw: string | null;
-  readonly remapByDraftPart: ReadonlyMap<string, number>;
+  readonly remapByCoordinate: ReadonlyMap<string, CheckoffRemapTarget>;
 };
 
 export function positiveSafeId(value: number, label: string): number {
@@ -68,20 +70,26 @@ export function assessCheckoffRemap(input: {
   readonly oldPartMatchKeyById: ReadonlyMap<number, string>;
   readonly partProfileIdById: ReadonlyMap<number, number>;
   readonly newPartByMatchKey: ReadonlyMap<string, { readonly draftPartId: number; readonly quantityEffective: number }>;
+  /** Required-unit token at each accepted `part_id:unit_index`. */
+  readonly oldTokenByCoordinate: ReadonlyMap<string, string>;
+  /** New coordinate of each token the reconciliation reuses in an included Part. */
+  readonly newCoordinateByToken: ReadonlyMap<string, CheckoffRemapTarget>;
 }):
   | ({ readonly kind: "safe" } & CheckoffRemapPlan)
   | { readonly kind: "unsafe"; readonly unmappable: UnmappableCheckoffLink[] } {
-  const remapByDraftPart = new Map<string, number>();
-  const unmappable: UnmappableCheckoffLink[] = [];
-  const seen = new Set<string>();
+  const remapByCoordinate = new Map<string, CheckoffRemapTarget>();
+  const gateUnmappable: UnmappableCheckoffLink[] = [];
+  const tokenUnmappable: UnmappableCheckoffLink[] = [];
+  const gateSeen = new Set<string>();
+  const tokenSeen = new Set<string>();
 
-  function resolve(linkId: string, filename: string, unit: { part_id: number; unit_index: number }): void {
+  function gate(linkId: string, filename: string, unit: { part_id: number; unit_index: number }): void {
     const key = `${unit.part_id}:${unit.unit_index}`;
-    if (seen.has(key)) return;
-    seen.add(key);
+    if (gateSeen.has(key)) return;
+    gateSeen.add(key);
     const matchKey = input.oldPartMatchKeyById.get(unit.part_id);
     if (!matchKey) {
-      unmappable.push({
+      gateUnmappable.push({
         linkId,
         filename,
         reason: `Checked-off part id ${unit.part_id} no longer exists in this Plan's parts`,
@@ -90,7 +98,7 @@ export function assessCheckoffRemap(input: {
     }
     const target = input.newPartByMatchKey.get(matchKey);
     if (!target) {
-      unmappable.push({
+      gateUnmappable.push({
         linkId,
         filename,
         reason: `STL for "${filename}" (match_key ${matchKey}) is no longer part of the reconciled Plan`,
@@ -98,14 +106,46 @@ export function assessCheckoffRemap(input: {
       return;
     }
     if (unit.unit_index >= target.quantityEffective) {
-      unmappable.push({
+      gateUnmappable.push({
         linkId,
         filename,
         reason: `Checked-off unit index ${unit.unit_index} exceeds the new quantity (${target.quantityEffective}) for "${filename}"`,
       });
+    }
+  }
+
+  // Follow the Required unit, not the index: a kept unit can move to another index.
+  function follow(linkId: string, filename: string, unit: { part_id: number; unit_index: number }): void {
+    const key = `${unit.part_id}:${unit.unit_index}`;
+    if (tokenSeen.has(key)) return;
+    tokenSeen.add(key);
+    const token = input.oldTokenByCoordinate.get(key);
+    const target = token == null ? undefined : input.newCoordinateByToken.get(token);
+    if (!target) {
+      tokenUnmappable.push({
+        linkId,
+        filename,
+        reason: `Required unit at Part ${unit.part_id} index ${unit.unit_index} is absent or excluded in the selected Plan`,
+      });
       return;
     }
-    remapByDraftPart.set(key, target.draftPartId);
+    remapByCoordinate.set(key, target);
+  }
+
+  function resolve(
+    linkId: string,
+    filename: string,
+    units: unknown,
+    label: string,
+    checkGate: boolean,
+  ): void {
+    if (!Array.isArray(units)) return;
+    for (const unitValue of units) {
+      const unit = applyJsonRecord(unitValue, label);
+      const coordinate = { part_id: unit.part_id as number, unit_index: unit.unit_index as number };
+      if (checkGate) gate(linkId, filename, coordinate);
+      follow(linkId, filename, coordinate);
+    }
   }
 
   for (const value of applySettingArray(input.checkoffLinksRaw, "Printer Checkoff links")) {
@@ -113,15 +153,8 @@ export function assessCheckoffRemap(input: {
     if (row.profile_id !== input.profileId) continue;
     const linkId = typeof row.id === "string" ? row.id : "unknown";
     const filename = typeof row.filename === "string" ? row.filename : "unknown file";
-    if (Array.isArray(row.units)) {
-      for (const unitValue of row.units) {
-        const unit = applyJsonRecord(unitValue, "Printer Checkoff coordinate");
-        resolve(linkId, filename, {
-          part_id: unit.part_id as number,
-          unit_index: unit.unit_index as number,
-        });
-      }
-    }
+    resolve(linkId, filename, row.units, "Printer Checkoff coordinate", true);
+    resolve(linkId, filename, row.resolved_units, "Printer Checkoff coordinate", false);
   }
 
   for (const value of applySettingArray(input.sendQueueRaw, "Printer send queue")) {
@@ -145,20 +178,15 @@ export function assessCheckoffRemap(input: {
     }
     const linkId = typeof row.id === "string" ? row.id : "unknown";
     const filename = typeof row.filename === "string" ? row.filename : "unknown file";
-    for (const unitValue of units) {
-      const unit = applyJsonRecord(unitValue, "Printer queue coordinate");
-      resolve(linkId, filename, {
-        part_id: unit.part_id as number,
-        unit_index: unit.unit_index as number,
-      });
-    }
+    resolve(linkId, filename, units, "Printer queue coordinate", true);
   }
 
-  if (unmappable.length > 0) return { kind: "unsafe", unmappable };
+  if (gateUnmappable.length > 0) return { kind: "unsafe", unmappable: gateUnmappable };
+  if (tokenUnmappable.length > 0) return { kind: "unsafe", unmappable: tokenUnmappable };
   return {
     kind: "safe",
     checkoffLinksRaw: input.checkoffLinksRaw,
     sendQueueRaw: input.sendQueueRaw,
-    remapByDraftPart,
+    remapByCoordinate,
   };
 }

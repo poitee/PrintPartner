@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+desktop_rebuild = ["pp-storage/desktop_rebuild"]
+
 [dependencies]
 pp-storage = { path = "../pp-storage" }
 anyhow.workspace = true

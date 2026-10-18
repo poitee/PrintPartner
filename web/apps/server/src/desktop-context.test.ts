@@ -261,20 +261,48 @@ it("keeps a live matching-identity marker owned", async () => {
 });
 
 describe("orphaned desktop owner release", () => {
-  it.each([
-    { scenario: "the dead parent", markerPid: 4242, released: true },
-    { scenario: "another owner", markerPid: 4343, released: false },
-  ])("releases the socket and marker only when the marker names $scenario", ({ markerPid, released }) => {
+  it("removes the private socket without touching standalone ownership", () => {
     const directory = mkdtempSync(join(tmpdir(), "pp-orphaned-owner-"));
     const marker = join(directory, ".desktop-owner.json");
     const socket = join(directory, "run", "pp.sock");
     try {
       mkdirSync(join(directory, "run"));
       writeFileSync(socket, "");
-      writeFileSync(marker, JSON.stringify({ pid: markerPid }), { mode: 0o600 });
+      writeFileSync(marker, "standalone owner", { mode: 0o600 });
       releaseOrphanedDesktopOwner({ data_dir: directory, socket_path: socket, parent_pid: 4242 });
-      expect({ marker: existsSync(marker), socket: existsSync(socket), socketDir: existsSync(join(directory, "run")) })
-        .toEqual(released ? { marker: false, socket: false, socketDir: false } : { marker: true, socket: true, socketDir: true });
+      expect(readFileSync(marker, "utf8")).toBe("standalone owner");
+      expect({ socket: existsSync(socket), socketDir: existsSync(join(directory, "run")) })
+        .toEqual({ socket: false, socketDir: false });
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 });
+
+it.skipIf(process.platform === "win32")("requires the core flag and the inherited printpartner.lock inode", () => {
+  const module = new URL("./desktop-context.ts", import.meta.url).href;
+  const source = `
+import { installDesktopContext, desktopContext } from ${JSON.stringify(module)};
+try {
+  installDesktopContext({ version: 1, data_dir: process.argv[1], socket_path: process.argv[1] + "/backend.sock",
+    generation: "ab".repeat(16), key: "cd".repeat(32), parent_pid: process.ppid, port: 43123 });
+  console.log(desktopContext()?.data_dir === process.argv[1] ? "admitted" : "wrong directory");
+} catch (error) { console.log(error.message); }
+`;
+  const probe = `
+import fcntl, os, subprocess, sys, tempfile
+with tempfile.TemporaryDirectory() as directory:
+    directory = os.path.realpath(directory)
+    os.mkfifo(directory + "/.desktop-owner.json")
+    for flag, name in [("1", "printpartner.lock"), ("0", "printpartner.lock"), ("1", "wrong.lock")]:
+        with open(directory + "/printpartner.lock", "w+b") as lock, open(directory + "/" + name, "r+b" if name == "printpartner.lock" else "w+b") as inherited:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            os.dup2(inherited.fileno(), 198, inheritable=True)
+            child = subprocess.run([sys.argv[1], "--import", "tsx", "--input-type=module", "-e", sys.argv[2], directory],
+                                   env={**os.environ, "PP_STORAGE_CORE_LOCK": flag}, close_fds=False, capture_output=True, text=True, timeout=30)
+            assert child.returncode == 0, child.stderr
+            print(child.stdout.strip())
+            os.close(198)
+`;
+  const result = spawnSync("python3", ["-c", probe, process.execPath, source], { encoding: "utf8", timeout: 120_000 });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim().split("\n")).toEqual(["admitted", "Core storage lock required", "Inherited storage lock rejected"]);
+}, 120_000);

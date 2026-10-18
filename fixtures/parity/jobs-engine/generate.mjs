@@ -1,0 +1,158 @@
+// Generates the jobs-engine parity golden from Node's InProcessJobRunner. Run
+// from the repo root after `npm --prefix web ci --ignore-scripts`:
+//   node fixtures/parity/jobs-engine/generate.mjs          # write
+//   node fixtures/parity/jobs-engine/generate.mjs --check  # verify, no writes
+// The runner imports workspace TypeScript, so the generator reruns itself
+// under web's tsx loader with the `development` export condition.
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "../../..");
+const runnerSource = "web/apps/server/src/services/job-runner.ts";
+const goldenPath = join(here, "jobs-engine.json");
+const check = process.argv.includes("--check");
+
+// Each case starts one job for tenant-a and reads it back before the runner's
+// deferred execution begins, so the snapshot is the enqueued projection.
+const starts = [
+  { id: "check-source-updates", kind: "check-source-updates", payload: {} },
+  { id: "export-checklist-html", kind: "export-checklist-html", payload: { profile_id: 7 } },
+];
+
+// Retained cases run each job to its end, one after another, so the later job
+// finishes later. With no Sources the update check succeeds with an empty
+// result; the checklist export fails because the probe repository has no plan.
+// A tenant-a listener subscribes before each run starts and records every
+// event the runner emits.
+const lists = {
+  all: {},
+  done: { status: "done" },
+  unknown_status: { status: "bogus" },
+  profile_7: { profile_id: 7 },
+  profile_8: { profile_id: 8 },
+  non_numeric_profile: { profile_id: Number.NaN },
+  since_epoch: { since: "1970-01-01T00:00:00.000Z" },
+  since_future: { since: "2100-01-01T00:00:00.000Z" },
+};
+
+if (process.argv.includes("--probe")) {
+  const { InProcessJobRunner } = await import(pathToFileURL(join(root, runnerSource)).href);
+  const repo = { getSetting: () => null, setSetting: () => undefined, listSources: () => [] };
+  const newRunner = () =>
+    new InProcessJobRunner({
+      getRepo: () => repo,
+      reposDir: "/nonexistent/repos",
+      exportsDir: "/nonexistent/exports",
+      dataDir: "/nonexistent",
+    });
+  const runner = newRunner();
+  const cases = [];
+  for (const { id, kind, payload } of starts) {
+    const jobId = await runner.start(kind, payload, "tenant-a");
+    const { job_id: _random, ...queued } = await runner.get(jobId, "tenant-a");
+    cases.push({
+      id,
+      kind,
+      queued,
+      other_tenant: await runner.get(jobId, "tenant-b"),
+      other_tenant_stream: runner.subscribe(jobId, "tenant-b", () => undefined),
+    });
+  }
+  const retainedRunner = newRunner();
+  const settled = async (jobId) => {
+    for (;;) {
+      const snapshot = await retainedRunner.get(jobId, "tenant-a");
+      if (snapshot.status !== "pending" && snapshot.status !== "running") return snapshot;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  const finished = [];
+  for (const { id, kind, payload } of starts) {
+    const jobId = await retainedRunner.start(kind, payload, "tenant-a");
+    const stream = [];
+    retainedRunner.subscribe(jobId, "tenant-a", (event) => {
+      const { job_id: _id, updated_at: _updated, finished_at: _done, ...frame } = event;
+      stream.push(frame);
+    });
+    const { job_id: _random, finished_at: _at, ...snapshot } = await settled(jobId);
+    finished.push({
+      id,
+      kind,
+      status: snapshot.status,
+      ...(snapshot.status === "done" && { snapshot }),
+      stream,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const retained = Object.entries(lists).map(([id, filters]) => ({
+    id,
+    jobs: retainedRunner.listJobs(filters, "tenant-a").map(({ kind, status }) => ({ kind, status })),
+  }));
+  retained.push({ id: "other_tenant", jobs: retainedRunner.listJobs({}, "tenant-b") });
+  // Node has no supplied-import kind. Starting one is refused and leaves the
+  // tenant nothing to read, list or stream.
+  const internalRunner = newRunner();
+  const internal = {
+    start_error: await internalRunner
+      .start("supplied-source-import", { project_id: 1, operation_key: "upload", input_version: 1 }, "tenant-a")
+      .then(() => null, (error) => error.message),
+    get: await internalRunner.get("never-started", "tenant-a"),
+    stream: internalRunner.subscribe("never-started", "tenant-a", () => undefined),
+    list: internalRunner.listJobs({}, "tenant-a"),
+  };
+  // The failing export logs to stdout, so the probe result is the last line.
+  process.stdout.write(`\n${JSON.stringify({ node: process.version, cases, finished, retained, internal })}`);
+  process.exit(0);
+}
+
+const tsx = join(root, "web/node_modules/tsx/dist/esm/index.mjs");
+const probe = JSON.parse(
+  execFileSync(
+    process.execPath,
+    ["--conditions=development", "--import", pathToFileURL(tsx).href, fileURLToPath(import.meta.url), "--probe"],
+    { cwd: join(root, "web/apps/server"), encoding: "utf8" },
+  )
+    .split("\n")
+    .at(-1),
+);
+
+// One case per line keeps the golden reviewable.
+const generated = `@generated by fixtures/parity/jobs-engine/generate.mjs from Node ${probe.node}. Do not edit.`;
+const text = `{
+  "generated": ${JSON.stringify(generated)},
+  "source": ${JSON.stringify(runnerSource)},
+  "cases": [
+${probe.cases.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
+  ],
+  "finished": [
+${probe.finished.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
+  ],
+  "retained": [
+${probe.retained.map((item) => `    ${JSON.stringify(item)}`).join(",\n")}
+  ],
+  "internal": ${JSON.stringify(probe.internal)}
+}
+`;
+
+let current = null;
+try {
+  current = readFileSync(goldenPath, "utf8");
+} catch {}
+if (current !== text) {
+  if (check) {
+    console.error(`out of date ${relative(root, goldenPath)}`);
+    process.exit(1);
+  }
+  writeFileSync(goldenPath, text);
+}
+console.log(
+  JSON.stringify({
+    cases: probe.cases.length,
+    finished: probe.finished.length,
+    retained: probe.retained.length,
+    check,
+  }),
+);

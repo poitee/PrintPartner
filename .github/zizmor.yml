@@ -1,0 +1,13 @@
+rules:
+  dangerous-triggers:
+    ignore:
+      # Both workflows run trusted base/default-branch scripts, never PR-head code.
+      # PR evidence needs body edits and Linear sync needs closed events and a secret.
+      - pr-evidence.yml:4
+      - linear-pr-sync.yml:4
+  self-repository:
+    ignore:
+      # actionlint 1.7.12 rejects the replacement $/ syntax. These local workflows
+      # resolve at the same commit as the caller without a mutable external ref.
+      - release.yml:20
+      - release.yml:23

@@ -2,6 +2,10 @@
 pub(crate) mod authority;
 #[cfg(feature = "desktop_rebuild")]
 pub use authority::AuthorityFailure;
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) use authority::queries::{
+    StreamAuthority, StreamAuthorityIdentity, resolve_stream_authority,
+};
 mod crypto;
 mod keys;
 mod policy;
@@ -10,6 +14,7 @@ pub mod rebuild;
 pub use policy::{
     AuthFailure, AuthInputFailure, AuthPolicy, AuthStatus, RegistrationPolicy, SessionTenantPolicy,
 };
+pub(crate) const OWNED_SETTINGS: [&str; 1] = ["api_keys_v1"];
 
 use crate::{Envelope, SettingsClient, WriterOwner};
 use anyhow::{Result, anyhow, bail, ensure};

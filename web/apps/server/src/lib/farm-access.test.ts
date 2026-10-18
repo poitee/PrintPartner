@@ -216,6 +216,11 @@ describe("tenant-global farm access through live handlers", () => {
       reads.mockClear();
     }
     repo.setSetting("feature_toggles", '{"farm":true}');
+    const deniedInventory = JSON.parse((await invokeAssistantTool("get_farm_status", {}, { repo, integrations })).content);
+    expect(deniedInventory.printers).toEqual([expect.objectContaining({ id: "printer", state: "idle", filament_remaining_g: null })]);
+    expect(network).not.toHaveBeenCalled();
+    host.mockClear();
+    repo.setSetting("feature_toggles", '{"farm":true,"spoolman":true}');
     const result = JSON.parse((await invokeAssistantTool("get_farm_status", {}, { repo, integrations })).content);
     expect(result.printers).toEqual([expect.objectContaining({ id: "printer", state: "idle", filament_remaining_g: 480 })]);
     expect(host.mock.calls).toEqual([["host"]]);

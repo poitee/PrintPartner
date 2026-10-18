@@ -48,6 +48,8 @@ import {
   saveRoleFilamentDefault,
 } from "../services/role-filament-store.js";
 import { getColorById } from "../services/filament-catalog.js";
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
+import { parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import type { EditableKitRecipe } from "../services/export-kit.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
 import {
@@ -300,6 +302,13 @@ import { sourceNamingResponse } from "./source-naming-model.js";
 import { sourceRevision } from "./source-revision-model.js";
 import { sourceSummary } from "./source-summary-model.js";
 import { requiredText, sha256Digest } from "./write-validation.js";
+
+function withoutSpoolmanReferences(filamentColorId: string | null) {
+  return {
+    filament_color_id: filamentColorId?.trim().startsWith("spoolman:") ? null : filamentColorId,
+    spoolman_spool_id: null,
+  };
+}
 
 function filamentAssignmentFromRecord(row: Record<string, unknown>): FilamentAssignment {
   const colorId = typeof row.filament_color_id === "string" ? row.filament_color_id : null;
@@ -670,8 +679,6 @@ type ApplyPlanChangesCommand = {
   readonly remapCheckoffLinks?: boolean;
 };
 
-export type { UnmappableCheckoffLink } from "./plan-apply-model.js";
-
 export type AppliedPlanReceipt = {
   readonly profileId: number;
   readonly draftId: number;
@@ -710,6 +717,7 @@ export type ApplyPlanChangesResult =
       readonly unmappable: readonly UnmappableCheckoffLink[];
     }
   | { readonly kind: "token_allocation_failed" }
+  | { readonly kind: "spoolman_unavailable"; readonly problem: ReturnType<typeof spoolmanAccessProblem> }
   | { readonly kind: "transaction_unavailable" };
 
 export type RecomputePlanDraftResult =
@@ -3688,7 +3696,7 @@ export class AppRepository {
       updates.metadataJson = JSON.stringify(merged);
     }
     if (patch.manifest_community_slug !== undefined) {
-      updates.manifestCommunitySlug = patch.manifest_community_slug;
+      updates.manifestCommunitySlug = parseCommunityManifestSlug(patch.manifest_community_slug);
     }
 
     const identityChanged =
@@ -4399,6 +4407,11 @@ export class AppRepository {
       throw error;
     }
     const roleDefaults = loadRoleFilamentDefaults(this, profileId);
+    if (readSpoolmanAccess(this, profileId).kind !== "allowed") {
+      for (const defaults of Object.values(roleDefaults)) {
+        Object.assign(defaults, withoutSpoolmanReferences(defaults.filament_color_id));
+      }
+    }
     const trackingBySourceLayer = new Map(draftInputs.map((captured) => [captured.sourceLayer, captured.trackingKind]));
     const scannedDraftParts = merged.parts.map(
       (
@@ -6013,11 +6026,14 @@ export class AppRepository {
     };
   }
 
-  private applyCheckoffRemap(plan: CheckoffRemapPlan, finalRemap: ReadonlyMap<string, number>): void {
+  private applyCheckoffRemap(
+    plan: CheckoffRemapPlan,
+    finalRemap: ReadonlyMap<string, { readonly part_id: number; readonly unit_index: number }>,
+  ): void {
     if (finalRemap.size === 0) return;
     const remapUnit = (unit: { part_id: number; unit_index: number }) => {
       const next = finalRemap.get(`${unit.part_id}:${unit.unit_index}`);
-      return next ? { ...unit, part_id: next } : unit;
+      return next ? { ...unit, ...next } : unit;
     };
     if (plan.checkoffLinksRaw != null) {
       const links = JSON.parse(plan.checkoffLinksRaw) as Array<Record<string, unknown>>;
@@ -6266,6 +6282,13 @@ export class AppRepository {
       }
       const draft = this.getPlanDraft(profileId, draftId);
       if (!draft) return { kind: "not_found" };
+      const spoolmanAccess = readSpoolmanAccess(this, profileId);
+      if (spoolmanAccess.kind !== "allowed" && draft.parts.some((part) =>
+        part.baseRevisionPartId == null && hasSpoolmanAssignment({
+          filament_color_id: part.filamentColorId, spoolman_spool_id: part.spoolmanSpoolId,
+        }))) {
+        return { kind: "spoolman_unavailable", problem: spoolmanAccessProblem(spoolmanAccess) };
+      }
       const draftInputs = canonicalPlanInputs(
         draft.inputs.map((input) => ({
           source_id: input.sourceId,
@@ -6488,6 +6511,9 @@ export class AppRepository {
             .all()
             .map((row) => [row.id, row.matchKey] as const),
         );
+        const includedDraftPartIds = new Set(
+          prepared.parts.filter((part) => part.included).map((part) => part.draftPartId),
+        );
         const newPartByMatchKey = new Map(
           prepared.parts.map((part) => [
             part.partKey,
@@ -6514,6 +6540,20 @@ export class AppRepository {
               .map((row) => [row.id, row.profileId] as const),
           ),
           newPartByMatchKey,
+          oldTokenByCoordinate: new Map(
+            baseUnits.map((unit) => {
+              const projectionPartId = predecessorProjectionByRevisionPartId.get(unit.revisionPartId);
+              if (projectionPartId == null) throw new Error("Required-unit predecessor Part is missing");
+              return [`${projectionPartId}:${unit.priorIndex}`, unit.token] as const;
+            }),
+          ),
+          newCoordinateByToken: new Map(
+            prepared.progress.flatMap((unit) =>
+              unit.token != null && includedDraftPartIds.has(unit.draftPartId)
+                ? [[unit.token, { draftPartId: unit.draftPartId, unitIndex: unit.unitIndex }] as const]
+                : [],
+            ),
+          ),
         });
         if (assessment.kind === "unsafe") {
           return {
@@ -6705,11 +6745,11 @@ export class AppRepository {
         revisionPartByDraftPart.set(part.draftPartId, revisionPart.id);
       }
       if (checkoffRemapPlan) {
-        const finalRemap = new Map<string, number>();
-        for (const [key, draftPartId] of checkoffRemapPlan.remapByDraftPart) {
-          const projectionPartId = projectionByDraftPart.get(draftPartId);
+        const finalRemap = new Map<string, { part_id: number; unit_index: number }>();
+        for (const [key, target] of checkoffRemapPlan.remapByCoordinate) {
+          const projectionPartId = projectionByDraftPart.get(target.draftPartId);
           if (!projectionPartId) throw new Error("Checkoff remap target Part is missing");
-          finalRemap.set(key, projectionPartId);
+          finalRemap.set(key, { part_id: projectionPartId, unit_index: target.unitIndex });
         }
         this.applyCheckoffRemap(checkoffRemapPlan, finalRemap);
       }
@@ -7491,9 +7531,15 @@ export class AppRepository {
       }
 
       for (const { source, target } of resolved.parts) {
+        const assignment = filamentAssignmentColumns(source.assignment);
+        if (readSpoolmanAccess(this, profileId).kind !== "allowed") {
+          const refs = withoutSpoolmanReferences(assignment.filamentColorId);
+          assignment.filamentColorId = refs.filament_color_id;
+          assignment.spoolmanSpoolId = refs.spoolman_spool_id;
+        }
         const written = this.db
           .update(this.schema.parts)
-          .set(filamentAssignmentColumns(source.assignment))
+          .set(assignment)
           .where(and(eq(this.schema.parts.tenantId, this.tenantId), eq(this.schema.parts.id, target.projectionPartId)))
           .run();
         if (written.changes !== 1) throw new Error("Accepted Part copy failed");
@@ -7580,7 +7626,15 @@ export class AppRepository {
       }
       const roleFilaments = this.getSetting(roleFilamentSettingKey(id));
       if (roleFilaments) {
-        this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+        if (readSpoolmanAccess(this, newProfile.id).kind === "allowed") {
+          this.setSetting(roleFilamentSettingKey(newProfile.id), roleFilaments);
+        } else {
+          const defaults = loadRoleFilamentDefaults(this, id);
+          for (const row of Object.values(defaults)) {
+            Object.assign(row, withoutSpoolmanReferences(row.filament_color_id));
+          }
+          this.setSetting(roleFilamentSettingKey(newProfile.id), JSON.stringify(defaults));
+        }
       }
       copyProductionSetup(this, {
         sourceProfileId: id,
@@ -8145,6 +8199,7 @@ export class AppRepository {
     warnings: string[];
     unmatched_sources: KitBundleUnmatchedSource[];
   } {
+    const sourceRefs = collectKitBundleSourceRefs(data);
     const profileData = (data.profile as Record<string, unknown>) ?? {};
     const desired = (newName || profileData.name || "Imported kit").toString().trim() || "Imported kit";
     let name = desired;
@@ -8197,7 +8252,7 @@ export class AppRepository {
       return null;
     };
 
-    for (const sourceRef of collectKitBundleSourceRefs(data)) {
+    for (const sourceRef of sourceRefs) {
       const projectId = resolveProjectId({
         name: sourceRef.name,
         url: sourceRef.url,

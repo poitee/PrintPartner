@@ -2,15 +2,16 @@
 
 Use this index to find the guide for your task. The in-app Help page covers the product workflow.
 
+Print Partner is moving its backend from Node to one Rust core. The core runs as a desktop app and as a single-user Docker image. [Architecture](architecture.md) describes the target and the current state.
+
 ## Start here
 
 | Guide | Use it when |
 |-------|-------------|
 | [Install](INSTALL.md) | You are setting up the Docker container or opening Print Partner on a LAN. |
-| [Invite-beta hosted planning](../web/DEPLOY.md#invite-beta-hosted-planning) | You are standing up the private planning host. |
 | [Operations](../OPERATIONS.md) | You need backups, recovery, API keys, metrics, logs, or update steps. |
 | [MCP setup](assistant-mcp.md) | You want to connect Cursor, Claude, or another MCP client. |
-| [Deployment reference](../web/DEPLOY.md) | You need environment variables, authentication, OAuth, or SaaS settings. |
+| [Contributing](development/contributing.md) | You want to pick up a ticket and open a pull request. |
 
 ## Product workflow
 
@@ -23,6 +24,30 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 | Checkoff | `/progress?profile=<id>` | Track required units through printing and assembly. |
 | Production | `/export?profile=<id>` | Arrange plates, export files, and send sliced jobs. |
 | Production overview | `/production` | Review remaining work across builds. |
+
+## Rust core
+
+| Page | Covers |
+|------|--------|
+| [Architecture](architecture.md) | Target design, current state, and the crate map. |
+| [Storage](storage.md) | Data directory, single-writer lock, and migrations. |
+| [HTTP API](api.md) | The versioned integration API. |
+| [MCP](mcp.md) | The MCP server in the Rust core. |
+| [Network sharing](network-sharing.md) | "Share on network" in the desktop app. |
+| [Desktop app](desktop.md) | The Tauri app, its tray, and its data. |
+| [Docker image](docker.md) | The single-user headless image. |
+| [Release](release.md) | How releases are built, signed, and published. |
+| [Domain](domain/README.md) | The core model and one page per product area. |
+| [Desktop rebuild flag and slice plan](desktop-rebuild.md) | The `desktop_rebuild` feature and the GRE-595 slices. |
+
+## Development
+
+- [Building](development/building.md)
+- [Contributing](development/contributing.md)
+- [Continuous integration](development/ci.md)
+- [Change a CI workflow](development/ci-controls.md)
+- [Definition of done](development/definition-of-done.md)
+- [Gate evidence](contributing/gate-evidence.md)
 
 ## Setup and integrations
 
@@ -38,20 +63,28 @@ Use this index to find the guide for your task. The in-app Help page covers the 
 
 ## Reference
 
-- [Architecture](ARCHITECTURE.md)
-- [Desktop rebuild flag and slice plan](desktop-rebuild.md)
-- [HTTP API](API.md)
 - [Manifest format](../manifests/README.md)
 - [Security](../SECURITY.md)
 - [Release history](../CHANGELOG.md)
 - [Plan autosave](plan-autosave.md)
-- [Hosted tenant storage](hosted-storage.md)
 
 ## Decisions
 
 - [ADR 0001: Model the Build workflow as preparation and making](adr/0001-model-build-workflow-as-preparation-and-making.md)
 - [ADR 0002: Keep Sources and Plan state contextual](adr/0002-keep-sources-and-plan-state-contextual.md)
 - [ADR 0004: Share references without redistributing models](adr/0004-share-references-without-redistributing-models.md)
+- [ADR 0005: Keep one desktop product identity](adr/0005-desktop-product-identity.md)
+- [ADR 0006: Autosave text contains Unicode scalar values](adr/0006-autosave-text-contract.md)
+- [ADR 0007: Record the Rust crate layout and dependency edges](adr/0007-rust-crate-layout.md)
+
+## Node server
+
+These pages describe the Node server that the Rust core replaces. Its multi-user, hosted planning, and Postgres modes do not carry over to the Rust core.
+
+- [Deployment reference](../web/DEPLOY.md)
+- [Invite-beta hosted planning](../web/DEPLOY.md#invite-beta-hosted-planning)
+- [Hosted tenant storage](hosted-storage.md)
+- [Single-process guarantees](architecture/background-work-guarantees.md): what one Node server process guarantees for the send queue and backup restore.
 
 ## Agent workflows
 

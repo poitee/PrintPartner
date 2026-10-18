@@ -268,9 +268,13 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "source.sync",
         "tool.get_workflow_help",
         "tool.get_job_status",
+        "tool.check_hardware_interfaces",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
+        "tool.get_plan_snapshot",
+        "tool.get_kit_catalog",
+        "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -283,9 +287,12 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.preview_source_naming",
         "tool.get_source_docs",
         "tool.get_source_inventory",
+        "tool.compare_source_revisions",
+        "tool.audit_source_provenance",
+        "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 18);
-    assert_eq!(unresolved.len(), 425);
+    assert_eq!(reviewed.len(), 25);
+    assert_eq!(unresolved.len(), 418);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -548,9 +555,13 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
     for id in [
         "tool.get_workflow_help",
         "tool.get_job_status",
+        "tool.check_hardware_interfaces",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
+        "tool.get_plan_snapshot",
+        "tool.get_kit_catalog",
+        "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
         "tool.ui_navigate",
@@ -563,6 +574,9 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.preview_source_naming",
         "tool.get_source_docs",
         "tool.get_source_inventory",
+        "tool.compare_source_revisions",
+        "tool.audit_source_provenance",
+        "tool.analyze_stl_mesh",
     ] {
         for participants in [vec![id], vec![]] {
             let mut value = manifest();
@@ -591,8 +605,10 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 #[test]
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
+        ("tool.get_workflow_help", "tool.check_hardware_interfaces"),
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
+        ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_job_status", "tool.ui_highlight_part"),
         ("tool.ui_highlight_part", "tool.ui_focus_stl_search"),
         ("tool.ui_focus_stl_search", "tool.ui_navigate"),
@@ -600,6 +616,12 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.ui_open_source", "tool.ui_open_docs"),
         ("tool.ui_open_docs", "tool.get_source_docs"),
         ("tool.get_source_docs", "tool.get_source_inventory"),
+        ("tool.get_source_inventory", "tool.compare_source_revisions"),
+        (
+            "tool.compare_source_revisions",
+            "tool.audit_source_provenance",
+        ),
+        ("tool.read_source_file", "tool.analyze_stl_mesh"),
         ("tool.get_workflow_help", "tool.get_job_status"),
         ("tool.get_job_status", "tool.list_plans"),
         ("tool.get_workflow_help", "tool.list_plans"),
@@ -632,14 +654,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.get_build_workflow", "tool.compare_source_revisions"],
+        &["tool.get_build_workflow", "tool.audit_build_coverage"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved
-        .retain(|id| id != "tool.get_build_workflow" && id != "tool.compare_source_revisions");
+    unresolved.retain(|id| id != "tool.get_build_workflow" && id != "tool.audit_build_coverage");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.get_build_workflow", "tool.compare_source_revisions"] {
+    for id in ["tool.get_build_workflow", "tool.audit_build_coverage"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
@@ -1735,25 +1756,39 @@ fn assert_workspace_tool_resources(id: &str) {
     let resources = index
         .resources_for(id)
         .expect("Workspace tool resources must be reviewed");
-    let expected: ResourceSet = serde_json::from_value(
-        if matches!(id, "tool.get_source_docs" | "tool.get_source_inventory") {
-            json!([
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "table", "name": "source_notes"},
-                {"kind": "table", "name": "source_revisions"},
-                {"kind": "table", "name": "app_settings"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        } else {
-            json!([
-                {"kind": "table", "name": "build_profiles"},
-                {"kind": "table", "name": "projects"},
-                {"kind": "table", "name": "source_docs"},
-                {"kind": "file", "name": "source-workspace"}
-            ])
-        },
-    )
+    let expected: ResourceSet = serde_json::from_value(if id == "tool.analyze_stl_mesh" {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else if matches!(
+        id,
+        "tool.compare_source_revisions" | "tool.audit_source_provenance"
+    ) {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else if matches!(id, "tool.get_source_docs" | "tool.get_source_inventory") {
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "table", "name": "source_notes"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    } else {
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ])
+    })
     .unwrap();
     assert_eq!(resources, &expected);
     assert_eq!(
@@ -2003,4 +2038,492 @@ fn ticket_t_7_ownership_get_source_inventory_has_complete_node_owned_resources()
 #[test]
 fn ticket_t_7_ownership_get_source_inventory_refuses_invalid_admission_before_effects() {
     assert_workspace_tool_invalid_admission("tool.get_source_inventory");
+}
+
+#[test]
+fn ticket_t_7_ownership_compare_source_revisions_has_complete_node_owned_resources() {
+    assert_workspace_tool_resources("tool.compare_source_revisions");
+}
+
+#[test]
+fn ticket_t_7_ownership_compare_source_revisions_refuses_invalid_admission_before_effects() {
+    assert_workspace_tool_invalid_admission("tool.compare_source_revisions");
+}
+
+#[test]
+fn ticket_t_7_ownership_audit_source_provenance_has_complete_node_owned_resources() {
+    assert_workspace_tool_resources("tool.audit_source_provenance");
+}
+
+#[test]
+fn ticket_t_7_ownership_audit_source_provenance_refuses_invalid_admission_before_effects() {
+    assert_workspace_tool_invalid_admission("tool.audit_source_provenance");
+}
+
+#[test]
+fn ticket_t_7_ownership_analyze_stl_mesh_has_complete_node_owned_resources() {
+    assert_workspace_tool_resources("tool.analyze_stl_mesh");
+}
+
+#[test]
+fn ticket_t_7_ownership_analyze_stl_mesh_refuses_invalid_admission_before_effects() {
+    assert_workspace_tool_invalid_admission("tool.analyze_stl_mesh");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_snapshot_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.get_plan_snapshot");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_kit_catalog_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.get_kit_catalog");
+}
+
+fn assert_catalog_tool_invalid_admission(id: &str) {
+    let mut original = manifest();
+    original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    let mut baseline_effect = false;
+    admit(&original)
+        .and_then(|index| {
+            index.admit_rollback(id)?;
+            baseline_effect = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(baseline_effect);
+    let entry = original["resources"]["reviewed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|entry| entry["operation"] == id)
+        .unwrap();
+    for resource_index in 0..original["resources"]["reviewed"][entry]["resources"]
+        .as_array()
+        .unwrap()
+        .len()
+    {
+        for duplicate in [false, true] {
+            let mut value = original.clone();
+            let resources = value["resources"]["reviewed"][entry]["resources"]
+                .as_array_mut()
+                .unwrap();
+            if duplicate {
+                resources.push(resources[resource_index].clone());
+            } else {
+                resources.remove(resource_index);
+            }
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::ResourceSetMismatch { id: id.into() })
+            );
+            assert!(!effect);
+        }
+    }
+    let resources_empty = original["resources"]["reviewed"][entry]["resources"]
+        .as_array()
+        .unwrap()
+        .is_empty();
+    for edit in 0..13 {
+        if resources_empty && (9..=11).contains(&edit) {
+            continue;
+        }
+        let mut value = original.clone();
+        let expected = match edit {
+            0 | 1 => {
+                value["resources"]["reviewed"][entry]["resources"] = if edit == 0 {
+                    json!([{"kind":"table","name":"projects"}])
+                } else {
+                    json!([{"kind":"file","name":"source-workspace"}])
+                };
+                AdmissionError::ResourceSetMismatch { id: id.into() }
+            }
+            2 | 3 => {
+                value["resources"]["reviewed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(entry);
+                if edit == 3 {
+                    value["resources"]["unresolved"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!(id));
+                }
+                malformed(&format!("missing reviewed resources for {id}"))
+            }
+            4 => {
+                value["resources"]["reviewed"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(original["resources"]["reviewed"][entry].clone());
+                malformed(&format!("duplicate resource state for {id}"))
+            }
+            5 => {
+                value["resources"]["unresolved"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(id));
+                malformed(&format!("duplicate resource state for {id}"))
+            }
+            6 | 7 => {
+                regroup(&mut value, id, &[id]);
+                value["operations"]
+                    .as_array_mut()
+                    .unwrap()
+                    .last_mut()
+                    .unwrap()["owner"] = json!(if edit == 6 { "rust" } else { "python" });
+                if edit == 6 {
+                    AdmissionError::UnsupportedRustOwner {
+                        participant: id.into(),
+                    }
+                } else {
+                    AdmissionError::UnknownOwner {
+                        value: "python".into(),
+                    }
+                }
+            }
+            8 => {
+                value["operations"].as_array_mut().unwrap().push(
+                    json!({"operation":"tool.conflict", "owner":"node", "participants":[id]}),
+                );
+                AdmissionError::ConflictingParticipant {
+                    operation: id.into(),
+                    left: "tool.conflict".into(),
+                    right: id.into(),
+                }
+            }
+            12 => {
+                value["resources"]["reviewed"][entry]["resources"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"kind":"table","name":"plan_snapshots"}));
+                AdmissionError::ResourceSetMismatch { id: id.into() }
+            }
+            9..=11 => {
+                let resources = value["resources"]["reviewed"][entry]["resources"]
+                    .as_array_mut()
+                    .unwrap();
+                match edit {
+                    9 => {
+                        resources.remove(0);
+                    }
+                    10 => {
+                        resources.push(resources[0].clone());
+                    }
+                    11 => {
+                        resources.clear();
+                    }
+                    _ => unreachable!(),
+                }
+                AdmissionError::ResourceSetMismatch { id: id.into() }
+            }
+            _ => unreachable!(),
+        };
+        let mut effect = false;
+        let result = admit(&value).and_then(|index| {
+            index.admit_rollback(id)?;
+            effect = true;
+            Ok(())
+        });
+        assert_eq!(result, Err(expected), "edit {edit}");
+        assert!(!effect, "edit {edit}");
+    }
+
+    for resource in [
+        json!({"kind":"table","name":"unregistered_table"}),
+        json!({"kind":"file","name":"unregistered-file"}),
+    ] {
+        let mut value = original.clone();
+        value["resources"]["reviewed"][entry]["resources"]
+            .as_array_mut()
+            .unwrap()
+            .push(resource);
+        let mut effect = false;
+        assert!(matches!(
+            admit(&value).and_then(|index| {
+                index.admit_rollback(id)?;
+                effect = true;
+                Ok(())
+            }),
+            Err(AdmissionError::Malformed(_))
+        ));
+        assert!(!effect);
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_snapshot_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_plan_snapshot";
+    let index = admit_bundled_manifest().unwrap();
+    let resources = index
+        .resources_for(id)
+        .expect("snapshot resources must be reviewed");
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"table","name":"build_profiles"},
+        {"kind":"table","name":"parts"},
+        {"kind":"table","name":"profile_layers"},
+        {"kind":"table","name":"projects"},
+        {"kind":"table","name":"source_revisions"},
+        {"kind":"table","name":"app_settings"},
+        {"kind":"table","name":"plan_accepted_input_sets"},
+        {"kind":"table","name":"plan_revision_input_sets"},
+        {"kind":"table","name":"plan_revision_inputs"},
+        {"kind":"file","name":"source-workspace"},
+        {"kind":"file","name":"kit-catalog"}
+    ]))
+    .unwrap();
+    assert_eq!(resources, &expected);
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    for (format, node_reads, writers) in [
+        ("sqlite-schema", 34, vec![Some(35), None]),
+        ("source-revision-workspace", 1, vec![Some(2), None]),
+        ("kit-catalog", 1, vec![Some(2), None]),
+    ] {
+        for rust_writes in writers {
+            let mut value = manifest();
+            value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+            value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+    }
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut value = manifest();
+    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+    value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+    value["live_formats"]["kit-catalog"]["node_reads"] = json!(2);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_snapshot_requires_valid_catalog_format() {
+    for field in ["node_reads", "rust_writes"] {
+        let mut value = manifest();
+        value["live_formats"]["kit-catalog"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(
+            matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains(&format!("missing field `{field}`")))
+        );
+        value["live_formats"]["kit-catalog"][field] = json!(0);
+        assert_eq!(
+            admit(&value).unwrap_err(),
+            malformed("live format kit-catalog has version 0")
+        );
+    }
+    let mut value = manifest();
+    value["live_formats"]
+        .as_object_mut()
+        .unwrap()
+        .remove("kit-catalog");
+    assert!(
+        matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains("missing field `kit-catalog`"))
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_get_kit_catalog_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_kit_catalog";
+    let index = admit_bundled_manifest().unwrap();
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"file","name":"kit-catalog"}
+    ]))
+    .unwrap();
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&expected));
+    for rust_writes in [None, Some(2)] {
+        let mut value = manifest();
+        value["live_formats"]["kit-catalog"]["rust_writes"] = json!(rust_writes);
+        let mut effect = false;
+        assert_eq!(
+            admit(&value).and_then(|index| {
+                index.admit_rollback(id)?;
+                effect = true;
+                Ok(())
+            }),
+            Err(AdmissionError::IncompatibleLiveFormat {
+                operation: id.into(),
+                format: "kit-catalog".into(),
+                node_reads: 1,
+                rust_writes,
+            })
+        );
+        assert!(!effect);
+    }
+    let mut value = manifest();
+    value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_option_groups_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.get_plan_option_groups");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_option_groups_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_plan_option_groups";
+    let index = admit_bundled_manifest().unwrap();
+    let resources = index
+        .resources_for(id)
+        .expect("plan option group resources must be reviewed");
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"table","name":"build_profiles"},
+        {"kind":"table","name":"profile_layers"},
+        {"kind":"table","name":"projects"},
+        {"kind":"table","name":"app_settings"},
+        {"kind":"file","name":"source-workspace"},
+        {"kind":"file","name":"path-hints"},
+        {"kind":"file","name":"community-manifests"}
+    ]))
+    .unwrap();
+    assert_eq!(resources, &expected);
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut sqlite_compatible = manifest();
+    sqlite_compatible["live_formats"]["sqlite-schema"]["node_reads"] = json!(35);
+    assert_eq!(
+        admit(&sqlite_compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    for format in ["path-hints", "community-manifests"] {
+        assert_eq!(
+            sqlite_compatible["live_formats"][format]["rust_writes"],
+            json!("none")
+        );
+    }
+    for (format, node_reads) in [
+        ("sqlite-schema", 34),
+        ("source-revision-workspace", 1),
+        ("path-hints", 1),
+        ("community-manifests", 1),
+    ] {
+        for rust_writes in [None, Some(node_reads + 1)] {
+            let mut value = manifest();
+            for (compatible_format, version) in [
+                ("sqlite-schema", 34),
+                ("source-revision-workspace", 1),
+                ("path-hints", 1),
+                ("community-manifests", 1),
+            ] {
+                value["live_formats"][compatible_format]["rust_writes"] = json!(version);
+            }
+            let compatible = admit(&value).unwrap();
+            assert_eq!(compatible.admit_rollback(id), Ok(&expected));
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_get_plan_option_groups_requires_valid_inference_formats() {
+    for format in ["path-hints", "community-manifests"] {
+        for field in ["node_reads", "rust_writes"] {
+            let mut value = manifest();
+            value["live_formats"][format]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains(&format!("missing field `{field}`")))
+            );
+            value["live_formats"][format][field] = json!(0);
+            assert_eq!(
+                admit(&value).unwrap_err(),
+                malformed(&format!("live format {format} has version 0"))
+            );
+        }
+        let mut value = manifest();
+        value["live_formats"]
+            .as_object_mut()
+            .unwrap()
+            .remove(format);
+        assert!(
+            matches!(admit(&value), Err(AdmissionError::Malformed(detail)) if detail.contains(&format!("missing field `{format}`")))
+        );
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_hardware_interfaces_has_reviewed_empty_node_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.check_hardware_interfaces";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(index.resources_for(id), Ok(&ResourceSet::new()));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&ResourceSet::new()));
+}
+
+#[test]
+fn ticket_t_7_ownership_hardware_interfaces_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.check_hardware_interfaces");
 }

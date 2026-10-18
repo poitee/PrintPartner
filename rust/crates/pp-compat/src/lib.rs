@@ -6,7 +6,7 @@ pub use logs::recent_diagnostics;
 mod parent_death;
 use parent_death::{ParentDeathGuard, configure_child};
 mod release;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use axum::{
     body::Body,
     http::{HeaderValue, Request, Response},
@@ -14,7 +14,7 @@ use axum::{
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-pub use release::verify_bundle;
+pub use release::{MeasuredBundle, verify_bundle};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
@@ -46,16 +46,22 @@ pub struct Bundle {
     pub commit: String,
 }
 
+#[cfg(test)]
+pub type BeforeSetup = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
+
 pub struct SpawnSpec {
     pub account_pin: DesktopAccountPin,
-    pub bundle: Bundle,
+    pub bundle: MeasuredBundle,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
-    pub lease: String,
-    pub lease_file: std::fs::File,
+    #[cfg(test)]
+    pub setup_padding: String,
+    /// The exclusive printpartner.lock descriptor, inherited by the supervised child.
+    pub storage_lock: std::fs::File,
     pub port: u16,
     pub gateway_rate_limit: bool,
-    pub record_child: fn(&std::path::Path, u32) -> Result<()>,
+    #[cfg(test)]
+    pub before_setup: BeforeSetup,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -448,12 +454,27 @@ async fn write_setup_or_cancel(
 }
 
 impl Process {
+    /// The first spawn uses the verification that produced `spec.bundle`. A respawn passes
+    /// the restart-disarm token, measures the release again on a blocking thread that stops
+    /// between files once `cancelled` fires, and starts no child if restarts were blocked
+    /// while it measured.
     async fn spawn(
         spec: &SpawnSpec,
         capture: &logs::Logs,
         cancelled: &CancellationToken,
+        respawn: Option<&CancellationToken>,
     ) -> Result<Self> {
-        release::verify_backend(&spec.bundle)?;
+        if let Some(disarmed) = respawn {
+            let bundle = Bundle::clone(&spec.bundle);
+            let stop = cancelled.clone();
+            tokio::task::spawn_blocking(move || release::verify_backend(&bundle, &stop))
+                .await
+                .context("Release verification task failed")??;
+            ensure!(
+                !restarts_blocked(cancelled, disarmed),
+                "Compatibility restart blocked during release verification"
+            );
+        }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
             .bundle
@@ -490,6 +511,7 @@ impl Process {
                     .iter()
                     .filter_map(|name| std::env::var_os(name).map(|value| (*name, value))),
             )
+            .env("PP_STORAGE_CORE_LOCK", "1")
             .env("PP_COMMIT", release::manifest()?.commit)
             .env("PRINT_PARTNER_UPDATE_CHECK", "0")
             .env("AI_ENABLED", "0")
@@ -500,40 +522,27 @@ impl Process {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let (parent_read, parent_death) =
-            configure_child(&mut command, spec.lease_file.as_raw_fd())
+            configure_child(&mut command, spec.storage_lock.as_raw_fd())
                 .context("Could not arm parent-death watcher")?;
         let mut child = command.spawn().context("Could not start bundled Node")?;
         drop(parent_read);
-        // Persist ownership before the child can receive setup or open storage.
+        #[cfg(test)]
         if let Err(error) =
-            (spec.record_child)(&spec.data_dir, child.id().context("Missing child PID")?)
+            (spec.before_setup)(&spec.data_dir, child.id().context("Missing child PID")?)
         {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(error.context("Could not record child ownership"));
+            return Err(error);
         }
-        let child_identity = (|| -> Result<String> {
-            let marker: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(spec.data_dir.join(".desktop-owner.json"))?)?;
-            marker["child_process_identity"]
-                .as_str()
-                .filter(|identity| !identity.is_empty())
-                .map(str::to_string)
-                .context("Recorded child identity missing")
-        })();
-        let child_identity = match child_identity {
-            Ok(identity) => identity,
-            Err(error) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                return Err(error.context("Could not read recorded child ownership"));
-            }
-        };
         let mut stdin = child.stdin.take().context("Missing parent-liveness pipe")?;
         let mut setup = serde_json::json!({ "version":1, "data_dir":spec.data_dir, "socket_path":endpoint.socket,
-            "generation":endpoint.generation, "key":hex::encode(key), "lease":spec.lease, "parent_pid":std::process::id(),
-            "port":spec.port, "gateway_rate_limit":spec.gateway_rate_limit, "child_process_identity":child_identity });
+            "generation":endpoint.generation, "key":hex::encode(key), "parent_pid":std::process::id(),
+            "port":spec.port, "gateway_rate_limit":spec.gateway_rate_limit });
         spec.account_pin.apply(&mut setup);
+        #[cfg(test)]
+        if !spec.setup_padding.is_empty() {
+            setup["test_padding"] = spec.setup_padding.clone().into();
+        }
         if write_setup_or_cancel(&mut stdin, setup, cancelled)
             .await
             .is_err()
@@ -582,6 +591,7 @@ impl Process {
             .arg(spec.script)
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
+            .env("NODE", crate::tests::node_binary())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -603,7 +613,7 @@ impl Process {
             "socket_path": endpoint.socket,
             "generation": endpoint.generation,
             "key": hex::encode(key),
-            "lease": spec.lease,
+            "test_padding": spec.setup_padding,
             "parent_pid": std::process::id(),
             "port": spec.port
         });
@@ -814,7 +824,7 @@ pub(crate) struct ShellSpec {
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
     pub pidfile: PathBuf,
-    pub lease: String,
+    pub setup_padding: String,
     pub port: u16,
 }
 
@@ -840,9 +850,10 @@ async fn obtain(
     source: &Launch,
     logs: &logs::Logs,
     cancelled: &CancellationToken,
+    respawn: Option<&CancellationToken>,
 ) -> Result<Process> {
     match source {
-        Launch::Release(spec) => Process::spawn(spec, logs, cancelled).await,
+        Launch::Release(spec) => Process::spawn(spec, logs, cancelled, respawn).await,
         #[cfg(test)]
         Launch::Shell(spec) => Process::spawn_shell(spec, logs, cancelled).await,
     }
@@ -912,6 +923,7 @@ impl Supervisor {
             let mut crashes = std::collections::VecDeque::new();
             let mut exit = CompatExit::Graceful;
             let mut attempt = 0;
+            let mut spawned = false;
             loop {
                 if restarts_blocked(&cancelled, &disarmed) {
                     break;
@@ -921,7 +933,9 @@ impl Supervisor {
                 // first request. Starting closes admission before draining it.
                 while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
-                let process = obtain(&source, &logs, &cancelled).await;
+                let process =
+                    obtain(&source, &logs, &cancelled, spawned.then_some(&disarmed)).await;
+                spawned = true;
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
                 if let Ok(mut process) = process {
@@ -1125,20 +1139,39 @@ mod ticket_t_2;
 
 #[cfg(test)]
 mod tests {
-    fn node_binary() -> std::path::PathBuf {
-        let configured = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
-        let output = std::process::Command::new(configured)
-            .args(["-p", "process.execPath"])
-            .output()
-            .expect("Node must report its native executable");
-        assert!(output.status.success());
-        std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+    pub(crate) fn node_binary() -> std::path::PathBuf {
+        static NODE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        NODE.get_or_init(|| {
+            let configured = std::env::var_os("PP_TEST_NODE").unwrap_or_else(|| "node".into());
+            let output = std::process::Command::new(configured)
+                .args(["-p", "process.execPath"])
+                .output()
+                .expect("Node must report its native executable");
+            assert!(output.status.success());
+            std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+        })
+        .clone()
     }
 
     fn pid_has_exited(pid: i32) -> bool {
         let result = unsafe { libc::kill(pid, 0) };
         (result < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
             || matches!(linux_proc_state(pid as u32), Some('Z' | 'X'))
+    }
+
+    fn group_snapshot(group: u32) -> String {
+        let output = std::process::Command::new("ps")
+            .args(["-e", "-o", "pid,ppid,pgid,sid,stat,comm"])
+            .output()
+            .unwrap();
+        let group = group.to_string();
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| {
+                line.contains("PID") || line.split_whitespace().nth(2) == Some(group.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// `kill(pid, 0)` is true for a zombie. A preserved peer has to still be
@@ -1173,7 +1206,7 @@ mod tests {
         let mut command = tokio::process::Command::new(&node);
         command
             .arg("-e")
-            .arg("const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(() => {}, 1e9)'],{stdio:'ignore'}); fs.writeFileSync(process.env.PP_COMPAT_DEATH_PIDFILE+'.desc',String(child.pid)); setInterval(() => {}, 1e9)")
+            .arg("const {spawn}=require('node:child_process'); const fs=require('node:fs'); const child=spawn(process.execPath,['-e','setInterval(() => {}, 1e9)'],{stdio:'ignore'}); const pidfile=process.env.PP_COMPAT_DEATH_PIDFILE+'.desc'; fs.writeFileSync(pidfile+'.tmp',String(child.pid)); fs.renameSync(pidfile+'.tmp',pidfile); setInterval(() => {}, 1e9)")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -1208,6 +1241,7 @@ mod tests {
                 }
                 let _ = std::fs::remove_file(&self.pidfile);
                 let _ = std::fs::remove_file(self.pidfile.with_extension("desc"));
+                let _ = std::fs::remove_file(self.pidfile.with_extension("desc.tmp"));
             }
         }
         let node = node_binary();
@@ -1289,19 +1323,17 @@ mod tests {
         }
         owner.wait().unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !pid_has_exited(pid) && std::time::Instant::now() < deadline {
+        let mut node_gone = pid_has_exited(pid);
+        while !node_gone && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
+            node_gone = pid_has_exited(pid);
         }
         let descendant_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !pid_has_exited(descendant as i32)
-            && linux_proc_state(descendant) != Some('Z')
-            && std::time::Instant::now() < descendant_deadline
-        {
+        let mut descendant_gone = pid_has_exited(descendant as i32);
+        while !descendant_gone && std::time::Instant::now() < descendant_deadline {
             std::thread::sleep(Duration::from_millis(10));
+            descendant_gone = pid_has_exited(descendant as i32);
         }
-        let descendant_gone =
-            pid_has_exited(descendant as i32) || linux_proc_state(descendant) == Some('Z');
-        let node_gone = pid_has_exited(pid);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while peer_is_running(&mut peer) && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -1703,18 +1735,22 @@ mod tests {
     async fn ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced() {
         use tokio::io::{AsyncBufReadExt, BufReader};
 
-        struct Subreaper(libc::c_int);
-        impl Drop for Subreaper {
-            fn drop(&mut self) {
-                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, self.0) };
-            }
+        if std::env::var_os("PP_COMPAT_SUBREAPER_FIXTURE").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced",
+                    "--nocapture",
+                ])
+                .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "isolated subreaper fixture failed: {status}"
+            );
+            return;
         }
-        let mut previous = 0;
-        assert_eq!(
-            unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut previous) },
-            0
-        );
-        let _restore = Subreaper(previous);
         assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
 
         for (planned, already_exited, cancel_on_eof) in [
@@ -1741,7 +1777,7 @@ if pid == 0:
 os.close(write)
 os.read(read, 1)
 os.close(read)
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
 print(pid, flush=True)
 sys.stdin.buffer.read()
 if sys.argv[1] == "wait":
@@ -1819,17 +1855,35 @@ if sys.argv[1] == "wait":
         }
     }
 
-    #[tokio::test]
-    async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
+    /// Spawns a shell that exits 0 on SIGTERM and returns once the trap is set.
+    /// The group SIGTERM can land in a forked child before it execs `sleep`; the
+    /// child's inherited trap swallows it and a `sleep 30` then outlives the
+    /// grace period (GRE-719). Short sleeps bound that to 0.1 s, and the shell
+    /// still runs its own trap once the current sleep ends.
+    async fn spawn_cooperative_child() -> tokio::process::Child {
+        use tokio::io::{AsyncBufReadExt, BufReader};
         let mut command = tokio::process::Command::new("/bin/sh");
         command
             .arg("-c")
-            .arg("trap 'exit 0' TERM; sleep 30")
+            .arg("trap 'exit 0' TERM; echo ready; while :; do sleep 0.1; done")
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
-        let child = command.spawn().unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut child = command.spawn().unwrap();
+        let mut line = String::new();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(line, "ready\n");
+        child
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
+        let child = spawn_cooperative_child().await;
         let outcome = stop_owned_child(child, true).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
         assert_eq!(outcome.exit, super::CompatExit::Graceful);
@@ -1844,15 +1898,7 @@ if sys.argv[1] == "wait":
 
     #[tokio::test]
     async fn ticket_t_3_drain_restart_cleanup_switches_to_sigterm_when_shutdown_starts() {
-        let mut command = tokio::process::Command::new("/bin/sh");
-        command
-            .arg("-c")
-            .arg("trap 'exit 0' TERM; sleep 30")
-            .stdin(std::process::Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true);
-        let child = command.spawn().unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let child = spawn_cooperative_child().await;
         let outcome = stop_owned_child_at(child, false, Some(Duration::from_millis(100))).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
         assert!(
@@ -1990,9 +2036,14 @@ if sys.argv[1] == "wait":
         );
         assert!(
             !super::drain::process_alive(grand),
-            "grandchild survived a failed leader wait"
+            "grandchild survived a failed leader wait\n{}",
+            group_snapshot(pid)
         );
-        assert!(super::drain::process_group_absent(pid));
+        assert!(
+            super::drain::process_group_absent(pid),
+            "group survived a failed leader wait\n{}",
+            group_snapshot(pid)
+        );
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "{:?}",

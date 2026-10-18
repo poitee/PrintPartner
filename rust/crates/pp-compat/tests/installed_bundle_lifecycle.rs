@@ -3,7 +3,6 @@
 use anyhow::{Context, Result, bail, ensure};
 use pp_compat::{Bundle, SpawnSpec, Status, Supervisor};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     env,
     fs::{File, OpenOptions},
@@ -32,34 +31,10 @@ struct ReleaseIdentity {
 struct TestOwnership {
     data_dir: PathBuf,
     runtime_dir: PathBuf,
-    lease: String,
     lock: File,
 }
 
 impl TestOwnership {
-    // The installed-bundle fixture owns its marker; compat stays storage-independent.
-    fn record_child(directory: &Path, pid: u32) -> Result<()> {
-        let path = directory.join(".desktop-owner.json");
-        let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-        marker["child_pid"] = pid.into();
-        marker["child_process_identity"] =
-            format!("instance:{}", hex::encode(rand::random::<[u8; 16]>())).into();
-        let temporary = directory.join(format!(
-            ".desktop-owner-{}.json.new",
-            hex::encode(rand::random::<[u8; 16]>())
-        ));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(&serde_json::to_vec(&marker)?)?;
-        file.sync_all()?;
-        std::fs::rename(temporary, path)?;
-        File::open(directory)?.sync_all()?;
-        Ok(())
-    }
-
     fn create(data_dir: PathBuf, runtime_dir: PathBuf) -> Result<Self> {
         ensure!(
             data_dir.is_absolute(),
@@ -82,27 +57,12 @@ impl TestOwnership {
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(data_dir.join(".desktop.lock"))?;
+            .open(data_dir.join("printpartner.lock"))?;
         let locked = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         ensure!(locked == 0, "Could not lock test data directory");
-        let lease = hex::encode(rand::random::<[u8; 32]>());
-        let marker = serde_json::json!({
-            "storage_protocol_version": 1,
-            "pid": std::process::id(),
-            "lease_hash": hex::encode(Sha256::digest(lease.as_bytes())),
-            "runtime_dir": runtime_dir,
-        });
-        let mut marker_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(data_dir.join(".desktop-owner.json"))?;
-        marker_file.write_all(marker.to_string().as_bytes())?;
-        marker_file.sync_all()?;
         Ok(Self {
             data_dir,
             runtime_dir,
-            lease,
             lock,
         })
     }
@@ -209,13 +169,17 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
     )?)?;
     ensure!(release.os == "macos", "Installed release is not macOS");
     let web_root = contents.join(&release.web);
-    let bundle = Bundle {
-        node: contents.join(&release.node),
-        entry: web_root.join("apps/server/dist/current/desktop.js"),
-        web_root,
-        runtime_version: release.runtime_version.clone(),
-        commit: release.commit.clone(),
-    };
+    let assets = web_root.join("apps/web/dist");
+    let bundle = pp_compat::verify_bundle(
+        Bundle {
+            node: contents.join(&release.node),
+            entry: web_root.join("apps/server/dist/current/desktop.js"),
+            web_root,
+            runtime_version: release.runtime_version.clone(),
+            commit: release.commit.clone(),
+        },
+        &assets,
+    )?;
     let ownership = TestOwnership::create(
         required_path("PP_COMPAT_TEST_DATA_DIR")?,
         required_path("PP_COMPAT_TEST_RUNTIME_DIR")?,
@@ -226,28 +190,13 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         bundle,
         data_dir: ownership.data_dir.clone(),
         runtime_dir: ownership.runtime_dir.clone(),
-        lease: ownership.lease.clone(),
-        lease_file: ownership.lock.try_clone()?,
+        storage_lock: ownership.lock.try_clone()?,
         gateway_rate_limit: false,
-        record_child: TestOwnership::record_child,
         port,
     })?;
     let mut status = supervisor.handle.status.clone();
     let (generation, ready_pid) = wait_for_ready(&mut status).await?;
     ensure!(process_exists(ready_pid)?, "Ready child PID is absent");
-    let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(
-        ownership.data_dir.join(".desktop-owner.json"),
-    )?)?;
-    ensure!(
-        marker["child_pid"] == ready_pid,
-        "Ready child ownership was not recorded"
-    );
-    ensure!(
-        marker["child_process_identity"]
-            .as_str()
-            .is_some_and(|identity| identity.starts_with("instance:")),
-        "Ready child instance identity was not recorded"
-    );
     let socket = ownership
         .runtime_dir
         .join(format!("{}.sock", &generation[..12]));

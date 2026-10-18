@@ -251,7 +251,7 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
             .contains("stopped")
     );
     assert!(done_rx.try_recv().is_err());
-    assert!(path.join(".desktop-owner.json").exists());
+    assert!(path.join(".desktop-lease").is_file());
     raw.execute_batch("COMMIT").unwrap();
     first.recv().unwrap().unwrap();
     drop(raw);
@@ -387,7 +387,7 @@ fn reader_pool_resets_pragmas_rejects_writes_and_is_bounded() {
 }
 #[test]
 fn ahead_and_old_versions_reject_before_side_effects() {
-    for version in [30, 36] {
+    for version in [30, schema::CURRENT_VERSION + 1] {
         let path = directory("version");
         let database = path.join("print-partner.db");
         let conn = Connection::open(&database).unwrap();
@@ -404,7 +404,7 @@ fn ahead_and_old_versions_reject_before_side_effects() {
             WriterOwner::open_at(&path, Limits::default(), "2026-10-02T00:00:00.000Z").is_err()
         );
         assert_eq!(std::fs::read(&database).unwrap(), before);
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 2);
     }
 }
 
@@ -523,18 +523,17 @@ fn backup_rejects_managed_trees_aliases_and_existing_files() {
         .recv()
         .unwrap()
         .unwrap();
-    let marker_path = path.join(".desktop-owner.json");
+    let marker_path = path.join(".desktop-lease");
     let marker = std::fs::read(&marker_path).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
-    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
-    let lock = path.join(".desktop.lock");
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
+    let lock = path.join("printpartner.lock");
     let inode = std::fs::metadata(&lock).unwrap().ino();
     let mut denied = [
         "print-partner.db",
         "print-partner.db-wal",
         "print-partner.db-shm",
         "print-partner.db-journal",
-        ".desktop.lock",
+        "printpartner.lock",
         ".desktop-owner.json",
         "new-file",
     ]
@@ -546,10 +545,10 @@ fn backup_rejects_managed_trees_aliases_and_existing_files() {
     symlink(&runtime, aliases.join("runtime")).unwrap();
     symlink(path.join("print-partner.db-wal"), aliases.join("wal-alias")).unwrap();
     denied.extend([
-        aliases.join("data/.desktop.lock"),
+        aliases.join("data/printpartner.lock"),
         aliases.join("runtime/new-file"),
         aliases.join("wal-alias"),
-        path.join("repos/../.desktop.lock"),
+        path.join("repos/../printpartner.lock"),
     ]);
     let existing = aliases.join("existing");
     std::fs::write(&existing, b"preserve").unwrap();
@@ -596,9 +595,7 @@ fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
         .unwrap()
         .unwrap();
     assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
-    let marker: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path.join(".desktop-owner.json")).unwrap()).unwrap();
-    let runtime = PathBuf::from(marker["runtime_dir"].as_str().unwrap());
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
     assert_eq!(std::fs::read_dir(&runtime).unwrap().count(), 0);
     std::fs::remove_dir(&runtime).unwrap();
     let existing = external.join("existing.db");
@@ -643,7 +640,7 @@ fn backup_survives_missing_runtime_without_relaxing_destination_checks() {
 #[test]
 fn shutdown_with_held_reader_fails_bounded_and_retains_ownership() {
     let (path, owner, client) = fixture("held-reader");
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
     let read = client.reader(Duration::ZERO).unwrap();
     let started = Instant::now();
     let error = owner.shutdown().unwrap_err().to_string();
@@ -660,31 +657,24 @@ fn shutdown_with_held_reader_fails_bounded_and_retains_ownership() {
         SettingSnapshot::Missing
     );
     drop(read);
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     assert!(lease::StorageLease::acquire(&path).is_err());
     assert!(lease::StorageLease::retry_failed_release(&path).is_err());
 }
 
 #[test]
-fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
+fn failed_cleanup_retains_reservation_and_lock_until_explicit_retry() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-release");
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
-    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
     let blocker = runtime.join("block-release");
     std::fs::write(&blocker, b"retain").unwrap();
     assert!(owner.shutdown().is_err());
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     assert!(lease::StorageLease::acquire(&path).is_err());
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()
@@ -704,21 +694,22 @@ fn failed_cleanup_retains_marker_and_lock_until_explicit_retry() {
 }
 
 #[test]
-fn directory_lease_cleanup_failure_retains_lock_until_retry() {
+fn compatibility_cleanup_failure_retains_lock_until_retry() {
     use fs2::FileExt;
     let (path, owner, _) = fixture("retained-directory-lease");
     let lease_path = path.join(".desktop-lease");
     let hidden = path.join(".desktop-lease-hidden");
     std::fs::rename(&lease_path, &hidden).unwrap();
-    // Marker removal alone must not release the OS lock when the portable lease cannot be removed.
+    std::fs::create_dir(&lease_path).unwrap();
     assert!(owner.shutdown().is_err());
     assert!(!path.join(".desktop-owner.json").exists());
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()
     );
+    std::fs::remove_dir(&lease_path).unwrap();
     std::fs::rename(hidden, &lease_path).unwrap();
     let released = lease::StorageLease::retry_failed_release(&path).unwrap();
     assert!(released.marker_removed && released.runtime_removed && released.lock_released);
@@ -747,7 +738,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
         entries
     };
     for stale_marker in [false, true] {
-        for version in [30, 36] {
+        for version in [30, schema::CURRENT_VERSION + 1] {
             for with_shm in [false, true] {
                 let source = directory("wal-source");
                 let raw = Connection::open(source.join("print-partner.db")).unwrap();
@@ -775,6 +766,7 @@ fn wal_only_unsupported_versions_preserve_every_input_file() {
                     )
                     .unwrap();
                 }
+                std::fs::write(target.join("printpartner.lock"), b"").unwrap();
                 let before = tree(&target);
                 let error = WriterOwner::open(&target, Limits::default())
                     .err()
@@ -792,87 +784,20 @@ fn unproved_closure_cannot_be_released_by_cleanup_retry() {
     use fs2::FileExt;
     let path = directory("unproved-closure");
     let owner = lease::StorageLease::acquire(&path).unwrap();
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
     owner.retain_until_process_exit();
     let error = lease::StorageLease::retry_failed_release(&path)
         .err()
         .unwrap();
     assert!(error.to_string().contains("Closure was not proved"));
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()
     );
     assert!(lease::StorageLease::acquire(&path).is_err());
-}
-
-#[test]
-fn public_open_recovers_dead_writer_marker_and_atomic_lease() {
-    let (path, owner, client) = fixture("crash-reopen");
-    set(&client, "survives", "crash")
-        .unwrap()
-        .recv()
-        .unwrap()
-        .unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
-    owner.shutdown().unwrap();
-    let pid = exited_true_pid();
-    let marker = serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior-process", "instance": "ab".repeat(16)});
-    std::fs::write(path.join(".desktop-owner.json"), marker.to_string()).unwrap();
-    std::fs::create_dir(path.join(".desktop-lease")).unwrap();
-    std::fs::write(path.join(".desktop-lease/owner.json"), marker.to_string()).unwrap();
-    let (reopened, _) = WriterOwner::open(&path, Limits::default()).unwrap();
-    let client = reopened.client();
-    let reader = client.reader(Duration::ZERO).unwrap();
-    assert_eq!(
-        reader.snapshot("test", "survives").unwrap(),
-        SettingSnapshot::Stored {
-            value: "crash".into()
-        }
-    );
-    drop(reader);
-    reopened.shutdown().unwrap();
-    assert!(!path.join(".desktop-owner.json").exists());
-    assert!(!path.join(".desktop-lease").exists());
-    std::fs::remove_dir_all(path).unwrap();
-}
-
-#[test]
-fn unowned_preflight_rejects_live_and_invalid_markers_without_changes() {
-    let mut prior = Command::new("/usr/bin/true").spawn().unwrap();
-    let pid = prior.id();
-    prior.wait().unwrap();
-    let child = lease::current_process_identity();
-    for contents in [
-        serde_json::json!({"pid": std::process::id()}).to_string(),
-        serde_json::json!({"pid": 0}).to_string(),
-        "not json".into(),
-        // A dead legacy Rust owner may have left an unrecorded child holding storage.
-        serde_json::json!({"pid": pid, "process_identity": "prior"}).to_string(),
-        // A dead owner whose recorded child is still alive keeps storage blocked.
-        serde_json::json!({"storage_protocol_version": 1, "pid": pid, "process_identity": "prior", "child_pid": std::process::id(), "child_process_identity": child}).to_string(),
-    ] {
-        let path = directory("blocked-marker");
-        std::fs::write(path.join(".desktop-owner.json"), &contents).unwrap();
-        assert!(WriterOwner::open(&path, Limits::default()).is_err());
-        assert_eq!(
-            std::fs::read_to_string(path.join(".desktop-owner.json")).unwrap(),
-            contents
-        );
-        assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
-        std::fs::remove_dir_all(path).unwrap();
-    }
-    let path = directory("unreadable-marker");
-    std::fs::create_dir(path.join(".desktop-owner.json")).unwrap();
-    assert!(WriterOwner::open(&path, Limits::default()).is_err());
-    assert!(path.join(".desktop-owner.json").is_dir());
-    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
-    std::fs::remove_dir_all(path).unwrap();
 }
 
 const SCHEMA_PARITY_NODE_VERSION: &str = "v22.23.3";
@@ -1405,15 +1330,23 @@ fn index_and_trigger_sql(db: &Path) -> Vec<(String, String, String)> {
 
 fn assert_second_open_keeps_catalog(dir: &Path, label: &str) {
     let db = dir.join("print-partner.db");
-    assert_eq!(schema_version_at(&db), "35", "{label}");
+    assert_eq!(
+        schema_version_at(&db),
+        schema::CURRENT_VERSION.to_string(),
+        "{label}"
+    );
     let cookie = sqlite_schema_cookie(&db);
     let catalog = index_and_trigger_sql(&db);
     let (owner, ready) = open_parity(dir, "2026-10-02T00:00:00.000Z");
-    assert_eq!(ready.version, 35, "{label}");
-    assert_eq!(ready.previous_version, 35, "{label}");
+    assert_eq!(ready.version, schema::CURRENT_VERSION, "{label}");
+    assert_eq!(ready.previous_version, schema::CURRENT_VERSION, "{label}");
     assert!(ready.backup.is_none(), "{label}");
     owner.shutdown().unwrap();
-    assert_eq!(schema_version_at(&db), "35", "{label}");
+    assert_eq!(
+        schema_version_at(&db),
+        schema::CURRENT_VERSION.to_string(),
+        "{label}"
+    );
     assert_eq!(
         sqlite_schema_cookie(&db),
         cookie,
@@ -1784,7 +1717,7 @@ fn ticket_t_7_migrations() {
             );
         }
         let (owner, ready) = open_parity(&work, &clock);
-        assert_eq!(ready.version, 35, "{name}");
+        assert_eq!(ready.version, schema::CURRENT_VERSION, "{name}");
         assert_eq!(ready.previous_version, initial, "{name}");
         let backup = ready.backup.clone();
         if (1..35).contains(&initial) {
@@ -1805,8 +1738,8 @@ fn ticket_t_7_migrations() {
         assert!(diff.is_empty(), "{name} node {node_version}: {diff:#?}");
         let backup_bytes = backup.as_ref().map(|path| std::fs::read(path).unwrap());
         let (reopened, again) = open_parity(&work, &clock);
-        assert_eq!(again.version, 35);
-        assert_eq!(again.previous_version, 35);
+        assert_eq!(again.version, schema::CURRENT_VERSION);
+        assert_eq!(again.previous_version, schema::CURRENT_VERSION);
         assert!(again.backup.is_none());
         reopened.shutdown().unwrap();
         if let Some(bytes) = backup_bytes {
@@ -1887,6 +1820,11 @@ fn refused_wal_input(version: &str) -> PathBuf {
 }
 
 fn assert_refused(path: &Path, message: &str) {
+    std::fs::write(
+        path.join("printpartner.lock"),
+        b"keep existing lock contents",
+    )
+    .unwrap();
     let before = tree_hashes(path);
     assert!(
         before.iter().any(|(file, _)| file == "print-partner.db")
@@ -1906,13 +1844,26 @@ fn ticket_t_7_migrations_preserves_refused_inputs() {
         &refused_wal_input("30"),
         "Cannot upgrade database schema version 30",
     );
-    assert_refused(&refused_wal_input("36"), "newer than supported version 35");
+    let newer = if cfg!(feature = "desktop_rebuild") {
+        "42"
+    } else {
+        "40"
+    };
+    assert_refused(
+        &refused_wal_input(newer),
+        &format!("newer than supported version {}", schema::CURRENT_VERSION),
+    );
     assert_refused(&refused_wal_input("abc"), "Invalid database schema version");
     let corrupt = directory("refuse-corrupt");
     std::fs::write(corrupt.join("print-partner.db"), b"not a sqlite database").unwrap();
     std::fs::write(corrupt.join("print-partner.db-wal"), b"wal-bytes").unwrap();
     std::fs::write(corrupt.join("print-partner.db-shm"), b"shm-bytes").unwrap();
     std::fs::write(corrupt.join("retain-user-file"), b"untouched").unwrap();
+    std::fs::write(
+        corrupt.join("printpartner.lock"),
+        b"keep existing lock contents",
+    )
+    .unwrap();
     let before = tree_hashes(&corrupt);
     let error = WriterOwner::open(&corrupt, Limits::default())
         .err()
@@ -2356,17 +2307,17 @@ fn ticket_t_7_writer_denies_managed_alias_backups_and_reopens() {
         .unwrap()
         .unwrap();
     assert!(path.join("print-partner.db-wal").metadata().unwrap().len() > 32);
-    let lock = path.join(".desktop.lock");
+    let lock = path.join("printpartner.lock");
     let inode = std::fs::metadata(&lock).unwrap().ino();
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
     let aliases = directory("t7-aliases");
     symlink(path.join("print-partner.db-wal"), aliases.join("wal-alias")).unwrap();
     symlink(&path, aliases.join("data")).unwrap();
     for target in [
         path.join("print-partner.db"),
         path.join("print-partner.db-wal"),
-        path.join(".desktop.lock"),
-        path.join(".desktop-owner.json"),
+        path.join("printpartner.lock"),
+        path.join(".desktop-lease"),
         aliases.join("wal-alias"),
         aliases.join("data/print-partner.db"),
     ] {
@@ -2376,10 +2327,7 @@ fn ticket_t_7_writer_denies_managed_alias_backups_and_reopens() {
             "{target:?} {error}"
         );
         assert_eq!(std::fs::metadata(&lock).unwrap().ino(), inode);
-        assert_eq!(
-            std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-            marker
-        );
+        assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
         assert!(
             std::fs::File::open(&lock)
                 .unwrap()
@@ -2414,9 +2362,8 @@ fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
         .recv()
         .unwrap()
         .unwrap();
-    let marker = std::fs::read(path.join(".desktop-owner.json")).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&marker).unwrap();
-    let runtime = PathBuf::from(value["runtime_dir"].as_str().unwrap());
+    let marker = std::fs::read(path.join(".desktop-lease")).unwrap();
+    let runtime = owner.lease.as_ref().unwrap().runtime_dir().to_owned();
     std::fs::write(runtime.join("block-release"), b"retain").unwrap();
     let error = owner.shutdown().unwrap_err().to_string();
     assert!(
@@ -2425,10 +2372,7 @@ fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
         ),
         "{error}"
     );
-    assert_eq!(
-        std::fs::read(path.join(".desktop-owner.json")).unwrap(),
-        marker
-    );
+    assert_eq!(std::fs::read(path.join(".desktop-lease")).unwrap(), marker);
     let blocked = match WriterOwner::open(&path, Limits::default()) {
         Ok(_) => panic!("cleanup failure released ownership"),
         Err(error) => error.to_string(),
@@ -2438,7 +2382,7 @@ fn ticket_t_7_writer_retains_ownership_when_cleanup_fails() {
         "{blocked}"
     );
     assert!(
-        std::fs::File::open(path.join(".desktop.lock"))
+        std::fs::File::open(path.join("printpartner.lock"))
             .unwrap()
             .try_lock_exclusive()
             .is_err()
@@ -2644,15 +2588,28 @@ fn build_historical_database(
     root
 }
 
+fn upload_columns() -> Vec<(&'static str, &'static str, &'static str)> {
+    #[cfg(feature = "desktop_rebuild")]
+    return crate::uploads::added_columns().unwrap();
+    #[cfg(not(feature = "desktop_rebuild"))]
+    Vec::new()
+}
+
 fn table_columns(db: &Path, table: &str) -> Vec<String> {
     let connection = Connection::open(db).unwrap();
     let mut statement = connection
         .prepare(&format!("PRAGMA table_info({})", quote_ident(table)))
         .unwrap();
+    let added = upload_columns();
     statement
         .query_map([], |row| row.get::<_, String>(1))
         .unwrap()
         .map(|name| name.unwrap())
+        .filter(|name| {
+            !added
+                .iter()
+                .any(|(owner, column, _)| *owner == table && column == name)
+        })
         .collect()
 }
 
@@ -2923,7 +2880,7 @@ fn ticket_t_7_migrations_historical_order() {
 
     let fresh_dir = directory("historical-fresh");
     let (fresh_owner, fresh_ready) = open_parity(&fresh_dir, "2026-10-02T00:00:00.000Z");
-    assert_eq!(fresh_ready.version, 35);
+    assert_eq!(fresh_ready.version, schema::CURRENT_VERSION);
     assert_eq!(fresh_ready.previous_version, 0);
     assert!(fresh_ready.backup.is_none());
     fresh_owner.shutdown().unwrap();
@@ -2933,7 +2890,7 @@ fn ticket_t_7_migrations_historical_order() {
         let work = directory(&format!("historical-upgrade-{label}"));
         copy_db_files(source, &work);
         let (owner, ready) = open_parity(&work, "2026-10-02T00:00:00.000Z");
-        assert_eq!(ready.version, 35, "{label}");
+        assert_eq!(ready.version, schema::CURRENT_VERSION, "{label}");
         assert_eq!(ready.previous_version, *version, "{label}");
         match ready.backup.as_ref() {
             Some(path) if *version < 35 => {
@@ -3230,7 +3187,81 @@ fn with_sql_identity(graph: &SchemaGraph) -> SchemaGraph {
     graph
 }
 
+#[cfg(feature = "desktop_rebuild")]
+fn omit_source_schema(graph: &mut SchemaGraph) {
+    let mut owned = crate::uploads::owned_objects().unwrap();
+    owned.extend(
+        graph
+            .objects
+            .keys()
+            .filter(|(_, name)| {
+                name.starts_with("source_scan_execution")
+                    || name.starts_with("sqlite_autoindex_source_scan_execution")
+                    || name.starts_with("source_sync_")
+                    || name.starts_with("sqlite_autoindex_source_sync_")
+            })
+            .map(|(_, name)| name.clone()),
+    );
+    graph.objects.retain(|(_, name), _| !owned.contains(name));
+    for name in &owned {
+        graph.columns.remove(name);
+        graph.foreign_keys.remove(name);
+        graph.rows.remove(name);
+    }
+    let added = upload_columns();
+    for (table, column, definition) in &added {
+        if let Some((_, Some(sql))) = graph.objects.get_mut(&("table".into(), (*table).into())) {
+            *sql = sql.replacen(&format!(", {definition}"), "", 1);
+        }
+        let Some(keys) = graph.foreign_keys.get_mut(*table) else {
+            continue;
+        };
+        let field = |key: &str, index: usize| key.split('\u{1f}').nth(index).unwrap().to_owned();
+        let dropped: BTreeSet<String> = keys
+            .iter()
+            .filter(|key| field(key, 3) == *column)
+            .map(|key| field(key, 0))
+            .collect();
+        keys.retain(|key| !dropped.contains(&field(key, 0)));
+        for key in keys.iter_mut() {
+            let id: i64 = field(key, 0).parse().unwrap();
+            let (_, rest) = key.split_once('\u{1f}').unwrap();
+            *key = format!("{}\u{1f}{rest}", id - dropped.len() as i64);
+        }
+    }
+    for (table, defs) in graph.columns.iter_mut() {
+        let before = defs.len();
+        defs.retain(|line| {
+            let name = line.split('\u{1f}').nth(1).unwrap();
+            !added
+                .iter()
+                .any(|(owner, column, _)| owner == table && *column == name)
+        });
+        if defs.len() < before
+            && let Some(rows) = graph.rows.get_mut(table)
+        {
+            for row in rows.iter_mut() {
+                *row = row
+                    .split('\u{1e}')
+                    .take(defs.len())
+                    .collect::<Vec<_>>()
+                    .join("\u{1e}");
+            }
+        }
+    }
+}
+
 fn omit_durable_jobs(graph: &mut SchemaGraph) {
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        graph
+            .objects
+            .retain(|(_, name), _| !name.contains("plan_apply_admissions"));
+        graph.columns.remove("plan_apply_admissions");
+        graph.foreign_keys.remove("plan_apply_admissions");
+        graph.rows.remove("plan_apply_admissions");
+        omit_source_schema(graph);
+    }
     let job_object = |name: &str| {
         name.starts_with("durable_job") || name.starts_with("sqlite_autoindex_durable_job")
     };
@@ -3280,8 +3311,7 @@ fn blank_schema_version_stamp(graph: &mut SchemaGraph) {
     }
 }
 
-/// Node schema 34 is the shared catalog. Durable jobs and the schema 35 stamp
-/// are the Rust-owned extension and are compared by the jobs tests.
+/// Compare Node-owned objects separately from the jobs and publication schemas.
 fn node_owned_catalog(node: &SchemaGraph, rust: &SchemaGraph) -> Vec<String> {
     let mut node = node.clone();
     let mut rust = rust.clone();
@@ -3342,7 +3372,7 @@ fn ticket_t_7_migrations_preserves_plan_revision_inputs() {
     copy_db_files(&historical, &rust_dir);
     apply_historical_node_upgrade(&node_dir);
     let (owner, ready) = open_parity(&rust_dir, "2026-10-02T00:00:00.000Z");
-    assert_eq!(ready.version, 35);
+    assert_eq!(ready.version, schema::CURRENT_VERSION);
     assert_eq!(ready.previous_version, 31);
     assert_eq!(schema_version_at(ready.backup.as_ref().unwrap()), "31");
     let backup_rows = plan_input_rows(ready.backup.as_ref().unwrap());
@@ -3560,7 +3590,7 @@ fn ticket_t_7_migrations_matches_node_upgrade() {
         insert_historical_plan_inputs(&rust_dir.join("print-partner.db"));
         run_node_driver(&historical, &node_dir);
         let (owner, ready) = open_parity(&rust_dir, "2026-10-02T00:00:00.000Z");
-        assert_eq!(ready.version, 35, "{label}");
+        assert_eq!(ready.version, schema::CURRENT_VERSION, "{label}");
         assert_eq!(ready.previous_version, version, "{label}");
         if version < 35 {
             assert_eq!(

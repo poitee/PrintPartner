@@ -19,8 +19,8 @@ const requiredFiles = [
   "CHANGELOG.md",
   "docs/README.md",
   "docs/INSTALL.md",
-  "docs/API.md",
-  "docs/ARCHITECTURE.md",
+  "docs/api.md",
+  "docs/architecture.md",
   "docs/assistant-mcp.md",
   "docs/screenshots/README.md",
 ];
@@ -90,6 +90,7 @@ function isTextFile(file) {
     ".html",
     ".js",
     ".json",
+    ".jsonc",
     ".md",
     ".mjs",
     ".mts",

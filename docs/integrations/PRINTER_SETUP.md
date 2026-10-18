@@ -108,6 +108,6 @@ Check firewall rules, VLAN routing, mDNS assumptions, and whether the printer en
 ## Related documentation
 
 - [Spoolman](SPOOLMAN.md)
-- [Architecture](../ARCHITECTURE.md)
-- [HTTP API](../API.md)
+- [Architecture](../architecture.md)
+- [HTTP API](../api.md)
 - [Operations](../../OPERATIONS.md)

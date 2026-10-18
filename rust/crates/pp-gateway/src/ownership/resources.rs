@@ -28,6 +28,9 @@ pub enum TableId {
 pub enum FileFamily {
     SourceWorkspace,
     SourceCovers,
+    KitCatalog,
+    PathHints,
+    CommunityManifests,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -64,6 +67,8 @@ enum ReviewedEntry {
     SourceSync { import: SourceSyncImport },
     #[serde(rename = "tool.get_workflow_help")]
     GetWorkflowHelp { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.check_hardware_interfaces")]
+    CheckHardwareInterfaces { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -76,8 +81,20 @@ enum ReviewedEntry {
     PreviewSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.list_plan_snapshots")]
     ListPlanSnapshots { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_kit_catalog")]
+    GetKitCatalog { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_snapshot")]
+    GetPlanSnapshot { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_option_groups")]
+    GetPlanOptionGroups { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_source")]
     UiOpenSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.analyze_stl_mesh")]
+    AnalyzeStlMesh { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.audit_source_provenance")]
+    AuditSourceProvenance { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.compare_source_revisions")]
+    CompareSourceRevisions { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_source_inventory")]
     GetSourceInventory { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_source_docs")]
@@ -136,6 +153,9 @@ impl ReviewedEntry {
             Self::GetWorkflowHelp { resources } => {
                 ("tool.get_workflow_help", resources, BTreeSet::new())
             }
+            Self::CheckHardwareInterfaces { resources } => {
+                ("tool.check_hardware_interfaces", resources, BTreeSet::new())
+            }
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -170,6 +190,41 @@ impl ReviewedEntry {
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(PlanSnapshots)]),
             ),
+            Self::GetKitCatalog { resources } => (
+                "tool.get_kit_catalog",
+                resources,
+                BTreeSet::from([File(FileFamily::KitCatalog)]),
+            ),
+            Self::GetPlanOptionGroups { resources } => (
+                "tool.get_plan_option_groups",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                    File(FileFamily::PathHints),
+                    File(FileFamily::CommunityManifests),
+                ]),
+            ),
+            Self::GetPlanSnapshot { resources } => (
+                "tool.get_plan_snapshot",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Parts),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceRevisions),
+                    Table(AppSettings),
+                    Table(PlanAcceptedInputSets),
+                    Table(PlanRevisionInputSets),
+                    Table(PlanRevisionInputs),
+                    File(FileFamily::SourceWorkspace),
+                    File(FileFamily::KitCatalog),
+                ]),
+            ),
             Self::UiOpenSource { resources } => (
                 "tool.ui_open_source",
                 resources,
@@ -189,6 +244,35 @@ impl ReviewedEntry {
                     Table(SourceNotes),
                     Table(SourceRevisions),
                     Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::AnalyzeStlMesh { resources } => (
+                "tool.analyze_stl_mesh",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::AuditSourceProvenance { resources } => (
+                "tool.audit_source_provenance",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceRevisions),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::CompareSourceRevisions { resources } => (
+                "tool.compare_source_revisions",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(SourceRevisions),
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
@@ -303,12 +387,16 @@ impl Declarations {
             "source.sync",
             "tool.get_workflow_help",
             "tool.get_job_status",
+            "tool.check_hardware_interfaces",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
             "tool.preview_source_naming",
             "tool.list_plans",
             "tool.list_plan_snapshots",
+            "tool.get_plan_snapshot",
+            "tool.get_kit_catalog",
+            "tool.get_plan_option_groups",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
             "tool.ui_navigate",
@@ -318,6 +406,9 @@ impl Declarations {
             "tool.list_source_categories",
             "tool.get_source_docs",
             "tool.get_source_inventory",
+            "tool.compare_source_revisions",
+            "tool.audit_source_provenance",
+            "tool.analyze_stl_mesh",
         ] {
             if !states.contains_key(id) {
                 return Err(AdmissionError::Malformed(format!(

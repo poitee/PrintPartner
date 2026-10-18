@@ -21,7 +21,7 @@ export class KitJsonTooLargeError extends Error {
   }
 }
 
-export type KitBundlePartWithoutProgress = Readonly<{
+type KitBundlePartWithoutProgress = Readonly<{
   matchKey: string;
   relativePath: string;
   filename: string;

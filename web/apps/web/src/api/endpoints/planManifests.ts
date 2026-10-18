@@ -13,7 +13,7 @@ import type { ProfileLayer } from "./plans";
 
 export type { ReviewPart } from "@print-partner/contracts";
 
-export type ChoiceTreeNode = {
+type ChoiceTreeNode = {
   id: string;
   label?: string;
   type?: "pick_one" | "pick_any" | "pick_n" | "addon_toggle";

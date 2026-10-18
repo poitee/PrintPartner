@@ -1,5 +1,9 @@
 #![cfg(feature = "desktop_rebuild")]
 
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
 use anyhow::Result;
 use pp_domain::{PositiveId, features::Feature};
 use pp_storage::{
@@ -164,7 +168,7 @@ impl Fixture {
         start: bool,
     ) -> AttemptLease {
         let job = self.enqueue(account, key, printer(key, plan, start));
-        let (claimed, lease) = worker.claim().unwrap().unwrap();
+        let claimed_attempt!(claimed, lease) = worker.claim().unwrap().unwrap();
         assert_eq!(claimed.job_id, job.job_id);
         lease
     }
@@ -289,7 +293,10 @@ fn disabled(error: anyhow::Error) {
 fn refusal_is_atomic_and_same_lease_can_retry_after_enable() {
     let f = Fixture::new(true);
     let account = f.account("one");
-    let worker = f.owner().job_worker(admission()).unwrap();
+    let worker = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     let mut lease = f.claim(&account, &worker, "printer", None, false);
     disabled(f.refuse(&worker, &mut lease, deduction("spool")));
     f.set(&account, Scope::User, Some(true));
@@ -324,7 +331,10 @@ fn ordinary_owner_never_reads_feature_layers() {
         if scenario == "corrupt" {
             f.setting(&account, None, "{");
         }
-        let worker = f.owner().job_worker(admission()).unwrap();
+        let worker = f
+            .owner()
+            .job_worker_with_policy(policy(), admission())
+            .unwrap();
         let mut lease = f.claim(&account, &worker, "printer", plan, false);
         assert_eq!(
             worker.update(&mut lease, deduction("spool")).unwrap().state,
@@ -339,7 +349,10 @@ fn live_controls_resolve_plan_then_user_then_default() {
     let f = Fixture::new(true);
     let account = f.account("choices");
     let plan = f.plan(&account);
-    let worker = f.owner().job_worker(admission()).unwrap();
+    let worker = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     let mut lease = f.claim(&account, &worker, "printer", Some(plan), false);
     for (index, (scope, choice, allowed)) in [
         (Scope::User, Some(true), true),
@@ -391,7 +404,10 @@ fn stored_tenant_and_plan_ownership_are_authoritative() {
     let bob_plan = f.plan(&bob);
     f.set(&alice, Scope::User, Some(true));
     f.set(&bob, Scope::Plan(bob_plan), Some(true));
-    let worker = f.owner().job_worker(admission()).unwrap();
+    let worker = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     let mut alice_lease = f.claim(&alice, &worker, "alice", Some(alice_plan), false);
     confirm(
         &worker,
@@ -461,7 +477,10 @@ fn corrupt_layers_fail_closed_without_changing_the_lease() {
     let f = Fixture::new(true);
     let account = f.account("corrupt");
     let plan = f.plan(&account);
-    let worker = f.owner().job_worker(admission()).unwrap();
+    let worker = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     let mut lease = f.claim(&account, &worker, "printer", Some(plan), false);
     for scope in [None, Some(plan)] {
         for value in [
@@ -516,8 +535,14 @@ fn corrupt_layers_fail_closed_without_changing_the_lease() {
 fn siblings_and_clones_share_policy_and_capacity_contract() {
     let f = Fixture::new(true);
     let account = f.account("siblings");
-    let first = f.owner().job_worker(admission()).unwrap();
-    let second = f.owner().job_worker(admission()).unwrap();
+    let first = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
+    let second = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     let cloned = first.clone();
     let mut conflicting = admission();
     conflicting.per_resource = 2;
@@ -545,8 +570,14 @@ fn siblings_and_clones_share_policy_and_capacity_contract() {
 fn existing_validation_precedes_feature_resolution() {
     let f = Fixture::new(true);
     let account = f.account("validation");
-    let worker = f.owner().job_worker(admission()).unwrap();
-    let sibling = f.owner().job_worker(admission()).unwrap();
+    let worker = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
+    let sibling = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     let mut lease = f.claim(&account, &worker, "printer", None, false);
     let mut stale = lease.clone();
     worker
@@ -571,7 +602,7 @@ fn existing_validation_precedes_feature_resolution() {
         "Invalid digest"
     );
     f.enqueue(&account, "sync", Payload::Sync { project_ids: None });
-    let (_, mut source) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut source) = worker.claim().unwrap().unwrap();
     assert_eq!(
         f.refuse(&worker, &mut source, deduction("spool"))
             .to_string(),
@@ -616,7 +647,10 @@ fn existing_validation_precedes_feature_resolution() {
 fn denied_optional_deduction_preserves_primary_completion_rules() {
     let f = Fixture::new(true);
     let account = f.account("primary");
-    let worker = f.owner().job_worker(admission()).unwrap();
+    let worker = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     for (name, start, combined) in [
         ("upload", false, false),
         ("start", true, false),
@@ -663,7 +697,10 @@ fn denied_optional_deduction_preserves_primary_completion_rules() {
 fn bound_printer_start_rejects_deduction_before_feature_read() {
     let f = Fixture::new(true);
     let account = f.account("bound");
-    let worker = f.owner().job_worker(admission()).unwrap();
+    let worker = f
+        .owner()
+        .job_worker_with_policy(policy(), admission())
+        .unwrap();
     let mut parent = f.claim(&account, &worker, "printer", None, true);
     worker
         .update(
@@ -692,7 +729,7 @@ fn bound_printer_start_rejects_deduction_before_feature_read() {
         "start",
         Payload::PrinterStart(PrinterStartRequest::new(&uploaded.job_id)),
     );
-    let (_, mut lease) = worker.claim().unwrap().unwrap();
+    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
     f.setting(&account, None, "{");
     assert_eq!(
         f.refuse(&worker, &mut lease, deduction("spool"))
@@ -740,7 +777,10 @@ fn admitted_effect_can_confirm_and_finish_after_choices_become_invalid() {
         let account = f.account("confirmed");
         let plan = f.plan(&account);
         f.set(&account, Scope::Plan(plan), Some(true));
-        let worker = f.owner().job_worker(admission()).unwrap();
+        let worker = f
+            .owner()
+            .job_worker_with_policy(policy(), admission())
+            .unwrap();
         let mut lease = f.claim(&account, &worker, "printer", Some(plan), false);
         let primary = confirm(
             &worker,
@@ -781,7 +821,10 @@ fn admitted_effect_can_reconcile_after_recovery_or_failure_despite_invalid_choic
             let account = f.account("operator");
             let plan = f.plan(&account);
             f.set(&account, Scope::Plan(plan), Some(true));
-            let worker = f.owner().job_worker(admission()).unwrap();
+            let worker = f
+                .owner()
+                .job_worker_with_policy(policy(), admission())
+                .unwrap();
             let mut lease = f.claim(&account, &worker, "printer", Some(plan), false);
             let primary = confirm(
                 &worker,

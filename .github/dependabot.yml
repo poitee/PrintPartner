@@ -1,6 +1,8 @@
 version: 2
 updates:
   - package-ecosystem: npm
+    cooldown:
+      default-days: 7
     directory: /web
     open-pull-requests-limit: 5
     schedule:
@@ -18,12 +20,16 @@ updates:
           - version-update:semver-major
 
   - package-ecosystem: pip
+    cooldown:
+      default-days: 7
     directory: /manifests
     open-pull-requests-limit: 3
     schedule:
       interval: weekly
 
   - package-ecosystem: github-actions
+    cooldown:
+      default-days: 7
     directory: /
     open-pull-requests-limit: 3
     schedule:
@@ -37,6 +43,8 @@ updates:
           - patch
 
   - package-ecosystem: docker
+    cooldown:
+      default-days: 7
     directory: /
     open-pull-requests-limit: 3
     schedule:
@@ -47,6 +55,8 @@ updates:
           - version-update:semver-major
 
   - package-ecosystem: docker
+    cooldown:
+      default-days: 7
     directory: /slicer-sidecar
     open-pull-requests-limit: 3
     schedule:
@@ -57,6 +67,8 @@ updates:
           - version-update:semver-major
 
   - package-ecosystem: cargo
+    cooldown:
+      default-days: 7
     directory: /rust
     open-pull-requests-limit: 5
     schedule:
@@ -69,3 +81,8 @@ updates:
         update-types:
           - minor
           - patch
+    # Direct crates are pinned with "=", so a lockfile-only major bump cannot build.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major

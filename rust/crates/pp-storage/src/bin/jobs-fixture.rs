@@ -1,3 +1,7 @@
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/common/claimed_attempt.rs"
+));
 use anyhow::{Result, anyhow, ensure};
 use pp_storage::{
     Limits, WriterOwner,
@@ -80,9 +84,12 @@ fn main() -> Result<()> {
                 ),
                 "Queued reservation missing"
             );
-            let (_, lease) = worker
+            let claimed_attempt!(_, lease, source_work) = worker
                 .claim()?
                 .ok_or_else(|| anyhow!("Source claim missing"))?;
+            #[cfg(feature = "desktop_rebuild")]
+            let mut source_work = source_work.ok_or_else(|| anyhow!("Source lease missing"))?;
+            #[cfg(not(feature = "desktop_rebuild"))]
             let mut source_work = worker.begin_source_work(
                 &lease,
                 None,
@@ -141,7 +148,7 @@ fn main() -> Result<()> {
                 first.job_id == duplicate.job_id,
                 "Duplicate created another job"
             );
-            let (claimed, _lease) = if command == "concurrent" {
+            let claimed_attempt!(claimed, _lease) = if command == "concurrent" {
                 let barrier = Arc::new(Barrier::new(8));
                 let handles: Vec<_> = (0..8)
                     .map(|_| {
@@ -179,7 +186,7 @@ fn main() -> Result<()> {
             );
         }
         "restart" => {
-            let (claimed, _lease) = worker
+            let claimed_attempt!(claimed, _lease) = worker
                 .claim()?
                 .ok_or_else(|| anyhow!("No recovered claim"))?;
             ensure!(
@@ -210,7 +217,8 @@ fn main() -> Result<()> {
                 },
             )?;
             if command == "effect-intent" {
-                let (_, mut lease) = worker.claim()?.ok_or_else(|| anyhow!("No effect claim"))?;
+                let claimed_attempt!(_, mut lease) =
+                    worker.claim()?.ok_or_else(|| anyhow!("No effect claim"))?;
                 let admitted = worker.update(
                     &mut lease,
                     WorkerOperation::BeginEffect(EffectIntent {

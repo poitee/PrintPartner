@@ -241,10 +241,12 @@ class StartupStopTest(unittest.TestCase):
                     marker = None
                     def stop_before_origin(_process, errors):
                         nonlocal marker
-                        marker = Path(errors.name).parent / 'data/.desktop-owner.json'
+                        marker = Path(errors.name).parent / 'data/.desktop-lease'
                         marker.parent.mkdir()
-                        marker.write_text(json.dumps({'runtime_dir': str(runtime)}))
-                        (marker.parent / '.desktop.lock').touch()
+                        marker.touch()
+                        (marker.parent.parent / "bootstrap.json").write_text(json.dumps({"runtime_dir": str(runtime)}))
+                        (marker.parent.parent / "bootstrap.json").chmod(0o600)
+                        (marker.parent / 'printpartner.lock').touch()
                         raise verify.Stop('SIGTERM')
                     def terminate(_process):
                         if failure != 'owner':
@@ -275,8 +277,10 @@ class StartupStopTest(unittest.TestCase):
             runtime = fixture / "runtime"
             runtime.mkdir()
             (fixture / "data").mkdir()
-            (fixture / "data/.desktop.lock").touch()
-            (fixture / "data/.desktop-owner.json").write_text(json.dumps({"runtime_dir": str(runtime)}))
+            (fixture / "data/printpartner.lock").touch()
+            (fixture / "data/.desktop-lease").touch()
+            (fixture / "bootstrap.json").write_text(json.dumps({"runtime_dir": str(runtime)}))
+            (fixture / "bootstrap.json").chmod(0o600)
             return child
 
         verify.held["pending"] = "SIGTERM"
@@ -286,7 +290,7 @@ class StartupStopTest(unittest.TestCase):
             with self.assertRaises(RuntimeError) as failure:
                 verify.serve(Path("server"), Path("repo"), "node", "commit", None)
         # The shutdown checks ran and found the marker the exited server left behind.
-        self.assertIn("Owner marker survived", str(failure.exception))
+        self.assertIn("Compatibility reservation survived", str(failure.exception))
 
     def test_stop_during_silent_or_partial_startup_is_prompt_and_clean(self):
         with tempfile.TemporaryDirectory(prefix="pp-startup-stop-test-") as temporary:
@@ -359,9 +363,11 @@ from pathlib import Path
 data = Path(sys.argv[sys.argv.index('--data') + 1])
 runtime = data / 'runtime'
 runtime.mkdir(parents=True)
-(data / '.desktop.lock').touch()
-marker = data / '.desktop-owner.json'
-marker.write_text(json.dumps({{'runtime_dir': str(runtime)}}))
+(data / 'printpartner.lock').touch()
+marker = data / '.desktop-lease'
+marker.touch()
+Path(sys.argv[sys.argv.index("--test-credential-file") + 1]).write_text(json.dumps({{"runtime_dir": str(runtime)}}))
+Path(sys.argv[sys.argv.index("--test-credential-file") + 1]).chmod(0o600)
 def stop(*_):
     if {exit_status} == 0:
         marker.unlink()
@@ -431,11 +437,12 @@ from pathlib import Path
 data = Path(sys.argv[sys.argv.index('--data') + 1])
 runtime = data / 'runtime'
 runtime.mkdir(parents=True)
-(data / '.desktop.lock').touch()
-marker = data / '.desktop-owner.json'
-marker.write_text(json.dumps({'runtime_dir': str(runtime)}))
+(data / 'printpartner.lock').touch()
+marker = data / '.desktop-lease'
+marker.touch()
 if '--test-credential-file' in sys.argv:
-    Path(sys.argv[sys.argv.index('--test-credential-file') + 1]).write_text('{}')
+    Path(sys.argv[sys.argv.index('--test-credential-file') + 1]).write_text(json.dumps({"runtime_dir": str(runtime)}))
+    Path(sys.argv[sys.argv.index('--test-credential-file') + 1]).chmod(0o600)
 def stop(*_):
     marker.unlink()
     runtime.rmdir()
@@ -537,11 +544,11 @@ class VerifyServerStopTest(unittest.TestCase):
         process = SimpleNamespace(pid=123, stdout=io.StringIO())
         def origin(_process, errors):
             fixture = Path(errors.name).parent
-            marker = fixture / "data/.desktop-owner.json"
+            marker = fixture / "data/.desktop-lease"
             marker.parent.mkdir()
-            marker.write_text(json.dumps({"runtime_dir": str(fixture / "runtime")}))
+            marker.touch()
             credential = fixture / "credentials.json"
-            credential.write_text(json.dumps({"bootstrap_url": "http://127.0.0.1:12345/__desktop/bootstrap?token"}))
+            credential.write_text(json.dumps({"bootstrap_url": "http://127.0.0.1:12345/__desktop/bootstrap?token", "runtime_dir": str(fixture / "runtime")}))
             credential.chmod(0o600)
             return "http://127.0.0.1:12345"
         responses = []
@@ -671,10 +678,11 @@ class ServerExitTest(unittest.TestCase):
             credentials = Path(temporary) / "credential.json"
             def origin(_process, errors):
                 fixture = Path(errors.name).parent
-                marker = fixture / "data/.desktop-owner.json"
+                marker = fixture / "data/.desktop-lease"
                 marker.parent.mkdir()
-                marker.write_text(json.dumps({"runtime_dir": temporary}))
-                (fixture / "bootstrap.json").write_text('{}')
+                marker.touch()
+                (fixture / "bootstrap.json").write_text(json.dumps({"runtime_dir": temporary}))
+                (fixture / "bootstrap.json").chmod(0o600)
                 return "http://127.0.0.1:12345"
             with mock.patch.object(verify, "start_server", return_value=process), \
                     mock.patch.object(verify, "read_origin", side_effect=origin), \
@@ -694,9 +702,11 @@ class ServerExitTest(unittest.TestCase):
         runtime = Path("/tmp/pp-test-runtime")
 
         def origin(_process, errors):
-            marker = Path(errors.name).parent / "data/.desktop-owner.json"
+            marker = Path(errors.name).parent / "data/.desktop-lease"
             marker.parent.mkdir()
-            marker.write_text(json.dumps({"runtime_dir": str(runtime)}))
+            marker.touch()
+            (marker.parent.parent / "bootstrap.json").write_text(json.dumps({"runtime_dir": str(runtime)}))
+            (marker.parent.parent / "bootstrap.json").chmod(0o600)
             return "http://127.0.0.1:12345"
 
         output = io.StringIO()
@@ -1010,11 +1020,11 @@ verify.main()
                               if line.startswith("PP_SERVER_URL=") for token in line.split())
                 server_pid = int(fields["PP_SERVER_PID"])
                 data = Path(data_path.read_text())
-                marker = data / ".desktop-owner.json"
-                original = marker.read_bytes()
-                owner = json.loads(original)
-                self.assertEqual(owner["pid"], server_pid)
-                node_pid = owner["child_pid"]
+                self.assertEqual(data.parent.stat().st_mode & 0o777, 0o700)
+                self.assertEqual((data.parent / "bootstrap.json").stat().st_mode & 0o777, 0o600)
+                node_pid = json.loads((data.parent / "bootstrap.json").read_text())["child_pid"]
+                parent_pid = int(subprocess.check_output(["ps", "-o", "ppid=", "-p", str(node_pid)], text=True))
+                self.assertEqual(parent_pid, server_pid)
                 self.assertTrue(process_alive(node_pid), "Node must be running before SIGKILL")
                 launcher.kill()
                 self.assertEqual(launcher.wait(timeout=5), -signal.SIGKILL)
@@ -1028,12 +1038,16 @@ verify.main()
                     if pid is not None and process_alive(pid):
                         with contextlib.suppress(ProcessLookupError):
                             os.kill(pid, signal.SIGKILL)
+                if data_path.exists():
+                    (Path(data_path.read_text()).parent / "bootstrap.json").unlink(missing_ok=True)
 
     def test_sigkill_while_serving_leaves_no_server_or_node_children(self):
         node = shlex.quote(shutil.which('node'))
         server = (f'{node} -e "setInterval(() => {{}}, 1000)" &\necho $! > "$PP_TEST_PIDFILE.tmp"\nmv "$PP_TEST_PIDFILE.tmp" "$PP_TEST_PIDFILE"\n'
                   'mkdir -p "$2"\n'
-                  'printf "{\\"runtime_dir\\": \\"%s\\"}" "$PP_TEST_RUNTIME" > "$2/.desktop-owner.json"\n'
+                  'touch "$2/.desktop-lease"\n'
+                  'umask 077\n'
+                  'printf "{\\"runtime_dir\\": \\"%s\\"}" "$PP_TEST_RUNTIME" > "${10}"\n'
                   'echo "http://127.0.0.1:49152"\nwait\n')
         self.assert_sigkill_leaves_no_children(npm_body="exit 0\n", server_body=server, wait_for="PP_SERVER_URL=")
 

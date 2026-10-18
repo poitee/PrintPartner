@@ -35,7 +35,7 @@ export const PARTS_MANIFEST_HEADERS = [
   "notes",
 ] as const;
 
-export type PartsManifestColumn = (typeof PARTS_MANIFEST_HEADERS)[number];
+type PartsManifestColumn = (typeof PARTS_MANIFEST_HEADERS)[number];
 
 export type PartsManifestRow = Record<PartsManifestColumn, string>;
 

@@ -1,0 +1,631 @@
+#![cfg(feature = "desktop_rebuild")]
+//! Upload journal admission and its startup checks. The file count, size and path
+//! cases compare with Node's `writeUploadedFiles` (`fixtures/parity/uploads`).
+//! Node has no journal, quota or idempotency, so those cases and the codec
+//! fixture port the reference `source_import_codec.rs`.
+use pp_storage::{
+    Limits, WriterOwner,
+    auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
+    catalog::CreateSource,
+    jobs::{Credential, Payload},
+    uploads::{Admission, Basis, File, ImportClient, Input, Operation, State, Target},
+};
+use rusqlite::Connection;
+use serde::Serialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
+
+const RESERVED: u64 = 3_506_438_144;
+const MAX_INPUT: u64 = 268_435_456;
+const MAX_PREPARED: u64 = 1_073_741_824;
+const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
+fn policy() -> AuthPolicy {
+    AuthPolicy {
+        registration: RegistrationPolicy::Open,
+        session_tenant: SessionTenantPolicy::AccountTenant,
+        first_user: FirstUserTenant::NewUser,
+    }
+}
+
+struct Fixture {
+    root: PathBuf,
+    owner: WriterOwner,
+    client: ImportClient,
+}
+
+impl Fixture {
+    fn open() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "pp-upload-journal-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        Self {
+            root,
+            owner,
+            client,
+        }
+    }
+
+    fn physical(&self) -> Credential {
+        Credential::PhysicalOwner(self.owner.job_physical_owner())
+    }
+
+    fn admit(&self, request: Admission, files: Vec<File>, disk: u64) -> anyhow::Result<Operation> {
+        let epoch = self.client.accounting_epoch();
+        let cancelled = AtomicBool::new(false);
+        self.client
+            .admit(self.physical(), request, files, disk, epoch, &cancelled)
+    }
+
+    fn connection(&self) -> Connection {
+        Connection::open(self.root.join("print-partner.db")).unwrap()
+    }
+
+    fn rows(&self) -> Vec<i64> {
+        let tables = [
+            "projects",
+            "source_import_operations",
+            "source_import_quota",
+            "durable_jobs",
+        ];
+        let connection = self.connection();
+        let count = |table| format!("SELECT count(*) FROM {table}");
+        tables
+            .map(|table| {
+                connection
+                    .query_row(&count(table), [], |row| row.get(0))
+                    .unwrap()
+            })
+            .to_vec()
+    }
+
+    /// Returns the refusal and checks that it wrote nothing.
+    fn refused(&self, request: Admission, files: Vec<File>, disk: u64) -> String {
+        let before = self.rows();
+        let error = self.admit(request, files, disk).unwrap_err().to_string();
+        assert_eq!(self.rows(), before, "{error}");
+        error
+    }
+}
+
+fn create(name: &str) -> Target {
+    let source = CreateSource {
+        name: name.into(),
+        source_kind: Some("local".into()),
+        source_type: Some("local".into()),
+        ..Default::default()
+    };
+    Target::Create {
+        metadata: Box::new(source),
+    }
+}
+
+fn file(path: &str, size: u64) -> File {
+    File {
+        path: path.into(),
+        size,
+        sha256: "b".repeat(64),
+        kind: "input".into(),
+    }
+}
+
+fn admission(key: &str, target: Target, files: &[File]) -> Admission {
+    let paths = files.iter().map(|file| file.path.clone()).collect();
+    Admission {
+        key: key.into(),
+        target,
+        input: Input::Files { paths },
+        reserved_bytes: RESERVED,
+        max_input_bytes: MAX_INPUT,
+        max_prepared_bytes: MAX_PREPARED,
+    }
+}
+
+/// A request that creates a Source named after its key, for one 3-byte file.
+fn upload(key: &str) -> (Admission, Vec<File>) {
+    let files = vec![file("part.stl", 3)];
+    (admission(key, create(key), &files), files)
+}
+
+fn hash(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn session(owner: &WriterOwner) -> Credential {
+    let request = auth::Request::Register {
+        email: "other@example.test".into(),
+        display_name: "Other".into(),
+        password: Secret::new("long-test-password".into()),
+    };
+    let reply = owner
+        .auth_with_policy(policy())
+        .unwrap()
+        .submit(
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let Ok(auth::Outcome::Session { token, .. }) = reply.recv().unwrap() else {
+        panic!("session expected")
+    };
+    Credential::Session(Secret::new(token.expose().into()))
+}
+
+#[test]
+fn admission_creates_the_source_journal_and_internal_job_once() {
+    let fixture = Fixture::open();
+    let before = fixture.rows();
+    let (request, files) = upload("first");
+    assert_eq!(fixture.client.accounting_epoch(), 0);
+    let operation = fixture.admit(request, files.clone(), 0).unwrap();
+    assert_eq!(fixture.client.accounting_epoch(), 1);
+    let revision = operation.authority_revision.as_ref().unwrap();
+    let digest = hash(&serde_json::to_vec(&files).unwrap());
+    assert_eq!(
+        (
+            &operation.state,
+            operation.observation_cursor,
+            &revision.input_digest
+        ),
+        (&State::Admitted, Some(0), &digest)
+    );
+    let after = fixture.rows();
+    assert_eq!(after, [before[0] + 1, 1, 1, before[3] + 1]);
+    let stored: String = fixture
+        .connection()
+        .query_row(
+            "SELECT j.kind||' '||j.state||' '||q.reserved_bytes||' '||q.retained_bytes||' '||q.settled FROM durable_jobs j, source_import_quota q WHERE j.id=?1",
+            [&operation.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        stored,
+        format!("supplied-source-import queued {RESERVED} 0 0")
+    );
+
+    let get = |credential, key: &str| fixture.client.get(credential, key.into());
+    assert_eq!(get(fixture.physical(), "first").unwrap(), operation);
+    assert_eq!(fixture.client.accounting_epoch(), 1);
+    assert_eq!(
+        fixture.admit(upload("first").0, files.clone(), 0).unwrap(),
+        operation
+    );
+    let renamed = admission("first", create("Renamed"), &files);
+    assert_eq!(
+        fixture.refused(renamed, files, 0),
+        "Import idempotency conflict"
+    );
+    assert_eq!(fixture.rows(), after);
+    for (credential, key) in [
+        (fixture.physical(), "missing"),
+        (session(&fixture.owner), "first"),
+    ] {
+        assert_eq!(
+            get(credential, key).unwrap_err().to_string(),
+            "Import not found"
+        );
+    }
+    let (request, files) = upload("stale");
+    let cancelled = AtomicBool::new(false);
+    let stale = fixture
+        .client
+        .admit(fixture.physical(), request, files, 0, 0, &cancelled)
+        .unwrap_err();
+    assert_eq!(
+        stale.to_string(),
+        "Import accounting changed; retry admission"
+    );
+}
+
+#[test]
+fn admission_refuses_quota_and_limits_without_writing() {
+    let fixture = Fixture::open();
+    let limited = |reserved, max_input, max_prepared| {
+        let (request, files) = upload("quota");
+        let request = Admission {
+            reserved_bytes: reserved,
+            max_input_bytes: max_input,
+            max_prepared_bytes: max_prepared,
+            ..request
+        };
+        (request, files)
+    };
+    for ((request, files), disk, message) in [
+        (
+            limited(RESERVED - 1, MAX_INPUT, MAX_PREPARED),
+            0,
+            "Import quota exceeded",
+        ),
+        (
+            limited(QUOTA + 1, MAX_INPUT, MAX_PREPARED),
+            0,
+            "Import quota exceeded",
+        ),
+        (
+            limited(RESERVED, MAX_INPUT + 1, MAX_PREPARED),
+            0,
+            "Invalid import limits",
+        ),
+        (limited(RESERVED, MAX_INPUT, 0), 0, "Invalid import limits"),
+        (limited(RESERVED, 2, MAX_PREPARED), 0, "Input limit"),
+        (
+            upload("quota"),
+            QUOTA - RESERVED + 1,
+            "Owner import quota exceeded",
+        ),
+    ] {
+        assert_eq!(fixture.refused(request, files, disk), message);
+    }
+
+    let (request, files) = upload("first");
+    fixture.admit(request, files, 0).unwrap();
+    let (request, files) = upload("second");
+    let pending = fixture.refused(request, files, QUOTA - 2 * RESERVED + 1);
+    assert_eq!(pending, "Owner import quota exceeded");
+    let (request, files) = upload("second");
+    fixture.admit(request, files, QUOTA - 2 * RESERVED).unwrap();
+}
+
+#[test]
+fn admission_refuses_unbound_inputs_and_targets_without_writing() {
+    let fixture = Fixture::open();
+    let (request, files) = upload("existing");
+    let created = fixture.admit(request, files.clone(), 0).unwrap();
+    let with = |change: fn(&mut File)| {
+        let mut changed = file("part.stl", 3);
+        change(&mut changed);
+        vec![changed]
+    };
+    let zip = || Input::Zip {
+        path: "upload.zip".into(),
+    };
+    let missing = Target::Existing { source_id: 999 };
+    for (request, files, message) in [
+        (upload("").0, files.clone(), "Invalid operation key"),
+        (
+            upload(&"k".repeat(129)).0,
+            files.clone(),
+            "Invalid operation key",
+        ),
+        (upload("key\n").0, files.clone(), "Invalid operation key"),
+        (
+            upload("digest").0,
+            with(|file| file.sha256 = "B".repeat(64)),
+            "Invalid digest",
+        ),
+        (
+            upload("typed").0,
+            with(|file| file.kind = "stl".into()),
+            "Input binding mismatch",
+        ),
+        (
+            upload("paths").0,
+            with(|file| file.path = "other.stl".into()),
+            "Input binding mismatch",
+        ),
+        (
+            Admission {
+                input: zip(),
+                ..upload("zip").0
+            },
+            files.clone(),
+            "Input binding mismatch",
+        ),
+        (
+            admission("missing", missing, &files),
+            files.clone(),
+            "Source not found",
+        ),
+        (
+            admission("named", create("existing"), &files),
+            files.clone(),
+            "Source already exists: existing",
+        ),
+    ] {
+        assert_eq!(fixture.refused(request, files, 0), message);
+    }
+
+    let target = Target::Existing {
+        source_id: created.source_id,
+    };
+    let zipped = vec![file("upload.zip", 3)];
+    let request = Admission {
+        input: zip(),
+        ..admission("zip", target, &zipped)
+    };
+    let existing = fixture.admit(request, zipped, 0).unwrap();
+    assert_eq!(
+        (existing.source_id, existing.input),
+        (created.source_id, zip())
+    );
+}
+
+#[test]
+fn node_upload_limits_match_the_journal_boundaries() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/parity/uploads/uploads.json"
+    ))
+    .unwrap();
+    let limits = json!({"max_source_upload_bytes": MAX_INPUT, "max_source_upload_files": 10000});
+    assert_eq!(fixture["limits"], limits);
+    let journal = Fixture::open();
+    // Where Node writes files, the journal admits the same canonical paths.
+    let refused = [
+        ("empty", "At least one file is required", "Invalid files"),
+        (
+            "too_many",
+            "Archive has too many entries (10001, max 10000)",
+            "Invalid files",
+        ),
+        (
+            "over_limit",
+            "Uploaded source exceeds the 256 MiB upload limit",
+            "Input limit",
+        ),
+        (
+            "parent",
+            "File path escapes extraction directory: ../part.stl",
+            "Invalid relative path",
+        ),
+        (
+            "duplicate",
+            "Duplicate uploaded file path: part.stl",
+            "Duplicate file",
+        ),
+        (
+            "case_duplicate",
+            "Duplicate uploaded file path: part.stl",
+            "Duplicate file",
+        ),
+        (
+            "canonical_duplicate",
+            "Duplicate uploaded file path: parts/a.stl",
+            "Duplicate file",
+        ),
+        (
+            "canonical_case_duplicate",
+            "Duplicate uploaded file path: \\Parts\\A.stl",
+            "Duplicate file",
+        ),
+    ];
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 13);
+    for case in cases {
+        let id = case["id"].as_str().unwrap();
+        let node = match &case["result"]["error"] {
+            Value::String(error) => Err(error.as_str()),
+            _ => {
+                Ok(serde_json::from_value::<Vec<String>>(case["result"]["paths"].clone()).unwrap())
+            }
+        };
+        let files: Vec<File> = match &case["files"] {
+            Value::Array(files) => files
+                .iter()
+                .map(|entry| {
+                    file(
+                        entry["path"].as_str().unwrap(),
+                        entry["size"].as_u64().unwrap(),
+                    )
+                })
+                .collect(),
+            counted => (0..counted["count"].as_u64().unwrap())
+                .map(|index| file(&format!("part-{index}.stl"), 1))
+                .collect(),
+        };
+        // The smallest reservation lets every admitted case fit one quota.
+        let request = Admission {
+            max_prepared_bytes: 1,
+            reserved_bytes: MAX_INPUT + 3 + 16 * 1024 * 1024,
+            ..admission(id, create(id), &files)
+        };
+        let result = journal.admit(request, files, 0);
+        match (node, result) {
+            (Ok(written), Ok(operation)) => {
+                let Input::Files { paths } = &operation.input else {
+                    panic!("{id}: files expected")
+                };
+                let mut admitted: Vec<String> = operation
+                    .requested_files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect();
+                assert_eq!(paths, &admitted, "{id}");
+                admitted.sort();
+                assert_eq!(admitted, written, "{id}");
+            }
+            (Err(node), Err(error)) => {
+                let journal = error.to_string();
+                assert!(
+                    refused.contains(&(id, node, &journal)),
+                    "{id}: {node} / {journal}"
+                );
+            }
+            (node, result) => panic!("{id}: Node {node:?}, journal {:?}", result.map(drop)),
+        }
+    }
+}
+
+#[test]
+fn admission_hashes_the_canonical_paths() {
+    let journal = Fixture::open();
+    let supplied = vec![file("\\Parts\\a.stl", 3)];
+    let request = admission("canonical", create("canonical"), &supplied);
+    let first = journal.admit(request, supplied, 0).unwrap();
+    let canonical = vec![file("Parts/a.stl", 3)];
+    let digest = hash(&serde_json::to_vec(&canonical).unwrap());
+    assert_eq!(first.requested_digest, digest);
+    let request = admission("canonical", create("canonical"), &canonical);
+    assert_eq!(journal.admit(request, canonical, 0).unwrap(), first);
+}
+
+#[test]
+fn imports_requires_one_valid_owner_quota() {
+    let root = std::env::temp_dir().join(format!(
+        "pp-upload-quota-{}",
+        hex::encode(rand::random::<[u8; 8]>())
+    ));
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let refusal = |quota| owner.imports(policy(), quota).err().unwrap().to_string();
+    assert_eq!(refusal(0), "Invalid desktop quota");
+    assert_eq!(
+        refusal(64 * 1024 * 1024 * 1024 + 1),
+        "Invalid desktop quota"
+    );
+    owner.imports(policy(), QUOTA).unwrap();
+    owner.imports(policy(), QUOTA).unwrap();
+    assert_eq!(refusal(QUOTA + 1), "Import quota already configured");
+}
+
+#[test]
+fn startup_checks_journal_documents_against_their_jobs() {
+    for (mutation, message) in [
+        (
+            "UPDATE source_import_operations SET document=json_set(document,'$.input_version',2)",
+            "Invalid import input version",
+        ),
+        (
+            "UPDATE durable_jobs SET document=json_set(document,'$.payload.payload.input_version',2)",
+            "Import job binding mismatch",
+        ),
+        (
+            "UPDATE durable_jobs SET document=json_set(document,'$.payload.payload.operation_key','other')",
+            "Import job binding mismatch",
+        ),
+        (
+            "UPDATE source_import_operations SET state='failed'",
+            "Corrupt Source import journal",
+        ),
+        (
+            "UPDATE source_import_quota SET reserved_bytes=1",
+            "Corrupt Source quota journal",
+        ),
+        (
+            "UPDATE source_import_quota SET settled=1",
+            "Corrupt Source quota journal",
+        ),
+    ] {
+        let journal = Fixture::open();
+        let (request, files) = upload("startup");
+        journal.admit(request, files, 0).unwrap();
+        let Fixture {
+            root,
+            owner,
+            client,
+        } = journal;
+        drop(client);
+        owner.shutdown().unwrap();
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        owner.shutdown().unwrap();
+        let database = Connection::open(root.join("print-partner.db")).unwrap();
+        database.execute_batch(mutation).unwrap();
+        let error = WriterOwner::open(&root, Limits::default()).err().unwrap();
+        assert!(
+            format!("{error:#}").contains(message),
+            "{mutation}: {error:#}"
+        );
+    }
+}
+
+fn encoded<T: Serialize>(value: &T) -> Value {
+    let bytes = serde_json::to_vec(value).unwrap();
+    json!({"utf8": String::from_utf8(bytes.clone()).unwrap(), "sha256": hash(&bytes)})
+}
+
+fn legacy_case(key: &str, input: Input, path: &str, byte: char) -> Value {
+    let files = vec![File {
+        sha256: byte.to_string().repeat(64),
+        ..file(path, 3)
+    }];
+    let admission = Admission {
+        input: input.clone(),
+        ..admission(key, Target::Existing { source_id: 42 }, &files)
+    };
+    let requested = serde_json::to_vec(&files).unwrap();
+    let intent = serde_json::to_vec(&(&admission, &files)).unwrap();
+    let basis = Basis {
+        current_source_revision_id: None,
+        url: String::new(),
+        branch: "main".into(),
+        tag: None,
+        source_kind: "local".into(),
+        source_type: "local".into(),
+        local_path: None,
+        last_commit_sha: None,
+        legacy_manifest_cutover: false,
+    };
+    let operation = Operation {
+        tenant: "default".into(),
+        actor: "physical-owner".into(),
+        key: key.into(),
+        intent_digest: hash(&intent),
+        source_id: 42,
+        job_id: "c".repeat(64),
+        input_version: 1,
+        input: input.clone(),
+        requested_files: files,
+        requested_digest: hash(&requested),
+        state: State::Admitted,
+        basis,
+        default_rules: true,
+        original_rules: None,
+        reserved_bytes: RESERVED,
+        max_input_bytes: MAX_INPUT,
+        max_prepared_bytes: MAX_PREPARED,
+        owned: None,
+        artifact: None,
+        receipt: None,
+        cleanup_settled: false,
+        authority_revision: None,
+        observation_cursor: None,
+    };
+    let payload = Payload::SuppliedSourceImport {
+        project_id: 42,
+        operation_key: key.into(),
+        input_version: 1,
+    };
+    json!({
+        "input": encoded(&input),
+        "admission": encoded(&admission),
+        "operation": encoded(&operation),
+        "supplied_job_payload": encoded(&payload),
+        "requested": {"utf8": String::from_utf8(requested.clone()).unwrap(), "sha256": hash(&requested)},
+        "intent": {"utf8": String::from_utf8(intent.clone()).unwrap(), "sha256": hash(&intent)},
+        "job_intent": encoded(&(1u32, &payload)),
+    })
+}
+
+#[test]
+fn legacy_files_and_zip_match_the_detached_prior_serializer() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/source-import-v1-serde.json")).unwrap();
+    let cases = &fixture["legacy"]["cases"];
+    assert_eq!(
+        fixture["baseline_commit"],
+        "2f24c9b42ba637bb13138837356099b32f5704aa"
+    );
+    let paths = vec!["part.stl".into()];
+    let files = legacy_case("legacy-files-1", Input::Files { paths }, "part.stl", 'b');
+    assert_eq!(cases["files"], files);
+    let path = "upload.zip".to_owned();
+    let zip = legacy_case("legacy-zip-1", Input::Zip { path }, "upload.zip", 'a');
+    assert_eq!(cases["zip"], zip);
+    for field in ["files", "zip"]
+        .iter()
+        .flat_map(|case| cases[case].as_object().unwrap().values())
+    {
+        assert_eq!(
+            hash(field["utf8"].as_str().unwrap().as_bytes()),
+            field["sha256"]
+        );
+    }
+}
