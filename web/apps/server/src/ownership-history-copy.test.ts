@@ -28,6 +28,7 @@ import { digestPlanInputs } from "./services/plan-freshness.js";
 import { executeOwnershipCopy, inspectOwnershipCopy } from "./ownership-migration.js";
 import { ownershipHistoryTables } from "./ownership-history.js";
 import { tenantExportDirectory } from "./lib/secure-path.js";
+import { inspectOwnershipExports } from "./ownership-exports.js";
 import { registerExportRoutes } from "./routes/exports.js";
 import { ACCEPTED_PLATE_EXPORT_LIMITS, materializeAcceptedPlateExport } from "./services/accepted-plate-export-delivery.js";
 
@@ -1172,7 +1173,17 @@ it("copies accepted Plate export trees to each mapped owner and reuses them afte
   }
   expect(existsSync(join(paths.destinationDir, "exports/tenant-default"))).toBe(false);
 });
-it.each(["cross-plan", "manifest-mismatch", "unknown-file"])("refuses %s accepted Plate export trees", async kind => {
+it("admits five-digit accepted Plate ordinals", () => {
+  const root = mkdtempSync(join(tmpdir(), "pp-plate-ordinals-")); roots.push(root);
+  const revision = join(root, "tenant-default/accepted-plates/profile-1/revision-3");
+  mkdirSync(join(revision, "plates"), { recursive: true });
+  writeFileSync(join(revision, "manifest.json"), JSON.stringify({ format: "accepted-plate-3mf-manifest-v1", basis: { profile_id: 1, plate_revision_id: 3 },
+    plates: [{ ordinal: 9999, entry: "plates/9999.3mf" }, { ordinal: 10000, entry: "plates/10000.3mf" }] }));
+  for (const file of ["accepted-plates.zip", "plates/9999.3mf", "plates/10000.3mf"]) writeFileSync(join(revision, file), file);
+  expect(inspectOwnershipExports(root, [{ id: 1, tenantId: "default" }], [{ id: 3, profileId: 1 }]).map(artifact => artifact.path)).toEqual([
+    "accepted-plates.zip", "manifest.json", "plates/10000.3mf", "plates/9999.3mf"].map(file => `tenant-default/accepted-plates/profile-1/revision-3/${file}`));
+});
+it.each(["cross-plan", "manifest-mismatch", "unknown-file", "missing-plate"])("refuses %s accepted Plate export trees", async kind => {
   const paths = plateFixture();
   await materializePlates(paths.sourceDir, "default", 1);
   const input = manifest(paths.sourceDir);
@@ -1180,6 +1191,7 @@ it.each(["cross-plan", "manifest-mismatch", "unknown-file"])("refuses %s accepte
   if (kind === "cross-plan") cpSync(join(plates, "profile-1/revision-3"), join(plates, "profile-2/revision-3"), { recursive: true });
   if (kind === "manifest-mismatch") cpSync(join(plates, "profile-1/revision-3"), join(plates, "profile-1/revision-2"), { recursive: true });
   if (kind === "unknown-file") writeFileSync(join(plates, "profile-1/revision-3/notes.txt"), "unexpected");
+  if (kind === "missing-plate") rmSync(join(plates, "profile-1/revision-3/plates/0001.3mf"));
   expect(() => inspectOwnershipCopy(paths)).toThrow();
   await refused(paths, input);
 });
