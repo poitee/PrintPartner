@@ -1,12 +1,14 @@
 """Run the built desktop backend, not a simulator. Linux headless proof only."""
 
 import argparse
+import ctypes
 from contextlib import contextmanager
 import fcntl
 import hashlib
 import hmac
 import http.client
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import platform
@@ -18,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 ROOT = Path(__file__).resolve().parents[2]
 OBSERVER = Path(__file__).with_name("built_backend_observer.cjs")
@@ -117,6 +120,95 @@ def owned_child(command, lock_fd, output, env):
                                pid_absent=pid_absent(child.pid), group_absent=group_absent(child.pid))
                 write_json(output / "guard-cleanup.json", cleanup)
                 require(cleanup["pid_absent"] and cleanup["group_absent"], "guard left a process behind")
+
+
+def reap_owned_descendants():
+    """Only called inside the dedicated Linux subreaper worker."""
+    killed, reaped = set(), []
+    deadline = time.monotonic() + STOP_SECONDS
+    while True:
+        try:
+            while True:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if not pid:
+                    break
+                reaped.append(pid)
+        except ChildProcessError:
+            return {"killed": sorted(killed), "reaped": reaped, "children_absent": True}
+        # Killing a parent reparents even session-detached, empty-env descendants to this worker.
+        children = Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()
+        for child in children:
+            pid = int(child)
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed.add(pid)
+            except ProcessLookupError:
+                pass
+        require(time.monotonic() < deadline, f"run-owned descendants survived cleanup: {children}")
+        time.sleep(.01)
+
+
+def _subreaper_timeout(signum, frame):
+    raise TimeoutError("isolated proof exceeded its deadline")
+
+
+def _subreaper_worker(connection, parent_connection, function, args, cleanup_path):
+    parent_connection.close()
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        require(libc.prctl(36, 1, 0, 0, 0) == 0,
+                f"PR_SET_CHILD_SUBREAPER failed: errno {ctypes.get_errno()}")
+        signal.signal(signal.SIGTERM, _subreaper_timeout)
+        try:
+            outcome = ("result", function(*args))
+        except BaseException as error:
+            if isinstance(error, AssertionError):
+                # Exception constructors such as ListenerFound take more than their message.
+                outcome = ("assertion", type(error), error.args, error.__dict__)
+            else:
+                outcome = ("error", traceback.format_exc())
+        finally:
+            write_json(cleanup_path, reap_owned_descendants())
+        connection.send(outcome)
+    except BaseException:
+        connection.send(("error", traceback.format_exc()))
+    finally:
+        connection.close()
+
+
+def run_in_subreaper(function, args, cleanup_path, timeout):
+    """Run one Linux proof in its own process so adoption cannot include caller children."""
+    require(sys.platform == "linux", "subreaper containment requires Linux")
+    context = multiprocessing.get_context("fork")
+    receiver, sender = context.Pipe(duplex=False)
+    worker = context.Process(target=_subreaper_worker,
+                             args=(sender, receiver, function, args, cleanup_path))
+    worker.start()
+    sender.close()
+    try:
+        timed_out = not receiver.poll(timeout)
+        if timed_out:
+            worker.terminate()
+            require(receiver.poll(3 * STOP_SECONDS + 1), "subreaper timed out before reporting descendant cleanup")
+        outcome = receiver.recv()
+    finally:
+        receiver.close()
+        worker.join(timeout=STOP_SECONDS)
+        if worker.is_alive():
+            worker.kill()
+            worker.join(timeout=STOP_SECONDS)
+    if timed_out:
+        raise TimeoutError(f"isolated proof exceeded {timeout} seconds; see {cleanup_path}")
+    require(worker.exitcode == 0, f"subreaper worker failed: {worker.exitcode}")
+    if outcome[0] == "result":
+        return outcome[1]
+    if outcome[0] == "assertion":
+        _, kind, arguments, attributes = outcome
+        error = BaseException.__new__(kind)
+        BaseException.__init__(error, *arguments)
+        error.__dict__.update(attributes)
+        raise error
+    raise RuntimeError(outcome[1])
 
 
 def assert_previous(completed):
