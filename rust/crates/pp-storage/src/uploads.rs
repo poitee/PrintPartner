@@ -141,9 +141,8 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
         let failed: bool = connection.query_row(check, [], |row| row.get(0))?;
         ensure!(!failed, "{message}");
     }
-    validate_journal(connection)?;
     if version < SCHEMA_STEPS[1].0 {
-        return Ok(());
+        return validate_journal(connection, false);
     }
     for (check, message) in [
         (
@@ -158,7 +157,7 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
         let failed: bool = connection.query_row(check, [], |row| row.get(0))?;
         ensure!(!failed, "{message}");
     }
-    Ok(())
+    validate_journal(connection, true)
 }
 
 fn column_definition(connection: &Connection, table: &str, column: &str) -> Result<String> {
@@ -196,7 +195,7 @@ fn column_definition(connection: &Connection, table: &str, column: &str) -> Resu
     Err(anyhow!("Missing Source column definition {table}.{column}"))
 }
 
-fn validate_journal(connection: &Connection) -> Result<()> {
+fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
     let documents = connection
         .prepare("SELECT document FROM source_import_operations")?
         .query_map([], |row| row.get::<_, String>(0))?
@@ -226,10 +225,65 @@ fn validate_journal(connection: &Connection) -> Result<()> {
             "Import job binding mismatch"
         );
         ensure!(
-            !op.cleanup_settled || job.is_some_and(|job| job.state.terminal()),
+            !op.cleanup_settled || job.as_ref().is_some_and(|job| job.state.terminal()),
             "Import completion job mismatch"
         );
+        if preclaim && let Some(job) = job {
+            validate_preclaim_refusal(connection, &op, &job)?;
+        }
     }
+    Ok(())
+}
+
+/// A preclaim refusal is the entry's only observation: its admitted entry's
+/// first cursor, and the targeted claim refusal that failed its job before any
+/// attempt. A settled entry keeps the refusal as its last observation.
+fn validate_preclaim_refusal(
+    connection: &Connection,
+    op: &Operation,
+    job: &jobs::JobRecord,
+) -> Result<()> {
+    let Some((cursor, job_id, cancel)) = connection
+        .query_row(
+            "SELECT cursor,job_id,cancel_requested FROM source_preclaim_refusals WHERE tenant_id=?1 AND operation_key=?2",
+            params![op.tenant, op.key],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, bool>(2)?)),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    let (observations, attempts): (i64, i64) = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM source_revision_observations WHERE tenant_id=?1 AND operation_key=?2),(SELECT COUNT(*) FROM source_revision_attempts WHERE tenant_id=?1 AND operation_key=?2)",
+        params![op.tenant, op.key],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let refusal = job.authority_refusal.as_ref();
+    ensure!(
+        cursor == 1
+            && job_id == op.job_id
+            && op.authority_revision.is_some()
+            && match (&op.state, op.cleanup_settled) {
+                (State::Admitted, false) => true,
+                (State::Failed, true) => !cancel,
+                (State::Cancelled, true) => cancel,
+                _ => false,
+            }
+            && op.observation_cursor == Some(cursor)
+            && observations == 0
+            && attempts == 0
+            && job.state == jobs::PersistentState::Failed
+            && job.attempt == 0
+            && job.generation == 1
+            && job.fence.is_none()
+            && job.worker.is_none()
+            && job.cancel_requested == cancel
+            && refusal.is_some_and(|refusal| {
+                refusal.phase == jobs::AuthorityRefusalPhase::TargetedClaim
+                    && refusal.generation == 0
+            }),
+        "Invalid Source preclaim refusal binding"
+    );
     Ok(())
 }
 
@@ -393,6 +447,61 @@ pub struct Operation {
     pub observation_cursor: Option<i64>,
 }
 
+/// A step of a claimed import attempt. Every step but `Read` records a Source
+/// observation.
+#[derive(Clone, Debug)]
+pub enum Phase {
+    Read,
+    Owned(OwnedInput),
+    Published(Artifact),
+    Activate,
+    Cleanup,
+    Fail,
+}
+
+impl Phase {
+    fn observation(&self) -> Option<&'static str> {
+        match self {
+            Self::Read => None,
+            Self::Owned(_) => Some("owned"),
+            Self::Published(_) => Some("published"),
+            Self::Activate => Some("activated"),
+            Self::Cleanup => Some("cleanup"),
+            Self::Fail => Some("failed"),
+        }
+    }
+}
+
+/// The attempt context a Source observation records.
+enum Observed {
+    /// A targeted claim refused before the job's first attempt.
+    Preclaim { job_id: String, cancel: bool },
+    /// A live attempt, or a targeted claim refused after an earlier attempt,
+    /// which holds no fence.
+    Attempt {
+        job_id: String,
+        generation: i64,
+        fence: Option<String>,
+        receipt: Option<(i64, bool)>,
+        cancel: bool,
+    },
+}
+
+impl Observed {
+    fn fenced(job: &jobs::JobRecord, lease: &jobs::AttemptLease, op: &Operation) -> Self {
+        Self::Attempt {
+            job_id: job.job_id.clone(),
+            generation: lease.generation(),
+            fence: Some(lease.fence().to_owned()),
+            receipt: op
+                .receipt
+                .as_ref()
+                .map(|receipt| (receipt.revision_id, receipt.activated)),
+            cancel: job.cancel_requested,
+        }
+    }
+}
+
 pub(crate) enum Command {
     Admit(Admit),
     Get {
@@ -400,6 +509,12 @@ pub(crate) enum Command {
         policy: AuthPolicy,
         storage: Arc<crate::Shared>,
         key: String,
+    },
+    Phase {
+        lease: jobs::AttemptLease,
+        source_work: catalog::SourceWorkProof,
+        phase: Phase,
+        policy: AuthPolicy,
     },
 }
 
@@ -416,7 +531,14 @@ pub(crate) struct Admit {
 
 impl Command {
     pub(crate) fn changes_accounting(&self) -> bool {
-        !matches!(self, Self::Get { .. })
+        !matches!(
+            self,
+            Self::Get { .. }
+                | Self::Phase {
+                    phase: Phase::Read,
+                    ..
+                }
+        )
     }
 }
 
@@ -501,7 +623,11 @@ impl ImportClient {
     }
 }
 
-fn submit(storage: &SettingsClient, command: Command, cancelled: &AtomicBool) -> Result<Operation> {
+pub(crate) fn submit(
+    storage: &SettingsClient,
+    command: Command,
+    cancelled: &AtomicBool,
+) -> Result<Operation> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut queue = storage
         .shared
@@ -555,9 +681,521 @@ pub(crate) fn execute(
             op
         }
         Command::Admit(command) => admit(&tx, catalog_state, command)?,
+        Command::Phase {
+            lease,
+            source_work,
+            phase,
+            policy,
+        } => {
+            let mut job = jobs::claimed_job(&tx, &lease)?;
+            let mut op = bound(&tx, &job)?.ok_or_else(|| anyhow!("Missing import operation"))?;
+            crate::source_scan::require_live_reservation(
+                catalog_state,
+                &source_work,
+                &catalog::SourceBinding {
+                    tenant: job.tenant.clone(),
+                    id: op.source_id,
+                },
+            )?;
+            if let Err(error) = jobs::revalidate_source_authority(&tx, &job, policy) {
+                let observed = Observed::fenced(&job, &lease, &op);
+                if jobs::commit_source_authority_refusal(&tx, &mut job, &error)? {
+                    record_observation(&tx, &mut op, "authority_refused", observed)?;
+                    store(&tx, &op)?;
+                    tx.commit()?;
+                }
+                return Err(error);
+            }
+            advance(&tx, catalog_state, &lease, job, op, phase)?
+        }
     };
     tx.commit()?;
     Ok(operation)
+}
+
+/// Loads the journal entry of a supplied import job and checks its binding.
+fn bound(tx: &Transaction<'_>, job: &jobs::JobRecord) -> Result<Option<Operation>> {
+    let jobs::Payload::SuppliedSourceImport {
+        project_id,
+        operation_key,
+        input_version,
+    } = &job.payload
+    else {
+        return Err(anyhow!("Not a supplied Source import"));
+    };
+    let Some(op) = load(tx, &job.tenant, operation_key)? else {
+        return Ok(None);
+    };
+    ensure!(
+        op.job_id == job.job_id
+            && op.source_id == i64::try_from(*project_id)?
+            && op.input_version == *input_version,
+        "Import job binding mismatch"
+    );
+    Ok(Some(op))
+}
+
+fn advance(
+    tx: &Transaction<'_>,
+    catalog_state: &catalog::State,
+    lease: &jobs::AttemptLease,
+    mut job: jobs::JobRecord,
+    mut op: Operation,
+    phase: Phase,
+) -> Result<Operation> {
+    ensure!(
+        !job.cancel_requested || matches!(phase, Phase::Read | Phase::Fail | Phase::Cleanup),
+        "Import cancelled"
+    );
+    let observation = phase.observation();
+    match phase {
+        Phase::Read => {}
+        Phase::Owned(owned) => {
+            ensure!(op.state == State::Admitted, "Input already captured");
+            op.owned = Some(owned);
+            op.state = State::OwnedInputReady;
+        }
+        Phase::Published(artifact) => {
+            ensure!(op.state == State::OwnedInputReady, "Input not ready");
+            op.artifact = Some(artifact);
+            op.state = State::Published;
+        }
+        Phase::Activate => {
+            ensure!(op.state == State::Published, "Artifact not published");
+            activate(tx, catalog_state, &mut op, lease)?;
+        }
+        Phase::Fail => {
+            ensure!(op.receipt.is_none(), "Import already completed");
+            op.state = if job.cancel_requested {
+                State::Cancelled
+            } else {
+                State::Failed
+            };
+        }
+        Phase::Cleanup => {
+            job.state = match op.state {
+                State::Activated => jobs::PersistentState::Succeeded,
+                State::Cancelled => jobs::PersistentState::Cancelled,
+                State::Conflict | State::Failed => jobs::PersistentState::Failed,
+                State::Admitted | State::OwnedInputReady | State::Published => {
+                    return Err(anyhow!("Import is not settled"));
+                }
+            };
+            settle(tx, &mut op)?;
+            jobs::save(tx, &mut job, "source_import_settled")?;
+        }
+    }
+    if let Some(name) = observation {
+        let observed = Observed::fenced(&job, lease, &op);
+        record_observation(tx, &mut op, name, observed)?;
+    }
+    store(tx, &op)?;
+    Ok(op)
+}
+
+/// Releases the import's reservation and keeps the bytes of its published
+/// artifact.
+fn settle(tx: &Transaction<'_>, op: &mut Operation) -> Result<()> {
+    op.cleanup_settled = true;
+    let retained = op
+        .artifact
+        .as_ref()
+        .map_or(0, |artifact| artifact.stored_bytes);
+    tx.execute(
+        "UPDATE source_import_quota SET reserved_bytes=0,retained_bytes=?3,settled=1 WHERE tenant=?1 AND operation_key=?2",
+        params![op.tenant, op.key, i64::try_from(retained)?],
+    )?;
+    Ok(())
+}
+
+/// Settles the journal of a supplied import whose job ended before its
+/// `Cleanup` phase, as a refused authority, a missing Source or the attempt
+/// limit leaves it. An unfinished import becomes failed, or cancelled if its
+/// owner asked, and releases its reservation. Nothing else runs: the job, the
+/// Source and its observations stay as they are. Returns false for a job that
+/// is not terminal, holds a fence, or whose import is already settled.
+pub(crate) fn settle_terminal(tx: &Transaction<'_>, job: &jobs::JobRecord) -> Result<bool> {
+    if job.kind != jobs::JobKind::SuppliedSourceImport
+        || !job.state.terminal()
+        || job.fence.is_some()
+        || job.worker.is_some()
+    {
+        return Ok(false);
+    }
+    let Some(mut op) = bound(tx, job)? else {
+        return Ok(false);
+    };
+    if op.cleanup_settled {
+        return Ok(false);
+    }
+    if matches!(
+        op.state,
+        State::Admitted | State::OwnedInputReady | State::Published
+    ) {
+        op.state = if job.cancel_requested {
+            State::Cancelled
+        } else {
+            State::Failed
+        };
+    }
+    settle(tx, &mut op)?;
+    store(tx, &op)?;
+    Ok(true)
+}
+
+/// Settles every unsettled import whose job, live or archived, has ended. The
+/// storage owner runs this at startup, after every attempt is recovered. A
+/// queued import whose Source is gone, which deletion allowed before it waited
+/// for imports, fails as its claim would and then settles.
+pub(crate) fn settle_ended(tx: &Transaction<'_>) -> Result<()> {
+    let rows = tx
+        .prepare("SELECT coalesce((SELECT document FROM durable_jobs WHERE id=o.job_id),(SELECT archived_document FROM durable_job_keys WHERE job_id=o.job_id)),EXISTS(SELECT 1 FROM projects WHERE tenant_id=o.tenant AND id=o.source_id) FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE q.settled=0")?
+        .query_map([], |row| {
+            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, bool>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (document, source) in rows {
+        let Some(document) = document else {
+            continue;
+        };
+        let mut job = jobs::decode(&document)?;
+        if !source && job.state == jobs::PersistentState::Queued {
+            jobs::fail_source_unavailable(tx, &mut job)?;
+        }
+        ensure!(
+            settle_terminal(tx, &job)? || source,
+            "Unsettled import Source missing"
+        );
+    }
+    Ok(())
+}
+
+/// True while an import of the Source holds an unsettled reservation.
+pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<bool> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE o.tenant=?1 AND o.source_id=?2 AND q.settled=0)",
+        params![tenant, id],
+        |row| row.get(0),
+    )?)
+}
+
+fn record_observation(
+    tx: &Transaction<'_>,
+    op: &mut Operation,
+    phase: &str,
+    observed: Observed,
+) -> Result<()> {
+    if op.authority_revision.is_none() {
+        return Ok(());
+    }
+    let cursor = op
+        .observation_cursor
+        .and_then(|cursor| cursor.checked_add(1))
+        .ok_or_else(|| anyhow!("Invalid Source observation cursor"))?;
+    let now = crate::auth::catalog_timestamp();
+    match observed {
+        Observed::Preclaim { job_id, cancel } => tx.execute(
+            "INSERT INTO source_preclaim_refusals(tenant_id,operation_key,cursor,phase,job_id,admitted_generation,cancel_requested,created_at) VALUES(?1,?2,?3,?4,?5,0,?6,?7)",
+            params![op.tenant, op.key, cursor, phase, job_id, cancel, now],
+        )?,
+        Observed::Attempt {
+            job_id,
+            generation,
+            fence,
+            receipt,
+            cancel,
+        } => tx.execute(
+            "INSERT INTO source_revision_observations(tenant_id,operation_key,cursor,phase,job_id,attempt_generation,attempt_fence,revision_id,receipt_activated,cancel_requested,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                op.tenant,
+                op.key,
+                cursor,
+                phase,
+                job_id,
+                generation,
+                fence,
+                receipt.map(|(revision, _)| revision),
+                receipt.map(|(_, activated)| activated),
+                cancel,
+                now
+            ],
+        )?,
+    };
+    op.observation_cursor = Some(cursor);
+    Ok(())
+}
+
+/// Records a targeted claim's authority refusal in the import's journal, before
+/// the job records its own refusal.
+pub(crate) fn record_targeted_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &jobs::JobRecord,
+) -> Result<()> {
+    let Some(mut op) = bound(tx, job)? else {
+        return Ok(());
+    };
+    let observed = if job.generation == 0 {
+        let attempted: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_revision_attempts WHERE tenant_id=?1 AND operation_key=?2)",
+            params![op.tenant, op.key],
+            |row| row.get(0),
+        )?;
+        ensure!(
+            job.state == jobs::PersistentState::Queued
+                && job.attempt == 0
+                && job.fence.is_none()
+                && job.worker.is_none()
+                && job.effects.is_empty()
+                && job.result.is_none()
+                && op.state == State::Admitted
+                && op.observation_cursor == Some(0)
+                && !attempted,
+            "Invalid preclaim Source refusal context"
+        );
+        Observed::Preclaim {
+            job_id: job.job_id.clone(),
+            cancel: job.cancel_requested,
+        }
+    } else {
+        Observed::Attempt {
+            job_id: job.job_id.clone(),
+            generation: job.generation,
+            fence: None,
+            receipt: None,
+            cancel: job.cancel_requested,
+        }
+    };
+    record_observation(tx, &mut op, "authority_refused", observed)?;
+    store(tx, &op)
+}
+
+/// True for a supplied import whose input only its admitting owner holds, so
+/// only that owner's targeted claim may run it.
+pub(crate) fn awaits_owner_input(tx: &Transaction<'_>, job: &jobs::JobRecord) -> Result<bool> {
+    Ok(job.kind == jobs::JobKind::SuppliedSourceImport
+        && tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM source_import_operations WHERE tenant=?1 AND job_id=?2 AND state='admitted')",
+            params![job.tenant, job.job_id],
+            |row| row.get(0),
+        )?)
+}
+
+/// Registers the published artifact as a complete Source revision and points the
+/// Source at it if the Source still matches the admission basis. Otherwise the
+/// revision stays inactive and the import ends in conflict.
+fn activate(
+    tx: &Transaction<'_>,
+    catalog_state: &catalog::State,
+    op: &mut Operation,
+    lease: &jobs::AttemptLease,
+) -> Result<()> {
+    let revision = op
+        .authority_revision
+        .clone()
+        .ok_or_else(|| anyhow!("Legacy Source operation requires repair"))?;
+    let current: i64 = tx.query_row(
+        "SELECT source_configuration_version FROM projects WHERE tenant_id=?1 AND id=?2",
+        params![op.tenant, op.source_id],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        current == revision.source_configuration_version,
+        "Source configuration changed after admission"
+    );
+    let artifact = op
+        .artifact
+        .clone()
+        .ok_or_else(|| anyhow!("Missing artifact"))?;
+    let now = crate::auth::catalog_timestamp();
+    tx.execute(
+        "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,source_configuration_version,activation_observation_digest,input_digest,producer_version) VALUES(?1,?2,?3,?4,?5,?6,'complete',?7,?8,?9,?10) ON CONFLICT DO NOTHING",
+        params![
+            op.tenant,
+            op.source_id,
+            artifact.upstream_key,
+            artifact.manifest_digest,
+            artifact.locator,
+            now,
+            revision.source_configuration_version,
+            revision.activation_observation_digest,
+            revision.input_digest,
+            revision.producer_version
+        ],
+    )?;
+    let (id, manifest_digest, locator, synced_at): (i64, String, String, String) = tx.query_row(
+        "SELECT id,manifest_digest,snapshot_locator,synced_at FROM source_revisions WHERE tenant_id=?1 AND project_id=?2 AND upstream_revision_key=?3 AND completeness='complete'",
+        params![op.tenant, op.source_id, artifact.upstream_key],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    ensure!(
+        manifest_digest == artifact.manifest_digest && locator == artifact.locator,
+        "Accepted revision identity mismatch"
+    );
+    tx.execute(
+        "INSERT INTO source_revision_attempts(tenant_id,operation_key,job_id,source_id,revision_id,source_configuration_version,activation_observation_digest,input_digest,producer_version,attempt_generation,attempt_fence,activated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12)",
+        params![
+            op.tenant,
+            op.key,
+            op.job_id,
+            op.source_id,
+            id,
+            revision.source_configuration_version,
+            revision.activation_observation_digest,
+            revision.input_digest,
+            revision.producer_version,
+            lease.generation(),
+            lease.fence(),
+            now
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO source_revision_artifacts(revision_id,artifact_kind,input_digest,producer_version,artifact_digest) VALUES(?1,'snapshot_manifest',?2,?3,?4) ON CONFLICT DO NOTHING",
+        params![id, revision.input_digest, revision.producer_version, artifact.manifest_digest],
+    )?;
+    let basis = &op.basis;
+    let local_path = catalog_state
+        .directory
+        .join("repos")
+        .join(&artifact.locator)
+        .to_string_lossy()
+        .into_owned();
+    let activated = tx.execute(
+        "UPDATE projects SET current_source_revision_id=?3,local_path=?4,last_commit_sha=?5,last_synced_at=?6 WHERE tenant_id=?1 AND id=?2 AND current_source_revision_id IS ?7 AND url=?8 AND branch=?9 AND tag IS ?10 AND source_kind=?11 AND source_type=?12 AND local_path IS ?13 AND last_commit_sha IS ?14 AND legacy_manifest_cutover=?15",
+        params![
+            op.tenant,
+            op.source_id,
+            id,
+            local_path,
+            artifact.upstream_key,
+            synced_at,
+            basis.current_source_revision_id,
+            basis.url,
+            basis.branch,
+            basis.tag,
+            basis.source_kind,
+            basis.source_type,
+            basis.local_path,
+            basis.last_commit_sha,
+            basis.legacy_manifest_cutover
+        ],
+    )? == 1;
+    let postprocessing = if activated {
+        tx.execute(
+            "UPDATE source_revision_attempts SET activated=1 WHERE tenant_id=?1 AND operation_key=?2",
+            params![op.tenant, op.key],
+        )?;
+        apply_activation(tx, catalog_state, op, &artifact, &revision, id, &now)?
+    } else {
+        Postprocessing::NotActivated
+    };
+    op.state = if activated {
+        State::Activated
+    } else {
+        State::Conflict
+    };
+    op.receipt = Some(Receipt {
+        tenant: op.tenant.clone(),
+        operation_key: op.key.clone(),
+        job_id: op.job_id.clone(),
+        source_id: op.source_id,
+        revision_id: id,
+        artifact,
+        basis: op.basis.clone(),
+        activated,
+        applied_at: now,
+        postprocessing,
+        authority_revision: Some(revision),
+    });
+    Ok(())
+}
+
+/// Marks the activated Source up to date, applies the suggested import rules
+/// if the Source still has its default rules, and replaces its document index.
+/// A failed index keeps the activation and reports `IndexError`.
+fn apply_activation(
+    tx: &Transaction<'_>,
+    catalog_state: &catalog::State,
+    op: &Operation,
+    artifact: &Artifact,
+    revision: &SourceAuthorityRevision,
+    revision_id: i64,
+    now: &str,
+) -> Result<Postprocessing> {
+    let (metadata, rules): (Option<String>, Option<String>) = tx.query_row(
+        "SELECT metadata_json,imported_paths FROM projects WHERE tenant_id=?1 AND id=?2",
+        params![op.tenant, op.source_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let mut metadata = metadata
+        .and_then(|metadata| {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&metadata).ok()
+        })
+        .unwrap_or_default();
+    metadata.insert("remote_update_status".into(), "up_to_date".into());
+    metadata.insert("remote_checked_at".into(), now.into());
+    metadata.remove("sync_error");
+    metadata.remove("sync_required");
+    tx.execute(
+        "UPDATE projects SET metadata_json=?3 WHERE tenant_id=?1 AND id=?2",
+        params![op.tenant, op.source_id, serde_json::to_string(&metadata)?],
+    )?;
+    if op.default_rules && rules == op.original_rules && !artifact.suggested_rules.is_empty() {
+        catalog::run(
+            tx,
+            catalog_state,
+            &op.tenant,
+            catalog::Request::SaveImportRules {
+                id: op.source_id,
+                rules: artifact.suggested_rules.clone(),
+            },
+        )?;
+    }
+    tx.execute_batch("SAVEPOINT import_docs")?;
+    let indexed = (|| -> Result<()> {
+        tx.execute(
+            "DELETE FROM source_docs WHERE tenant_id=?1 AND project_id=?2",
+            params![op.tenant, op.source_id],
+        )?;
+        let collator = icu_collator::Collator::try_new(Default::default(), Default::default())
+            .map_err(|error| anyhow!("{error}"))?;
+        let mut ordered: Vec<&File> = artifact.files.iter().collect();
+        ordered.sort_by(|a, b| {
+            (a.kind != "readme")
+                .cmp(&(b.kind != "readme"))
+                .then_with(|| collator.compare(&a.path, &b.path))
+        });
+        for file in ordered {
+            if ["readme", "md", "pdf"].contains(&file.kind.as_str()) {
+                tx.execute(
+                    "INSERT INTO source_docs(tenant_id,project_id,path,kind,size_bytes,content_hash,extract_status,source_revision_id,input_digest,producer_version,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                    params![
+                        op.tenant,
+                        op.source_id,
+                        file.path,
+                        file.kind,
+                        i64::try_from(file.size)?,
+                        &file.sha256[..24],
+                        if file.kind == "pdf" { "pending" } else { "na" },
+                        revision_id,
+                        revision.input_digest,
+                        revision.producer_version,
+                        now
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    })();
+    if indexed.is_err() {
+        tx.execute_batch("ROLLBACK TO import_docs; RELEASE import_docs")?;
+        return Ok(Postprocessing::IndexError);
+    }
+    tx.execute_batch("RELEASE import_docs")?;
+    Ok(if artifact.files.iter().any(|file| file.kind == "pdf") {
+        Postprocessing::DocumentMetadataIndexedPdfPending
+    } else {
+        Postprocessing::DocumentMetadataIndexed
+    })
 }
 
 fn admit(
@@ -570,7 +1208,7 @@ fn admit(
         policy,
         storage,
         mut request,
-        expected_files,
+        mut expected_files,
         disk_bytes,
         accounting_epoch,
         quota,
@@ -587,7 +1225,25 @@ fn admit(
             && !request.key.chars().any(char::is_control),
         "Invalid operation key"
     );
+    // As Node's `writeUploadedFiles` does, a backslash becomes `/`, leading
+    // slashes are dropped, and names that differ only in case are duplicates.
+    let canonical =
+        |path: &mut String| *path = path.replace('\\', "/").trim_start_matches('/').into();
+    match &mut request.input {
+        Input::Files { paths } => paths.iter_mut().for_each(canonical),
+        Input::Zip { path } => canonical(path),
+    }
+    for file in &mut expected_files {
+        canonical(&mut file.path);
+    }
     files(&expected_files, request.max_input_bytes)?;
+    let mut folded = HashSet::new();
+    ensure!(
+        expected_files
+            .iter()
+            .all(|file| folded.insert(file.path.to_lowercase())),
+        "Duplicate file"
+    );
     let requested_digest = serialized_digest(&expected_files)?;
     let intent_digest = serialized_digest(&(&request, &expected_files))?;
     if let Some(prior) = load(tx, &tenant, &request.key)? {
@@ -725,6 +1381,15 @@ fn validate_limits(request: &Admission, quota: u64) -> Result<()> {
 
 fn serialized_digest(value: &impl Serialize) -> Result<String> {
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(value)?)))
+}
+
+fn store(tx: &Transaction<'_>, op: &Operation) -> Result<()> {
+    validate_operation(op)?;
+    tx.execute(
+        "UPDATE source_import_operations SET state=json_extract(?3,'$.state'),document=?3 WHERE tenant=?1 AND operation_key=?2",
+        params![op.tenant, op.key, serde_json::to_string(op)?],
+    )?;
+    Ok(())
 }
 
 fn load(tx: &Transaction<'_>, tenant: &str, key: &str) -> Result<Option<Operation>> {

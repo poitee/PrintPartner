@@ -328,9 +328,11 @@ glob matcher steps that `Glob` counted. The default and maximum is 2^28 units, s
 comparisons at the 100,000-visit limit can average about 2,680 units each. One
 comparison costs O(P + K²) units for a pattern of P units and a key of K units,
 with K at most 4,096. Only the post-comparison charge can pass the limit, so an
-attempt can exceed it by one comparison's normalized and matcher work. Kit JSON
-passes through the budgeted document reader before the stored-kit parser, so
-UTF-16 selection text uses the existing codec.
+attempt can exceed it by one comparison's normalized and matcher work. `kit`
+reads stored kit JSON with `manifest_options::observation::stored_kit`, the
+parser builder observation uses. It charges the raw bytes as a document and each
+parsed value and object key as a node, and the last duplicate JSON key wins, as in
+Node's `JSON.parse`. UTF-16 selection text uses the existing codec.
 
 `read_model::reusable_draft_base` checks current freshness before validating the
 complete accepted snapshot with the existing bounded readers. It propagates
@@ -373,6 +375,35 @@ Spoolman references from new Parts without changing accepted decisions.
 Recompute consumes it. Save and rebase remain GRE-608. Existing GRE-668,
 GRE-669 and GRE-670 follow-ups remain open.
 
+Quantity JSON uses the existing `ryu-js` formatter at the shared Part encoding
+boundary, including the bytes sorted and hashed by the planning digest.
+Filename quantities retain JavaScript's binary64 rounding. For example,
+`9007199254740993` becomes `9007199254740992`, `1000000000000000128` prints as
+`1000000000000000100`, `1e20` prints as `100000000000000000000`, and `1e21`
+prints as `1e+21`. This does not expand the stored integer range. Recompute
+still refuses unsafe quantities atomically, preserving existing draft rows
+and STL files. This code remains behind default-off `desktop_rebuild`; product
+callers still check the `PP_DESKTOP_REBUILD` environment value at startup.
+
+Preparation uses `pp_domain::build_identity::trim_js` for import-rule JSON,
+rule and path normalization, blank naming markers, decimal `parseInt` prefixes,
+role-default lookup and Spoolman color prefixes. JavaScript trims U+FEFF and
+ordinary whitespace, and preserves U+0085. The prototype-slug decision remains
+on GRE-697.
+
+`working_draft_preparation_trim` compares public-client Parts against literal
+Node 22.23.3 outcomes from disposable databases and STL files. Its two named
+tests cover filtered, unfiltered and wrapped-JSON imports, naming and color
+defaults. Cancellation and invalid U+0085 quantity prefixes preserve draft rows
+and files. The storage module retains its default-off compile gate; product
+callers retain the startup `PP_DESKTOP_REBUILD` environment check.
+
+```sh
+npx --yes --package=node@22 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/preparation-trim-node.mjs web/apps/server > /persist/tmp/preparation-trim.jsonl
+cmp /persist/tmp/preparation-trim.jsonl rust/crates/pp-storage/tests/fixtures/preparation-trim-node.jsonl
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_preparation_trim
+```
+
 Tests compare literal Node fingerprints, Parts and digests, propagate resource
 refusals, and cancel at every budget checkpoint. Regenerate the fixtures twice:
 
@@ -414,22 +445,58 @@ A recompute runs in three steps on the writer thread:
    copies quantity overrides, and inclusion when the draft is kept, from open
    drafts, as Node's `carryOpenDraftEdits` does. Before it loads an open draft,
    it charges the preparation budget for everything the load reads. That is
-   one visit per row of the draft, its inputs and Parts, and for a v2 draft
-   its selected reconciliation, decisions and assignments. The bytes of every
-   column the load parses, hashes or compares count as comparison work. An
-   open draft with more than about 100,000 assignments therefore exceeds the
-   default visit limit. A limit or cancellation refusal rolls the transaction back. It abandons
+   one visit per draft, input, Part and decision, plus two for the selected
+   reconciliation. Shared explicit column lists drive both the loaders and
+   their cost queries. Each loaded column costs its byte length, including
+   identifiers and metadata. Each assignment also costs 1,024 comparison units
+   and uses no visit. A 200,000-assignment draft fits the default limits; two
+   such open drafts exhaust the default grant. Before their bytes and other
+   work, the 268,435,456-unit comparison cap permits at most 262,144 assignment
+   rows across carried drafts. Each table load retains its 200,000-row cap,
+   and structural work stays capped at 100,000 visits.
+   On the Linux calibration VM, two runs of five alternating release trials
+   measured a median 1,929.5 ms for a 200,000-assignment carry and 12.8 ms
+   without a carry. The difference is 9,583 ns per assignment. The slowest
+   carry, 2,431.6 ms, projects to about 3.2 seconds for the default grant's
+   assignment ceiling.
+   This is a work bound; elapsed time depends on the machine and scheduler.
+   Refusing two drafts with 200,000 assignments took 2,381.8 ms in one run.
+   Each cost query streams indexed rows and sums individual column lengths
+   without concatenation, aggregation or sorting. Both the cost scan and the
+   loader check cancellation between rows. JSON parsing and serialization
+   also check cancellation. Large JSON arrays retain raw rows and validate
+   one at a time, so cancelling does not free a whole parsed object tree.
+   The release test sweeps cancellation offsets on 200,000 assignments; the
+   debug test uses 20,000 assignments. SQLite hooks remain a test-only
+   dependency. A limit or cancellation refusal rolls the transaction back.
+   It abandons
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
-`RecomputeOutcome::into_json_body` writes Node's result kinds. Node's service
-also selects Required units after a created or existing draft. This client does
-not, so a caller that needs the workspace runs the Required-unit selection
-itself. Node's `would_wipe` result has no Rust preparation counterpart yet.
+`RecomputeOutcome::into_json_body` writes Node's result kinds. Node's
+`would_wipe` result has no Rust preparation counterpart yet.
+
+`WorkingDraftClient::recompute_and_select` ports Node's
+`PlanDraftWorkspaceService.recompute`. It runs the recompute above and, after
+a created or existing draft, selects Required units as `edit` does. The
+selection has no decisions, uses the key `auto-<snapshot digest>`, and runs in
+its own immediate transaction with a fresh admission deadline. A draft that
+already has a selection is not selected again; a read transaction returns its
+workspace. Either path returns `RecomputeWorkspaceOutcome::Selected` with the
+`required_units::Outcome`. Every other recompute result is `Refused`.
+The selection checks cancellation before it starts and before it commits, but
+it does not use the preparation budget, as `edit` does not. If the selection
+fails or is cancelled, the recompute stays committed and the method returns
+the error. Node's route answers that error with HTTP 500 and `internal_error`.
+A retry with the same key finds the saved draft, so it only runs the selection
+again.
 
 The operation tests replay each Node case on a copy of the required-units
 `unchanged` database and compare outcomes and the `plan_drafts`,
-`plan_draft_inputs` and `plan_draft_parts` rows with Node's. Creation times are
+`plan_draft_inputs`, `plan_draft_parts`, reconciliation and assignment rows
+with Node's. The selecting cases run Node's service: created then replayed,
+existing, an injected selection failure then a retry, and a draft selected
+before the recompute. Creation times are
 compared by format. Cases that change the database between the transactions
 run their SQL after Node's preparation returns. The Rust test reads run it when
 the first STL scan starts. After that scan, preparation still reads settings,
@@ -438,8 +505,10 @@ of those, and it only turns off Spoolman defaults, which the fixture does not
 set. Both sides therefore prepare the same Parts.
 Rust-only tests cover cancellation, a budget refusal, open drafts whose Parts,
 selected reconciliation or any loaded column exceed the budget when their edits
-are carried, a cancelled or unauthenticated request, and a client without
-observations. Regenerate the fixture twice:
+are carried, a cancelled or unauthenticated request, a client without
+observations, and cancellation during the selection. That test holds the
+selection with a slow trigger, cancels, compares the rows with Node's committed
+recompute, and then retries. Regenerate the fixture twice:
 
 ```sh
 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server > /persist/tmp/recompute-first.jsonl
@@ -447,11 +516,14 @@ node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development ru
 cmp /persist/tmp/recompute-first.jsonl /persist/tmp/recompute-second.jsonl
 cmp /persist/tmp/recompute-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.jsonl
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute --test-threads=2
+cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(two_hundred_thousand_assignments) | test(multiple_maximum_drafts) | test(cancellation_inside_a_large)'
+node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server --large-carry
 python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 ```
 
-The mutation runner copies the workspace into `/persist/tmp` with its own target
-directory. Only an executed failing test counts as a kill.
+The mutation runner copies the workspace into `/persist/tmp` and reuses
+`CARGO_TARGET_DIR` when supplied. Run it separately from other Cargo commands
+when you reuse a target directory. Only an executed failing test counts as a kill.
 
 ### D4 media reconciliation
 
@@ -1008,17 +1080,85 @@ input version, a settled entry against a terminal job, and its quota row against
 reservation and retained bytes.
 
 Node writes supplied files with `writeUploadedFiles` and has no journal, quota or
-idempotency. `fixtures/parity/uploads/generate.mjs` records its limits and its results
-for ten file sets. The journal matches Node's 256 MiB and 10,000-file limits and its
-refusal of empty, oversized, escaping and duplicate inputs. It differs on purpose for
-three: Node rewrites backslashes and a leading slash, and folds case when it looks for
-duplicates. The journal stores exact canonical paths, so it refuses the first two and
-admits names that differ only in case. The quota, idempotency, startup and codec cases
-port the reference `source_import_codec.rs` and its serializer fixture:
+idempotency. `fixtures/parity/uploads/generate.mjs` records its limits, and for each
+of thirteen file sets either its refusal or the paths it wrote. The journal matches
+Node's 256 MiB and 10,000-file limits and its refusal of empty, oversized, escaping
+and duplicate inputs. Since D14 (d), admission also rewrites a backslash as `/` and
+drops leading slashes before it validates and hashes the request, and refuses names
+that differ only in case, so it admits the paths Node writes and refuses the
+duplicates Node refuses. The quota, idempotency, startup and codec cases port the
+reference `source_import_codec.rs` and its serializer fixture:
 
 ```sh
 node fixtures/parity/uploads/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test upload_journal
+```
+
+### D14 uploads: import phases
+
+GRE-610's fourth PR runs an admitted import through its phases, behind
+`desktop_rebuild`. It moves journal state only. The files are written by the import
+runner in pp-core (D3), and captured inputs arrive in D14 (e).
+
+`ServerWorkerClient::import_phase(lease, phase)` applies one `uploads::Phase` to the
+live attempt from `claim_import`, in one writer transaction:
+
+| Phase | Requires | Result |
+| --- | --- | --- |
+| `Read` | a live attempt | the entry, unchanged; the only phase that does not advance the accounting epoch |
+| `Owned(input)` | `admitted` | `owned_input_ready`, with `.pp-imports/{job_id}` holding exactly the admitted files |
+| `Published(artifact)` | `owned_input_ready` | `published`, with the artifact bound to the Source and within the reservation |
+| `Activate` | `published`, and the Source configuration version from admission | a complete Source revision, its attempt and its manifest artifact. If the Source still matches the admission basis, it points at the revision, is marked up to date, takes the suggested import rules when it still has its default rules, and gets a new document index (`activated`). Otherwise the revision stays inactive (`conflict`) |
+| `Fail` | no receipt | `cancelled` if the job was cancelled, otherwise `failed` |
+| `Cleanup` | `activated`, `conflict`, `failed` or `cancelled` | the reservation settles, the stored bytes stay retained, and the job ends `succeeded`, `failed` or `cancelled` |
+
+A cancelled attempt may only read, fail and clean up ("Import cancelled"). Every
+phase but `Read` appends a Source observation with the attempt's generation and
+fence, the receipt's revision and activation, and the cancellation flag.
+
+Each phase first revalidates the job's original authority with
+`jobs::revalidate_source_authority`. If it is refused,
+`jobs::commit_source_authority_refusal` fails the job with phase `source_writer`, an
+`authority_refused` observation records the fenced attempt, both commit, and the
+phase returns the typed `AuthorityFailure`. These are the helpers' first production
+callers. A targeted claim refused before the job's first attempt now writes the
+entry's `source_preclaim_refusals` row; one refused after an earlier attempt writes an
+`authority_refused` observation with that generation and no fence. A generic claim
+skips an import whose entry is still `admitted`, because only the owner that holds
+its input can run it.
+
+A job can end before its `Cleanup` phase: an authority refusal, a missing Source or
+the attempt limit fails it. `uploads::settle_terminal` then settles the entry, and
+nothing else runs. An unfinished entry becomes `failed`, or `cancelled` if its owner
+asked, and its reservation is released as `Cleanup` releases it. The job, the
+Source and the observations stay as they are. It acts only on a terminal job with no
+fence or worker and an unsettled entry, so a live attempt keeps its import, and a
+repeat changes nothing. Two callers use it. The owner's `Cancel` of the ended job
+settles it with their current credential and advances the accounting epoch. At
+startup, after expired attempts are recovered, the storage owner settles every
+such entry, including those of archived jobs. The reference has no such path: its
+refused imports keep their reservation.
+
+As in the reference, `uploads::source_reserved` makes Source deletion return
+`active_work` while an import of the Source holds an unsettled reservation.
+Storage written before that guard can hold an unsettled entry whose Source is
+gone. The same startup pass fails its queued job with `source_unavailable`, as a
+claim would, and then settles the entry. Any other job state with a missing
+Source refuses to open.
+
+Opening storage checks each preclaim refusal against its entry and job: it must be
+the entry's first and only observation, the entry must be `admitted`, or settled as
+`failed` or `cancelled` to match the cancellation flag, and the job must have failed
+at generation 1 from a targeted-claim refusal at generation 0, with the same
+cancellation flag.
+
+Node writes supplied files in one call and has no journal, attempts or
+observations, so the tests port the reference `source_import_operation.rs` storage
+assertions and its `Postprocessing` wire values:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test import_phases --test upload_journal
+node fixtures/parity/uploads/generate.mjs --check
 ```
 
 ## D9 build graph receipt
@@ -1772,4 +1912,30 @@ which cannot hold unpaired surrogates.
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild
+```
+
+### D23 auth HTTP wiring, GRE-617 PR 1
+
+Main's `pp-api` `auth/http.rs` and its `auth_http` tests are newer than
+`desktop/source-sync-local-current-20261008`. They keep the reset delivery
+window, health `degraded_detail`, `hasPassword` and the no-panic rewrites. No
+handler code is ported back from the reference.
+
+`pp-api` gains a `desktop_rebuild` feature. `auth_router` accepts an
+`AuthBackend`: the existing pooled `AuthClient`, or, with the feature, D6's
+`RebuildAuthClient`. Existing callers pass `AuthClient` unchanged.
+
+With `desktop_rebuild`, `pp_core::rebuild_api::router(rebuild, owner, routes)`
+is the single place that registers Rust auth routes. It returns `None` before
+creating any client unless the stored `DesktopRebuild` setting is on. When it
+is on, it selects `rebuild_auth_with_policy` with the caller's lifetimes, as D6
+requires. Default builds do not compile the module.
+
+The desktop gateway does not mount this router. The desktop process holds the
+storage lease that `WriterOwner::open` needs, and Node owns those writes until
+cutover. Gateway mounting belongs to D26.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core --features desktop_rebuild
 ```

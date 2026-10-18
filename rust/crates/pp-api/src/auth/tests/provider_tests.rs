@@ -137,13 +137,14 @@ impl TestServer {
             .await
             .unwrap();
         }
-        let auth = owner
-            .auth_with_policy(AuthPolicy {
+        let auth = crate::auth::test_backend(
+            &owner,
+            AuthPolicy {
                 registration,
                 session_tenant: SessionTenantPolicy::AccountTenant,
                 first_user: FirstUserTenant::NewUser,
-            })
-            .unwrap();
+            },
+        );
         let fake_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let fake_origin = format!("http://{}", fake_listener.local_addr().unwrap());
         let fake = Fake {

@@ -160,7 +160,7 @@ function productFiles(source: string, db: Database.Database, destination?: strin
 }
 function exportInventory(source: string, db: Database.Database): OwnershipExport[] {
   const root = join(source, "exports");
-  return missing(root) ? [] : inspectOwnershipExports(root, drizzle(db).select().from(schema.buildProfiles).all());
+  return missing(root) ? [] : inspectOwnershipExports(root, drizzle(db).select().from(schema.buildProfiles).all(), drizzle(db).select().from(schema.acceptedPlateRevisions).all());
 }
 function relocatedLocalPath(row: Row, source: string, destination: string): string {
   const path = z.string().parse(row.local_path);

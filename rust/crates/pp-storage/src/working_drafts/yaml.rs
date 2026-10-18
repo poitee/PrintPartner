@@ -256,7 +256,18 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             if i == chars.len() {
                 break;
             }
-            if flow == 0 && (!plain || plain_parent.is_some_and(|n| line_indent <= n)) {
+            let mut content = i;
+            while chars.get(content).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                if (content - i).is_multiple_of(1024) {
+                    budget.check()?;
+                }
+                content += 1;
+            }
+            let plain_blank = chars.get(content).is_none_or(|c| matches!(c, '\r' | '\n'));
+            if !plain_blank
+                && flow == 0
+                && (!plain || plain_parent.is_some_and(|n| line_indent <= n))
+            {
                 plain = false;
                 node = true;
                 quoted_end = false;
@@ -364,6 +375,11 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             output.push(c);
             consumed += 1;
             i += 1;
+            if c == '\r' && chars.get(i) == Some(&'\n') {
+                output.push('\n');
+                consumed += 1;
+                i += 1;
+            }
             line_start = true;
             continue;
         }
@@ -1101,6 +1117,122 @@ mod tests {
                 ),
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn yaml_plain_continuation_after_crlf_preserves_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(b"project: prefix\r\n  \"\\uE000\"", &mut budget).unwrap();
+        assert_eq!(
+            units(&doc, "project", &mut budget),
+            "prefix \"\\uE000\"".encode_utf16().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn yaml_plain_continuation_after_blank_preserves_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(b"project: prefix\n\n  \"\\uE000\"", &mut budget).unwrap();
+        assert_eq!(
+            units(&doc, "project", &mut budget),
+            "prefix\n\"\\uE000\"".encode_utf16().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn yaml_tab_blank_regressions_preserve_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut actual = Vec::new();
+        for source in [
+            "a: x\n\t\n  \"\\uE000\"",
+            "a: x\n\t  \n  \"\\uE000\"",
+            "- x\n\t\n  \"\\uE000\"",
+            "a: x\n  \n\t\n    \n  \"\\uE000\"",
+            "a: x\r\n\t\r\n  \"\\uE000\"",
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
+            let id = if source.starts_with('-') {
+                let Node::Sequence(items) = doc.node(doc.root, &mut budget).unwrap() else {
+                    panic!("expected a sequence");
+                };
+                items[0]
+            } else {
+                doc.get(doc.root, "a", &mut budget).unwrap().unwrap()
+            };
+            actual.push(doc.text(id, &mut budget).unwrap().units().to_vec());
+        }
+        let expected = [
+            "x\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+            "x\n\n\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+        ]
+        .map(|value| value.encode_utf16().collect::<Vec<_>>());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn yaml_line_breaks_match_js_yaml() {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Expected {
+            Mapping(HashMap<String, String>),
+            Sequence(Vec<String>),
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            source: String,
+            expected: Option<Expected>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/yaml-line-breaks-node.json"
+        ))
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        for case in cases {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let result = Document::parse(case.source.as_bytes(), &mut budget);
+            let Some(expected) = case.expected else {
+                assert!(
+                    matches!(result, Err(ReadFailure::InvalidDocument)),
+                    "{}: {:?}",
+                    case.name,
+                    case.source
+                );
+                continue;
+            };
+            let doc = result.unwrap_or_else(|err| panic!("{}: {err:?}", case.name));
+            match (doc.node(doc.root, &mut budget).unwrap(), expected) {
+                (Node::Mapping(entries), Expected::Mapping(expected)) => {
+                    assert_eq!(entries.len(), expected.len(), "{}", case.name);
+                    for (key, value) in expected {
+                        assert_eq!(
+                            units(&doc, &key, &mut budget),
+                            value.encode_utf16().collect::<Vec<_>>(),
+                            "{}: {key}",
+                            case.name
+                        );
+                    }
+                }
+                (Node::Sequence(items), Expected::Sequence(expected)) => {
+                    assert_eq!(items.len(), expected.len(), "{}", case.name);
+                    for (id, value) in items.iter().zip(expected) {
+                        assert_eq!(
+                            doc.text(*id, &mut budget).unwrap().units(),
+                            value.encode_utf16().collect::<Vec<_>>(),
+                            "{}",
+                            case.name
+                        );
+                    }
+                }
+                _ => panic!("{}: unexpected collection", case.name),
+            }
         }
     }
 

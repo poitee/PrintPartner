@@ -3,8 +3,9 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{self, Secret},
     read_model::Credential,
+    required_units::ReconciliationCommand,
     working_drafts::{
-        Failure, PositiveId, RecomputeRequest,
+        Failure, PositiveId, RecomputeRequest, RecomputeWorkspaceOutcome,
         observation::{
             ArtifactRead, CheckoutManifestUse, DocumentRead, DraftReads, InventoryPath,
             OwnedCatalogReadRequest, OwnedCheckoutReadRequest, OwnedStlReadRequest,
@@ -22,7 +23,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn session() -> Credential {
@@ -216,6 +217,8 @@ impl Fixture {
             "drafts": self.rows("SELECT id,tenant_id,profile_id,base_revision_id,base_plan_version,state,lifecycle_version,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest,digest_format,snapshot_digest,created_by,idempotency_key,created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z' AS created_at_iso,current_required_unit_reconciliation_id,consumed_revision_id,consumed_at FROM plan_drafts ORDER BY id"),
             "inputs": self.rows("SELECT * FROM plan_draft_inputs ORDER BY id"),
             "parts": self.rows("SELECT * FROM plan_draft_parts ORDER BY id"),
+            "reconciliations": self.rows("SELECT id,draft_id,actor_id,idempotency_key,planning_digest,result_kind,reconciliation_digest,payload_digest FROM plan_draft_required_unit_reconciliations ORDER BY id"),
+            "assignments": self.rows("SELECT reconciliation_id,target_draft_part_id,unit_index,kind,required_unit_token FROM plan_draft_required_unit_assignments ORDER BY reconciliation_id,target_draft_part_id,unit_index"),
         })
     }
     fn open(&self) -> WriterOwner {
@@ -243,7 +246,7 @@ fn recompute(
         id(profile),
         RecomputeRequest::new(key, apply_manifest)?,
         cancelled,
-        Duration::from_secs(5),
+        Duration::from_secs(60),
     )?;
     let mut outcome: Value = serde_json::from_slice(&outcome.into_json_body().into_bytes())?;
     if let Some(created_at) = outcome["draft"]["createdAt"].as_str() {
@@ -263,6 +266,29 @@ fn recompute(
     Ok(outcome)
 }
 
+fn recompute_and_select(
+    owner: &WriterOwner,
+    reads: Arc<Shared>,
+    key: &str,
+    cancelled: Arc<AtomicBool>,
+) -> anyhow::Result<Value> {
+    let outcome = owner
+        .working_drafts_with_observations(policy(), reads, PreparationLimits::default())?
+        .recompute_and_select(
+            session(),
+            id(1),
+            RecomputeRequest::new(key, true)?,
+            cancelled,
+            Duration::from_secs(60),
+        )?;
+    Ok(match outcome {
+        RecomputeWorkspaceOutcome::Selected(outcome) => serde_json::to_value(outcome)?,
+        RecomputeWorkspaceOutcome::Refused(outcome) => {
+            serde_json::from_slice(&outcome.into_json_body().into_bytes())?
+        }
+    })
+}
+
 fn compare_node(name: &str) {
     let case = node(name);
     let f = Fixture::new(&case);
@@ -270,6 +296,12 @@ fn compare_node(name: &str) {
     let results = case["results"].as_array().unwrap();
     assert_eq!(calls.len(), results.len());
     for (index, (call, expected)) in calls.iter().zip(results).enumerate() {
+        if call["op"] == "sql" {
+            f.sql()
+                .execute_batch(call["sql"].as_str().unwrap())
+                .unwrap();
+            continue;
+        }
         let owner = f.open();
         let actual = match call["op"].as_str().unwrap() {
             "edit" => owner
@@ -284,6 +316,35 @@ fn compare_node(name: &str) {
                     Duration::from_secs(5),
                 )
                 .map(|outcome| serde_json::to_value(outcome).unwrap()),
+            "reconcile" => {
+                let request = serde_json::from_value(
+                    json!({"expected_snapshot_digest":call["digest"], "decisions":[]}),
+                )
+                .unwrap();
+                let command = ReconciliationCommand::new(
+                    id(call["profile"].as_u64().unwrap()),
+                    id(call["draft"].as_u64().unwrap()),
+                    request,
+                    call["key"].as_str().unwrap(),
+                    session(),
+                )
+                .unwrap();
+                owner
+                    .required_units_with_policy(policy())
+                    .unwrap()
+                    .reconcile(
+                        command,
+                        Arc::new(AtomicBool::new(false)),
+                        Duration::from_secs(5),
+                    )
+                    .map(|outcome| serde_json::to_value(outcome).unwrap())
+            }
+            "service" => recompute_and_select(
+                &owner,
+                f.reads(&case["files"], &call["between"], None),
+                call["key"].as_str().unwrap(),
+                Arc::new(AtomicBool::new(false)),
+            ),
             "recompute" => recompute(
                 &owner,
                 f.reads(&case["files"], &call["between"], None),
@@ -306,7 +367,13 @@ fn compare_node(name: &str) {
         owner.shutdown().unwrap();
     }
     let rows = f.recorded_rows();
-    for table in ["drafts", "inputs", "parts"] {
+    for table in [
+        "drafts",
+        "inputs",
+        "parts",
+        "reconciliations",
+        "assignments",
+    ] {
         assert_eq!(rows[table], case[table], "{name} {table}");
     }
 }
@@ -362,6 +429,111 @@ node_case!(
 );
 node_case!(a_profile_without_layers_is_no_layers, "no-layers");
 node_case!(a_profile_without_stls_is_no_stls, "no-stls");
+node_case!(
+    a_created_draft_is_selected_and_its_replay_is_not_reselected,
+    "service-created-then-selected"
+);
+node_case!(
+    an_existing_draft_is_selected,
+    "service-existing-then-selected"
+);
+node_case!(
+    a_failed_selection_keeps_the_recompute_and_a_retry_selects,
+    "service-selection-fails-then-retried"
+);
+node_case!(
+    an_existing_selection_is_kept,
+    "service-existing-already-selected"
+);
+
+/// Cancels a selecting recompute while a slow trigger holds the selection
+/// transaction, after the recompute has committed.
+#[test]
+fn cancellation_during_selection_keeps_the_recompute_and_a_retry_selects() {
+    let repository = node("created-then-replayed");
+    let f = Fixture::new(&repository);
+    f.sql().execute_batch("CREATE TRIGGER slow_selection AFTER INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT sum(n) FROM (WITH RECURSIVE n(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM n WHERE n<1000000) SELECT n FROM n); END").unwrap();
+    let owner = f.open();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let client = owner
+            .working_drafts_with_observations(
+                policy(),
+                f.reads(&repository["files"], &Value::Null, None),
+                PreparationLimits::default(),
+            )
+            .unwrap();
+        let cancelled = cancelled.clone();
+        std::thread::spawn(move || {
+            client.recompute_and_select(
+                session(),
+                id(1),
+                RecomputeRequest::new("first", true).unwrap(),
+                cancelled,
+                Duration::from_secs(5),
+            )
+        })
+    };
+    let probe = f.sql();
+    probe.busy_timeout(Duration::ZERO).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if f.rows("SELECT id FROM plan_drafts WHERE id=3") == json!([{"id":3}]) {
+            match probe.execute_batch("BEGIN IMMEDIATE") {
+                Ok(()) => probe.execute_batch("ROLLBACK").unwrap(),
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if error.code == rusqlite::ErrorCode::DatabaseBusy =>
+                {
+                    break;
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+        assert!(Instant::now() < deadline, "selection never started");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    cancelled.store(true, Ordering::Release);
+    let error = worker.join().unwrap().unwrap_err();
+    assert!(
+        matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+        "{error:?}"
+    );
+    owner.shutdown().unwrap();
+    f.sql()
+        .execute_batch("DROP TRIGGER slow_selection")
+        .unwrap();
+    let rows = f.recorded_rows();
+    for table in [
+        "drafts",
+        "inputs",
+        "parts",
+        "reconciliations",
+        "assignments",
+    ] {
+        assert_eq!(rows[table], repository[table], "{table}");
+    }
+    let retried = node("service-selection-fails-then-retried");
+    let owner = f.open();
+    let selected = recompute_and_select(
+        &owner,
+        f.reads(&repository["files"], &Value::Null, None),
+        "first",
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    owner.shutdown().unwrap();
+    assert_eq!(selected, retried["results"][2]);
+    let rows = f.recorded_rows();
+    for table in [
+        "drafts",
+        "inputs",
+        "parts",
+        "reconciliations",
+        "assignments",
+    ] {
+        assert_eq!(rows[table], retried[table], "{table}");
+    }
+}
 
 fn refused(f: &Fixture, cancel: bool, limits: PreparationLimits) -> anyhow::Error {
     let owner = f.open();
@@ -477,9 +649,6 @@ fn carrying_open_draft_edits_spends_the_recompute_budget() {
     owner.shutdown().unwrap();
 }
 
-/// The reviewer's probe. A v2 draft built through the public API selects a
-/// reconciliation with 20,000 assignments over only 20 Parts. The reviewer
-/// ran it with the maximum 200,000, which the default visit limit refuses.
 #[test]
 fn carrying_a_selected_reconciliation_spends_the_recompute_budget() {
     let files = json!(
@@ -527,7 +696,243 @@ fn carrying_a_selected_reconciliation_spends_the_recompute_budget() {
         f.rows("SELECT d.digest_format,(SELECT COUNT(*) FROM plan_draft_parts p WHERE p.draft_id=d.id) AS parts,(SELECT COUNT(*) FROM plan_draft_required_unit_assignments a WHERE a.reconciliation_id=d.current_required_unit_reconciliation_id) AS assignments FROM plan_drafts d WHERE d.profile_id=3"),
         json!([{"digest_format": "plan-draft-v2", "parts": 20, "assignments": 20000}])
     );
-    assert_carry_refused(&f, &owner);
+    let before = f.recorded_rows();
+    let error = recompute(
+        &owner,
+        f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+        PreparationLimits {
+            comparison_work: 1_500_000,
+            ..PreparationLimits::default()
+        },
+        "bounded",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref(),
+        Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+    assert_eq!(f.recorded_rows(), before);
+    owner.shutdown().unwrap();
+}
+
+fn large_carried_draft(quantity: u16) -> (Fixture, WriterOwner) {
+    let files = json!(
+        (0..20)
+            .map(|i| format!("old-{i:04}.stl"))
+            .collect::<Vec<_>>()
+    );
+    let f = Fixture::new(&json!({"files": files, "setup": [NEW_PLAN]}));
+    let owner = f.open();
+    let large = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "large",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let ids = large["draft"]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| part["id"].clone())
+        .collect::<Vec<_>>();
+    let request = serde_json::from_value(json!({
+        "expected_snapshot_digest": large["draft"]["snapshotDigest"],
+        "decision": {"kind": "set_quantity_override", "draft_part_ids": ids, "value": quantity},
+    }))
+    .unwrap();
+    let edited = owner
+        .working_drafts_with_policy(policy())
+        .unwrap()
+        .edit(
+            session(),
+            id(3),
+            id(large["draft"]["id"].as_u64().unwrap()),
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+    assert_eq!(serde_json::to_value(edited).unwrap()["kind"], "ready");
+    assert_eq!(
+        f.rows("SELECT d.digest_format,(SELECT COUNT(*) FROM plan_draft_parts p WHERE p.draft_id=d.id) AS parts,(SELECT COUNT(*) FROM plan_draft_required_unit_assignments a WHERE a.reconciliation_id=d.current_required_unit_reconciliation_id) AS assignments FROM plan_drafts d WHERE d.profile_id=3"),
+        json!([{"digest_format": "plan-draft-v2", "parts": 20, "assignments": 20 * usize::from(quantity)}])
+    );
+    (f, owner)
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "run this 200,000-assignment regression in release mode"
+)]
+fn two_hundred_thousand_assignments_recompute_with_default_limits() {
+    let (f, owner) = large_carried_draft(10000);
+    owner.shutdown().unwrap();
+    let golden = f.path.join("golden.db");
+    f.sql().backup("main", &golden, None).unwrap();
+    for trial in 0..5 {
+        for carry in [true, false] {
+            f.sql()
+                .restore("main", &golden, None::<fn(rusqlite::backup::Progress)>)
+                .unwrap();
+            if !carry {
+                f.sql().execute_batch("UPDATE plan_drafts SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE profile_id=3 AND state='open'").unwrap();
+            }
+            let owner = f.open();
+            let started = std::time::Instant::now();
+            let result = recompute(
+                &owner,
+                f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+                PreparationLimits::default(),
+                "small",
+                true,
+                3,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            eprintln!(
+                "maximum-count trial {trial}, carry={carry}: {:?}",
+                started.elapsed()
+            );
+            assert_eq!(result["kind"], "created");
+            assert_eq!(result["draft"]["parts"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                f.rows(
+                    "SELECT state,lifecycle_version FROM plan_drafts WHERE profile_id=3 ORDER BY id"
+                ),
+                json!([{"state":"abandoned","lifecycle_version":1},{"state":"open","lifecycle_version":0}])
+            );
+            owner.shutdown().unwrap();
+        }
+    }
+}
+
+#[test]
+fn cancellation_inside_a_large_carried_load_is_prompt() {
+    let quantity = if cfg!(debug_assertions) { 1000 } else { 10000 };
+    let (f, owner) = large_carried_draft(quantity);
+    let before = f.recorded_rows();
+    let offsets: Vec<u64> = if cfg!(debug_assertions) {
+        vec![200]
+    } else {
+        (0..=1400).step_by(70).collect()
+    };
+    let mut cancelled_trials = 0;
+    for offset in offsets {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let setter = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(offset));
+            let at = std::time::Instant::now();
+            flag.store(true, Ordering::Release);
+            at
+        });
+        let result = recompute(
+            &owner,
+            f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+            PreparationLimits::default(),
+            &format!("cancel-load-{offset}"),
+            true,
+            3,
+            cancelled,
+        );
+        let finished = std::time::Instant::now();
+        let at = setter.join().unwrap();
+        if let Ok(outcome) = result {
+            assert_eq!(outcome["kind"], "created");
+            assert!(
+                finished.saturating_duration_since(at) < Duration::from_millis(50),
+                "response finished too late after cancellation"
+            );
+            break;
+        }
+        let error = result.unwrap_err();
+        let latency = finished.saturating_duration_since(at);
+        assert!(format!("{error:?}").contains("Cancelled"), "{error:?}");
+        assert_eq!(f.recorded_rows(), before);
+        eprintln!(
+            "{}-assignment cancellation at {offset} ms: {latency:?}",
+            20 * usize::from(quantity)
+        );
+        assert!(latency < Duration::from_millis(50), "{latency:?}");
+        cancelled_trials += 1;
+    }
+    assert!(cancelled_trials > 0);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "run maximum-count carry admission in release mode"
+)]
+fn multiple_maximum_drafts_exceed_the_default_carry_grant() {
+    let (f, owner) = large_carried_draft(10000);
+    let files = json!(
+        (0..20)
+            .map(|i| format!("new-{i:04}.stl"))
+            .collect::<Vec<_>>()
+    );
+    let out = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "second",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let ids = out["draft"]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].clone())
+        .collect::<Vec<_>>();
+    let request = serde_json::from_value(json!({"expected_snapshot_digest": out["draft"]["snapshotDigest"], "decision":{"kind":"set_quantity_override","draft_part_ids":ids,"value":10000}})).unwrap();
+    let edited = owner
+        .working_drafts_with_policy(policy())
+        .unwrap()
+        .edit(
+            session(),
+            id(3),
+            id(out["draft"]["id"].as_u64().unwrap()),
+            request,
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+    assert_eq!(serde_json::to_value(edited).unwrap()["kind"], "ready");
+    f.sql().execute_batch("UPDATE plan_drafts SET state='open',lifecycle_version=lifecycle_version+1 WHERE profile_id=3 AND state='abandoned'").unwrap();
+    assert_eq!(f.rows("SELECT COUNT(*) AS assignments FROM plan_draft_required_unit_assignments a JOIN plan_drafts d ON a.reconciliation_id=d.current_required_unit_reconciliation_id WHERE d.profile_id=3 AND d.state='open'"), json!([{"assignments":400000}]));
+    let before = f.recorded_rows();
+    let start = std::time::Instant::now();
+    let result = recompute(
+        &owner,
+        f.reads(&json!(["only-current.stl"]), &Value::Null, None),
+        PreparationLimits::default(),
+        "refused",
+        true,
+        3,
+        Arc::new(AtomicBool::new(false)),
+    );
+    eprintln!("multiple maximum drafts refused in {:?}", start.elapsed());
+    let error = result.unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
     owner.shutdown().unwrap();
 }
 
@@ -594,6 +999,132 @@ fn every_column_a_draft_load_reads_spends_the_carry_budget() {
         );
         assert_eq!(f.recorded_rows(), before, "{name}");
     }
+}
+
+fn assert_metadata_charged(setup: &str, padded: &str) {
+    let f = Fixture::new(&node("created-then-replayed"));
+    f.sql().execute_batch(setup).unwrap();
+    f.sql()
+        .execute(
+            "UPDATE plan_drafts SET snapshot_digest='invalid' WHERE id=2",
+            [],
+        )
+        .unwrap();
+    let owner = f.open();
+    let attempt = |comparison_work| {
+        recompute(
+            &owner,
+            f.reads(&node("created-then-replayed")["files"], &Value::Null, None),
+            PreparationLimits {
+                comparison_work,
+                ..PreparationLimits::default()
+            },
+            "metadata",
+            true,
+            1,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err()
+    };
+    let (mut low, mut high) = (0, 100_000);
+    while low < high {
+        let mid = (low + high) / 2;
+        if matches!(
+            attempt(mid).downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    assert!(!matches!(
+        attempt(high).downcast_ref(),
+        Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+    owner.shutdown().unwrap();
+    let f = Fixture::new(&node("created-then-replayed"));
+    f.sql().execute_batch(padded).unwrap();
+    f.sql()
+        .execute(
+            "UPDATE plan_drafts SET snapshot_digest='invalid' WHERE id=2",
+            [],
+        )
+        .unwrap();
+    let before = f.recorded_rows();
+    let reconciliations =
+        f.rows("SELECT * FROM plan_draft_required_unit_reconciliations ORDER BY id");
+    let error = refused(
+        &f,
+        false,
+        PreparationLimits {
+            comparison_work: high,
+            ..PreparationLimits::default()
+        },
+    );
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
+    assert_eq!(
+        f.rows("SELECT * FROM plan_draft_required_unit_reconciliations ORDER BY id"),
+        reconciliations
+    );
+}
+
+#[test]
+fn header_metadata_spends_comparison_work() {
+    let f = Fixture::new(&node("created-then-replayed"));
+    f.sql()
+        .execute(
+            "UPDATE plan_drafts SET created_by=? WHERE id=2",
+            ["x".repeat(40_000)],
+        )
+        .unwrap();
+    let before = f.recorded_rows();
+    let error = refused(
+        &f,
+        false,
+        PreparationLimits {
+            comparison_work: 10_000,
+            ..PreparationLimits::default()
+        },
+    );
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
+}
+
+#[test]
+fn input_identifiers_spend_comparison_work() {
+    assert_metadata_charged(
+        "",
+        "UPDATE plan_draft_inputs SET id=9007199254740991 WHERE id=(SELECT MIN(id) FROM plan_draft_inputs WHERE draft_id=2)",
+    );
+}
+
+#[test]
+fn part_identifiers_spend_comparison_work() {
+    assert_metadata_charged(
+        "",
+        "UPDATE plan_draft_parts SET id=9007199254740991 WHERE id=(SELECT MIN(id) FROM plan_draft_parts WHERE draft_id=2)",
+    );
+}
+
+#[test]
+fn reconciliation_metadata_spends_comparison_work() {
+    let setup = select_reconciliation("'[]'", "'{\"kind\":\"unresolved\",\"conflicts\":[]}'");
+    let padded = setup.replace("0,created_by,", "0,hex(zeroblob(20000)),");
+    assert_metadata_charged(&setup, &padded);
 }
 
 #[test]
@@ -754,4 +1285,70 @@ fn refused_requests_write_nothing() {
     assert_eq!(error.to_string(), "Authentication required");
     owner.shutdown().unwrap();
     assert_eq!(f.recorded_rows(), before);
+}
+
+#[test]
+fn preparation_large_quantity_refusal_preserves_rows_and_files() {
+    for quantity in [
+        "9007199254740992",
+        "9007199254740993",
+        "1000000000000000128",
+        "100000000000000000000",
+        "1000000000000000000000",
+    ] {
+        let filename = format!("part_x{quantity}.stl");
+        let mut case = node("created-then-replayed");
+        case["files"] = json!([filename]);
+        let f = Fixture::new(&case);
+        let before = f.recorded_rows();
+        let file = f.path.join("repos/1/revisions/fixture").join(&filename);
+        let contents = std::fs::read(&file).unwrap();
+        let owner = f.open();
+        let error = recompute(
+            &owner,
+            f.reads(&case["files"], &Value::Null, None),
+            PreparationLimits::default(),
+            "large-quantity",
+            true,
+            1,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid scalar part integer");
+        owner.shutdown().unwrap();
+        assert_eq!(f.recorded_rows(), before, "{quantity}");
+        assert_eq!(std::fs::read(file).unwrap(), contents, "{quantity}");
+    }
+}
+
+#[test]
+fn large_quantity_public_json_matches_node_for_integer_and_float_values() {
+    use pp_storage::manifest_text::{DraftPart, PartManifestMetadata};
+    for (value, literal) in [
+        (json!(1000000000000000128_i64), "1000000000000000100"),
+        (json!(1e20), "100000000000000000000"),
+    ] {
+        for field in [
+            "quantityInferred",
+            "quantityOverride",
+            "quantityEffective",
+            "quantity_inferred",
+            "quantity_override",
+            "quantity_effective",
+        ] {
+            let part = DraftPart::new(json!({field: value}), PartManifestMetadata::default());
+            assert_eq!(
+                String::from_utf8(part.json_fields(&[field], false)).unwrap(),
+                format!("{{\"{field}\":{literal}}}"),
+            );
+        }
+    }
+    let part = DraftPart::new(
+        json!({"quantityOverride": null, "id": 1000000000000000128_i64}),
+        PartManifestMetadata::default(),
+    );
+    assert_eq!(
+        part.json_fields(&["quantityOverride", "id"], false),
+        br#"{"quantityOverride":null,"id":1000000000000000128}"#
+    );
 }

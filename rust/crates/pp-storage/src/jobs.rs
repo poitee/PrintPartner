@@ -751,6 +751,30 @@ impl ServerWorkerClient {
         )?)
         .receive()
     }
+    /// Runs one phase of a claimed supplied import with a live reservation for
+    /// its tenant and Source. A refused original authority
+    /// commits the refusal and its Source observation before returning the typed
+    /// failure.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn import_phase(
+        &self,
+        lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
+        phase: crate::uploads::Phase,
+    ) -> Result<crate::uploads::Operation> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        crate::uploads::submit(
+            &self.storage,
+            crate::uploads::Command::Phase {
+                lease: lease.clone(),
+                source_work: source_work.proof()?,
+                phase,
+                policy,
+            },
+            &AtomicBool::new(false),
+        )
+    }
     /// Revalidates the original credential of a live attempt. The check does
     /// not change the job.
     #[cfg(feature = "desktop_rebuild")]
@@ -1257,6 +1281,12 @@ fn bind_printer_start(tx: &Transaction<'_>, tenant: &str, mut payload: Payload) 
     payload.bind_printer_start(printer_id, upload)?;
     Ok(payload)
 }
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn fail_source_unavailable(tx: &Transaction<'_>, job: &mut JobRecord) -> Result<()> {
+    job.state = PersistentState::Failed;
+    job.recovery = Some("Source is unavailable for this job".into());
+    save(tx, job, "source_unavailable")
+}
 pub(crate) fn save(tx: &Transaction<'_>, job: &mut JobRecord, event: &str) -> Result<()> {
     job.payload.validate_stored()?;
     job.state_version += 1;
@@ -1355,6 +1385,8 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
 pub(crate) fn recover(connection: &mut Connection) -> Result<()> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     recover_in(&tx, true)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::uploads::settle_ended(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -1976,6 +2008,11 @@ pub(crate) fn user(
         UserOperation::Cancel { job_id } => {
             let mut job = owned(tx, &job_id, tenant)?;
             if job.state.terminal() || job.cancel_requested {
+                // An import that ended before its cleanup phase settles here.
+                #[cfg(feature = "desktop_rebuild")]
+                if crate::uploads::settle_terminal(tx, &job)? {
+                    return Ok(Outcome::Job(job, LocalCommit::Committed));
+                }
                 return Ok(Outcome::Job(job, LocalCommit::ReadOnly));
             }
             job.cancel_requested = true;
@@ -2211,6 +2248,10 @@ fn claim(
             let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
                 continue;
             };
+            #[cfg(feature = "desktop_rebuild")]
+            if filter.job_id.is_none() && crate::uploads::awaits_owner_input(tx, &job)? {
+                continue;
+            }
             let resource = job.payload.resource();
             if !resource.is_empty() {
                 let count = reserved_resources(tx, &job.tenant, false)?
@@ -2245,6 +2286,9 @@ fn claim(
                     }
                 };
                 if let Some(reason) = refusal {
+                    if filter.job_id.is_some() {
+                        crate::uploads::record_targeted_authority_refusal(tx, &job)?;
+                    }
                     let phase = if filter.job_id.is_some() {
                         AuthorityRefusalPhase::TargetedClaim
                     } else {
@@ -2265,9 +2309,7 @@ fn claim(
             let source = match source_binding(&job.payload)? {
                 SourceBinding::Individual(id) => {
                     if crate::catalog::get(tx, &job.tenant, id)?.is_none() {
-                        job.state = PersistentState::Failed;
-                        job.recovery = Some("Source is unavailable for this job".into());
-                        save(tx, &mut job, "source_unavailable")?;
+                        fail_source_unavailable(tx, &mut job)?;
                         continue;
                     }
                     if catalog_state.source_busy(&job.tenant, id) {
@@ -2890,10 +2932,6 @@ pub(crate) fn require_original_authority(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-610 (D14 import Phase) calls this")
-)]
 pub(crate) fn revalidate_source_authority(
     tx: &Transaction<'_>,
     job: &JobRecord,
@@ -2906,10 +2944,6 @@ pub(crate) fn revalidate_source_authority(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-610 (D14 import Phase) calls this")
-)]
 pub(crate) fn commit_source_authority_refusal(
     tx: &Transaction<'_>,
     job: &mut JobRecord,
@@ -3214,7 +3248,7 @@ pub(crate) fn publication_conflicts(
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/common/claimed_attempt.rs"
+        "/src/claimed_attempt.rs"
     ));
     use super::*;
 
@@ -3428,13 +3462,11 @@ mod tests {
     }
     #[cfg(feature = "desktop_rebuild")]
     fn test_storage() -> SettingsClient {
-        let (owner, _) = WriterOwner::open(
-            &std::env::temp_dir().join(format!("pp-claim-unit-{}", random())),
-            crate::Limits::default(),
-        )
-        .unwrap();
+        let root = std::env::temp_dir().join(format!("pp-claim-unit-{}", random()));
+        let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
         let client = owner.client();
         owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         client
     }
 
