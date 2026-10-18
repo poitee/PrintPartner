@@ -35,7 +35,9 @@ class CiPathFilterTests(unittest.TestCase):
         for path in ["rust/crates/pp-desktop/src/main.rs", "web/apps/web/src/App.tsx",
                      ".github/workflows/desktop-native-macos.yml",
                      "scripts/test_native_image_cleanup.py", "scripts/ci-path-filter.py",
-                     ".cursor/skills/verify-print-partner-rust/helpers/test_launch.py"]:
+                     ".cursor/skills/verify-print-partner-rust/helpers/test_launch.py",
+                     ".cursor/skills/verify-print-partner-rust/helpers/verify.py",
+                     ".cursor/skills/verify-print-partner-rust/helpers/future_helper.py"]:
             self.assertTrue(ci_filter.relevant(path, "native"))
         for path in ["README.md", "docs/ci.md", ".github/workflows/pr-evidence.yml"]:
             self.assertFalse(ci_filter.relevant(path, "native"))
@@ -88,6 +90,10 @@ class CiPathFilterTests(unittest.TestCase):
             docs = commit("docs/space and\nnewline.md")
             for kind in ["rust", "actions", "native"]:
                 self.assertEqual(select(base, docs, kind)[0], "relevant=false\n")
+            git("checkout", "-q", "--detach", base)
+            helper = commit(".cursor/skills/verify-print-partner-rust/helpers/verify.py")
+            self.assertEqual(select(base, helper, "native")[0], "relevant=true\n")
+            self.assertEqual(select(base, helper, "rust")[0], "relevant=false\n")
             git("checkout", "-q", "--detach", base)
             fixture = commit("fixtures/parity/jobs-model/jobs-model.json")
             self.assertEqual(select(base, fixture, "rust")[0], "relevant=true\n")
