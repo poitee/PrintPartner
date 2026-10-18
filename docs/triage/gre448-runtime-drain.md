@@ -467,10 +467,23 @@ Each of two cycles SIGKILLs only the owner PID. An unrelated `/bin/sleep` child
 of the test runner joins the backend group. The owner and backend groups must
 differ. The backend remains stopped, so it cannot handle stdin EOF. Within five
 seconds, the backend group must disappear and the peer must die by SIGKILL.
-The Linux test runner acts as a subreaper and reaps the adopted backend and
-watcher. Receipts require absent process identities and an absent group, rather
-than treating zombies as reaped. The spawn ledger must remain at one entry.
+An isolated reexecution of the exact ignored Rust test acts as a Linux
+subreaper and reaps the adopted backend and watcher. The calling test runner
+never changes its subreaper state. The child uses `--include-ignored`, and the
+GRE-826 validator requires exactly one named test to pass. On failure, the
+wrapper forwards captured stdout and stderr, preserving the proof driver
+assertion `built startup group outlived force-killed owner`. Receipts require
+absent process identities and an absent group, rather than treating zombies as
+reaped. The spawn ledger must remain at one entry.
 The fixture guard runs only after these positive assertions.
+
+The asset-free regression
+`built_startup_reexec_keeps_parent_subreaper_unchanged` runs parent states 0 and
+1 in separate test processes. Each calls the built-test wrapper across a real
+executable boundary. A probe after the child's subreaper call records its PID
+and enabled state before any assets are read. The regression requires a
+different PID, state 1 in the child, and unchanged state in each parent. It also
+rejects a launch that omits ignored-test selection.
 
 Build and run with a host-native Linux Node 24.21.0 ABI 137 binary:
 

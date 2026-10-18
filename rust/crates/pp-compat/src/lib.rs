@@ -1753,14 +1753,17 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    fn validate_subreaper_fixture(output: &std::process::Output) -> Result<(), &'static str> {
+    pub(super) fn validate_subreaper_fixture(
+        output: &std::process::Output,
+        test_name: &str,
+    ) -> Result<(), &'static str> {
         if !output.status.success() {
             return Err("isolated subreaper fixture failed");
         }
         let stdout = std::str::from_utf8(&output.stdout)
             .map_err(|_| "isolated subreaper fixture output is not UTF-8")?;
         let lines: Vec<_> = stdout.lines().filter(|line| !line.is_empty()).collect();
-        let expected = format!("test {SUBREAPER_FIXTURE} ... ok");
+        let expected = format!("test {test_name} ... ok");
         let invalid = "isolated subreaper fixture did not pass exactly once";
         let ["running 1 test", result, summary] = lines.as_slice() else {
             return Err(invalid);
@@ -1780,7 +1783,11 @@ mod tests {
     #[test]
     fn subreaper_reexec_runs_exactly_one_fixture() {
         let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
-        assert_eq!(validate_subreaper_fixture(&output), Ok(()), "{output:?}");
+        assert_eq!(
+            validate_subreaper_fixture(&output, SUBREAPER_FIXTURE),
+            Ok(()),
+            "{output:?}"
+        );
         let stdout = String::from_utf8(output.stdout.clone()).unwrap();
         for malformed in [
             stdout.repeat(2),
@@ -1791,7 +1798,7 @@ mod tests {
             let mut invalid = output.clone();
             invalid.stdout = malformed.into_bytes();
             assert_eq!(
-                validate_subreaper_fixture(&invalid),
+                validate_subreaper_fixture(&invalid, SUBREAPER_FIXTURE),
                 Err("isolated subreaper fixture did not pass exactly once")
             );
         }
@@ -1804,7 +1811,7 @@ mod tests {
         assert_eq!(output.status.code(), Some(0));
         assert!(String::from_utf8_lossy(&output.stdout).contains("running 0 tests"));
         assert_eq!(
-            validate_subreaper_fixture(&output),
+            validate_subreaper_fixture(&output, SUBREAPER_FIXTURE),
             Err("isolated subreaper fixture did not pass exactly once"),
             "{output:?}"
         );
@@ -1817,7 +1824,11 @@ mod tests {
 
         if std::env::var_os("PP_COMPAT_SUBREAPER_FIXTURE").is_none() {
             let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
-            assert_eq!(validate_subreaper_fixture(&output), Ok(()), "{output:?}");
+            assert_eq!(
+                validate_subreaper_fixture(&output, SUBREAPER_FIXTURE),
+                Ok(()),
+                "{output:?}"
+            );
             return;
         }
         assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
