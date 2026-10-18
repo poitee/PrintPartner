@@ -3,12 +3,14 @@ name: PR evidence tests
 on:
   pull_request:
     paths:
+      - '.github/pull_request_template.md'
       - 'scripts/lint-pr-evidence.mjs'
       - 'scripts/lint-pr-evidence.test.mjs'
       - '.github/workflows/pr-evidence*.yml'
   push:
     branches: [main]
     paths:
+      - '.github/pull_request_template.md'
       - 'scripts/lint-pr-evidence.mjs'
       - 'scripts/lint-pr-evidence.test.mjs'
       - '.github/workflows/pr-evidence*.yml'

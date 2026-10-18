@@ -34,7 +34,8 @@ class CiPathFilterTests(unittest.TestCase):
     def test_native_inputs(self):
         for path in ["rust/crates/pp-desktop/src/main.rs", "web/apps/web/src/App.tsx",
                      ".github/workflows/desktop-native-macos.yml",
-                     "scripts/test_native_image_cleanup.py", "scripts/ci-path-filter.py"]:
+                     "scripts/test_native_image_cleanup.py", "scripts/ci-path-filter.py",
+                     ".cursor/skills/verify-print-partner-rust/helpers/test_launch.py"]:
             self.assertTrue(ci_filter.relevant(path, "native"))
         for path in ["README.md", "docs/ci.md", ".github/workflows/pr-evidence.yml"]:
             self.assertFalse(ci_filter.relevant(path, "native"))

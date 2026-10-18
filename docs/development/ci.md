@@ -5,7 +5,7 @@ The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds an
 On PRs, the jobs are selected as follows:
 
 - `rust (linux)` and `rust (windows)` run when a `changes` job finds a change to `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, `fixtures/**`, `scripts/setup-ci-linux.sh`, the workflow itself, or the CI filter script and its tests. Other changes skip both jobs while keeping their check reports present.
-- `rust (macos)` ignores changed paths. It runs only when the PR has the exact `macos` label and is not a draft. Adding or removing the label, marking the PR ready for review and converting it to a draft each start a new run.
+- `rust (macos)` uses the same path selection. It runs only when relevant inputs change and the PR has the exact `macos` label and is not a draft. Adding or removing the label, marking the PR ready for review and converting it to a draft each start a new run.
 
 Pushes to `main`, merge groups, nightly and manual runs execute all three jobs regardless of paths. A new push to a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so each merge has a result and no `main` run waits for or cancels another. Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
@@ -132,8 +132,8 @@ The filter also skips one test by name, outside those groups:
 ## Other Rust workflows
 
 - **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
-- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. Changed paths do not select its jobs. Its `changes` job selects them by event:
-  - On pull requests, `linux-precheck`, `server-smoke`, the arm64 `bundle` and `macos-storage-gate` run only when the PR has the exact `macos` label and is not a draft. Fork PRs skip `macos-storage-gate`. The Intel bundle never runs on pull requests.
+- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. Its `changes` job selects them by event and changed paths:
+  - On pull requests, `linux-precheck`, `server-smoke`, the arm64 `bundle` and `macos-storage-gate` run only when the PR has the exact `macos` label, is not a draft, and changes desktop inputs. The selector includes the Rust inputs above, the native workflow, its cleanup tests and the macOS launch helper. Fork PRs skip `macos-storage-gate`. The Intel bundle never runs on pull requests.
   - Pushes to `main` or `master`, merge groups, nightly and manual runs select every job, including the Intel bundle.
 
   Every macOS job also needs a successful `linux-precheck`, so a broken web build never starts a macOS runner. Skipped jobs still report their checks. A new push, label change or draft change on a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so a push to `main` never waits for or cancels another `main` run.

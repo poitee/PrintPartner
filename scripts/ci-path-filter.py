@@ -13,7 +13,8 @@ def relevant(path, kind):
     if path in {"scripts/ci-path-filter.py", "scripts/test_ci_path_filter.py"}:
         return True
     if kind == "native" and path in {".github/workflows/desktop-native-macos.yml",
-                                      "scripts/test_native_image_cleanup.py"}:
+                                      "scripts/test_native_image_cleanup.py",
+                                      ".cursor/skills/verify-print-partner-rust/helpers/test_launch.py"}:
         return True
     if kind == "actions":
         return (path.startswith((".github/workflows/", ".github/actions/"))
