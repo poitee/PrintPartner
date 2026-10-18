@@ -47,6 +47,8 @@ const steps = [
   { op: "list" },
 ];
 
+const GENERATED_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
+
 // Mirrored by `Tokens` in rust/crates/pp-api/tests/auth_key_parity.rs.
 class Tokens {
   ids = new Map();
@@ -62,13 +64,19 @@ class Tokens {
     this.ids.set(body.id, `<id:${this.ids.size + 1}>`);
     this.keys.set(body.key, `<key:${this.keys.size + 1}>`);
   }
+  // Runs on raw output: an issued key may appear only as the `key` field of
+  // the response that created it.
+  leaked(issuedNow, result) {
+    const text = JSON.stringify(issuedNow ? { ...result, body: { ...result.body, key: null } } : result);
+    return [...this.keys.keys()].some((key) => text.includes(key));
+  }
   normalize(value) {
     if (typeof value === "string") return this.ids.get(value) ?? this.keys.get(value) ?? value;
     if (Array.isArray(value)) return value.map((item) => this.normalize(item));
     if (value === null || typeof value !== "object") return value;
     const result = Object.fromEntries(Object.entries(value).map(([name, item]) => [name, this.normalize(item)]));
     for (const field of ["createdAt", "lastUsedAt"]) {
-      if (typeof value[field] !== "string" || !this.ids.has(value.id)) continue;
+      if (!GENERATED_TIME.test(value[field]) || !this.ids.has(value.id)) continue;
       const slot = `${this.ids.get(value.id).slice(1, -1)}.${field}`;
       const seen = this.times.get(slot) ?? [];
       if (!seen.includes(value[field])) seen.push(value[field]);
@@ -111,7 +119,8 @@ async function probe() {
       if (step.op === "create") result = await http("POST", "/settings/api-keys");
       if (step.op === "revoke") result = await http("DELETE", `/settings/api-keys/${tokens.raw(step.id)}`);
       if (step.op === "rotate") result = await http("POST", `/settings/api-keys/${tokens.raw(step.id)}/regenerate`);
-      if ((step.op === "create" || step.op === "rotate") && result.status === 201) tokens.issue(result.body);
+      const issuedNow = (step.op === "create" || step.op === "rotate") && result.status === 201;
+      if (issuedNow) tokens.issue(result.body);
       if (step.op === "use") result = { accepted: validateApiKey(deps.repo, tokens.raw(step.key)) };
       if (step.op === "reopen") {
         store.sqlite.close();
@@ -125,6 +134,7 @@ async function probe() {
         store = open();
         result = {};
       }
+      if (tokens.leaked(issuedNow, result)) throw new Error(`Node step ${results.length} leaks an issued key`);
       results.push(tokens.normalize(result));
     }
   } finally {

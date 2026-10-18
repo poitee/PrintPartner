@@ -171,6 +171,19 @@ fn stored_keys(directory: &Path, tenant: &str) -> String {
         .unwrap()
 }
 
+/// Matches the `toISOString` form both servers write, such as `2026-10-18T13:35:59.446Z`.
+fn generated_time(value: &str) -> bool {
+    value.len() == 24
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            4 | 7 => byte == b'-',
+            10 => byte == b'T',
+            13 | 16 => byte == b':',
+            19 => byte == b'.',
+            23 => byte == b'Z',
+            _ => byte.is_ascii_digit(),
+        })
+}
+
 /// Mirrors `Tokens` in `fixtures/parity/auth-key/generate.mjs`.
 #[derive(Default)]
 struct Tokens {
@@ -201,6 +214,16 @@ impl Tokens {
         self.ids.push(body["id"].as_str().unwrap().to_owned());
         self.keys.push(body["key"].as_str().unwrap().to_owned());
     }
+    /// Runs on raw output: an issued key may appear only as the `key` field of
+    /// the response that created it.
+    fn leaked(&self, issued_now: bool, result: &Value) -> bool {
+        let mut visible = result.clone();
+        if issued_now {
+            visible["body"]["key"] = Value::Null;
+        }
+        let text = visible.to_string();
+        self.keys.iter().any(|key| text.contains(key.as_str()))
+    }
     fn normalize(&mut self, value: &Value) -> Value {
         match value {
             Value::String(text) => Value::String(self.token(text).unwrap_or_else(|| text.clone())),
@@ -215,6 +238,9 @@ impl Tokens {
                     let (Some(id), Some(time)) = (&id, value[field].as_str()) else {
                         continue;
                     };
+                    if !generated_time(time) {
+                        continue;
+                    }
                     let slot = format!("{}.{field}", &id[1..id.len() - 1]);
                     let seen = self.times.entry(slot.clone()).or_default();
                     if !seen.iter().any(|known| known == time) {
@@ -230,9 +256,13 @@ impl Tokens {
     }
 }
 
+fn issues(step: &Value, result: &Value) -> bool {
+    matches!(step["op"].as_str(), Some("create" | "rotate")) && result["status"] == 201
+}
+
 struct Replay {
     steps: Vec<Value>,
-    rust: Vec<Value>,
+    raw: Vec<Value>,
     issued: Vec<String>,
     directory: PathBuf,
     tenant: String,
@@ -249,7 +279,7 @@ async fn replay() -> Replay {
     let mut server = Server::open(&directory).await;
     let (cookie, tenant) = server.register("owner@example.com").await;
     let mut tokens = Tokens::default();
-    let mut rust = Vec::new();
+    let mut raw_results = Vec::new();
     for step in &steps {
         let raw = |field: &str| tokens.raw(step[field].as_str().unwrap());
         let result = match step["op"].as_str().unwrap() {
@@ -298,15 +328,15 @@ async fn replay() -> Replay {
             }
             op => panic!("unknown step {op}"),
         };
-        if matches!(step["op"].as_str(), Some("create" | "rotate")) && result["status"] == 201 {
+        if issues(step, &result) {
             tokens.issue(&result["body"]);
         }
-        rust.push(tokens.normalize(&result));
+        raw_results.push(result);
     }
     server.stop().await;
     Replay {
         steps,
-        rust,
+        raw: raw_results,
         issued: tokens.keys,
         directory,
         tenant,
@@ -328,15 +358,25 @@ fn rust_contract(node: &Value) -> Value {
     expected
 }
 
-fn mismatches(steps: &[Value], rust: &[Value]) -> Vec<String> {
-    assert_eq!(steps.len(), rust.len());
-    steps
-        .iter()
-        .zip(rust)
-        .enumerate()
-        .filter(|(_, (step, rust))| rust_contract(&step["node"]) != **rust)
-        .map(|(index, (step, rust))| format!("step {index} {step}\n  rust {rust}"))
-        .collect()
+/// Normalizes raw Rust results in order, as the generator does for Node, and
+/// lists every step that leaks a key or differs from the Node contract.
+fn mismatches(steps: &[Value], raw: &[Value]) -> Vec<String> {
+    assert_eq!(steps.len(), raw.len());
+    let mut tokens = Tokens::default();
+    let mut differences = Vec::new();
+    for (index, (step, result)) in steps.iter().zip(raw).enumerate() {
+        let issued_now = issues(step, result);
+        if issued_now {
+            tokens.issue(&result["body"]);
+        }
+        let rust = tokens.normalize(result);
+        if tokens.leaked(issued_now, result) {
+            differences.push(format!("step {index} leaks an issued key"));
+        } else if rust_contract(&step["node"]) != rust {
+            differences.push(format!("step {index} {step}\n  rust {rust}"));
+        }
+    }
+    differences
 }
 
 #[tokio::test]
@@ -347,7 +387,7 @@ async fn rust_key_routes_match_node_contract_and_redact_secrets() {
         "golden stores only key tokens"
     );
     let replay = replay().await;
-    let differences = mismatches(&replay.steps, &replay.rust);
+    let differences = mismatches(&replay.steps, &replay.raw);
     assert!(differences.is_empty(), "{}", differences.join("\n"));
     assert_eq!(replay.issued.len(), 4);
     let stored = stored_keys(&replay.directory, &replay.tenant);
@@ -377,27 +417,48 @@ async fn rust_key_routes_match_node_contract_and_redact_secrets() {
 async fn comparison_rejects_leaked_secret_and_accepted_revoked_key() {
     let replay = replay().await;
     std::fs::remove_dir_all(&replay.directory).unwrap();
-    assert!(mismatches(&replay.steps, &replay.rust).is_empty());
+    assert!(mismatches(&replay.steps, &replay.raw).is_empty());
     let step = |op: &str, after: usize| {
         (after..replay.steps.len())
             .find(|&index| replay.steps[index]["op"] == op)
             .unwrap()
     };
-
-    let mut leaked = replay.rust.clone();
     let list = step("list", 1);
-    leaked[list]["body"]["keys"][0]["key"] = json!("<key:1>");
-    assert_eq!(mismatches(&replay.steps, &leaked).len(), 1);
-
     let revoked_use = step("use", step("revoke", 0));
     assert_eq!(replay.steps[revoked_use]["key"], "<key:1>");
-    let mut accepted = replay.rust.clone();
-    accepted[revoked_use]["accepted"] = json!("<id:1>");
-    assert_eq!(mismatches(&replay.steps, &accepted).len(), 1);
-
-    let mut retimed = replay.rust.clone();
-    retimed[list]["body"]["keys"][0]["createdAt"] = json!("<id:1.createdAt#2>");
-    assert_eq!(mismatches(&replay.steps, &retimed).len(), 1);
+    let unknown_revoke = step("revoke", step("rotate", 0));
+    assert_eq!(replay.steps[unknown_revoke]["id"], "key_0000000000000000");
+    let key = replay.raw[1]["body"]["key"].clone();
+    let id = replay.raw[1]["body"]["id"].clone();
+    let mutations = [
+        ("key in list", list, "/body/keys/0/key", key.clone()),
+        (
+            "key as createdAt",
+            list,
+            "/body/keys/0/createdAt",
+            key.clone(),
+        ),
+        ("key as detail", unknown_revoke, "/body/detail", key),
+        (
+            "invalid createdAt",
+            list,
+            "/body/keys/0/createdAt",
+            json!("not-a-time"),
+        ),
+        (
+            "changed createdAt",
+            list,
+            "/body/keys/0/createdAt",
+            json!("2001-01-01T00:00:00.000Z"),
+        ),
+        ("revoked key accepted", revoked_use, "/accepted", id),
+    ];
+    for (name, index, pointer, value) in mutations {
+        let mut raw = replay.raw.clone();
+        let (parent, field) = pointer.rsplit_once('/').unwrap();
+        raw[index].pointer_mut(parent).unwrap()[field] = value;
+        assert_eq!(mismatches(&replay.steps, &raw).len(), 1, "{name}");
+    }
 }
 
 #[tokio::test]
