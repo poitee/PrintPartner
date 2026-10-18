@@ -288,6 +288,36 @@ fn gre_636_sigkill_releases_lock_without_manual_cleanup() {
 }
 
 #[test]
+fn gre_679_replaced_advisory_lock_cannot_admit_a_second_writer() {
+    let fixture = Fixture::new();
+    let mut owner = Process::spawn(&fixture.0, "writer");
+    owner.start();
+    assert_eq!(owner.event(), "owned");
+    let reservation = fixture.0.join(".desktop-lease");
+    let original = std::fs::read(&reservation).unwrap();
+    std::fs::rename(
+        fixture.0.join("printpartner.lock"),
+        fixture.0.join("replaced.lock"),
+    )
+    .unwrap();
+    let mut contender = Process::spawn(&fixture.0, "writer");
+    contender.start();
+    assert_eq!(
+        contender.event(),
+        "refused Data directory already owned; .desktop-lease compatibility reservation is locked"
+    );
+    assert!(contender.wait().success());
+    assert_eq!(std::fs::read(&reservation).unwrap(), original);
+    assert!(reservation.is_file());
+    assert!(owner.child.try_wait().unwrap().is_none());
+    owner.stop();
+    let mut successor = Process::spawn(&fixture.0, "writer");
+    successor.start();
+    assert_eq!(successor.event(), "owned");
+    successor.stop();
+}
+
+#[test]
 fn gre_636_lock_refusal_precedes_database_preflight() {
     let fixture = Fixture::new();
     let database = fixture.0.join("print-partner.db");
