@@ -1,0 +1,7 @@
+[profile.pp-local-linux]
+test-threads = 3
+
+# Real-process suites must not compete for the three-vCPU runner's test capacity.
+[[profile.pp-local-linux.overrides]]
+filter = 'binary(=runtime_m0) | package(=pp-compat)'
+threads-required = "num-test-threads"
