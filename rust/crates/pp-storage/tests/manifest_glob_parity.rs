@@ -19,10 +19,12 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    process::Command,
     sync::{Arc, RwLock, atomic::AtomicBool},
     time::Duration,
 };
+
+#[path = "common/process.rs"]
+mod child_process;
 
 fn session() -> Credential {
     Credential::Session(Secret::new("required-unit-fixture-secret".into()))
@@ -158,12 +160,13 @@ impl Drop for Fixture {
 fn committed_matrix_matches_current_node() {
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../fixtures/parity/manifest-globs/generate.mjs");
-    let output =
-        Command::new(std::env::var_os("PP_SCHEMA_PARITY_NODE").unwrap_or_else(|| "node".into()))
-            .arg(script)
-            .arg("--check")
-            .output()
-            .expect("run Node fixture generator");
+    let output = child_process::command(
+        std::env::var_os("PP_SCHEMA_PARITY_NODE").unwrap_or_else(|| "node".into()),
+    )
+    .arg(script)
+    .arg("--check")
+    .output()
+    .expect("run Node fixture generator");
     assert!(
         output.status.success(),
         "Node fixture drift check failed:\n{}\n{}",
