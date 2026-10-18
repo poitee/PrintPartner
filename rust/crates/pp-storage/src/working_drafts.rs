@@ -30,6 +30,8 @@ pub mod observation;
 mod preparation;
 #[cfg(test)]
 mod preparation_tests;
+mod rebase;
+pub use rebase::{Conflict as RebaseConflict, Field as RebaseField, RebaseOutcome, RebaseRequest};
 
 mod manifest;
 #[cfg(test)]
@@ -171,13 +173,8 @@ pub struct RecomputeRequest {
 }
 impl RecomputeRequest {
     pub fn new(idempotency_key: &str, apply_manifest: bool) -> Result<Self> {
-        let key = JsText::scalar(idempotency_key).trim_ecmascript();
-        ensure!(!key.is_empty(), "Plan draft idempotency key is required");
-        ensure!(key.units().len() <= 160, "Invalid idempotency key");
         Ok(Self {
-            idempotency_key: key
-                .as_scalar()
-                .ok_or_else(|| anyhow!("Invalid idempotency key"))?,
+            idempotency_key: self::idempotency_key(idempotency_key)?,
             apply_manifest,
         })
     }
@@ -188,6 +185,15 @@ impl RecomputeRequest {
             ..Default::default()
         }
     }
+}
+
+/// Node's trimmed `Idempotency-Key` header.
+fn idempotency_key(value: &str) -> Result<String> {
+    let key = JsText::scalar(value).trim_ecmascript();
+    ensure!(!key.is_empty(), "Plan draft idempotency key is required");
+    ensure!(key.units().len() <= 160, "Invalid idempotency key");
+    key.as_scalar()
+        .ok_or_else(|| anyhow!("Invalid idempotency key"))
 }
 
 /// Node's `recomputePlanDraft` result, after the service's Plan check.
@@ -487,6 +493,13 @@ enum Operation {
         observations: Observations,
         reply: RecomputeReply,
     },
+    Rebase {
+        draft_id: PositiveId,
+        idempotency_key: String,
+        request: RebaseRequest,
+        observations: Observations,
+        reply: mpsc::Sender<Result<RebaseOutcome>>,
+    },
 }
 enum RecomputeReply {
     Draft(mpsc::Sender<Result<RecomputeOutcome>>),
@@ -671,6 +684,44 @@ impl WorkingDraftClient {
             }
         })
     }
+    /// Creates an open draft from a fresh preparation carrying the source
+    /// draft's Part decisions, as Node's `rebasePlanDraft` does. An open
+    /// source is abandoned in the same transaction. Node's service then selects
+    /// Required units; this method does not.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rebase(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        draft_id: PositiveId,
+        idempotency_key: &str,
+        request: RebaseRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<RebaseOutcome> {
+        let idempotency_key = self::idempotency_key(idempotency_key)?;
+        let observations = self
+            .observations
+            .clone()
+            .ok_or_else(|| anyhow!("Working-draft observations are not configured"))?;
+        self.enqueue(cancelled, wait, |reply, cancelled| {
+            Envelope::WorkingDraftWrite {
+                command: Write {
+                    credential,
+                    profile,
+                    policy: self.policy,
+                    cancelled,
+                    operation: Operation::Rebase {
+                        draft_id,
+                        idempotency_key,
+                        request,
+                        observations,
+                        reply,
+                    },
+                },
+            }
+        })
+    }
     fn enqueue<T>(
         &self,
         cancelled: Arc<AtomicBool>,
@@ -819,6 +870,25 @@ pub(super) fn write(
                     }));
                 }
             }
+        }
+        Operation::Rebase {
+            draft_id,
+            idempotency_key,
+            request,
+            observations,
+            reply,
+        } => {
+            let _ = reply.send(rebase::rebase(
+                connection,
+                &credential,
+                policy,
+                profile,
+                draft_id,
+                &idempotency_key,
+                &request,
+                &observations,
+                &cancelled,
+            ));
         }
     }
 }
@@ -1211,7 +1281,7 @@ fn recompute(
             "UPDATE plan_drafts SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND state='open'",
             params![tenant, profile],
         )?;
-        let id = insert_snapshot(tx, &tenant, &actor, profile, key, &prepared)?;
+        let id = insert_snapshot(tx, &tenant, &actor, profile, key, &prepared, None)?;
         let created = draft(tx, &tenant, profile, id)?
             .ok_or_else(|| anyhow!("Created Plan draft is missing"))?;
         Ok(RecomputeOutcome::Created {
@@ -1400,9 +1470,10 @@ fn insert_snapshot(
     profile: i64,
     key: &str,
     prepared: &preparation::PreparedDraftSnapshot,
+    rebased_from: Option<&rebase::Source<'_>>,
 ) -> Result<i64> {
     tx.execute(
-        "INSERT INTO plan_drafts (tenant_id,profile_id,base_revision_id,base_plan_version,state,digest_format,snapshot_digest,created_by,idempotency_key,created_at) VALUES (?,?,?,?,'open','plan-draft-v1',?,?,?,?)",
+        "INSERT INTO plan_drafts (tenant_id,profile_id,base_revision_id,base_plan_version,state,digest_format,snapshot_digest,created_by,idempotency_key,created_at,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest) VALUES (?,?,?,?,'open','plan-draft-v1',?,?,?,?,?,?,?)",
         params![
             tenant,
             profile,
@@ -1412,6 +1483,9 @@ fn insert_snapshot(
             actor,
             key,
             auth::catalog_timestamp(),
+            rebased_from.map(|source| source.id),
+            rebased_from.map(|source| source.generation),
+            rebased_from.map(|source| source.digest),
         ],
     )?;
     let id = tx.last_insert_rowid();
