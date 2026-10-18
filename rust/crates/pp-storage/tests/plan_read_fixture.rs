@@ -18,8 +18,7 @@ impl Fixture {
         Self(root)
     }
     fn connection(&self) -> Connection {
-        let connection = Connection::open(self.0.join("print-partner.db")).unwrap();
-        connection
+        Connection::open(self.0.join("print-partner.db")).unwrap()
     }
     #[cfg(feature = "desktop_rebuild")]
     fn mutate(&self, edit: impl FnOnce(&Connection)) {
