@@ -751,6 +751,39 @@ fn stored_kit_preserves_duplicate_free_node_counts_and_depth() {
 }
 
 #[test]
+fn stored_kit_missing_value_tokens_preserve_the_remaining_node_budget() {
+    for (raw, nodes) in [("", 1), (" \t\r\n", 1), ("[0,]", 3), (r#"{"key": }"#, 3)] {
+        let cancelled = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                nodes,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            observation::stored_kit(raw, &mut budget)
+                .map(drop)
+                .map_err(|error| format!("{error:?}")),
+            Ok(()),
+            "{raw:?}",
+        );
+        assert_eq!(
+            observation::stored_kit("{}", &mut budget)
+                .map(drop)
+                .map_err(|error| format!("{error:?}")),
+            Ok(()),
+            "remaining budget after {raw:?}",
+        );
+        assert!(matches!(
+            observation::stored_kit("{}", &mut budget),
+            Err(ReadFailure::LimitExceeded(Resource::Nodes))
+        ));
+    }
+}
+
+#[test]
 fn stored_kit_cancels_during_parse_before_malformed_tail() {
     let cancelled = AtomicBool::new(false);
     let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();

@@ -166,11 +166,17 @@ struct Parser<'a, E> {
 
 impl<E: From<JsonError>> Parser<'_, E> {
     fn value(&mut self, depth: usize) -> Result<JsonValue, E> {
+        self.whitespace();
+        if !matches!(
+            self.peek(),
+            Some(b'n' | b't' | b'f' | b'"' | b'[' | b'{' | b'-' | b'0'..=b'9')
+        ) {
+            return Err(JsonError::Syntax.into());
+        }
         if depth > MAX_DEPTH {
             return Err(JsonError::Limit(JsonLimit::Depth).into());
         }
         self.node(depth)?;
-        self.whitespace();
         match self.peek() {
             Some(b'n') => Ok(self.literal(b"null", JsonValue::Null)?),
             Some(b't') => Ok(self.literal(b"true", JsonValue::Bool(true))?),
@@ -399,6 +405,24 @@ mod tests {
         .unwrap();
         assert_eq!(depths, [0, 1, 1, 2, 2, 3, 3, 1, 1]);
         assert_eq!(parsed, parse(input).unwrap());
+    }
+
+    #[test]
+    fn missing_value_tokens_return_syntax_without_charging_nodes() {
+        for (input, expected_depths) in [
+            ("", vec![]),
+            (" \t\r\n", vec![]),
+            ("[0,]", vec![0, 1]),
+            (r#"{"key": }"#, vec![0, 1]),
+        ] {
+            let mut depths = Vec::new();
+            let parsed = parse_with_node(input.as_bytes(), |depth| {
+                depths.push(depth);
+                Ok::<(), JsonError>(())
+            });
+            assert_eq!(parsed, Err(JsonError::Syntax), "{input:?}");
+            assert_eq!(depths, expected_depths, "{input:?}");
+        }
     }
 
     #[test]
