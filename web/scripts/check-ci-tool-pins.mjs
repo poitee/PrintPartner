@@ -26,7 +26,37 @@ const desktopNodeLanes = [
   ['desktop-e2e', 'linux-smoke', 'E2E', 22],
   ['desktop-webkit', 'webkit-stl', 'WEBKIT', 24],
 ];
-const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence', ...desktopNodeLanes.map(([name]) => name)];
+const desktopNodeSetups = {
+  'desktop-runtime': {
+    runtime: { majors: [22, 24] },
+    'source-artifacts': { majors: [24] },
+    'rust-verify': { majors: [24] },
+  },
+  'desktop-native-macos': {
+    'linux-precheck': { majors: [24], needs: ['changes'], condition: "${{ needs.changes.outputs.macos == 'true' }}" },
+    'server-smoke': {
+      majors: [24],
+      needs: ['changes', 'linux-precheck'],
+      condition: "${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}",
+    },
+    bundle: {
+      majors: [24],
+      needs: ['changes', 'linux-precheck'],
+      condition: "${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}",
+    },
+    'bundle-intel': {
+      majors: [24],
+      needs: ['changes', 'linux-precheck'],
+      condition: "${{ !cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success' }}",
+    },
+    'macos-storage-gate': {
+      majors: [22, 24],
+      needs: ['changes', 'linux-precheck'],
+      condition: "${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}",
+    },
+  },
+};
+const additionalNodeWorkflows = ['integration-smoke', 'pr-evidence', ...desktopNodeLanes.map(([name]) => name), ...Object.keys(desktopNodeSetups)];
 const desktopContracts = /^desktop-contracts\.ya?ml$/;
 const directory = resolve(process.argv[2] ?? join(root, '.github/workflows'));
 let declarations = 0;
@@ -117,6 +147,80 @@ function checkNodeLanes(workflow, file, names, code = 'WEB', condition, major = 
   }
 }
 
+function hasExpectedNeeds(job, expected) {
+  const needs = Object.hasOwn(job ?? {}, 'needs') ? job.needs : [];
+  const actual = typeof needs === 'string' ? [needs] : needs;
+  return Array.isArray(actual) && actual.length === expected.length
+    && new Set(actual).size === actual.length && actual.every(name => expected.includes(name));
+}
+
+function effectiveShell(workflow, job, step) {
+  for (const scope of [step, job.defaults?.run, workflow.defaults?.run]) {
+    if (mapping(scope) && Object.hasOwn(scope, 'shell')) return scope.shell;
+  }
+}
+
+function checkDesktopNodeSetups(workflow, file, lanes) {
+  const expectedVersions = new Map();
+  const nodeCommand = /\b(?:node|npm|npx|corepack|yarn|pnpm)\b/;
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (!Object.hasOwn(lanes, name) && Array.isArray(job?.steps)
+      && job.steps.some(step => typeof step?.uses === 'string'
+        && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node')) {
+      report(file, `jobs.${name}`, 'UNEXPECTED_DESKTOP_NODE_SETUP', 'Node setups must belong to a declared desktop lane');
+    }
+  }
+  for (const [name, { majors, needs = [], condition: jobCondition }] of Object.entries(lanes)) {
+    const path = `jobs.${name}.steps`;
+    const steps = workflow.jobs[name]?.steps;
+    const setups = Array.isArray(steps) ? steps.filter(step => mapping(step)
+      && typeof step.uses === 'string' && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node') : [];
+    const job = workflow.jobs[name];
+    if (setups.length !== majors.length || Object.hasOwn(job ?? {}, 'continue-on-error')
+      || !hasExpectedNeeds(job, needs)
+      || (jobCondition === undefined ? Object.hasOwn(job ?? {}, 'if') : job?.if !== jobCondition)) {
+      report(file, path, 'INVALID_DESKTOP_NODE_SETUP', `expected ${majors.length} setup-node steps with the permitted job condition, dependencies ${JSON.stringify(needs)}, and without a job failure override`);
+      continue;
+    }
+    for (const [index, setup] of setups.entries()) {
+      const major = majors[index];
+      const version = setup.with?.['node-version'];
+      if (!mapping(setup.with) || typeof version !== 'string'
+        || !new RegExp(`^${major}\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$`).test(version)
+        || Object.hasOwn(setup.with, 'node-version-file') || Object.hasOwn(setup, 'if')
+        || Object.hasOwn(setup, 'continue-on-error')) {
+        report(file, path, 'UNPINNED_DESKTOP_NODE', `setup-node must select one exact Node ${major} patch without a step condition or failure overrides`);
+        continue;
+      }
+      if (expectedVersions.has(major) && expectedVersions.get(major) !== version) {
+        report(file, path, 'MISMATCHED_DESKTOP_NODE', `expected ${expectedVersions.get(major)}, received ${version}`);
+      }
+      expectedVersions.set(major, version);
+      const verification = steps[steps.indexOf(setup) + 1];
+      if (effectiveShell(workflow, job, verification) !== 'bash') {
+        report(file, path, 'INVALID_DESKTOP_NODE_SHELL', 'runtime assertions must use the built-in bash shell through step, job, or workflow settings');
+      }
+      if (!mapping(verification) || verification.run !== `test "$(node --version)" = "v${version}"`
+        || Object.hasOwn(verification, 'if') || Object.hasOwn(verification, 'continue-on-error')) {
+        report(file, path, 'MISSING_DESKTOP_NODE_VERIFICATION', 'setup-node must be immediately followed by an unconditional matching runtime assertion');
+      }
+      if (index > 0) {
+        const previous = setups[index - 1];
+        const fixtureVersion = previous.with?.['node-version'];
+        const fixtureRecord = `test "$(node --version)" = v${fixtureVersion}\necho "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >> "$GITHUB_ENV"\n`;
+        if (steps.slice(steps.indexOf(previous) + 2, steps.indexOf(setup)).some(step =>
+          typeof step?.run === 'string' && nodeCommand.test(step.run) && step.run !== fixtureRecord)) {
+          report(file, path, 'EARLY_DESKTOP_NODE_COMMAND', 'only fixture executable recording may use Node before the build runtime setup');
+        }
+      }
+    }
+    if (steps.slice(0, steps.indexOf(setups[0])).some(step => typeof step?.run === 'string'
+      && nodeCommand.test(step.run))) {
+      report(file, path, 'EARLY_DESKTOP_NODE_COMMAND', 'Node and dependency commands must follow setup-node and its runtime assertion');
+    }
+  }
+}
+
 function checkUses(step, file, path, seen) {
   if (!Object.hasOwn(step, 'uses')) return;
   if (!literal(step.uses)) {
@@ -193,6 +297,16 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
   for (const [name, lane, code, major] of desktopNodeLanes) {
     if (new RegExp(`^${name}\\.ya?ml$`, 'i').test(basename(file))) {
       checkNodeLanes(workflow, file, [lane], code, undefined, major);
+    }
+  }
+  for (const [name, lanes] of Object.entries(desktopNodeSetups)) {
+    if (!new RegExp(`^${name}\\.ya?ml$`, 'i').test(basename(file))) continue;
+    checkDesktopNodeSetups(workflow, file, lanes);
+    if (name === 'desktop-native-macos') {
+      const changes = workflow.jobs.changes;
+      if (!mapping(changes) || ['if', 'needs', 'continue-on-error'].some(key => Object.hasOwn(changes, key))) {
+        report(file, 'jobs.changes', 'INVALID_DESKTOP_PREREQUISITE', 'changes must exist, run unconditionally without dependencies, and propagate failure');
+      }
     }
   }
   if (/^web-ci\.ya?ml$/.test(basename(file))) checkNodeLanes(workflow, file, ['web', 'web-build']);
