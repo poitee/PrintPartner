@@ -11,7 +11,7 @@ use pp_storage::{
         observation::{
             ArtifactRead, CheckoutManifestUse, DocumentRead, DraftReads, InventoryPath,
             OwnedCatalogReadRequest, OwnedCheckoutReadRequest, OwnedStlReadRequest,
-            PreparationBudget, PreparationLimits, ReadFailure, ReadResult, StlInventory,
+            PreparationBudget, PreparationLimits, ReadFailure, ReadResult, Resource, StlInventory,
             StlRootRead,
         },
     },
@@ -238,10 +238,10 @@ fn rebase(
     owner: &WriterOwner,
     reads: Arc<Shared>,
     call: &Value,
+    limits: PreparationLimits,
     cancelled: Arc<AtomicBool>,
 ) -> anyhow::Result<Value> {
-    let client =
-        owner.working_drafts_with_observations(policy(), reads, PreparationLimits::default())?;
+    let client = owner.working_drafts_with_observations(policy(), reads, limits)?;
     let request: RebaseRequest = serde_json::from_value(call["request"].clone())?;
     let outcome = client.rebase(
         session(),
@@ -301,6 +301,7 @@ fn compare_node(name: &str) {
                 &owner,
                 f.reads(&case["files"], &call["between"], None),
                 call,
+                PreparationLimits::default(),
                 Arc::new(AtomicBool::new(false)),
             ),
             other => panic!("Unknown Node call {other}"),
@@ -381,6 +382,11 @@ node_case!(
 );
 node_case!(a_layer_shared_by_two_sources_conflicts, "shared-layer");
 node_case!(a_duplicated_part_key_is_ambiguous, "duplicate-key");
+node_case!(
+    a_renamed_part_matches_by_tracked_artifact,
+    "artifact-rename"
+);
+node_case!(two_decisions_on_one_target_collide, "artifact-collision");
 node_case!(a_profile_without_layers_is_no_layers, "no-layers");
 node_case!(a_profile_without_stls_is_no_stls, "no-stls");
 
@@ -392,7 +398,14 @@ fn cancellation_during_preparation_writes_nothing() {
     let owner = f.open();
     let cancelled = Arc::new(AtomicBool::new(false));
     let reads = f.reads(&case["files"], &Value::Null, Some(cancelled.clone()));
-    let error = rebase(&owner, reads, &case["calls"][0], cancelled).unwrap_err();
+    let error = rebase(
+        &owner,
+        reads,
+        &case["calls"][0],
+        PreparationLimits::default(),
+        cancelled,
+    )
+    .unwrap_err();
     owner.shutdown().unwrap();
     assert!(
         matches!(error.downcast_ref(), Some(ReadFailure::Cancelled)),
@@ -419,10 +432,49 @@ fn a_preparation_slower_than_the_busy_wait_still_writes() {
         &owner,
         reads,
         &case["calls"][0],
+        PreparationLimits::default(),
         Arc::new(AtomicBool::new(false)),
     );
     owner.shutdown().unwrap();
     assert_eq!(outcome.unwrap()["kind"], "rebased");
+}
+
+/// Loading the source draft spends the preparation budget, so an oversized
+/// source is refused before anything is written.
+#[test]
+fn an_oversized_source_draft_exceeds_the_comparison_budget() {
+    let case = node("base-moved-after-prepare");
+    let f = Fixture::new(&case);
+    f.sql()
+        .execute(
+            "UPDATE plan_draft_parts SET notes=? WHERE draft_id=2",
+            ["n".repeat(60_000)],
+        )
+        .unwrap();
+    let before = f.recorded_rows();
+    let owner = f.open();
+    let limits = PreparationLimits {
+        comparison_work: 8_192,
+        ..PreparationLimits::default()
+    };
+    let reads = f.reads(&case["files"], &Value::Null, None);
+    let error = rebase(
+        &owner,
+        reads,
+        &case["calls"][0],
+        limits,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap_err();
+    owner.shutdown().unwrap();
+    assert!(
+        matches!(
+            error.downcast_ref(),
+            Some(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(f.recorded_rows(), before);
 }
 
 #[test]
@@ -435,6 +487,7 @@ fn a_cancelled_request_is_refused_before_reading() {
         &owner,
         reads,
         &case["calls"][0],
+        PreparationLimits::default(),
         Arc::new(AtomicBool::new(true)),
     )
     .unwrap_err();

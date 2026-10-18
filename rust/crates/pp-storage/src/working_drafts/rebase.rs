@@ -206,10 +206,10 @@ pub(super) fn rebase(
     else {
         return finished(RebaseOutcome::ProfileNotFound);
     };
-    if let Some(outcome) = stored(&tx, &tenant, &actor, profile, key, &source)? {
+    if let Some(outcome) = stored(&tx, &tenant, &actor, profile, key, &source, &mut budget)? {
         return finished(outcome);
     }
-    let Some(current) = draft(&tx, &tenant, profile, source.id)? else {
+    let Some(current) = load(&tx, &tenant, profile, source.id, &mut budget)? else {
         return finished(RebaseOutcome::NotFound);
     };
     if let Some(outcome) = source.check(&current)? {
@@ -236,12 +236,12 @@ pub(super) fn rebase(
         return transact(connection, admission, cancelled, |tx| {
             let checked = recheck(
                 tx,
-                credential,
-                policy,
+                (credential, policy),
                 (&tenant, &actor),
                 profile,
                 key,
                 &source,
+                &mut budget,
             )?;
             let (current, profile_row) = match checked {
                 Ok(checked) => checked,
@@ -287,10 +287,16 @@ pub(super) fn rebase(
         }
     };
     let tx = connection.transaction()?;
-    let old = accepted_parts(&tx, &tenant, profile, &current.header["baseRevisionId"])?;
-    let now = accepted_parts(&tx, &tenant, profile, &base["baseRevisionId"])?;
+    let old = accepted_parts(
+        &tx,
+        &tenant,
+        profile,
+        &current.header["baseRevisionId"],
+        &mut budget,
+    )?;
+    let now = accepted_parts(&tx, &tenant, profile, &base["baseRevisionId"], &mut budget)?;
     tx.commit()?;
-    let conflicts = merge(&current, &old, &now, &mut prepared)?;
+    let conflicts = merge(&current, &old, &now, &mut prepared, &mut budget)?;
     if !conflicts.is_empty() {
         return finished(RebaseOutcome::MergeConflicts { conflicts });
     }
@@ -298,12 +304,12 @@ pub(super) fn rebase(
     transact(connection, admission, cancelled, |tx| {
         let checked = recheck(
             tx,
-            credential,
-            policy,
+            (credential, policy),
             (&tenant, &actor),
             profile,
             key,
             &source,
+            &mut budget,
         )?;
         let (current, profile_row) = match checked {
             Ok(checked) => checked,
@@ -329,7 +335,7 @@ pub(super) fn rebase(
             });
         }
         let id = insert_snapshot(tx, &tenant, &actor, profile, key, &prepared, Some(&source))?;
-        let rebased = draft(tx, &tenant, profile, id)?
+        let rebased = load(tx, &tenant, profile, id, &mut budget)?
             .filter(|d| {
                 d.header["snapshotDigest"] == prepared.digest.as_str()
                     && draft_origin(&d.header).ok() == Some(source.origin())
@@ -345,22 +351,22 @@ pub(super) fn rebase(
 /// draft and the Plan's row.
 fn recheck(
     tx: &Transaction<'_>,
-    credential: &Credential,
-    policy: auth::AuthPolicy,
+    (credential, policy): (&Credential, auth::AuthPolicy),
     (tenant, actor): (&str, &str),
     profile: i64,
     key: &str,
     source: &Source<'_>,
+    budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<Result<(Draft, Value), RebaseOutcome>> {
     let principal = auth::authority::queries::reconciliation_actor_ref(tx, credential, policy)?;
     ensure!(
         principal == (tenant.to_owned(), actor.to_owned()),
         "Authentication principal changed"
     );
-    if let Some(outcome) = stored(tx, tenant, actor, profile, key, source)? {
+    if let Some(outcome) = stored(tx, tenant, actor, profile, key, source, budget)? {
         return Ok(Err(outcome));
     }
-    let Some(current) = draft(tx, tenant, profile, source.id)? else {
+    let Some(current) = load(tx, tenant, profile, source.id, budget)? else {
         return Ok(Err(RebaseOutcome::NotFound));
     };
     if let Some(outcome) = source.check(&current)? {
@@ -389,13 +395,14 @@ fn stored(
     profile: i64,
     key: &str,
     source: &Source<'_>,
+    budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<Option<RebaseOutcome>> {
     if let Some(row) = one(
         tx,
         "SELECT id FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND created_by=? AND idempotency_key=?",
         &[&tenant, &profile, &actor, &key],
     )? {
-        let winner = draft(tx, tenant, profile, num(&row, "id")?)?
+        let winner = load(tx, tenant, profile, num(&row, "id")?, budget)?
             .ok_or_else(|| anyhow!("Saved Plan draft is missing"))?;
         return Ok(Some(if draft_origin(&winner.header)? == source.origin() {
             RebaseOutcome::Existing {
@@ -413,19 +420,32 @@ fn stored(
     else {
         return Ok(None);
     };
-    let successor = draft(tx, tenant, profile, num(&row, "id")?)?
+    let successor = load(tx, tenant, profile, num(&row, "id")?, budget)?
         .ok_or_else(|| anyhow!("Rebased Plan draft is missing"))?;
     if successor.header["rebasedFromSnapshotDigest"] == source.digest {
         return Ok(Some(RebaseOutcome::Existing {
             draft: snapshot(&successor)?,
         }));
     }
-    Ok(Some(match draft(tx, tenant, profile, source.id)? {
+    Ok(Some(match load(tx, tenant, profile, source.id, budget)? {
         Some(current) => RebaseOutcome::SourceConflict {
             draft: snapshot(&current)?,
         },
         None => RebaseOutcome::NotFound,
     }))
+}
+
+/// `draft`, charging what it reads to the budget and checking cancellation
+/// between rows, as recompute's carry does.
+fn load(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    id: i64,
+    budget: &mut observation::PreparationBudget<'_>,
+) -> Result<Option<Draft>> {
+    charge_open_draft(tx, tenant, id, budget)?;
+    storage::draft_checked(tx, tenant, profile, id, &|| Ok(budget.check()?))
 }
 
 /// Node's `digestPlanInputs` comparison: the input fields, stably sorted by
@@ -461,6 +481,7 @@ fn accepted_parts(
     tenant: &str,
     profile: i64,
     revision: &Value,
+    budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<Vec<Accepted>> {
     let Some(revision) = revision.as_i64() else {
         return Ok(Vec::new());
@@ -481,6 +502,7 @@ fn accepted_parts(
     )?
     .into_iter()
     .map(|row| {
+        budget.visit(0)?;
         Ok(Accepted {
             id: num(&row, "id")?,
             projection: row["projectionPartId"].as_i64(),
@@ -559,6 +581,7 @@ fn merge(
     old: &[Accepted],
     now: &[Accepted],
     fresh: &mut preparation::PreparedDraftSnapshot,
+    budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<Vec<Conflict>> {
     let old_by_id: HashMap<_, _> = old.iter().map(|part| (part.id, part)).collect();
     let baseline = |part: &DraftPart, field: Field| -> Result<Value> {
@@ -576,6 +599,7 @@ fn merge(
     order.sort_by_key(|index| source.parts[*index]["id"].as_i64());
     let mut decisions = Vec::new();
     for &index in &order {
+        budget.check()?;
         let part = &source.parts[index];
         for field in [Field::Included, Field::QuantityOverride] {
             let new_included = field == Field::Included && part["baseRevisionPartId"].is_null();
@@ -615,6 +639,7 @@ fn merge(
     let mut targets = Vec::<(usize, usize)>::new();
     let mut conflicts = Vec::new();
     for index in decided {
+        budget.check()?;
         let part = &source.parts[index];
         let source_part_id = num(part, "id")?;
         let Some(source_id) = source_evidence.source(part)? else {
@@ -687,6 +712,7 @@ fn merge(
         let targets: HashMap<_, _> = targets.into_iter().collect();
         let original = fresh.parts.clone();
         for (index, field) in decisions {
+            budget.check()?;
             // A decision without a target was on a Part the Source dropped.
             let Some(&target) = targets.get(&index) else {
                 continue;

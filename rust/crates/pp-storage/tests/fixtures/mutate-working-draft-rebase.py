@@ -22,6 +22,8 @@ mutants = [
     ('shared layer keeps its first Source', '.and_modify(|shared| *shared = None)', '.and_modify(|_| ())'),
     ('duplicated key not ambiguous', '&& !(source_evidence.keyed(source_id, key).len() == 1 && found.len() == 1);', '&& false;'),
     ('projection match skipped', 'old_projections.get(projection) == Some(&1)', 'false'),
+    ('tracked artifact fallback skipped', 'let found = if fresh_evidence.tracked.contains(&source_id) {', 'let found = if false {'),
+    ('target collision not reported', 'if source_part_ids.len() > 1 {', 'if false {'),
     ('concurrent decision overwritten', 'if !independent && *current != baseline(part, field)? && current != value {', 'if false {'),
     ('effective quantity not refreshed', 'next["quantityEffective"] = if value.is_null() {', 'next["quantityOverride"] = if value.is_null() {'),
     ('merged digest kept', 'fresh.digest = model::planning(&fresh.base, &fresh.capture.inputs, &fresh.parts)?;', ''),
