@@ -111,6 +111,38 @@ jobs:
         \ move {\\n        let started = std::time::Instant::now();\\n        loop {\\n            eprintln!(\"\
         RESTART_STATE {:?} {:?}\", started.elapsed(), *diagnostics.borrow());\\n            if diagnostics.changed().await.is_err()\
         \ { break; }\\n        }\\n    });\\n')\np.write_text(s)\nPYCODE\n"
+    - name: Measure release verification phases
+      run: 'python3 - <<''PYCODE''
+
+        from pathlib import Path
+
+        p=Path("rust/crates/pp-compat/src/lib.rs")
+
+        s=p.read_text().replace("let bundle = Bundle::clone(&spec.bundle);", ''let verification_started = std::time::Instant::now();\n            let
+        bundle = Bundle::clone(&spec.bundle);'')
+
+        s=s.replace(''.context("Release verification task failed")??;'', ''.context("Release verification task failed")??;\n            eprintln!("RESTART_VERIFY
+        {:?}", verification_started.elapsed());'')
+
+        p.write_text(s)
+
+        p=Path("rust/crates/pp-compat/src/release.rs")
+
+        s=p.read_text().replace(''let release = manifest()?;\n    ensure!('', ''let backend_started = std::time::Instant::now();\n    let
+        release = manifest()?;\n    ensure!('')
+
+        s=s.replace(''measure(&bundle.node)? == release.node_sha256,'', ''{ let started = std::time::Instant::now();
+        let result = measure(&bundle.node)?; eprintln!("VERIFY_NODE {:?}", started.elapsed()); result } == release.node_sha256,'')
+
+        s=s.replace(''verify_dependencies(&bundle.web_root, &release.dependencies, stop)?;'', ''eprintln!("VERIFY_BEFORE_DEPS
+        {:?}", backend_started.elapsed());\n    verify_dependencies(&bundle.web_root, &release.dependencies, stop)?;\n    eprintln!("VERIFY_TOTAL
+        {:?}", backend_started.elapsed());'')
+
+        p.write_text(s)
+
+        PYCODE
+
+        '
     - name: nextest (desktop_rebuild off)
       if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
       run: cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 --test-threads
