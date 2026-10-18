@@ -13,9 +13,17 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
+    path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+struct Scratch(PathBuf);
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -147,6 +155,7 @@ async fn compare(name: &str) {
     let mut random = [0; 12];
     getrandom::fill(&mut random).unwrap();
     let directory = std::env::temp_dir().join(format!("pp-auth-health-{}", hex::encode(random)));
+    let _cleanup = Scratch(directory.clone());
     let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
     let seed = owner.auth(FirstUserTenant::NewUser);
     let cookie = register(&seed, "health@example.test").await;
