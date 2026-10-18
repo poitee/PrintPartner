@@ -940,16 +940,39 @@ mod tests {
 
     pub(super) fn assert_lock_held_during_reservation_release() {
         if let Some(path) = CHECK_LOCK_DURING_RESERVATION_RELEASE.take() {
-            assert!(path.join(".desktop-lease").is_file());
-            let contender = File::open(path.join("printpartner.lock")).unwrap();
+            let probe = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "lease::tests::gre_679_release_order_probe",
+                    "--nocapture",
+                ])
+                .env("PP_GRE_679_RELEASE_PROBE", path)
+                .output()
+                .unwrap();
             assert!(
-                matches!(
-                    fs4::FileExt::try_lock(&contender),
-                    Err(fs4::TryLockError::WouldBlock)
-                ),
-                "advisory lock released before compatibility reservation cleanup"
+                probe.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&probe.stdout),
+                String::from_utf8_lossy(&probe.stderr)
             );
         }
+    }
+
+    #[test]
+    fn gre_679_release_order_probe() {
+        let Some(path) = std::env::var_os("PP_GRE_679_RELEASE_PROBE") else {
+            return;
+        };
+        let path = PathBuf::from(path);
+        assert!(path.join(".desktop-lease").is_file());
+        let contender = File::open(path.join("printpartner.lock")).unwrap();
+        assert!(
+            matches!(
+                fs4::FileExt::try_lock(&contender),
+                Err(fs4::TryLockError::WouldBlock)
+            ),
+            "advisory lock released before compatibility reservation cleanup"
+        );
     }
 
     #[test]
@@ -965,6 +988,21 @@ mod tests {
         assert!(!path.join(".desktop-lease").exists());
         let contender = File::open(path.join("printpartner.lock")).unwrap();
         fs4::FileExt::try_lock(&contender).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn gre_679_retained_drop_cleans_reservation_before_unlock() {
+        let path = directory();
+        let mut owner = StorageLease::acquire(&path).unwrap();
+        let runtime = owner.runtime_dir().to_owned();
+        owner.retain_on_drop();
+        CHECK_LOCK_DURING_RESERVATION_RELEASE.set(Some(path.clone()));
+        drop(owner);
+        assert!(CHECK_LOCK_DURING_RESERVATION_RELEASE.take().is_none());
+        assert!(!path.join(".desktop-lease").exists());
+        fs4::FileExt::try_lock(&File::open(path.join("printpartner.lock")).unwrap()).unwrap();
+        std::fs::remove_dir(runtime).unwrap();
         std::fs::remove_dir_all(path).unwrap();
     }
 
