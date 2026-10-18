@@ -403,6 +403,132 @@ fn replacement_recheck_refuses_changed_content_identity_and_links() {
 }
 
 #[tokio::test]
+async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
+    use crate::state_file::{self, Boundary};
+    use std::os::unix::process::ExitStatusExt;
+
+    struct PublicationCase {
+        boundary: Boundary,
+        expected_new: bool,
+    }
+    let cases = [
+        PublicationCase {
+            boundary: Boundary::Write,
+            expected_new: false,
+        },
+        PublicationCase {
+            boundary: Boundary::FileSync,
+            expected_new: false,
+        },
+        PublicationCase {
+            boundary: Boundary::Rename,
+            expected_new: false,
+        },
+        PublicationCase {
+            boundary: Boundary::DirectorySync,
+            expected_new: true,
+        },
+    ];
+    if let Some(path) = std::env::var_os("PP_T12_ORIGIN_CRASH_STORE") {
+        let path = Path::new(&path);
+        let case: usize = std::env::var("PP_T12_ORIGIN_CRASH_CASE")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let bytes = std::env::var("PP_T12_ORIGIN_CRASH_NEW").unwrap();
+        let owner = StorageLease::acquire(path).unwrap();
+        std::fs::write(
+            path.join("crash-runtime"),
+            owner.runtime_dir().as_os_str().as_encoded_bytes(),
+        )
+        .unwrap();
+        let previous = state_file::read(&owner, "desktop.toml").unwrap().unwrap();
+        state_file::publish_with(
+            &owner,
+            "desktop.toml",
+            bytes.as_bytes(),
+            Some(&previous),
+            |boundary| {
+                if boundary == cases[case].boundary {
+                    assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGKILL) }, 0);
+                    panic!("SIGKILL returned");
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        panic!("publication did not reach the crash checkpoint");
+    }
+    for (index, case) in cases.iter().enumerate() {
+        let fixture = Fixture::new();
+        let old = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let new = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let old_bytes = format!("port = {}\n", old.local_addr().unwrap().port());
+        let new_bytes = format!("port = {}\n", new.local_addr().unwrap().port());
+        std::fs::write(fixture.config(), &old_bytes).unwrap();
+        let portable = [
+            ("print-partner.db", b"copied database".as_slice()),
+            (
+                "browser-preferences.json",
+                b"copied portable preferences".as_slice(),
+            ),
+        ];
+        for (name, bytes) in portable {
+            std::fs::write(fixture.0.join(name), bytes).unwrap();
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "origin_tests::ticket_t_12_origin_crash_relaunch_reuses_complete_published_config",
+                "--nocapture",
+            ])
+            .env("PP_T12_ORIGIN_CRASH_STORE", &fixture.0)
+            .env("PP_T12_ORIGIN_CRASH_CASE", index.to_string())
+            .env("PP_T12_ORIGIN_CRASH_NEW", &new_bytes)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let (status, timed_out) = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break (status, false);
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                break (child.wait().unwrap(), true);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let runtime = std::fs::read_to_string(fixture.0.join("crash-runtime")).unwrap();
+        std::fs::remove_dir(runtime).unwrap();
+        assert!(!timed_out, "publication child exceeded its crash deadline");
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        let expected = if case.expected_new {
+            new_bytes
+        } else {
+            old_bytes
+        };
+        let expected = expected.as_bytes();
+        assert_eq!(std::fs::read(fixture.config()).unwrap(), expected);
+        let owner = StorageLease::acquire(&fixture.0).unwrap();
+        let (reserved, _other) = if case.expected_new {
+            (new, old)
+        } else {
+            (old, new)
+        };
+        let address = reserved.local_addr().unwrap();
+        drop(reserved);
+        let (listener, change) = bind_origin(&owner).await.unwrap();
+        assert_eq!(listener.local_addr().unwrap(), address);
+        assert_eq!(change, None);
+        assert!(TcpListener::bind(address).await.is_err());
+        assert_eq!(std::fs::read(fixture.config()).unwrap(), expected);
+        for (name, bytes) in portable {
+            assert_eq!(std::fs::read(fixture.0.join(name)).unwrap(), bytes);
+        }
+    }
+}
+
+#[tokio::test]
 async fn failed_recovery_closes_selected_listener_before_returning() {
     use crate::state_file::Boundary;
     let fixture = Fixture::new();
