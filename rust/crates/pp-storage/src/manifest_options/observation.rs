@@ -170,6 +170,7 @@ pub(crate) fn observe(
         sources.push(observed.row);
         stamps.push((source.source_id, observed.stamp));
     }
+    budget.check()?;
     Ok(ObservedBuilder {
         builder: ManifestBuilder {
             profile_id: captured.build,
