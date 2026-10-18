@@ -1,9 +1,7 @@
 rules:
   dangerous-triggers:
     ignore:
-      # Both workflows run trusted base/default-branch scripts, never PR-head code.
-      # PR evidence needs body edits and Linear sync needs closed events and a secret.
-      - pr-evidence.yml:4
+      # Linear sync runs trusted base/default-branch tooling for closed PRs.
       - linear-pr-sync.yml:4
   self-repository:
     ignore:

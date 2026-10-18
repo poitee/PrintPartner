@@ -449,8 +449,7 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             Some(&previous),
             |boundary| {
                 if boundary == cases[case].boundary {
-                    assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGKILL) }, 0);
-                    panic!("SIGKILL returned");
+                    kill_self();
                 }
                 Ok(())
             },
@@ -504,6 +503,16 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
         for (name, bytes) in portable {
             assert_eq!(std::fs::read(fixture.0.join(name)).unwrap(), bytes);
         }
+    }
+}
+
+/// SIGKILLs this process without running any more of its code. `kill` may
+/// return before delivery (seen on macOS), and unwinding would drop the lease
+/// and clean up state a real crash leaves behind.
+fn kill_self() -> ! {
+    assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGKILL) }, 0);
+    loop {
+        std::thread::park();
     }
 }
 
@@ -566,8 +575,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
         assert!(state_file::read(&owner, "desktop.toml").unwrap().is_none());
         state_file::publish_with(&owner, "desktop.toml", bytes.as_bytes(), None, |boundary| {
             if boundary == cases[case].0 {
-                assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGKILL) }, 0);
-                panic!("SIGKILL returned");
+                kill_self();
             }
             Ok(())
         })

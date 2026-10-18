@@ -3,7 +3,7 @@
 //! Regenerate it with `node fixtures/parity/jobs-engine/generate.mjs`.
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/common/claimed_attempt.rs"
+    "/src/claimed_attempt.rs"
 ));
 use pp_storage::jobs::ClaimedAttempt;
 use pp_storage::{
