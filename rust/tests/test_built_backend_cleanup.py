@@ -32,8 +32,36 @@ def leave_detached_descendant(ready, hang):
     return 42
 
 
+def signal_during_reaping(signaled):
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+    waitpid = os.waitpid
+
+    def interrupted_waitpid(child, options):
+        result = waitpid(child, options)
+        if result[0] == pid:
+            signaled.write_text(str(pid))
+            os.kill(os.getpid(), signal.SIGTERM)
+        return result
+
+    os.waitpid = interrupted_waitpid
+    return pid
+
+
 @unittest.skipUnless(sys.platform == "linux", "Linux run-owned descendant cleanup")
 class DescendantCleanupTest(unittest.TestCase):
+    def test_sigterm_during_reaping_still_writes_cleanup_receipt(self):
+        with tempfile.TemporaryDirectory(prefix="pp-cleanup-reaping-") as directory:
+            root = Path(directory)
+            signaled, receipt = root / "signaled", root / "cleanup.json"
+            pid = run_in_subreaper(signal_during_reaping, (signaled,), receipt, timeout=5)
+            self.assertEqual(int(signaled.read_text()), pid)
+            self.assertFalse(Path(f"/proc/{pid}").exists())
+            self.assertEqual(json.loads(receipt.read_text()),
+                             {"killed": [], "reaped": [pid], "children_absent": True})
+
     def test_success_still_reaps_detached_descendants(self):
         with tempfile.TemporaryDirectory(prefix="pp-cleanup-success-") as directory:
             root = Path(directory)
