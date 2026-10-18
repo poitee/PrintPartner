@@ -37,15 +37,27 @@ const steps = [
   { op: "revoke", id: UNKNOWN },
   { op: "rotate", id: UNKNOWN },
   { op: "list" },
+  { op: "create", as: "foreign" },
+  { op: "list", as: "foreign" },
+  { op: "use", key: "<key:3>", as: "foreign" },
+  { op: "use", key: "<key:4>" },
+  { op: "use", key: "<key:4>", as: "foreign" },
+  { op: "revoke", id: "<id:3>", as: "foreign" },
+  { op: "rotate", id: "<id:3>", as: "foreign" },
+  { op: "use", key: "<key:3>" },
+  { op: "list" },
   { op: "reopen", expire: { "<id:3>": "2000-01-01T00:00:00.000Z" } },
   { op: "list" },
   { op: "use", key: "<key:1>" },
   { op: "use", key: "<key:3>" },
   { op: "create" },
-  { op: "reopen", expire: { "<id:4>": "2999-01-01T00:00:00.000Z" } },
-  { op: "use", key: "<key:4>" },
+  { op: "reopen", expire: { "<id:5>": "2999-01-01T00:00:00.000Z" } },
+  { op: "use", key: "<key:5>" },
+  { op: "list", as: "foreign" },
   { op: "list" },
 ];
+// Steps marked `as: "foreign"` run in a second tenant. Others run in the owner tenant.
+const TENANTS = { owner: "default", foreign: "foreign" };
 
 // Accepts only a real UTC instant in the `toISOString` form both servers write.
 const generatedTime = (value) =>
@@ -66,6 +78,7 @@ class Tokens {
     return value;
   }
   issue(body) {
+    if (this.ids.has(body.id) || this.keys.has(body.key)) throw new Error("Node reissued a key or key ID");
     this.ids.set(body.id, `<id:${this.ids.size + 1}>`);
     this.keys.set(body.key, `<key:${this.keys.size + 1}>`);
   }
@@ -100,6 +113,7 @@ async function probe() {
   const { AppRepository } = await load("src/db/repository.ts");
   const { registerApiKeyManagementRoutes } = await load("src/routes/api-key-management.ts");
   const { validateApiKey } = await load("src/services/api-key-manager.ts");
+  const { setRequestTenantId, tenantStorage } = await load("src/middleware/tenant-context.ts");
 
   const directory = mkdtempSync(join(tmpdir(), "pp-auth-key-parity-"));
   const open = () => {
@@ -110,31 +124,40 @@ async function probe() {
   let store = open();
   const deps = { get repo() { return store.repo; } };
   const app = Fastify();
+  app.addHook("onRequest", async (request) => {
+    setRequestTenantId(request.headers["x-fixture-tenant"]);
+  });
   await registerApiKeyManagementRoutes(app, deps);
   const tokens = new Tokens();
+  let tenant = TENANTS.owner;
   const http = async (method, url) => {
-    const response = await app.inject({ method, url });
+    const response = await app.inject({ method, url, headers: { "x-fixture-tenant": tenant } });
     return { status: response.statusCode, body: response.json() };
   };
   const results = [];
   try {
     for (const step of steps) {
       let result;
+      tenant = TENANTS[step.as ?? "owner"];
       if (step.op === "list") result = await http("GET", "/settings/api-keys");
       if (step.op === "create") result = await http("POST", "/settings/api-keys");
       if (step.op === "revoke") result = await http("DELETE", `/settings/api-keys/${tokens.raw(step.id)}`);
       if (step.op === "rotate") result = await http("POST", `/settings/api-keys/${tokens.raw(step.id)}/regenerate`);
       const issuedNow = (step.op === "create" || step.op === "rotate") && result.status === 201;
       if (issuedNow) tokens.issue(result.body);
-      if (step.op === "use") result = { accepted: validateApiKey(deps.repo, tokens.raw(step.key)) };
+      if (step.op === "use") {
+        result = { accepted: tenantStorage.run(tenant, () => validateApiKey(deps.repo, tokens.raw(step.key))) };
+      }
       if (step.op === "reopen") {
         store.sqlite.close();
         store = open();
-        const stored = JSON.parse(store.repo.getSetting("api_keys_v1"));
-        for (const [id, expiresAt] of Object.entries(step.expire)) {
-          stored.find((key) => key.id === tokens.raw(id)).expiresAt = expiresAt;
-        }
-        store.repo.setSetting("api_keys_v1", JSON.stringify(stored));
+        tenantStorage.run(TENANTS.owner, () => {
+          const stored = JSON.parse(store.repo.getSetting("api_keys_v1"));
+          for (const [id, expiresAt] of Object.entries(step.expire)) {
+            stored.find((key) => key.id === tokens.raw(id)).expiresAt = expiresAt;
+          }
+          store.repo.setSetting("api_keys_v1", JSON.stringify(stored));
+        });
         store.sqlite.close();
         store = open();
         result = {};

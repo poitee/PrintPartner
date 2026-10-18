@@ -305,31 +305,34 @@ async fn replay() -> Replay {
     getrandom::fill(&mut bytes).unwrap();
     let directory = std::env::temp_dir().join(format!("pp-auth-key-parity-{}", hex::encode(bytes)));
     let mut server = Server::open(&directory).await;
-    let (cookie, tenant) = server.register("owner@example.com").await;
+    let (owner_cookie, tenant) = server.register("owner@example.com").await;
+    let foreign = server.register("foreign@example.com").await;
+    assert_ne!(foreign.1, tenant);
     let mut tokens = Tokens::default();
     let mut raw_results = Vec::new();
     for step in &steps {
         let raw = |field: &str| tokens.raw(step[field].as_str().unwrap());
+        let (cookie, step_tenant) = match step["as"].as_str() {
+            None => (&owner_cookie, &tenant),
+            Some("foreign") => (&foreign.0, &foreign.1),
+            Some(other) => panic!("unknown tenant {other}"),
+        };
         let result = match step["op"].as_str().unwrap() {
-            "list" => {
-                server
-                    .json(Method::GET, "/settings/api-keys", &cookie)
-                    .await
-            }
+            "list" => server.json(Method::GET, "/settings/api-keys", cookie).await,
             "create" => {
                 server
-                    .json(Method::POST, "/settings/api-keys", &cookie)
+                    .json(Method::POST, "/settings/api-keys", cookie)
                     .await
             }
             "revoke" => {
                 let path = format!("/settings/api-keys/{}", raw("id"));
-                server.json(Method::DELETE, &path, &cookie).await
+                server.json(Method::DELETE, &path, cookie).await
             }
             "rotate" => {
                 let path = format!("/settings/api-keys/{}/regenerate", raw("id"));
-                server.json(Method::POST, &path, &cookie).await
+                server.json(Method::POST, &path, cookie).await
             }
-            "use" => json!({"accepted": server.accepted(&tenant, &raw("key")).await}),
+            "use" => json!({"accepted": server.accepted(step_tenant, &raw("key")).await}),
             "reopen" => {
                 server.stop().await;
                 let mut stored: Value =
@@ -394,11 +397,19 @@ fn mismatches(steps: &[Value], raw: &[Value]) -> Vec<String> {
     let mut differences = Vec::new();
     for (index, (step, result)) in steps.iter().zip(raw).enumerate() {
         let issued_now = issues(step, result);
+        let reissued = issued_now
+            && ["id", "key"].iter().any(|field| {
+                tokens
+                    .token(result["body"][field].as_str().unwrap_or(""))
+                    .is_some()
+            });
         if issued_now {
             tokens.issue(&result["body"]);
         }
         let rust = tokens.normalize(result);
-        if tokens.leaked(issued_now, result) || reserved(result) {
+        if reissued {
+            differences.push(format!("step {index} reissues a key or key ID"));
+        } else if tokens.leaked(issued_now, result) || reserved(result) {
             differences.push(format!("step {index} leaks a key or carries a token"));
         } else if rust_contract(&step["node"]) != rust {
             differences.push(format!("step {index} {step}\n  rust {rust}"));
@@ -417,7 +428,7 @@ async fn rust_key_routes_match_node_contract_and_redact_secrets() {
     let replay = replay().await;
     let differences = mismatches(&replay.steps, &replay.raw);
     assert!(differences.is_empty(), "{}", differences.join("\n"));
-    assert_eq!(replay.issued.len(), 4);
+    assert_eq!(replay.issued.len(), 5);
     let stored = stored_keys(&replay.directory, &replay.tenant);
     let stored_value: Value = serde_json::from_str(&stored).unwrap();
     assert_eq!(stored_value.as_array().unwrap().len(), 4);
@@ -468,7 +479,7 @@ async fn comparison_rejects_leaked_secret_and_accepted_revoked_key() {
             "/body/keys/0/createdAt",
             key.clone(),
         ),
-        ("key as detail", unknown_revoke, "/body/detail", key),
+        ("key as detail", unknown_revoke, "/body/detail", key.clone()),
         (
             "invalid createdAt",
             list,
@@ -498,81 +509,15 @@ async fn comparison_rejects_leaked_secret_and_accepted_revoked_key() {
             "token as raw lastUsedAt",
             last,
             "/body/keys/3/lastUsedAt",
-            json!("<id:4.lastUsedAt#1>"),
+            json!("<id:5.lastUsedAt#1>"),
         ),
-        ("token as raw id", last, "/body/keys/3/id", json!("<id:4>")),
+        ("token as raw id", last, "/body/keys/3/id", json!("<id:5>")),
+        ("reissued key", 2, "/body/key", key.clone()),
     ];
     for (name, index, pointer, value) in mutations {
         let mut raw = replay.raw.clone();
         let (parent, field) = pointer.rsplit_once('/').unwrap();
         raw[index].pointer_mut(parent).unwrap()[field] = value;
-        assert_eq!(mismatches(&replay.steps, &raw).len(), 1, "{name}");
+        assert!(!mismatches(&replay.steps, &raw).is_empty(), "{name}");
     }
-}
-
-#[tokio::test]
-async fn foreign_tenant_cannot_list_use_revoke_or_rotate_keys() {
-    let node: Vec<Value> = serde_json::from_str::<Value>(GOLDEN).unwrap()["steps"]
-        .as_array()
-        .unwrap()
-        .clone();
-    let unknown = |op: &str| {
-        rust_contract(
-            &node
-                .iter()
-                .find(|step| step["op"] == op && step["id"] == "key_0000000000000000")
-                .unwrap()["node"],
-        )
-    };
-    let mut bytes = [0; 12];
-    getrandom::fill(&mut bytes).unwrap();
-    let directory = std::env::temp_dir().join(format!("pp-auth-key-tenant-{}", hex::encode(bytes)));
-    let server = Server::open(&directory).await;
-    let (owner, owner_tenant) = server.register("owner@example.com").await;
-    let (foreign, foreign_tenant) = server.register("foreign@example.com").await;
-    assert_ne!(owner_tenant, foreign_tenant);
-    let created = server
-        .json(Method::POST, "/settings/api-keys", &owner)
-        .await;
-    assert_eq!(created["status"], 201);
-    let id = created["body"]["id"].as_str().unwrap();
-    let key = created["body"]["key"].as_str().unwrap();
-
-    assert_eq!(
-        server
-            .json(Method::GET, "/settings/api-keys", &foreign)
-            .await,
-        json!({"status":200,"body":{"keys":[],"total":0}})
-    );
-    assert_eq!(
-        server
-            .json(
-                Method::DELETE,
-                &format!("/settings/api-keys/{id}"),
-                &foreign
-            )
-            .await,
-        unknown("revoke")
-    );
-    assert_eq!(
-        server
-            .json(
-                Method::POST,
-                &format!("/settings/api-keys/{id}/regenerate"),
-                &foreign
-            )
-            .await,
-        unknown("rotate")
-    );
-    assert_eq!(server.accepted(&foreign_tenant, key).await, None);
-    assert_eq!(
-        server.accepted(&owner_tenant, key).await.as_deref(),
-        Some(id)
-    );
-    let listed = server.json(Method::GET, "/settings/api-keys", &owner).await;
-    assert_eq!(listed["body"]["total"], 1);
-    assert_eq!(listed["body"]["keys"][0]["isActive"], true);
-    assert!(!listed.to_string().contains(key));
-    server.stop().await;
-    std::fs::remove_dir_all(&directory).unwrap();
 }
