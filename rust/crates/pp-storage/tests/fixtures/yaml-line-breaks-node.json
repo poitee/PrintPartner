@@ -1,0 +1,299 @@
+[
+  {
+    "name": "cr-plain-continuation",
+    "source": "project: prefix\r  \"\\uE000\"",
+    "expected": {
+      "project": "prefix \"\\uE000\""
+    }
+  },
+  {
+    "name": "cr-plain-blank",
+    "source": "project: prefix\r\r  \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n\"\\uE000\""
+    }
+  },
+  {
+    "name": "cr-plain-space-blanks",
+    "source": "project: prefix\r  \r    \r  \"\\uE000uD800\\uE000\"",
+    "expected": {
+      "project": "prefix\n\n\"\\uE000uD800\\uE000\""
+    }
+  },
+  {
+    "name": "cr-plain-single-quote",
+    "source": "project: prefix\r\r  '\\uE000'",
+    "expected": {
+      "project": "prefix\n'\\uE000'"
+    }
+  },
+  {
+    "name": "cr-plain-literal-sentinel",
+    "source": "project: prefix\r\r  \"uD800\"",
+    "expected": {
+      "project": "prefix\n\"uD800\""
+    }
+  },
+  {
+    "name": "cr-single-quoted-blank",
+    "source": "project: 'prefix\r\r  \\uE000 '",
+    "expected": {
+      "project": "prefix\n\\uE000 "
+    }
+  },
+  {
+    "name": "cr-double-quoted-blank",
+    "source": "project: \"prefix\r\r  \\uE000 \"",
+    "expected": {
+      "project": "prefix\n "
+    }
+  },
+  {
+    "name": "cr-double-quoted-following-node",
+    "source": "project: \"prefix\r\r  \\uE000\"\rnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n",
+      "next": ""
+    }
+  },
+  {
+    "name": "cr-literal-block-blank",
+    "source": "project: |\r  prefix\r\r  \"\\uE000 \"\r",
+    "expected": {
+      "project": "prefix\n\n\"\\uE000 \"\n"
+    }
+  },
+  {
+    "name": "cr-folded-block-blank",
+    "source": "project: >\r  prefix\r\r  \"\\uE000 \"\r",
+    "expected": {
+      "project": "prefix\n\"\\uE000 \"\n"
+    }
+  },
+  {
+    "name": "cr-comment-after-blank",
+    "source": "project: prefix\r\r# \"\\uE000\"\rnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix",
+      "next": ""
+    }
+  },
+  {
+    "name": "cr-comment-ends-plain",
+    "source": "project: prefix\r\r  # comment\r  \"\\uE000\"",
+    "expected": null
+  },
+  {
+    "name": "cr-dedented-quoted-node",
+    "source": "project: prefix\r\rnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix",
+      "next": ""
+    }
+  },
+  {
+    "name": "cr-verbatim-tag-blank",
+    "source": "project: !<tag:yaml.org,2002:str> prefix\r\r  \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n\"\\uE000\""
+    }
+  },
+  {
+    "name": "crlf-plain-continuation",
+    "source": "project: prefix\r\n  \"\\uE000\"",
+    "expected": {
+      "project": "prefix \"\\uE000\""
+    }
+  },
+  {
+    "name": "crlf-plain-blank",
+    "source": "project: prefix\r\n\r\n  \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n\"\\uE000\""
+    }
+  },
+  {
+    "name": "crlf-plain-space-blanks",
+    "source": "project: prefix\r\n  \r\n    \r\n  \"\\uE000uD800\\uE000\"",
+    "expected": {
+      "project": "prefix\n\n\"\\uE000uD800\\uE000\""
+    }
+  },
+  {
+    "name": "crlf-plain-single-quote",
+    "source": "project: prefix\r\n\r\n  '\\uE000'",
+    "expected": {
+      "project": "prefix\n'\\uE000'"
+    }
+  },
+  {
+    "name": "crlf-plain-literal-sentinel",
+    "source": "project: prefix\r\n\r\n  \"uD800\"",
+    "expected": {
+      "project": "prefix\n\"uD800\""
+    }
+  },
+  {
+    "name": "crlf-single-quoted-blank",
+    "source": "project: 'prefix\r\n\r\n  \\uE000 '",
+    "expected": {
+      "project": "prefix\n\\uE000 "
+    }
+  },
+  {
+    "name": "crlf-double-quoted-blank",
+    "source": "project: \"prefix\r\n\r\n  \\uE000 \"",
+    "expected": {
+      "project": "prefix\n "
+    }
+  },
+  {
+    "name": "crlf-double-quoted-following-node",
+    "source": "project: \"prefix\r\n\r\n  \\uE000\"\r\nnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n",
+      "next": ""
+    }
+  },
+  {
+    "name": "crlf-literal-block-blank",
+    "source": "project: |\r\n  prefix\r\n\r\n  \"\\uE000 \"\r\n",
+    "expected": {
+      "project": "prefix\n\n\"\\uE000 \"\n"
+    }
+  },
+  {
+    "name": "crlf-folded-block-blank",
+    "source": "project: >\r\n  prefix\r\n\r\n  \"\\uE000 \"\r\n",
+    "expected": {
+      "project": "prefix\n\"\\uE000 \"\n"
+    }
+  },
+  {
+    "name": "crlf-comment-after-blank",
+    "source": "project: prefix\r\n\r\n# \"\\uE000\"\r\nnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix",
+      "next": ""
+    }
+  },
+  {
+    "name": "crlf-comment-ends-plain",
+    "source": "project: prefix\r\n\r\n  # comment\r\n  \"\\uE000\"",
+    "expected": null
+  },
+  {
+    "name": "crlf-dedented-quoted-node",
+    "source": "project: prefix\r\n\r\nnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix",
+      "next": ""
+    }
+  },
+  {
+    "name": "crlf-verbatim-tag-blank",
+    "source": "project: !<tag:yaml.org,2002:str> prefix\r\n\r\n  \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n\"\\uE000\""
+    }
+  },
+  {
+    "name": "lf-plain-continuation",
+    "source": "project: prefix\n  \"\\uE000\"",
+    "expected": {
+      "project": "prefix \"\\uE000\""
+    }
+  },
+  {
+    "name": "lf-plain-blank",
+    "source": "project: prefix\n\n  \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n\"\\uE000\""
+    }
+  },
+  {
+    "name": "lf-plain-space-blanks",
+    "source": "project: prefix\n  \n    \n  \"\\uE000uD800\\uE000\"",
+    "expected": {
+      "project": "prefix\n\n\"\\uE000uD800\\uE000\""
+    }
+  },
+  {
+    "name": "lf-plain-single-quote",
+    "source": "project: prefix\n\n  '\\uE000'",
+    "expected": {
+      "project": "prefix\n'\\uE000'"
+    }
+  },
+  {
+    "name": "lf-plain-literal-sentinel",
+    "source": "project: prefix\n\n  \"uD800\"",
+    "expected": {
+      "project": "prefix\n\"uD800\""
+    }
+  },
+  {
+    "name": "lf-single-quoted-blank",
+    "source": "project: 'prefix\n\n  \\uE000 '",
+    "expected": {
+      "project": "prefix\n\\uE000 "
+    }
+  },
+  {
+    "name": "lf-double-quoted-blank",
+    "source": "project: \"prefix\n\n  \\uE000 \"",
+    "expected": {
+      "project": "prefix\n "
+    }
+  },
+  {
+    "name": "lf-double-quoted-following-node",
+    "source": "project: \"prefix\n\n  \\uE000\"\nnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n",
+      "next": ""
+    }
+  },
+  {
+    "name": "lf-literal-block-blank",
+    "source": "project: |\n  prefix\n\n  \"\\uE000 \"\n",
+    "expected": {
+      "project": "prefix\n\n\"\\uE000 \"\n"
+    }
+  },
+  {
+    "name": "lf-folded-block-blank",
+    "source": "project: >\n  prefix\n\n  \"\\uE000 \"\n",
+    "expected": {
+      "project": "prefix\n\"\\uE000 \"\n"
+    }
+  },
+  {
+    "name": "lf-comment-after-blank",
+    "source": "project: prefix\n\n# \"\\uE000\"\nnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix",
+      "next": ""
+    }
+  },
+  {
+    "name": "lf-comment-ends-plain",
+    "source": "project: prefix\n\n  # comment\n  \"\\uE000\"",
+    "expected": null
+  },
+  {
+    "name": "lf-dedented-quoted-node",
+    "source": "project: prefix\n\nnext: \"\\uE000\"",
+    "expected": {
+      "project": "prefix",
+      "next": ""
+    }
+  },
+  {
+    "name": "lf-verbatim-tag-blank",
+    "source": "project: !<tag:yaml.org,2002:str> prefix\n\n  \"\\uE000\"",
+    "expected": {
+      "project": "prefix\n\"\\uE000\""
+    }
+  }
+]

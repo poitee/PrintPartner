@@ -256,7 +256,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             if i == chars.len() {
                 break;
             }
-            if flow == 0 && (!plain || plain_parent.is_some_and(|n| line_indent <= n)) {
+            if !blank && flow == 0 && (!plain || plain_parent.is_some_and(|n| line_indent <= n)) {
                 plain = false;
                 node = true;
                 quoted_end = false;
@@ -364,6 +364,11 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             output.push(c);
             consumed += 1;
             i += 1;
+            if c == '\r' && chars.get(i) == Some(&'\n') {
+                output.push('\n');
+                consumed += 1;
+                i += 1;
+            }
             line_start = true;
             continue;
         }
@@ -1101,6 +1106,69 @@ mod tests {
                 ),
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn yaml_plain_continuation_after_crlf_preserves_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(b"project: prefix\r\n  \"\\uE000\"", &mut budget).unwrap();
+        assert_eq!(
+            units(&doc, "project", &mut budget),
+            "prefix \"\\uE000\"".encode_utf16().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn yaml_plain_continuation_after_blank_preserves_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(b"project: prefix\n\n  \"\\uE000\"", &mut budget).unwrap();
+        assert_eq!(
+            units(&doc, "project", &mut budget),
+            "prefix\n\"\\uE000\"".encode_utf16().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn yaml_line_breaks_match_js_yaml() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            source: String,
+            expected: Option<HashMap<String, String>>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/yaml-line-breaks-node.json"
+        ))
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        for case in cases {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let result = Document::parse(case.source.as_bytes(), &mut budget);
+            let Some(expected) = case.expected else {
+                assert!(
+                    matches!(result, Err(ReadFailure::InvalidDocument)),
+                    "{}: {:?}",
+                    case.name,
+                    case.source
+                );
+                continue;
+            };
+            let doc = result.unwrap_or_else(|err| panic!("{}: {err:?}", case.name));
+            let Node::Mapping(entries) = doc.node(doc.root, &mut budget).unwrap() else {
+                panic!("{}: expected a mapping", case.name);
+            };
+            assert_eq!(entries.len(), expected.len(), "{}", case.name);
+            for (key, value) in expected {
+                assert_eq!(
+                    units(&doc, &key, &mut budget),
+                    value.encode_utf16().collect::<Vec<_>>(),
+                    "{}: {key}",
+                    case.name
+                );
+            }
         }
     }
 
