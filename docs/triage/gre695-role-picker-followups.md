@@ -30,4 +30,11 @@ Before the fix, the regressions report `6 failed | 26 passed (32)`.
 After the fix, they report `32 passed (32)`. The gated cases include
 pending status, permission revocation, and Plan-switch fencing.
 
+The disposable local app also shows `Saving…` while a spool response is held
+and `Saved` after release. With a stored Plan Spoolman opt-out, importing an
+all-null Accent entry clears its custom color and the clear survives reload.
+The Primary spool assignment remains stored, and the denied picker shows no
+Settings integration hint. This check uses a local Spoolman fixture and
+temporary app data.
+
 Model/harness: Codex gpt-6.1-sol in T3 Code on fleet VM 136.
