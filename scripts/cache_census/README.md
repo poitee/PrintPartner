@@ -5,13 +5,12 @@ Run from the repository root with Python 3.10 or newer. Capture requires an auth
 ```sh
 python3 scripts/cache_census/census.py capture OWNER/REPO --output /tmp/cache-before.json
 python3 scripts/cache_census/census.py summary /tmp/cache-before.json
-# Capture again later, then compare in chronological order.
 python3 scripts/cache_census/census.py capture OWNER/REPO --output /tmp/cache-after.json
 python3 scripts/cache_census/census.py compare /tmp/cache-before.json /tmp/cache-after.json
 python3 -m unittest discover -s scripts/cache_census -p 'test_*.py' -v
 ```
 
-All reports use JSON. Capture writes to stdout unless `--output` is supplied. Use `--output` to publish a complete snapshot atomically. Existing files are never overwritten. API failures, malformed entries, duplicate IDs, changing counts, and incomplete pagination exit nonzero without a snapshot. Shell redirection can still create an empty file before the command runs.
+All reports use JSON. Capture writes to stdout unless `--output` is supplied. Use `--output` to publish a complete snapshot atomically. Existing files are never overwritten. Output files use the temporary file's private permissions; publication does not guarantee durability across a system crash. API failures, malformed entries, duplicate IDs, changing counts, and incomplete pagination exit nonzero without a snapshot. Shell redirection can still create an empty file before the command runs.
 
 Capture calls only `gh api --method GET --hostname github.com repos/OWNER/REPO/actions/caches` with `per_page=100`, ascending creation time, `--paginate`, and `--slurp`. It never changes caches, repository settings, workflows, or schedules. See the [cache API reference](https://docs.github.com/en/rest/actions/cache#list-github-actions-caches-for-a-repository) and [gh api reference](https://cli.github.com/manual/gh_api).
 

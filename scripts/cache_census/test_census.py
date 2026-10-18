@@ -270,6 +270,33 @@ class CliTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), original)
         self.assertEqual(list(self.root.glob(".cache-census-*")), [])
 
+    def test_capture_preserves_utf8_keys_under_a_non_utf8_locale(self):
+        pages = fixture("before")
+        pages[0]["actions_caches"][0]["key"] = "café"
+        source = self.root / "unicode.json"
+        source.write_text(json.dumps(pages, ensure_ascii=False), encoding="utf-8")
+        self.env["FAKE_GH_FIXTURE"] = str(source)
+        with (patch.dict(os.environ, self.env),
+              patch("locale.getpreferredencoding", return_value="iso8859-1"),
+              patch("locale.getencoding", return_value="iso8859-1", create=True)):
+            snapshot = census.capture("example/repo")
+        self.assertEqual(snapshot.entries["11"]["key"], "café")
+
+    def test_capture_dot_prefixed_repository(self):
+        result = self.cli("capture", "Example/.github")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["repository"], "example/.github")
+
+    def test_committed_evidence_comparison(self):
+        evidence = ROOT / "evidence" / "2026-10-18"
+        result = self.cli("compare", evidence / "083722.json", evidence / "083800.json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual((report["disappeared"]["entries"], report["disappeared"]["size_in_bytes"]),
+                         (2, 1_657_064_306))
+        self.assertEqual((report["added"]["entries"], report["added"]["size_in_bytes"]),
+                         (1, 742_416_946))
+
     def test_failed_gh_never_emits_snapshot_or_creates_output(self):
         self.env["FAKE_GH_EXIT"] = "1"
         for args in [(), ("--output", self.root / "failed.json")]:

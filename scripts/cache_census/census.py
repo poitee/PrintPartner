@@ -65,7 +65,7 @@ def timestamp(value, label):
 
 def repository_name(value):
     require(isinstance(value, str) and re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", value
+        r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", value
     ), "repository must be OWNER/REPO")
     return value.lower()
 
@@ -154,7 +154,7 @@ def capture(repository):
         "-H", "X-GitHub-Api-Version: 2022-11-28",
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", check=False)
     except OSError as error:
         raise CensusError(f"cannot run gh: {error}") from error
     require(result.returncode == 0, f"gh api failed with exit {result.returncode}: {result.stderr.strip()}")

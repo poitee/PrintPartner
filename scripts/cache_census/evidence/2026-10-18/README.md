@@ -11,7 +11,9 @@ gh api --method GET --paginate --slurp 'repos/poitee/PrintPartner/actions/caches
 
 The JSON pages were wrapped with collection start/end timestamps and converted to
 the tool's version 1 schema. The conversion retained every cache entry field and
-validated page counts with `load_snapshot`. `direct.json` was collected through
+validated page counts with `load_snapshot`. The original pages and conversion
+script were not retained, so their collection provenance cannot be independently
+reconstructed. `direct.json` was collected through
 the finished command:
 
 ```sh
@@ -46,12 +48,6 @@ Neither PR state proves why its cache disappeared.
 The direct CLI sample lists 37 entries and 10,869,502,466 bytes. It is another
 observation of a changing inventory, not a historical trend.
 
-A separate GET of `repos/poitee/PrintPartner/actions/cache/usage` near the first
-sample returned 11,042,679,395 bytes but 22 entries. The inventory listed 37.
-Keep the endpoint's count separate from enumerated entries. The
-[usage API](https://docs.github.com/en/rest/actions/cache#get-github-actions-cache-usage-for-a-repository)
-can lag because its data refreshes periodically.
-
 ## Limits and next policy slice
 
 These short, non-atomic collection windows cannot establish an eviction rate.
@@ -72,5 +68,7 @@ record their cache restore/save results, and correlate disappearing IDs with
 any available deletion activity or service evidence. Afterward, repeat those
 observations to check whether PR saves stop, main restores remain useful, and
 BuildKit entries persist. Registry request counts need separate job evidence.
-Coordinate workflow edits with the owners of PRs #601 and #474. No cache policy,
-workflow, repository limit, registry mirror, or persistent schedule changed here.
+PRs #601 and #474 owned workflow edits when these samples were collected; both
+have since merged. Recheck open PR file ownership before a later policy slice.
+No cache policy, workflow, repository limit, registry mirror, or persistent
+schedule changed here.
