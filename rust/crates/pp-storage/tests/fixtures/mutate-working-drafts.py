@@ -10,7 +10,7 @@ source = Path("crates/pp-storage/src/working_drafts.rs")
 diff = source.with_suffix("") / "diff.rs"
 mutants = [
     ("workspace skips origin validation", source, "            draft_origin(&draft.header)?;\n", ""),
-    ("list ignores creation time", source, "ORDER BY created_at,id", "ORDER BY id"),
+    ("list ignores creation time", source, "SELECT id,state,lifecycle_version,snapshot_digest,base_revision_id,base_plan_version FROM plan_drafts WHERE tenant_id=? AND profile_id=? ORDER BY created_at,id", "SELECT id,state,lifecycle_version,snapshot_digest,base_revision_id,base_plan_version FROM plan_drafts WHERE tenant_id=? AND profile_id=? ORDER BY id"),
     ("diff ignores revision ID", diff, 'profile["acceptedPlanRevisionId"] == d.header["baseRevisionId"]\n                    && ', ""),
     ("diff ignores Plan version", diff, '\n                    && profile["acceptedPlanVersion"] == d.header["basePlanVersion"]', ""),
     ("diff drops changed fields", diff, '.filter(|f| !before.same_field(after, f))', '.filter(|_| false)'),
