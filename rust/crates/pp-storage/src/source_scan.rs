@@ -202,7 +202,7 @@ fn expected_binding(job: &JobRecord) -> Result<SourceBinding> {
     })
 }
 
-fn require_live_reservation(
+pub(crate) fn require_live_reservation(
     state: &State,
     proof: &SourceWorkProof,
     expected: &SourceBinding,

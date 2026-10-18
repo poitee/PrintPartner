@@ -6,6 +6,7 @@ on:
   pull_request:
     paths: &fleet-paths
       - 'rust/**'
+      - 'scripts/setup-ci-linux.sh'
       - '.github/workflows/desktop-fleet-rust.yml'
   # Same inputs on main, so a merge of two individually green PRs gets checked.
   push:
@@ -24,12 +25,15 @@ jobs:
   ast-grep:
     name: ast-grep ratchet
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: ast-grep@0.50.0
