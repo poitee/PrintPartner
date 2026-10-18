@@ -33,7 +33,7 @@ for (const [name, space] of [['bom', '\ufeff'], ['ordinary', ' '], ['non-js', '\
     const filtered = project(ports.repository.recomputePlanDraft({ profileId: 1, actor: 'default', idempotencyKey: 'filtered', applyManifest: true }));
     raw.exec('UPDATE projects SET imported_paths=NULL WHERE id=1');
     const unfiltered = project(ports.repository.recomputePlanDraft({ profileId: 1, actor: 'default', idempotencyKey: 'unfiltered', applyManifest: true }));
-    raw.prepare('UPDATE projects SET imported_paths=? WHERE id=1').run(`${space}[]${space}`);
+    raw.prepare('UPDATE projects SET imported_paths=? WHERE id=1').run(`${space}["plain.stl"]${space}`);
     const wrapped = project(ports.repository.recomputePlanDraft({ profileId: 1, actor: 'default', idempotencyKey: 'wrapped', applyManifest: true }));
     const prefixQuantity = Number.isNaN(parseInt(`${space}3`, 10)) ? null : parseInt(`${space}3`, 10);
     output.push({ name, files, setup, filtered, unfiltered, wrapped, prefixQuantity });

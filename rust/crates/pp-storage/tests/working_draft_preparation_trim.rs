@@ -198,7 +198,7 @@ fn compare(name: &str) {
                 .sql()
                 .execute(
                     "UPDATE projects SET imported_paths=?1 WHERE id=1",
-                    [format!("{space}[]{space}")],
+                    [format!("{space}[\"plain.stl\"]{space}")],
                 )
                 .unwrap();
         }
@@ -251,7 +251,10 @@ fn compare(name: &str) {
                 Duration::from_secs(60),
             )
             .unwrap_err();
-        assert_eq!(error.to_string(), "Invalid scalar part integer");
+        assert_eq!(
+            error.to_string(),
+            "NOT NULL constraint failed: plan_draft_parts.quantity_inferred"
+        );
         assert_eq!(fixture.rows(), before);
         assert_eq!(std::fs::read(file).unwrap(), filename.as_bytes());
     }
