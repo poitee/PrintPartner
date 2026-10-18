@@ -31,7 +31,9 @@ mod preparation;
 #[cfg(test)]
 mod preparation_tests;
 mod rebase;
-pub use rebase::{Conflict as RebaseConflict, Field as RebaseField, RebaseOutcome, RebaseRequest};
+pub use rebase::{
+    Conflict as RebaseConflict, Field as RebaseField, RebaseArgs, RebaseOutcome, RebaseRequest,
+};
 
 mod manifest;
 #[cfg(test)]
@@ -688,17 +690,19 @@ impl WorkingDraftClient {
     /// draft's Part decisions, as Node's `rebasePlanDraft` does. An open
     /// source is abandoned in the same transaction. Node's service then selects
     /// Required units; this method does not.
-    #[allow(clippy::too_many_arguments)]
     pub fn rebase(
         &self,
         credential: Credential,
         profile: PositiveId,
-        draft_id: PositiveId,
-        idempotency_key: &str,
-        request: RebaseRequest,
+        args: RebaseArgs<'_>,
         cancelled: Arc<AtomicBool>,
         wait: Duration,
     ) -> Result<RebaseOutcome> {
+        let RebaseArgs {
+            draft_id,
+            idempotency_key,
+            request,
+        } = args;
         let idempotency_key = self::idempotency_key(idempotency_key)?;
         let observations = self
             .observations
@@ -880,14 +884,16 @@ pub(super) fn write(
         } => {
             let _ = reply.send(rebase::rebase(
                 connection,
-                &credential,
-                policy,
-                profile,
-                draft_id,
-                &idempotency_key,
-                &request,
-                &observations,
-                &cancelled,
+                rebase::Args {
+                    credential: &credential,
+                    policy,
+                    profile_id: profile,
+                    draft_id,
+                    key: &idempotency_key,
+                    request: &request,
+                    observations: &observations,
+                    cancelled: &cancelled,
+                },
             ));
         }
     }
