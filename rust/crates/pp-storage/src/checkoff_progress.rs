@@ -463,8 +463,19 @@ pub(crate) fn execute(
     admission: crate::writer_admission::Deadline,
 ) -> Result<Response> {
     let import = command.op.is_import();
-    let Ok(tx) = crate::writer_admission::begin_immediate(connection, admission) else {
-        return Ok(Refusal::Unavailable.response(import));
+    let tx = match crate::writer_admission::begin_immediate(connection, admission) {
+        Ok(tx) => tx,
+        Err(error) => {
+            let refusal = match error.downcast_ref::<rusqlite::Error>() {
+                Some(error)
+                    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy) =>
+                {
+                    Refusal::Unavailable
+                }
+                _ => Refusal::Internal,
+            };
+            return Ok(refusal.response(import));
+        }
     };
     let (tenant, _) =
         auth::authority::queries::reconciliation_actor(&tx, command.credential, command.policy)?;
@@ -750,4 +761,105 @@ fn assembly(part: &Part) -> Response {
         assembled_count: part.units.iter().filter(|u| u.assembled).count(),
         assembled_units: part.units.iter().map(|u| u.assembled).collect(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writer_admission::Deadline;
+    use serde_json::json;
+
+    fn command(import: bool) -> Command {
+        let request = if import {
+            Request::Import(Import {
+                expected: Basis {
+                    profile_id: 1,
+                    plan_version: 1,
+                    plan_revision_id: 1,
+                    plan_revision_digest: "a".repeat(64),
+                    required_unit_mapping_digest: "b".repeat(64),
+                },
+                rows: vec![ImportRow {
+                    part_id: 1,
+                    printed_count: 1,
+                }],
+            })
+        } else {
+            Request::CompletionCoordinate {
+                part_id: 1,
+                body: json!({ "unit_index": 0, "completed": true }),
+            }
+        };
+        Command {
+            credential: Credential::Session(auth::Secret::new("unused".into())),
+            op: validate(request).unwrap_or_else(|response| panic!("{response:?}")),
+            repos: PathBuf::new(),
+            policy: auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+        }
+    }
+
+    fn assert_expired_admission(import: bool) {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let response = execute(&mut connection, command(import), Deadline::expired()).unwrap();
+        let body = if import {
+            json!({ "detail": "Plan draft update is unavailable", "code": "transaction_unavailable" })
+        } else {
+            json!({ "detail": "Accepted Plan update is unavailable" })
+        };
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({ "status": 503, "body": body })
+        );
+        assert!(connection.is_autocommit());
+    }
+
+    fn assert_nonbusy_begin_failure(import: bool) {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "query_only", true).unwrap();
+        let error =
+            crate::writer_admission::begin_immediate(&mut connection, Deadline::at_dequeue())
+                .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<rusqlite::Error>()
+                .unwrap()
+                .sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly)
+        );
+        let response = execute(&mut connection, command(import), Deadline::at_dequeue()).unwrap();
+        let body = if import {
+            json!({ "detail": "Accepted Progress import failed", "code": "internal_error" })
+        } else {
+            json!({ "detail": "Internal Server Error" })
+        };
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({ "status": 500, "body": body })
+        );
+        assert!(connection.is_autocommit());
+    }
+
+    #[test]
+    fn import_admission_deadline_is_unavailable() {
+        assert_expired_admission(true);
+    }
+
+    #[test]
+    fn completion_admission_deadline_is_unavailable() {
+        assert_expired_admission(false);
+    }
+
+    #[test]
+    fn import_nonbusy_begin_failure_is_internal() {
+        assert_nonbusy_begin_failure(true);
+    }
+
+    #[test]
+    fn completion_nonbusy_begin_failure_is_internal() {
+        assert_nonbusy_begin_failure(false);
+    }
 }
