@@ -154,34 +154,7 @@ pub(super) fn prepare(
         );
         let _ = text(p, "filename")?;
         let _ = role(p);
-        let manifest = &p.manifest;
-        validate_named_text(
-            p,
-            &[
-                "partKey",
-                "relativePath",
-                "filename",
-                "sourceLayer",
-                "status",
-                "roleInferred",
-                "roleOverride",
-                "filamentColorId",
-                "filamentCustomHex",
-                "spoolmanSpoolId",
-                "notes",
-                "githubBlobUrl",
-                "artifactDigest",
-            ],
-            manifest
-                .requirement
-                .as_ref()
-                .map_or(0, |text| utf8_len(&text.0))
-                + manifest
-                    .option_group_id
-                    .as_ref()
-                    .map_or(0, |id| utf8_len(&id.0))
-                + manifest.manifest_source.as_ref().map_or(0, String::len),
-        )?;
+        validate_part_text(p, 0)?;
     }
     let digest = revision_digest(&parts)?;
     Ok(Prepared {
@@ -190,6 +163,38 @@ pub(super) fn prepare(
         progress,
         digest,
     })
+}
+
+pub(super) fn validate_part_text(part: &DraftPart, extra: usize) -> Result<()> {
+    let manifest = &part.manifest;
+    validate_named_text(
+        part,
+        &[
+            "partKey",
+            "relativePath",
+            "filename",
+            "sourceLayer",
+            "status",
+            "roleInferred",
+            "roleOverride",
+            "filamentColorId",
+            "filamentCustomHex",
+            "spoolmanSpoolId",
+            "notes",
+            "githubBlobUrl",
+            "artifactDigest",
+        ],
+        extra
+            + manifest
+                .requirement
+                .as_ref()
+                .map_or(0, |text| utf8_len(&text.0))
+            + manifest
+                .option_group_id
+                .as_ref()
+                .map_or(0, |id| utf8_len(&id.0))
+            + manifest.manifest_source.as_ref().map_or(0, String::len),
+    )
 }
 
 /// Node's `validateAcceptedOperationalTextRow`: the UTF-8 length of the named
