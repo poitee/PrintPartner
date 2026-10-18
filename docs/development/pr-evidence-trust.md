@@ -18,9 +18,11 @@ workflow executes. It does not protect the workflow definition.
 
 The current workflow checks out the repository default branch with persisted
 credentials disabled. It uses pinned actions, Node 22.23.3, and read-only
-`contents` and `pull-requests` permissions. Same-repository PRs select
-`self-hosted/linux/x64/pp-local`; other PRs select `ubuntu-latest`. This assessment
-does not attest to runner isolation or provision runners.
+`contents` and `pull-requests` permissions. In the unchanged workflow,
+same-repository PRs select `self-hosted/linux/x64/pp-local`; other PRs select
+`ubuntu-latest`. The PR can also edit this routing expression. Runner access
+therefore depends on controls outside this YAML, including fork approval policy.
+This assessment does not attest to runner isolation or provision runners.
 
 The body enters the checker through `PR_BODY`, not shell interpolation. The
 checker accepts nonempty Evidence or a nonempty Exemption reason. It neither
@@ -51,6 +53,10 @@ workflow file.
 The live intake recheck found 58 open PRs and no overlap with the Evidence
 workflow or checker files. PR #667 owns `docs/development/ci.md`, so this
 assessment uses a separate document.
+
+[The Evidence section in ci.md](ci.md#pr-evidence) still calls `Lint Evidence
+block` a required check, contrary to this live snapshot. The maintainer's next
+slice must reconcile that section after the overlapping documentation work lands.
 
 ## Standard trusted validation options
 
