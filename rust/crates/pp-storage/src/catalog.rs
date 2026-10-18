@@ -1104,6 +1104,10 @@ fn delete(tx: &Transaction<'_>, state: &State, tenant: &str, id: i64) -> Result<
     if state.source_busy(tenant, id) || crate::jobs::source_reserved(tx, tenant, id)? {
         return Ok(Deletion::ActiveWork);
     }
+    #[cfg(feature = "desktop_rebuild")]
+    if crate::uploads::source_reserved(tx, tenant, id)? {
+        return Ok(Deletion::ActiveWork);
+    }
     if tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM source_revisions WHERE project_id=?1)",
         [id],

@@ -56,7 +56,7 @@ for (const test of applyCases) {
     output.push({ kind: 'apply', ...test, result: applyManifestToDraftParts(repo, 1, test.parts, test.groups) });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
-for (const raw of [null, '', '{', '[]', 'null', '{}', '{"selections":{"2":" b ","a":[" x ","y"],"1":"z","empty":[]}}', '{"selections":{"tool":["a","a"]}}', '{"selections":{" ":"a"}}', '{"selections":{"tool":4}}', '{"layers":[4],"selections":{"tool":"a"}}', '{"selections":{"\\ud800":"\\udc00"}}', '{"unknown":{"deep":[1,2]},"selections":{"tool":"a"}}']) {
+for (const raw of [null, '', '{', '[]', 'null', '{}', '{"selections":{"2":" b ","a":[" x ","y"],"1":"z","empty":[]}}', '{"selections":{"tool":["a","a"]}}', '{"selections":{" ":"a"}}', '{"selections":{"tool":4}}', '{"layers":[4],"selections":{"tool":"a"}}', '{"selections":{"\\ud800":"\\udc00"}}', '{"unknown":{"deep":[1,2]},"selections":{"tool":"a"}}', '{"selections":{"tool":"a","tool":"b"}}', '{"selections":{"tool":"a","other":"c","tool":["b"]}}', '{"selections":{"tool":"a"},"selections":{"other":"b"}}', '{"selections":4,"selections":{"tool":"a"}}', '{"selections":{"tool":"a"},"selections":4}', '{"layers":[4],"layers":[],"selections":{"tool":"a"}}']) {
   const selections = loadKitManifest({ getSetting: () => raw }, 1).selections;
   output.push({ kind: 'kit', raw, result: JSON.stringify(Object.entries(selections).map(([key, value]) => [key, Array.isArray(value) ? value : [value]])) });
 }

@@ -22,6 +22,12 @@
 {"kind":"kit","raw":"{\"layers\":[4],\"selections\":{\"tool\":\"a\"}}","result":"[]"}
 {"kind":"kit","raw":"{\"selections\":{\"\\ud800\":\"\\udc00\"}}","result":"[[\"\\ud800\",[\"\\udc00\"]]]"}
 {"kind":"kit","raw":"{\"unknown\":{\"deep\":[1,2]},\"selections\":{\"tool\":\"a\"}}","result":"[[\"tool\",[\"a\"]]]"}
+{"kind":"kit","raw":"{\"selections\":{\"tool\":\"a\",\"tool\":\"b\"}}","result":"[[\"tool\",[\"b\"]]]"}
+{"kind":"kit","raw":"{\"selections\":{\"tool\":\"a\",\"other\":\"c\",\"tool\":[\"b\"]}}","result":"[[\"tool\",[\"b\"]],[\"other\",[\"c\"]]]"}
+{"kind":"kit","raw":"{\"selections\":{\"tool\":\"a\"},\"selections\":{\"other\":\"b\"}}","result":"[[\"other\",[\"b\"]]]"}
+{"kind":"kit","raw":"{\"selections\":4,\"selections\":{\"tool\":\"a\"}}","result":"[[\"tool\",[\"a\"]]]"}
+{"kind":"kit","raw":"{\"selections\":{\"tool\":\"a\"},\"selections\":4}","result":"[]"}
+{"kind":"kit","raw":"{\"layers\":[4],\"layers\":[],\"selections\":{\"tool\":\"a\"}}","result":"[[\"tool\",[\"a\"]]]"}
 {"kind":"optional","yaml":null,"result":null}
 {"kind":"optional","yaml":"","result":{"project":null,"rules":0}}
 {"kind":"optional","yaml":"{","result":null}
