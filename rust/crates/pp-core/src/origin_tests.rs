@@ -494,8 +494,17 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             (old, new)
         };
         let address = reserved.local_addr().unwrap();
-        drop(reserved);
-        let (listener, change) = bind_origin(&owner).await.unwrap();
+        let mut reserved = Some(reserved);
+        let (listener, change) = crate::origin::bind_origin_using(
+            &owner,
+            |_| Ok(()),
+            |requested| {
+                assert_eq!(std::net::SocketAddr::V4(requested), address);
+                std::future::ready(Ok(reserved.take().unwrap()))
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(listener.local_addr().unwrap(), address);
         assert_eq!(change, None);
         assert!(TcpListener::bind(address).await.is_err());
