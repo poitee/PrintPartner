@@ -448,6 +448,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     draftQueryState.hasWorkspace = false;
     healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
     const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    client.setQueryData(queryKeys.health, { ok: true, capabilities: healthQueryState.capabilities });
     client.setQueryData<PlanFeatures>(queryKeys.planFeatures(7), {
       profile_id: 7,
       overrides: { spoolman: allowed },
@@ -481,6 +482,67 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
         },
         value: false,
       }],
+    }), expect.any(String));
+  });
+
+  it.each([true, false])("uses the newest same-access review when includeExcluded=%s", async (includeExcluded) => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.planReview(7, !includeExcluded, true), savedChoices(1, 2).review);
+    await client.invalidateQueries({ queryKey: queryKeys.planReview(7, !includeExcluded, true), exact: true });
+    client.setQueryData(queryKeys.planReview(7, includeExcluded, true), savedChoices(1, 5).review);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.savePlanPartChanges([{ kind: "set_included", part: planRow, value: false }]);
+    });
+
+    expect(savePlanChoices).toHaveBeenCalledExactlyOnceWith(7, expect.objectContaining({
+      expected_base: { revision_id: 7, plan_version: 5 },
+    }), expect.any(String));
+  });
+
+  it.each([true, false])("reads current access when a queued save runs after allowed=%s changes", async (allowed) => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    client.setQueryData(queryKeys.health, { ok: true, capabilities: healthQueryState.capabilities });
+    const features: PlanFeatures = {
+      profile_id: 7,
+      overrides: { spoolman: allowed },
+      effective: {
+        farm: { enabled: false, source: "default" },
+        orders: { enabled: false, source: "default" },
+        bambu: { enabled: false, source: "default" },
+        spoolman: { enabled: allowed, source: "plan" },
+      },
+    };
+    client.setQueryData(queryKeys.planFeatures(7), features);
+    client.setQueryData(queryKeys.planReview(7, true, allowed), savedChoices(1, 2).review);
+    const first = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices).mockReturnValueOnce(first.promise);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    let edits: Promise<void>[] = [];
+    act(() => {
+      edits = [
+        hook.result.current.savePlanPartChanges([{ kind: "set_included", part: planRow, value: false }]),
+        hook.result.current.savePlanPartChanges([{ kind: "set_included", part: planRow, value: true }]),
+      ];
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+    await act(async () => {
+      client.setQueryData(queryKeys.planFeatures(7), {
+        ...features, effective: { ...features.effective, spoolman: { enabled: !allowed, source: "plan" } },
+      });
+      client.setQueryData(queryKeys.planReview(7, true, !allowed), savedChoices(1, 5).review);
+      first.resolve(savedChoices(1, 3));
+      await Promise.all(edits);
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(savePlanChoices).toHaveBeenLastCalledWith(7, expect.objectContaining({
+      expected_base: { revision_id: 7, plan_version: 5 },
     }), expect.any(String));
   });
 
