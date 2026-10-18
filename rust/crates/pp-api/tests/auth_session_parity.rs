@@ -8,6 +8,34 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
+use tokio::process::Command;
+
+#[tokio::test]
+async fn node_session_fixture_is_current() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let node = std::env::var_os("PP_SCHEMA_PARITY_NODE")
+        .or_else(|| std::env::var_os("PP_TEST_NODE"))
+        .unwrap_or_else(|| "node".into());
+    let generator = root.join("fixtures/parity/auth-session/generate.mjs");
+    let output = Command::new(&node)
+        .arg(&generator)
+        .arg("--check")
+        .current_dir(&root)
+        .output()
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "Cannot run {node:?} {generator:?} --check: {error}. Install Node 22 and web dependencies. Set PP_SCHEMA_PARITY_NODE or PP_TEST_NODE to select Node."
+            )
+        });
+    assert!(
+        output.status.success(),
+        "Auth session fixture freshness check failed with {}. Install Node 22 and web dependencies. If node.json is out of date, regenerate it with {node:?} {generator:?}.\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
