@@ -54,7 +54,7 @@ The live intake recheck found 58 open PRs and no overlap with the Evidence
 workflow or checker files. PR #667 owns `docs/development/ci.md`, so this
 assessment uses a separate document.
 
-[The Evidence section in ci.md](ci.md#pr-evidence) still calls `Lint Evidence
+[The Evidence paragraph in ci.md](ci.md#ephemeral-pr-runners) still calls `Lint Evidence
 block` a required check, contrary to this live snapshot. The maintainer's next
 slice must reconcile that section after the overlapping documentation work lands.
 
