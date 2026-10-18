@@ -437,7 +437,12 @@ jobs:
         with:
           tool: nextest@0.9.148
       - name: Test owned image cleanup and native holder reporting
-        run: python3 scripts/test_native_image_cleanup.py -v
+        run: |
+          python3 scripts/test_native_image_cleanup.py -v
+          for attempt in {1..10}; do
+            echo "Native holder cleanup repetition $attempt/10"
+            python3 scripts/test_native_image_cleanup.py CleanupTest.test_native_busy_image_reports_real_holder_before_force -v
+          done
       - name: Verify source Unicode and case regressions on macOS
         shell: bash
         run: |

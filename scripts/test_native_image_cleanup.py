@@ -27,7 +27,19 @@ if name == 'cargo':
     rows.write_text('id,name\n1,disposable fixture\n')
     if native:
         ready = root / 'ready'
-        code = 'import pathlib,sys,time; f=open(sys.argv[1]); pathlib.Path(sys.argv[2]).touch(); time.sleep(120)'
+        code = """
+import fcntl, pathlib, sys, time
+root = pathlib.Path(sys.argv[2]).parent
+with open(sys.argv[1]) as fixture:
+    fcntl.flock(fixture, fcntl.LOCK_EX)
+    pathlib.Path(sys.argv[2]).touch()
+    deadline = time.monotonic() + 120
+    while not (root / 'release').exists():
+        if time.monotonic() >= deadline:
+            raise SystemExit('holder release timed out')
+        time.sleep(.01)
+(root / 'closed').touch()
+"""
         child = subprocess.Popen([sys.executable, '-c', code, str(rows), str(ready)],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
@@ -41,8 +53,17 @@ if name == 'cargo':
     raise SystemExit(int(os.environ['TEST_STATUS']))
 if native:
     if name == 'hdiutil' and '-force' in args:
+        assert (root / 'closed').exists(), 'holder was not closed before force'
         print('force requested', flush=True)
-    raise SystemExit(subprocess.call([json.loads(os.environ['REAL_TOOLS'])[name], *args]))
+    status = subprocess.call([json.loads(os.environ['REAL_TOOLS'])[name], *args])
+    if name == 'lsof' and status == 0:
+        (root / 'release').touch()
+        deadline = time.monotonic() + 10
+        while not (root / 'closed').exists():
+            if time.monotonic() >= deadline:
+                raise SystemExit('holder did not close fixture')
+            time.sleep(.01)
+    raise SystemExit(status)
 if name == 'hdiutil':
     if args[0] == 'create':
         pathlib.Path(args[-1]).write_text('disposable image\n')
@@ -183,6 +204,63 @@ class CleanupTest(unittest.TestCase):
         self.assertNotIn('::warning::', result.stdout)
         self.assertFalse(os.path.ismount(mount))
         self.assertTrue((mount.parent / 'fixtures.sparseimage').is_file())
+
+
+class NativeHolderProtocolTest(unittest.TestCase):
+    def test_native_driver_releases_holder_after_diagnostic_before_force(self):
+        with tempfile.TemporaryDirectory(prefix='pp holder protocol ') as directory:
+            root = Path(directory)
+            driver = root / 'driver'
+            driver.write_text(textwrap.dedent(TOOLS))
+            for name in ('cargo', 'lsof', 'hdiutil'):
+                (root / name).symlink_to(driver)
+            rows = root / 'rows.csv'
+            probe = root / 'probe.py'
+            probe.write_text(textwrap.dedent('''
+                import fcntl, sys
+                with open(sys.argv[-1]) as fixture:
+                    try:
+                        fcntl.flock(fixture, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held = False
+                    except BlockingIOError:
+                        held = True
+                assert held == (sys.argv[1] == 'held'), sys.argv
+                print(sys.argv[1], flush=True)
+            '''))
+            real = {}
+            for name, expected in (('lsof', 'held'), ('hdiutil', 'closed')):
+                tool = root / f'real-{name}'
+                tool.write_text(f'#!{sys.executable}\nimport subprocess, sys\n'
+                                f'sys.exit(subprocess.call({[sys.executable, str(probe), expected]!r}'
+                                ' + sys.argv[1:]))\n')
+                tool.chmod(0o755)
+                real[name] = str(tool)
+            env = dict(os.environ, RUNNER_TEMP=directory, TMPDIR=directory,
+                       NATIVE='1', TEST_STATUS='23', REAL_TOOLS=json.dumps(real))
+
+            def run(name, *args):
+                return subprocess.run([sys.executable, str(root / name), *args], env=env,
+                                      text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, timeout=15)
+
+            try:
+                result = run('cargo')
+                self.assertEqual(result.returncode, 23, result.stdout)
+                self.assertFalse((root / 'closed').exists())
+                result = run('lsof', str(rows))
+                self.assertEqual((result.returncode, result.stdout), (0, 'held\n'))
+                self.assertTrue((root / 'closed').exists())
+                result = run('hdiutil', 'detach', '-force', str(rows))
+                self.assertEqual((result.returncode, result.stdout),
+                                 (0, 'force requested\nclosed\n'))
+                self.assertEqual(rows.read_text(), ROWS)
+            finally:
+                pid = root / 'holder.pid'
+                if pid.exists():
+                    try:
+                        os.kill(int(pid.read_text()), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == '__main__':
