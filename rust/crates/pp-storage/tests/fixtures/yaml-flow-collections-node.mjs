@@ -51,6 +51,16 @@ const refusals = [
   ['break-tag-after-document-start', '---\n  [!!int\n  1]'],
   ['break-tag-inline-document-start', '--- [!!int\n1]'],
   ['break-anchor', '[&a\n1]'],
+  ['break-tag-seq-colon-plain', '[!!str\n:x]'],
+  ['break-tag-map-value-colon', '{a: !!str\n:x}'],
+  ['break-tag-shallow-second-break', 'k: [!!str\n,\nx]'],
+  ['break-tag-shallow-tab', 'k: [!!str\n\t]'],
+  ['break-tag-shallow-comma-tab', 'k: [!!str\n,\tx]'],
+  ['shallow-close-after-comment', 'k: [a,\t#c\n]'],
+  ['shallow-close', 'k: [a,\n]'],
+  ['shallow-plain-continuation', 'k: [a\nb]'],
+  ['shallow-double-quoted-continuation', 'k: ["a\nb"]'],
+  ['shallow-indented-root-entry', '# c\n  [a,\n b]'],
 ];
 const accepted = [
   ['plain-pipe-inside', '[a |b]'],
@@ -118,6 +128,21 @@ const accepted = [
   ['verbatim-break-tag-deeper', '[!<tag:yaml.org,2002:int>\n 1]'],
   ['verbatim-break-tag-map-deep', 'project: [!<tag:yaml.org,2002:int>\n  1]'],
   ['verbatim-break-tag-close', '[!<tag:yaml.org,2002:str>\n]'],
+  ['escaped-cr-then-tab', 'project: ["a\\\r b"\t]'],
+  ['escaped-crlf-then-tab', 'project: ["a\\\r\n b"\t]'],
+  ['break-tag-key-colon-plain', '{!!str\n:x}'],
+  ['verbatim-break-tag-key-colon-plain', '{!<tag:yaml.org,2002:str>\n:x}'],
+  ['break-anchor-key-colon-plain', '{&a\n:x}'],
+  ['break-tag-explicit-key-colon-plain', '{? !!str\n:x}'],
+  ['break-tag-shallow-key-colon-plain', 'k: {!!str\n:x, b: c}'],
+  ['break-tag-shallow-close', 'k: [!!str\n]'],
+  ['verbatim-break-tag-shallow-close', 'k: [!<tag:yaml.org,2002:str>\n]'],
+  ['break-tag-seq-shallow-close', 'k: [!!seq\n]'],
+  ['break-anchor-shallow-close', 'k: [&a\n]'],
+  ['break-tag-shallow-comma', 'k: [!!str\n, x]'],
+  ['break-tag-comment-shallow-close', 'k: [!!str # c\n]'],
+  ['tab-continuation-at-indent', 'k: [a,\n \tb]'],
+  ['continuation-at-flow-indent', 'k:\n  [a,\n b]'],
 ];
 const verbatim = (source) => source.replace(/!!(\w+)/g, '!<tag:yaml.org,2002:$1>');
 const cases = [];
