@@ -4,7 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import {
+  TENANT_FEATURE_TOGGLES_CAPABILITY,
+  type PlanDraftWorkspace,
+  type PlanFeatures,
+} from "@print-partner/contracts";
 import { EngineHttpError } from "../api/engineTransport";
 import {
   abandonPlanDraft,
@@ -142,6 +146,8 @@ const profileSelectionState = vi.hoisted<{
   selectedProfileId: number | null;
 }>(() => ({ selectedProfileId: 7 }));
 
+const healthQueryState = vi.hoisted<{ capabilities: string[] }>(() => ({ capabilities: [] }));
+
 const editedWorkspace: PlanDraftWorkspace = {
   ...replacementWorkspace,
   draft: { ...replacementWorkspace.draft, snapshot_digest: "c".repeat(64) },
@@ -165,6 +171,13 @@ vi.mock("../api/endpoints/planDrafts", () => ({
 
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true } }),
+}));
+
+vi.mock("../queries/health", () => ({
+  useHealthQuery: () => ({
+    data: { ok: true, capabilities: healthQueryState.capabilities },
+    isSuccess: true,
+  }),
 }));
 
 vi.mock("./ProfileContext", () => ({
@@ -273,6 +286,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  healthQueryState.capabilities = [];
   profileSelectionState.selectedProfileId = 7;
   draftQueryState.hasOpenDraft = true;
   draftQueryState.hasOtherWorkspace = false;
@@ -422,6 +436,52 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(editPlanDraftParts).not.toHaveBeenCalled();
     expect(applyPlanDraft).not.toHaveBeenCalled();
     expect(recomputePlanDraft).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { allowed: false, includeExcluded: true },
+    { allowed: false, includeExcluded: false },
+    { allowed: true, includeExcluded: true },
+    { allowed: true, includeExcluded: false },
+  ])("saves the current access review basis when allowed=$allowed and includeExcluded=$includeExcluded", async ({ allowed, includeExcluded }) => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    client.setQueryData<PlanFeatures>(queryKeys.planFeatures(7), {
+      profile_id: 7,
+      overrides: { spoolman: allowed },
+      effective: {
+        farm: { enabled: false, source: "default" },
+        orders: { enabled: false, source: "default" },
+        bambu: { enabled: false, source: "default" },
+        spoolman: { enabled: allowed, source: "plan" },
+      },
+    });
+    client.setQueryData(queryKeys.planReview(7, true, !allowed), savedChoices(1, 2).review);
+    client.setQueryData(queryKeys.planReview(7, false, !allowed), savedChoices(1, 2).review);
+    client.setQueryData(queryKeys.planReview(7, includeExcluded, allowed), savedChoices(1, 5).review);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.savePlanPartChanges([
+        { kind: "set_included", part: planRow, value: false },
+      ]);
+    });
+
+    expect(savePlanChoices).toHaveBeenCalledExactlyOnceWith(7, expect.objectContaining({
+      expected_base: { revision_id: 7, plan_version: 5 },
+      expected_draft: null,
+      decisions: [{
+        kind: "set_included",
+        target: {
+          part_key: "frame/bracket.stl",
+          relative_path: "frame/bracket.stl",
+          source_layer: "base:Voron",
+        },
+        value: false,
+      }],
+    }), expect.any(String));
   });
 
   it("saves inclusion from the accepted Plan without creating a draft in the browser", async () => {
