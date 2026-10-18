@@ -1116,14 +1116,20 @@ Lone surrogate pattern units are preserved, and `?` consumes half a supplementar
 The matcher uses two indices and one saved `*` retry point instead of a regex.
 It has O(path units × pattern units) worst-case work and O(path units + pattern
 units) normalization storage. `BuilderGlob::new` normalizes a pattern once for
-all paths. The matcher has no `PreparationBudget` parameter; the observation
-checks cancellation before each path, so cancellation waits for at most one
-path's match.
+all paths. The matcher has no `PreparationBudget` parameter. The observation
+checks cancellation once on entry and before each path, so cancellation waits
+for at most one path's match, even when no paths were scanned or a variant has no parts.
 This resolves the backtracking and UTF-16 parity defects in GRE-642 and GRE-641.
 
 Regenerate or verify the Node differential corpus with
 `node rust/crates/pp-storage/tests/fixtures/manifest-globs-node.mjs` or append `--check`.
 The generator reads the actual `matchKeyMatches` and `globToRegExp` functions.
+Rust case mapping comes from std, while Node uses ICU.
+`manifest-case-node.mjs` writes, or with `--check` verifies, `manifest-case-node.jsonl`.
+It pins each UTF-16 unit's non-unicode `/i` class and each scalar's `toLowerCase` result.
+`builder_glob_case_mappings_match_node_tables` compares Rust against those tables.
+The Desktop contracts workflow runs both `--check` commands on Node 22 and 24, so
+an ICU or Unicode upgrade on either side fails CI instead of drifting.
 Run the ignored `builder_glob_backtracking_probe` test in an exclusive landing slot
 with `--release -- --ignored --nocapture` to check the 10 ms release bound.
 
