@@ -1318,3 +1318,35 @@ fn preparation_large_quantity_refusal_preserves_rows_and_files() {
         assert_eq!(std::fs::read(file).unwrap(), contents, "{quantity}");
     }
 }
+
+#[test]
+fn large_quantity_public_json_matches_node_for_integer_and_float_values() {
+    use pp_storage::manifest_text::{DraftPart, PartManifestMetadata};
+    for (value, literal) in [
+        (json!(1000000000000000128_i64), "1000000000000000100"),
+        (json!(1e20), "100000000000000000000"),
+    ] {
+        for field in [
+            "quantityInferred",
+            "quantityOverride",
+            "quantityEffective",
+            "quantity_inferred",
+            "quantity_override",
+            "quantity_effective",
+        ] {
+            let part = DraftPart::new(json!({field: value}), PartManifestMetadata::default());
+            assert_eq!(
+                String::from_utf8(part.json_fields(&[field], false)).unwrap(),
+                format!("{{\"{field}\":{literal}}}"),
+            );
+        }
+    }
+    let part = DraftPart::new(
+        json!({"quantityOverride": null, "id": 1000000000000000128_i64}),
+        PartManifestMetadata::default(),
+    );
+    assert_eq!(
+        part.json_fields(&["quantityOverride", "id"], false),
+        br#"{"quantityOverride":null,"id":1000000000000000128}"#
+    );
+}
