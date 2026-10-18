@@ -82,6 +82,10 @@
   {"name":"refuse-break-tag-shallow-tab-verbatim","source":"k: [!<tag:yaml.org,2002:str>\n\t]","expected":null},
   {"name":"refuse-break-tag-shallow-comma-tab","source":"k: [!!str\n,\tx]","expected":null},
   {"name":"refuse-break-tag-shallow-comma-tab-verbatim","source":"k: [!<tag:yaml.org,2002:str>\n,\tx]","expected":null},
+  {"name":"refuse-tab-tag-quoted-entry","source":"k: [!!str\t\"a\"]","expected":null},
+  {"name":"refuse-tab-tag-quoted-entry-verbatim","source":"k: [!<tag:yaml.org,2002:str>\t\"a\"]","expected":null},
+  {"name":"refuse-tab-tag-nested-flow","source":"k: [!!seq\t[a,\n b]]","expected":null},
+  {"name":"refuse-tab-tag-nested-flow-verbatim","source":"k: [!<tag:yaml.org,2002:seq>\t[a,\n b]]","expected":null},
   {"name":"refuse-shallow-close-after-comment","source":"k: [a,\t#c\n]","expected":null},
   {"name":"refuse-shallow-close","source":"k: [a,\n]","expected":null},
   {"name":"refuse-shallow-plain-continuation","source":"k: [a\nb]","expected":null},
@@ -166,5 +170,8 @@
   {"name":"accept-break-tag-shallow-comma","source":"k: [!!str\n, x]","expected":{"k":["","x"]}},
   {"name":"accept-break-tag-comment-shallow-close","source":"k: [!!str # c\n]","expected":{"k":[""]}},
   {"name":"accept-tab-continuation-at-indent","source":"k: [a,\n \tb]","expected":{"k":["a","b"]}},
-  {"name":"accept-continuation-at-flow-indent","source":"k:\n  [a,\n b]","expected":{"k":["a","b"]}}
+  {"name":"accept-continuation-at-flow-indent","source":"k:\n  [a,\n b]","expected":{"k":["a","b"]}},
+  {"name":"accept-tab-tag-multiline-plain","source":"k: [!!str\ta\n b]","expected":{"k":["a b"]}},
+  {"name":"accept-tab-tag-multiline-quoted","source":"k: [!!str\t\"a\n b\"]","expected":{"k":["a b"]}},
+  {"name":"accept-tab-tag-anchor-break","source":"k: [!!str\t&x\n ]","expected":{"k":[""]}}
 ]

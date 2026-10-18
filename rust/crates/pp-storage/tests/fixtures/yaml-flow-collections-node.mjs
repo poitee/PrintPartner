@@ -56,6 +56,8 @@ const refusals = [
   ['break-tag-shallow-second-break', 'k: [!!str\n,\nx]'],
   ['break-tag-shallow-tab', 'k: [!!str\n\t]'],
   ['break-tag-shallow-comma-tab', 'k: [!!str\n,\tx]'],
+  ['tab-tag-quoted-entry', 'k: [!!str\t"a"]'],
+  ['tab-tag-nested-flow', 'k: [!!seq\t[a,\n b]]'],
   ['shallow-close-after-comment', 'k: [a,\t#c\n]'],
   ['shallow-close', 'k: [a,\n]'],
   ['shallow-plain-continuation', 'k: [a\nb]'],
@@ -143,6 +145,9 @@ const accepted = [
   ['break-tag-comment-shallow-close', 'k: [!!str # c\n]'],
   ['tab-continuation-at-indent', 'k: [a,\n \tb]'],
   ['continuation-at-flow-indent', 'k:\n  [a,\n b]'],
+  ['tab-tag-multiline-plain', 'k: [!!str\ta\n b]'],
+  ['tab-tag-multiline-quoted', 'k: [!!str\t"a\n b"]'],
+  ['tab-tag-anchor-break', 'k: [!!str\t&x\n ]'],
 ];
 const verbatim = (source) => source.replace(/!!(\w+)/g, '!<tag:yaml.org,2002:$1>');
 const cases = [];
