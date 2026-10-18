@@ -1,6 +1,13 @@
 # Continuous integration
 
-The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It starts on every pull request and every push to `main`. On PRs, a `changes` job selects `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, `fixtures/**`, the workflow itself, and the CI filter script and its tests. Other changes skip the three named Rust jobs while keeping their check reports present. Every push to `main` and manual run executes all three jobs. A new push to a pull request cancels that pull request's older run. Every push to `main` gets its own run, so each merge has a result. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It starts on every pull request, every push to `main`, merge groups, a nightly schedule and manual runs.
+
+On PRs, the jobs are selected as follows:
+
+- `rust (linux)` and `rust (windows)` run when a `changes` job finds a change to `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, `fixtures/**`, `scripts/setup-ci-linux.sh`, the workflow itself, or the CI filter script and its tests. Other changes skip both jobs while keeping their check reports present.
+- `rust (macos)` ignores changed paths. It runs only when the PR has the exact `macos` label and is not a draft. Adding or removing the label, marking the PR ready for review and converting it to a draft each start a new run.
+
+Pushes to `main`, merge groups, nightly and manual runs execute all three jobs regardless of paths. A new push to a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so each merge has a result and no `main` run waits for or cancels another. Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
@@ -27,7 +34,7 @@ Each job runs these steps in order:
 9. `cargo test --doc`, with `desktop_rebuild` off. nextest does not run doctests.
 10. `cargo test --doc`, with `desktop_rebuild` on.
 
-On macOS PRs, steps 6, 8 and 10 are skipped. Linux and Windows keep both feature states on PRs. Pushes to `main` and manual runs keep both states on every OS.
+On macOS PRs, steps 6, 8 and 10 are skipped. Linux and Windows keep both feature states on PRs. Non-PR runs keep both states on every OS.
 
 The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
 
@@ -125,12 +132,17 @@ The filter also skips one test by name, outside those groups:
 ## Other Rust workflows
 
 - **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
-- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. On pull requests, its macOS jobs run only when the PR is ready for review and has the `macos` label. A new push to `main` does not cancel a running `main` run; it waits, and only the newest waiting push runs next.
+- **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. Changed paths do not select its jobs. Its `changes` job selects them by event:
+  - On pull requests, `linux-precheck`, `server-smoke`, the arm64 `bundle` and `macos-storage-gate` run only when the PR has the exact `macos` label and is not a draft. Fork PRs skip `macos-storage-gate`. The Intel bundle never runs on pull requests.
+  - Pushes to `main` or `master`, merge groups, nightly and manual runs select every job, including the Intel bundle.
+
+  Every macOS job also needs a successful `linux-precheck`, so a broken web build never starts a macOS runner. Skipped jobs still report their checks. A new push, label change or draft change on a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so a push to `main` never waits for or cancels another `main` run.
+  After normal detach retries fail, `lsof +f -- "$fixture_mount"` records open files on the source fixture's owned APFS filesystem before forced detach. Diagnostic and detach failures warn without changing the test exit status. Run `python3 scripts/test_native_image_cleanup.py -v` for executable cleanup fixtures. The same suite runs in `macos-storage-gate`, including a macOS-only disposable APFS image held open by a child process. Linux skips that native proof.
 - **Desktop runtime** (`desktop-runtime.yml`) builds `pp-api` and `pp-server` and runs the proofs that need the built server on Linux: the serial `runtime_m0` lifecycle log, the Python lifecycle, upload and gateway drivers, the source artifact checks and `verify.py`. Unit tests, clippy and fmt are not repeated here; `rust (linux)` runs them.
 
 When `rust (macos)` or a Native macOS bundle workflow job fails on a push to `main`, an alert job opens an issue labelled `ci-macos-main` for that workflow run, or comments on the existing open issue for the same run. Rust failures confined to Linux or Windows do not alert. Only the alert job receives `issues: write`.
 
-Required Rust and lint jobs fail if their input-selection job fails, so a broken filter or failing filter test cannot pass through the required checks. Failure alerts run independently with a separate issue per workflow run, so a shared concurrency queue cannot drop pending alerts. Reruns comment on the existing open issue for that run.
+Required Rust and lint jobs fail if their input-selection job fails, so a broken filter or failing filter test cannot pass through the required checks. `rust (macos)` also runs that check when the label and draft state select it. Failure alerts run independently with a separate issue per workflow run, so a shared concurrency queue cannot drop pending alerts. Reruns comment on the existing open issue for that run.
 
 ## Ephemeral PR runners
 
@@ -138,7 +150,7 @@ Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
 for Rust Linux, ast-grep, web checks, WebKit STL smoke, PR evidence lint, desktop contracts, desktop runtime,
 source artifacts, embedded-driver smoke, and the native
 macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
-`[self-hosted, macos, arm64, pp-local-mac]` with the existing `macos` PR label gate.
+`[self-hosted, macos, arm64, pp-local-mac]` when the PR has the `macos` label and is not a draft.
 Each runner accepts one job and is destroyed afterward. Linux has three slots with
 3 vCPU and 8 GB each; macOS has two fresh Tart VM slots.
 Routing matches registration labels, not ephemeral runner names. Live PR jobs
