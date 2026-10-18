@@ -855,8 +855,9 @@ until its holder releases or drops it. An abandoned claim reply drops its lease.
 The existing orphan queue handles releases that cannot enter the writer queue.
 
 CheckSourceUpdates claims have no initial Source-work lease. Their workers acquire
-individual leases through `begin_source_work`. Sync keeps its existing scoped
-Source bridge until D18 supplies the target API. Import settlement belongs to
+individual leases through `begin_source_work`. D18 (a) replaced Sync's scoped
+Source bridge: Sync reserves each target's Source when it claims the target, and
+`begin_source_work` refuses a Sync attempt. Import settlement belongs to
 D14 (d), local scan settlement to D17, and Sync settlement to D18. Claim-time
 import reservation and targeted `SourceBusy` errors follow the reference
 `source_binding`, `claim`, and `claim_import` in
@@ -1557,7 +1558,8 @@ GRE-703 item 1 by moving the test harness onto the real migration. It also remov
 the client schema prerequisite notes for GRE-707 item 6.
 `mark_local_failure`, `revalidate_source_authority` and
 `commit_source_authority_refusal` retain their tests and integration annotations;
-this schema slice adds no production callers for them. The authority helper
+this schema slice adds no production callers for them. Their callers are the
+D18 (b) Sync target failure (GRE-614) and the D14 import Phase path (GRE-610). The authority helper
 reuses `AuthorityRefusalReason::of` and saves one refusal.
 
 The Node generator now also executes the local `syncProjectById` completion and
@@ -1591,6 +1593,60 @@ initializer test bypasses preflight to prove that step validation rolls back the
 new index and leaves version 39 intact. The same drift is also refused through
 `WriterOwner` preflight. Logical comparisons include the SQLite catalog and rows,
 because SQLite's backup API can rewrite header counters.
+
+### D18 source sync: batch open and target claim
+
+D18 (a), GRE-614, ports the first part of `source_sync` from
+`desktop/source-sync-local-current-20261008` behind `desktop_rebuild`. A Sync
+attempt opens a batch, then claims its targets one at a time. The default build
+is unchanged and stays at schema 35.
+
+| Slice | Work | Estimated added/changed lines |
+| --- | --- | ---: |
+| D18 (a) | Schema 41; `open`, basis validation, target claim with Source reservation, ordinary failures, `halt_job`; Cancel and worker Fail halts; bridge removal; tests, Node probe, docs | 1,600 |
+| D18 (b) | Target validation, `settle`, `fail` with `mark_local_failure`, `acknowledge`, `adopt`, `halt_after_error` and `HaltSourceSync`; recovery of retained evidence; tests and docs | 1,450 |
+| D18 (c) | `finish`, `inspect`, `inspect_retained`, the recovery read types, the journal-owner guards for generic Finish, effects and reconciliation, claim and advance refusals, the prune guard; tests and docs | 1,200 |
+
+`open_source_sync` seals the batch the first time. An explicit selection keeps
+payload order. A selection of all Sources orders them by `last_synced_at`, then
+id, as the reference does; Node's `listProjectIds` uses table order. A later open
+revalidates the sealed basis and returns claims from earlier attempts to pending.
+
+`claim_next_source_sync_target` claims the first target that is not settled, in
+one writer transaction. A missing Source fails with Node's `Source not found`. A
+non-Local Source fails as `unsupported_kind`. Neither failure takes a reservation.
+A Local target records the attempt, the Source observation and a new reservation
+token. The token is activated after the commit, as claim-time reservation does.
+The reference uses three round trips for this: next, `BeginSyncTarget` and bind.
+A busy Source returns `SourceBusy` and leaves the target pending. A claim before
+open is refused. The returned `SyncTargetLease` holds the Source until it is
+released or dropped, so callers must not keep it longer than the target's work.
+
+Cancel, a worker `Fail` and a revoked original credential halt the batch. Pending
+targets become not-run. A claimed target is kept for reconciliation, and the Job
+becomes `reconciliation_required`. Otherwise the Job is cancelled or failed. A
+revoked credential records a Source-writer refusal. Until D18 (b), a claimed
+target cannot be settled. Until D18 (c), generic Finish and effects are still
+accepted for Sync.
+
+The reference schema numbers Source Sync 42 because its 41 validates manifest
+columns, which main does not have. Here the 40 to 41 step installs
+`source_sync_batches` and `source_sync_targets` from `source_sync/schema.sql`,
+following D17 (c): back up to `backups/pre-schema41.db`, install and validate in
+one transaction, then stamp 41. Preflight refuses Sync objects below 41.
+
+`fixtures/parity/source-sync/generate.mjs` runs Node's `InProcessJobRunner` Sync
+job over a missing id and a Local Source. The Rust test asserts the target order
+and Node's literal failure. Node has no durable batch, Source reservation or
+authority check. The claim-before-open, restart-recovery and ordinal tests adapt
+the reference `pp-core/tests/source_sync_local.rs` cases. The halt, refusal,
+busy-Source and bridge tests are new.
+
+```sh
+node fixtures/parity/source-sync/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests
+```
 
 ### D20 Checkoff progress
 
