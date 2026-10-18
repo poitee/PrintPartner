@@ -1,8 +1,4 @@
 name: Isolated Linux Rust restart diagnostics
-on:
-  push:
-    branches:
-      - ci/gre-753-linux-permissions
 permissions:
   contents: read
 defaults:
@@ -10,126 +6,128 @@ defaults:
     shell: bash
 env:
   CARGO_TERM_COLOR: always
-  INSTA_UPDATE: no
+  INSTA_UPDATE: false
 jobs:
   isolated-restarts:
     name: Isolated Rust crash and restart diagnostics
     runs-on:
-      - self-hosted
-      - linux
-      - x64
-      - pp-local
+    - self-hosted
+    - linux
+    - x64
+    - pp-local
     env:
       RUST_OS: linux
       CARGO_SCOPE: --workspace
-      NEXTEST_FILTER: test(=crash_guard_stops_after_five_failures_and_recovers_explicitly)
-        |
-        test(=stable_child_resets_backoff_without_erasing_rapid_crash_escalation)
-        |
-        test(=ticket_t_68_desktop_account_mapping::mapping_pin_survives_compat_crash_and_full_restart)
+      NEXTEST_FILTER: test(=crash_guard_stops_after_five_failures_and_recovers_explicitly) | test(=stable_child_resets_backoff_without_erasing_rapid_crash_escalation)
+        | test(=ticket_t_68_desktop_account_mapping::mapping_pin_survives_compat_crash_and_full_restart)
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-          ref: b5e2102bdc15d61653a2f6bfd930c3f94c7daaa4
-      - name: Set up ephemeral Linux prerequisites
-        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
-        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
-      - name: Prepare Python tool cache for the VM user
-        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
-        run: |
-          sudo mkdir -p /Users/runner/hostedtoolcache
-          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
-      - name: Set up Python 3.12 on ephemeral macOS
-        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
-        id: py
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
-      - name: Verify macOS manifest Python
-        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
-        env:
-          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
-        run: >
-          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >=
-          (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable,
-          sys.version)'
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+        ref: b5e2102bdc15d61653a2f6bfd930c3f94c7daaa4
+    - name: Set up ephemeral Linux prerequisites
+      if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+      run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+    - name: Prepare Python tool cache for the VM user
+      if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+      run: 'sudo mkdir -p /Users/runner/hostedtoolcache
 
-          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11);
-          assert hasattr(hashlib, "file_digest")'
-      - name: Verify preinstalled Python on ephemeral Windows
-        if: runner.environment == 'self-hosted' && runner.os == 'Windows'
-        id: py-windows
-        run: >
-          py -3.13 --version
+        sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
 
-          py -3.13 -c 'import hashlib, sys; assert sys.version_info >= (3, 11);
-          assert hasattr(hashlib, "file_digest"); print("python-path=" +
-          sys.executable)' >> "$GITHUB_OUTPUT"
-      - name: Set up Rust on ephemeral runners
-        if: runner.environment == 'self-hosted'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.99.0
-          components: rustfmt, clippy
-      - name: Fetch pinned historical schema commits
-        run: rust/scripts/fetch-historical-schema-commits.sh
-      - name: Install the pinned toolchain from rust-toolchain.toml
-        id: toolchain
-        run: |
-          rustup toolchain install
-          rustc --version
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          workspaces: rust -> target
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
-        with:
-          tool: nextest@0.9.148
-      - name: Install pinned storage-fixture Node
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 22.23.3
-      - name: Record storage-fixture executable
-        run: >
-          test "$(node --version)" = v22.23.3
+        '
+    - name: Set up Python 3.12 on ephemeral macOS
+      if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+      id: py
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Verify macOS manifest Python
+      if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+      env:
+        MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+      run: '"$MANIFEST_PYTHON" -c ''import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib,
+        "file_digest"); print(sys.executable, sys.version)''
 
-          echo "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >>
-          "$GITHUB_ENV"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24.21.0
-      - name: Build desktop assets and generate measured manifest
-        id: assets
-        env:
-          VITE_PRINT_PARTNER_DESKTOP: "1"
-          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path ||
-            steps.py-windows.outputs.python-path || 'python3' }}
-        run: >
-          set -euo pipefail
+        python3 -c ''import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")''
 
-          node_path=$(node -p process.execPath)
+        '
+    - name: Verify preinstalled Python on ephemeral Windows
+      if: runner.environment == 'self-hosted' && runner.os == 'Windows'
+      id: py-windows
+      run: 'py -3.13 --version
 
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            sudo ln -sf "$node_path" /usr/bin/node
-          fi
+        py -3.13 -c ''import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest");
+        print("python-path=" + sys.executable)'' >> "$GITHUB_OUTPUT"
 
-          echo "PP_TEST_NODE=$node_path" >> "$GITHUB_ENV"
+        '
+    - name: Set up Rust on ephemeral runners
+      if: runner.environment == 'self-hosted'
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+      with:
+        toolchain: 1.99.0
+        components: rustfmt, clippy
+    - name: Fetch pinned historical schema commits
+      run: rust/scripts/fetch-historical-schema-commits.sh
+    - name: Install the pinned toolchain from rust-toolchain.toml
+      id: toolchain
+      run: 'rustup toolchain install
 
-          npm --prefix web ci
+        rustc --version
 
-          npm --prefix web run build
+        '
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        workspaces: rust -> target
+    - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+      with:
+        tool: nextest@0.9.148
+    - name: Install pinned storage-fixture Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      with:
+        node-version: 22.23.3
+    - name: Record storage-fixture executable
+      run: 'test "$(node --version)" = v22.23.3
 
-          "$MANIFEST_PYTHON" rust/scripts/build-desktop-manifest.py --web web
-          --node "$node_path" --output rust/bundle-manifest.json --commit
-          "$GITHUB_SHA"
-      - name: nextest (desktop_rebuild off)
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-core
-          --test runtime_m0 --test-threads 1 --no-fail-fast -E "$NEXTEST_FILTER"
-      - name: nextest (desktop_rebuild on)
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS !=
-          'macos' || github.event_name != 'pull_request') }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-core
-          --test runtime_m0 --test-threads 1 --no-fail-fast -E "$NEXTEST_FILTER"
-          --features desktop_rebuild
+        echo "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >> "$GITHUB_ENV"
+
+        '
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      with:
+        node-version: 24.21.0
+    - name: Build desktop assets and generate measured manifest
+      id: assets
+      env:
+        VITE_PRINT_PARTNER_DESKTOP: '1'
+        MANIFEST_PYTHON: ${{ steps.py.outputs.python-path || steps.py-windows.outputs.python-path || 'python3' }}
+      run: "set -euo pipefail\nnode_path=$(node -p process.execPath)\nif [[ \"$RUNNER_OS\" == Linux ]]; then\n \
+        \ sudo ln -sf \"$node_path\" /usr/bin/node\nfi\necho \"PP_TEST_NODE=$node_path\" >> \"$GITHUB_ENV\"\nnpm\
+        \ --prefix web ci\nnpm --prefix web run build\n\"$MANIFEST_PYTHON\" rust/scripts/build-desktop-manifest.py\
+        \ --web web --node \"$node_path\" --output rust/bundle-manifest.json --commit \"$GITHUB_SHA\"\n"
+    - name: Instrument restart state without changing deadlines
+      run: "python3 - <<'PYCODE'\nfrom pathlib import Path\np = Path(\"rust/crates/pp-core/tests/runtime_m0.rs\"\
+        )\ns = p.read_text()\nfor line in [\"let mut state = handle.subscribe();\", \"let mut state = runtime.handle().subscribe();\"\
+        ]:\n    s = s.replace(line, line + '\\n    let mut diagnostics = state.clone();\\n    tokio::spawn(async\
+        \ move {\\n        let started = std::time::Instant::now();\\n        loop {\\n            eprintln!(\"\
+        RESTART_STATE {:?} {:?}\", started.elapsed(), *diagnostics.borrow());\\n            if diagnostics.changed().await.is_err()\
+        \ { break; }\\n        }\\n    });\\n')\np.write_text(s)\nPYCODE\n"
+    - name: nextest (desktop_rebuild off)
+      if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
+      run: cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 --test-threads
+        1 --success-output immediate --no-fail-fast -E "$NEXTEST_FILTER"
+    - name: nextest (desktop_rebuild on)
+      if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name
+        != 'pull_request') }}
+      run: cargo nextest run --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 --test-threads
+        1 --success-output immediate --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild
+    - name: Collect lifecycle events only
+      if: always()
+      run: "python3 - <<'PYCODE'\nfrom pathlib import Path\nimport json, tempfile\nfor p in Path(tempfile.gettempdir()).glob(\"\
+        pp-guard-m0-*/logs/desktop*.jsonl\"):\n    print(p)\n    for line in p.read_text().splitlines():\n     \
+        \   try: r=json.loads(line)\n        except ValueError: continue\n        if r.get(\"event\") != \"compat_output\"\
+        :\n            print(json.dumps({k:r[k] for k in (\"time\",\"event\",\"reason\",\"termination\") if k in\
+        \ r}))\nPYCODE\n"
+'on':
+  push:
+    branches:
+    - ci/gre-753-linux-permissions
