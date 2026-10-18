@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from built_backend_listeners import ListenerFound, Watch, endpoints, run_backend
 from built_backend_lifecycle import run_in_subreaper
@@ -52,6 +53,41 @@ def signal_during_reaping(signaled):
 
 @unittest.skipUnless(sys.platform == "linux", "Linux run-owned descendant cleanup")
 class DescendantCleanupTest(unittest.TestCase):
+    def test_unreadable_proc_children_fails_before_callback(self):
+        caller_pid = os.getpid()
+        read_text = Path.read_text
+        for error_type in (FileNotFoundError, PermissionError):
+            with self.subTest(error=error_type.__name__), tempfile.TemporaryDirectory(prefix="pp-cleanup-prerequisite-") as directory:
+                root = Path(directory)
+                marker, probe, receipt = root / "callback", root / "probe", root / "cleanup.json"
+
+                def unreadable_children(path, *args, **kwargs):
+                    pid = os.getpid()
+                    if pid != caller_pid and path == Path(f"/proc/self/task/{pid}/children"):
+                        probe.write_text(str(pid))
+                        raise error_type("simulated unreadable proc children")
+                    return read_text(path, *args, **kwargs)
+
+                unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                try:
+                    failure = None
+                    with patch.object(Path, "read_text", unreadable_children):
+                        try:
+                            run_in_subreaper(marker.write_text, ("callback invoked",), receipt, timeout=5)
+                        except RuntimeError as error:
+                            failure = str(error)
+                    self.assertFalse(marker.exists(), "callback ran before checking proc children readability")
+                    self.assertIsNotNone(failure, "missing proc children prerequisite did not fail")
+                    worker_pid = int(probe.read_text())
+                    self.assertNotEqual(worker_pid, caller_pid)
+                    self.assertIn("subreaper containment requires readable", failure)
+                    self.assertIn(f"/proc/self/task/{worker_pid}/children", failure)
+                    self.assertIn("CONFIG_PROC_CHILDREN", failure)
+                    self.assertIsNone(unrelated.poll(), "preflight affected an unrelated caller child")
+                finally:
+                    unrelated.kill()
+                    unrelated.wait(timeout=5)
+
     def test_sigterm_during_reaping_still_writes_cleanup_receipt(self):
         with tempfile.TemporaryDirectory(prefix="pp-cleanup-reaping-") as directory:
             root = Path(directory)
