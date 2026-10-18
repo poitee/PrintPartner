@@ -552,6 +552,24 @@ fn import_arrays_over_the_node_limit_refuse_instead_of_dropping_parts() {
 }
 
 #[test]
+fn import_rules_charge_overwritten_nested_unknown_fields() {
+    let mut database = import_only_source(r#"{"unknown":{"nested":[0,1,2]},"unknown":null}"#);
+    let captured = database.capture(TENANT, 1).unwrap();
+    assert!(matches!(
+        observe(
+            &captured,
+            Some(&part_reads()),
+            PreparationLimits {
+                nodes: 8,
+                ..PreparationLimits::default()
+            },
+            false,
+        ),
+        Err(ReadFailure::LimitExceeded(Resource::Nodes))
+    ));
+}
+
+#[test]
 fn zero_budgets_refuse_the_stored_kit_and_import_rules() {
     let mut database = import_only_source(r#"["part.stl"]"#);
     let both = database.capture(TENANT, 1).unwrap();
@@ -678,6 +696,69 @@ fn stored_kits_over_the_json_limits_refuse_instead_of_dropping_selections() {
         observed(many(99_993)),
         Err("LimitExceeded(Nodes)".to_owned())
     );
+}
+
+#[test]
+fn stored_kit_charges_overwritten_nested_unknown_fields() {
+    let cancelled = AtomicBool::new(false);
+    let limits = PreparationLimits {
+        nodes: 7,
+        ..PreparationLimits::default()
+    };
+    let mut budget = PreparationBudget::new(&cancelled, limits).unwrap();
+    assert!(
+        observation::stored_kit(
+            r#"{"selections":{"zeta":"z1"},"unknown":null}"#,
+            &mut budget,
+        )
+        .is_ok()
+    );
+
+    let mut budget = PreparationBudget::new(&cancelled, limits).unwrap();
+    assert!(matches!(
+        observation::stored_kit(
+            r#"{"selections":{"zeta":"z1"},"unknown":{"nested":[0,1,2]},"unknown":null}"#,
+            &mut budget,
+        ),
+        Err(ReadFailure::LimitExceeded(Resource::Nodes))
+    ));
+}
+
+#[test]
+fn stored_kit_preserves_duplicate_free_node_counts_and_depth() {
+    for (nodes, depth, expected) in [
+        (6, 3, Ok(())),
+        (5, 3, Err("LimitExceeded(Nodes)".to_owned())),
+        (6, 2, Err("LimitExceeded(Depth)".to_owned())),
+    ] {
+        let cancelled = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                nodes,
+                depth,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            observation::stored_kit(r#"{"unknown":{"leaf":[null]}}"#, &mut budget)
+                .map(drop)
+                .map_err(|error| format!("{error:?}")),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn stored_kit_cancels_during_parse_before_malformed_tail() {
+    let cancelled = AtomicBool::new(false);
+    let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    budget.cancel_after_checks(4);
+    assert!(matches!(
+        observation::stored_kit(r#"{"unknown":[0,1,2,3],"unknown":null,"#, &mut budget),
+        Err(ReadFailure::Cancelled)
+    ));
 }
 
 #[test]
