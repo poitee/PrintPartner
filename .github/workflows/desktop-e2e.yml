@@ -38,7 +38,7 @@ jobs:
         if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
         shell: bash
         run: |
-          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"
+          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
           if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
       - name: Set up ephemeral Linux prerequisites
         if: runner.environment == 'self-hosted' && runner.os == 'Linux'
