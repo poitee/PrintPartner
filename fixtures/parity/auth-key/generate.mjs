@@ -139,7 +139,9 @@ async function probe() {
         store = open();
         result = {};
       }
-      if (tokens.leaked(issuedNow, result)) throw new Error(`Node step ${results.length} leaks an issued key`);
+      if (tokens.leaked(issuedNow, result) || /"<(?:id|key):[^"]*>"/.test(JSON.stringify(result))) {
+        throw new Error(`Node step ${results.length} leaks a key or carries a token`);
+      }
       results.push(tokens.normalize(result));
     }
   } finally {

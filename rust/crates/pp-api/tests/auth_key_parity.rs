@@ -199,6 +199,19 @@ fn generated_time(value: &str) -> bool {
     (1..=days).contains(&day) && number(11..13) < 24 && number(14..16) < 60 && number(17..19) < 60
 }
 
+/// A raw string shaped like a normalization token would compare equal to the
+/// token it imitates, so raw output may not contain one.
+fn reserved(value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            (text.starts_with("<id:") || text.starts_with("<key:")) && text.ends_with('>')
+        }
+        Value::Array(items) => items.iter().any(reserved),
+        Value::Object(fields) => fields.values().any(reserved),
+        _ => false,
+    }
+}
+
 /// Mirrors `Tokens` in `fixtures/parity/auth-key/generate.mjs`.
 #[derive(Default)]
 struct Tokens {
@@ -385,8 +398,8 @@ fn mismatches(steps: &[Value], raw: &[Value]) -> Vec<String> {
             tokens.issue(&result["body"]);
         }
         let rust = tokens.normalize(result);
-        if tokens.leaked(issued_now, result) {
-            differences.push(format!("step {index} leaks an issued key"));
+        if tokens.leaked(issued_now, result) || reserved(result) {
+            differences.push(format!("step {index} leaks a key or carries a token"));
         } else if rust_contract(&step["node"]) != rust {
             differences.push(format!("step {index} {step}\n  rust {rust}"));
         }
@@ -481,6 +494,13 @@ async fn comparison_rejects_leaked_secret_and_accepted_revoked_key() {
             "/body/keys/3/lastUsedAt",
             json!([replay.raw[last]["body"]["keys"][3]["lastUsedAt"]]),
         ),
+        (
+            "token as raw lastUsedAt",
+            last,
+            "/body/keys/3/lastUsedAt",
+            json!("<id:4.lastUsedAt#1>"),
+        ),
+        ("token as raw id", last, "/body/keys/3/id", json!("<id:4>")),
     ];
     for (name, index, pointer, value) in mutations {
         let mut raw = replay.raw.clone();
