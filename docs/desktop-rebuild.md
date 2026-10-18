@@ -1150,10 +1150,11 @@ Opening storage checks each preclaim refusal against its entry and job: it must 
 the entry's first and only observation, the entry must be `admitted`, or settled as
 `failed` or `cancelled` to match the cancellation flag, and the job must have failed
 at generation 1 from a targeted-claim refusal at generation 0, with the same
-cancellation flag. The check also runs from the other side: an entry with an
-authority revision whose job records a targeted-claim refusal at generation 0 must
-have its preclaim row, so opening storage without it fails with `Missing Source
-preclaim refusal`. An entry without an authority revision never wrote one.
+cancellation flag. The check also runs from the other side: an entry whose job
+records a targeted-claim refusal at generation 0 and whose observation cursor is
+above 0 must have its preclaim row, so opening storage without it fails with
+`Missing Source preclaim refusal`. Storage written before targeted claims journaled
+the refusal left the cursor at 0 and has no row; it still opens.
 
 Node writes supplied files in one call and has no journal, attempts or
 observations, so the tests port the reference `source_import_operation.rs` storage

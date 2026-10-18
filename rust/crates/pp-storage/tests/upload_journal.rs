@@ -787,4 +787,19 @@ fn startup_refuses_an_import_missing_its_preclaim_refusal() {
     let missing = journal_rows(&root);
     refused_open(&root);
     assert_eq!(journal_rows(&root), missing);
+
+    // A refusal recorded before the preclaim row existed left the cursor at 0
+    // and still opens.
+    let root = preclaim_refused();
+    delete_preclaim(&root);
+    Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .execute_batch(
+            "UPDATE source_import_operations SET document=json_set(document,'$.observation_cursor',0)",
+        )
+        .unwrap();
+    for _ in 0..2 {
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        owner.shutdown().unwrap();
+    }
 }

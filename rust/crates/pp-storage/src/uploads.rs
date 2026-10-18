@@ -238,7 +238,8 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
 /// A preclaim refusal is the entry's only observation: its admitted entry's
 /// first cursor, and the targeted claim refusal that failed its job before any
 /// attempt. A settled entry keeps the refusal as its last observation. An entry
-/// with an authority revision whose job records that refusal must have the row.
+/// whose job records that refusal and whose cursor counted it must have the row;
+/// a refusal from before the row was written left the cursor at 0.
 fn validate_preclaim_refusal(
     connection: &Connection,
     op: &Operation,
@@ -254,7 +255,7 @@ fn validate_preclaim_refusal(
         .optional()?
     else {
         ensure!(
-            !(op.authority_revision.is_some()
+            !(op.observation_cursor.is_some_and(|cursor| cursor > 0)
                 && refusal.is_some_and(|refusal| {
                     refusal.phase == jobs::AuthorityRefusalPhase::TargetedClaim
                         && refusal.generation == 0
