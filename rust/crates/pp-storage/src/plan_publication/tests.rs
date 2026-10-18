@@ -263,7 +263,7 @@ fn input_validation_counts_named_fields_and_tenant() {
     tx.execute("INSERT INTO projects VALUES(1,?)", [&tenant])
         .unwrap();
     let mut input = json!({"sourceId":1,"sourceLayer":"s","trackingKind":"untracked","sourceRevisionId":null,"manifestDigest":null,"effectiveNamingDigest":"a".repeat(64),"extra":"ignored".repeat(10000)});
-    validate_inputs(&tx, &tenant, &[input.clone()]).unwrap();
+    validate_inputs(&tx, &tenant, std::slice::from_ref(&input)).unwrap();
     input["sourceLayer"] = json!("sx");
     assert_eq!(
         error(validate_inputs(&tx, &tenant, &[input])),
@@ -279,7 +279,7 @@ fn input_validation_counts_named_fields_and_tenant() {
     )
     .unwrap();
     let input = json!({"sourceId":2,"sourceLayer":"s","trackingKind":"revision","sourceRevisionId":3,"manifestDigest":"a".repeat(64),"effectiveNamingDigest":"b".repeat(64)});
-    validate_inputs(&tx, "tenant", &[input.clone()]).unwrap();
+    validate_inputs(&tx, "tenant", std::slice::from_ref(&input)).unwrap();
     tx.execute(
         "UPDATE source_revisions SET upstream_revision_key=upstream_revision_key || 'x'",
         [],
