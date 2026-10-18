@@ -2018,6 +2018,12 @@ pub(crate) fn user(
             job.cancel_requested = true;
             #[cfg(feature = "desktop_rebuild")]
             if job.kind == JobKind::Sync {
+                if job.state == PersistentState::ReconciliationRequired
+                    && job.authority_refusal.is_some()
+                {
+                    save(tx, &mut job, "cancellation_requested")?;
+                    return Ok(Outcome::Job(job, LocalCommit::Committed));
+                }
                 let job = crate::source_sync::halt_job(tx, job, "cancelled", "Sync was cancelled")?;
                 return Ok(Outcome::Job(job, LocalCommit::Committed));
             }

@@ -523,6 +523,7 @@ fn repeated_authority_refusal_halt_preserves_evidence() {
         assert_eq!(repeated.authority_refusal, refused.authority_refusal);
         assert_eq!(repeated.recovery, refused.recovery);
         assert_eq!(sync.snapshot(), before);
+        drop(connection);
         drop(target);
         let Fixture { owner, root, .. } = sync;
         owner.shutdown().unwrap();
