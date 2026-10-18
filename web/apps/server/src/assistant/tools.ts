@@ -1,6 +1,8 @@
 import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL, parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import { readFarmAccess } from "../lib/farm-access.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
   OwnershipAdmissionError,
@@ -28,7 +30,7 @@ import {
 import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-progress.js";
-import type { IntegrationPort } from "../integrations/store.js";
+import { getIntegrationConfig, type IntegrationPort } from "../integrations/store.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store.js";
 import {
@@ -2898,47 +2900,50 @@ export async function invokeAssistantTool(
           // print_jobs unreadable — idle_since degrades to null, status still works.
         }
 
-        const printers = await Promise.all(
+        const probes = await Promise.all(
           fleet.map(async (m) => {
-            let state: string = "unknown";
-            let message: string | null = null;
-            let activeJob: string | null = null;
-            let progress: number | null = null;
-            let etaSeconds: number | null = null;
+            const isBambu = desktopFeaturesEnabled() && !!m.integration_id
+              && getIntegrationConfig(ctx.repo, m.integration_id)?.type === "bambu";
+            const bambuAccess = isBambu ? readFeatureAccess(() => ctx.repo, "bambu") : null;
             let hostStatus: PrinterHostStatus | null = null;
-            if (m.integration_id && ctx.integrations) {
+            if (bambuAccess && bambuAccess.kind !== "allowed") {
+              hostStatus = { state: "unknown", message: bambuAccess.error };
+            } else if (m.integration_id && ctx.integrations) {
               try {
-                const status = await ctx.integrations.getStatus(m.integration_id);
-                hostStatus = status;
-                state = status.state;
-                message = status.message ?? null;
-                activeJob = ((status as Record<string, unknown>).filename as string | null) ?? null;
-                progress = typeof status.progress === "number" ? status.progress : null;
-                etaSeconds = typeof status.eta_seconds === "number" ? status.eta_seconds : null;
+                hostStatus = await ctx.integrations.getStatus(m.integration_id);
               } catch {
-                state = "offline";
+                hostStatus = { state: "offline" };
               }
             }
-
-            const filament = printerFilamentStatus(m, lookupSpools, hostStatus);
-
-            return {
-              id: m.id,
-              name: m.name,
-              state,
-              active_job: activeJob,
-              progress,
-              eta_seconds: etaSeconds,
-              message,
-              integration_id: m.integration_id ?? null,
-              idle_since: idleSinceFor(state, m.id, lastActivity),
-              filament_slots: filament.slots,
-              filament_remaining_g: filament.filament_remaining_g,
-              needs_filament_swap: filament.needs_filament_swap,
-              filament_swap_reason: filament.filament_swap_reason,
-            };
+            return { machine: m, isBambu, hostStatus };
           }),
         );
+
+        const printers = probes.map(({ machine: m, isBambu, hostStatus: probedStatus }) => {
+          let hostStatus = probedStatus;
+          const bambuAccess = isBambu ? readFeatureAccess(() => ctx.repo, "bambu") : null;
+          if (bambuAccess && bambuAccess.kind !== "allowed") {
+            hostStatus = { state: "unknown", message: bambuAccess.error };
+          }
+          const state = hostStatus?.state ?? "unknown";
+          const filament = printerFilamentStatus(m, lookupSpools, hostStatus);
+
+          return {
+            id: m.id,
+            name: m.name,
+            state,
+            active_job: hostStatus?.filename ?? null,
+            progress: typeof hostStatus?.progress === "number" ? hostStatus.progress : null,
+            eta_seconds: typeof hostStatus?.eta_seconds === "number" ? hostStatus.eta_seconds : null,
+            message: hostStatus?.message ?? null,
+            integration_id: m.integration_id ?? null,
+            idle_since: idleSinceFor(state, m.id, lastActivity),
+            filament_slots: filament.slots,
+            filament_remaining_g: filament.filament_remaining_g,
+            needs_filament_swap: filament.needs_filament_swap,
+            filament_swap_reason: filament.filament_swap_reason,
+          };
+        });
         return {
           content: JSON.stringify({
             printer_count: fleet.length,
