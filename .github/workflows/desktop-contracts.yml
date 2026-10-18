@@ -78,8 +78,12 @@ jobs:
       - name: Build authority packages
         run: npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain
       - name: Verify auth refusal Node fixtures
-        if: startsWith(matrix.node, '22.')
-        run: node ../fixtures/parity/auth-login/generate.mjs --check
+        run: |
+          case "$(node --version)" in
+            v22.*)
+              node ../fixtures/parity/auth-login/generate.mjs --check
+              ;;
+          esac
       - name: Verify required-unit Node fixtures
         run: |
           node ../rust/crates/pp-storage/tests/fixtures/required-units/messages-node.mjs --check
