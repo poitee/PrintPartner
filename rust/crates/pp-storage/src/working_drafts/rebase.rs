@@ -96,22 +96,20 @@ impl Field {
 }
 
 impl RebaseOutcome {
-    pub fn into_json_body(self) -> DraftOutcomeJsonBody {
+    pub fn into_json_body(self) -> Result<DraftOutcomeJsonBody> {
         let (kind, field, body) = match self {
             Self::Rebased { draft } => ("rebased", Some("draft"), draft.into_json_body().0),
             Self::Existing { draft } => ("existing", Some("draft"), draft.into_json_body().0),
             Self::SourceConflict { draft } => {
                 ("source_conflict", Some("draft"), draft.into_json_body().0)
             }
-            Self::NotAbandoned { state } => (
-                "not_abandoned",
-                Some("state"),
-                serde_json::to_vec(&state).expect("draft state"),
-            ),
+            Self::NotAbandoned { state } => {
+                ("not_abandoned", Some("state"), serde_json::to_vec(&state)?)
+            }
             Self::MergeConflicts { conflicts } => (
                 "merge_conflicts",
                 Some("conflicts"),
-                serde_json::to_vec(&conflicts).expect("scalar merge conflicts"),
+                serde_json::to_vec(&conflicts)?,
             ),
             Self::ProfileNotFound => ("profile_not_found", None, Vec::new()),
             Self::NotFound => ("not_found", None, Vec::new()),
@@ -123,7 +121,7 @@ impl RebaseOutcome {
             Self::NoLayers => ("no_layers", None, Vec::new()),
             Self::NoStls => ("no_stls", None, Vec::new()),
         };
-        outcome_json_body(kind, field, &body)
+        Ok(outcome_json_body(kind, field, &body))
     }
 }
 

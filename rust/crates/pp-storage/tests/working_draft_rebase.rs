@@ -252,7 +252,7 @@ fn rebase(
         cancelled,
         Duration::from_secs(5),
     )?;
-    let mut outcome: Value = serde_json::from_slice(&outcome.into_json_body().into_bytes())?;
+    let mut outcome: Value = serde_json::from_slice(&outcome.into_json_body()?.into_bytes())?;
     if let Some(created_at) = outcome["draft"]["createdAt"].as_str() {
         let iso = created_at.len() == 24
             && created_at
