@@ -1,299 +1,409 @@
 [
-  {
-    "name": "cr-plain-continuation",
-    "source": "project: prefix\r  \"\\uE000\"",
-    "expected": {
-      "project": "prefix \"\\uE000\""
-    }
-  },
-  {
-    "name": "cr-plain-blank",
-    "source": "project: prefix\r\r  \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n\"\\uE000\""
-    }
-  },
-  {
-    "name": "cr-plain-space-blanks",
-    "source": "project: prefix\r  \r    \r  \"\\uE000uD800\\uE000\"",
-    "expected": {
-      "project": "prefix\n\n\"\\uE000uD800\\uE000\""
-    }
-  },
-  {
-    "name": "cr-plain-single-quote",
-    "source": "project: prefix\r\r  '\\uE000'",
-    "expected": {
-      "project": "prefix\n'\\uE000'"
-    }
-  },
-  {
-    "name": "cr-plain-literal-sentinel",
-    "source": "project: prefix\r\r  \"uD800\"",
-    "expected": {
-      "project": "prefix\n\"uD800\""
-    }
-  },
-  {
-    "name": "cr-single-quoted-blank",
-    "source": "project: 'prefix\r\r  \\uE000 '",
-    "expected": {
-      "project": "prefix\n\\uE000 "
-    }
-  },
-  {
-    "name": "cr-double-quoted-blank",
-    "source": "project: \"prefix\r\r  \\uE000 \"",
-    "expected": {
-      "project": "prefix\n "
-    }
-  },
-  {
-    "name": "cr-double-quoted-following-node",
-    "source": "project: \"prefix\r\r  \\uE000\"\rnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n",
-      "next": ""
-    }
-  },
-  {
-    "name": "cr-literal-block-blank",
-    "source": "project: |\r  prefix\r\r  \"\\uE000 \"\r",
-    "expected": {
-      "project": "prefix\n\n\"\\uE000 \"\n"
-    }
-  },
-  {
-    "name": "cr-folded-block-blank",
-    "source": "project: >\r  prefix\r\r  \"\\uE000 \"\r",
-    "expected": {
-      "project": "prefix\n\"\\uE000 \"\n"
-    }
-  },
-  {
-    "name": "cr-comment-after-blank",
-    "source": "project: prefix\r\r# \"\\uE000\"\rnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix",
-      "next": ""
-    }
-  },
-  {
-    "name": "cr-comment-ends-plain",
-    "source": "project: prefix\r\r  # comment\r  \"\\uE000\"",
-    "expected": null
-  },
-  {
-    "name": "cr-dedented-quoted-node",
-    "source": "project: prefix\r\rnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix",
-      "next": ""
-    }
-  },
-  {
-    "name": "cr-verbatim-tag-blank",
-    "source": "project: !<tag:yaml.org,2002:str> prefix\r\r  \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n\"\\uE000\""
-    }
-  },
-  {
-    "name": "crlf-plain-continuation",
-    "source": "project: prefix\r\n  \"\\uE000\"",
-    "expected": {
-      "project": "prefix \"\\uE000\""
-    }
-  },
-  {
-    "name": "crlf-plain-blank",
-    "source": "project: prefix\r\n\r\n  \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n\"\\uE000\""
-    }
-  },
-  {
-    "name": "crlf-plain-space-blanks",
-    "source": "project: prefix\r\n  \r\n    \r\n  \"\\uE000uD800\\uE000\"",
-    "expected": {
-      "project": "prefix\n\n\"\\uE000uD800\\uE000\""
-    }
-  },
-  {
-    "name": "crlf-plain-single-quote",
-    "source": "project: prefix\r\n\r\n  '\\uE000'",
-    "expected": {
-      "project": "prefix\n'\\uE000'"
-    }
-  },
-  {
-    "name": "crlf-plain-literal-sentinel",
-    "source": "project: prefix\r\n\r\n  \"uD800\"",
-    "expected": {
-      "project": "prefix\n\"uD800\""
-    }
-  },
-  {
-    "name": "crlf-single-quoted-blank",
-    "source": "project: 'prefix\r\n\r\n  \\uE000 '",
-    "expected": {
-      "project": "prefix\n\\uE000 "
-    }
-  },
-  {
-    "name": "crlf-double-quoted-blank",
-    "source": "project: \"prefix\r\n\r\n  \\uE000 \"",
-    "expected": {
-      "project": "prefix\n "
-    }
-  },
-  {
-    "name": "crlf-double-quoted-following-node",
-    "source": "project: \"prefix\r\n\r\n  \\uE000\"\r\nnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n",
-      "next": ""
-    }
-  },
-  {
-    "name": "crlf-literal-block-blank",
-    "source": "project: |\r\n  prefix\r\n\r\n  \"\\uE000 \"\r\n",
-    "expected": {
-      "project": "prefix\n\n\"\\uE000 \"\n"
-    }
-  },
-  {
-    "name": "crlf-folded-block-blank",
-    "source": "project: >\r\n  prefix\r\n\r\n  \"\\uE000 \"\r\n",
-    "expected": {
-      "project": "prefix\n\"\\uE000 \"\n"
-    }
-  },
-  {
-    "name": "crlf-comment-after-blank",
-    "source": "project: prefix\r\n\r\n# \"\\uE000\"\r\nnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix",
-      "next": ""
-    }
-  },
-  {
-    "name": "crlf-comment-ends-plain",
-    "source": "project: prefix\r\n\r\n  # comment\r\n  \"\\uE000\"",
-    "expected": null
-  },
-  {
-    "name": "crlf-dedented-quoted-node",
-    "source": "project: prefix\r\n\r\nnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix",
-      "next": ""
-    }
-  },
-  {
-    "name": "crlf-verbatim-tag-blank",
-    "source": "project: !<tag:yaml.org,2002:str> prefix\r\n\r\n  \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n\"\\uE000\""
-    }
-  },
-  {
-    "name": "lf-plain-continuation",
-    "source": "project: prefix\n  \"\\uE000\"",
-    "expected": {
-      "project": "prefix \"\\uE000\""
-    }
-  },
-  {
-    "name": "lf-plain-blank",
-    "source": "project: prefix\n\n  \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n\"\\uE000\""
-    }
-  },
-  {
-    "name": "lf-plain-space-blanks",
-    "source": "project: prefix\n  \n    \n  \"\\uE000uD800\\uE000\"",
-    "expected": {
-      "project": "prefix\n\n\"\\uE000uD800\\uE000\""
-    }
-  },
-  {
-    "name": "lf-plain-single-quote",
-    "source": "project: prefix\n\n  '\\uE000'",
-    "expected": {
-      "project": "prefix\n'\\uE000'"
-    }
-  },
-  {
-    "name": "lf-plain-literal-sentinel",
-    "source": "project: prefix\n\n  \"uD800\"",
-    "expected": {
-      "project": "prefix\n\"uD800\""
-    }
-  },
-  {
-    "name": "lf-single-quoted-blank",
-    "source": "project: 'prefix\n\n  \\uE000 '",
-    "expected": {
-      "project": "prefix\n\\uE000 "
-    }
-  },
-  {
-    "name": "lf-double-quoted-blank",
-    "source": "project: \"prefix\n\n  \\uE000 \"",
-    "expected": {
-      "project": "prefix\n "
-    }
-  },
-  {
-    "name": "lf-double-quoted-following-node",
-    "source": "project: \"prefix\n\n  \\uE000\"\nnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n",
-      "next": ""
-    }
-  },
-  {
-    "name": "lf-literal-block-blank",
-    "source": "project: |\n  prefix\n\n  \"\\uE000 \"\n",
-    "expected": {
-      "project": "prefix\n\n\"\\uE000 \"\n"
-    }
-  },
-  {
-    "name": "lf-folded-block-blank",
-    "source": "project: >\n  prefix\n\n  \"\\uE000 \"\n",
-    "expected": {
-      "project": "prefix\n\"\\uE000 \"\n"
-    }
-  },
-  {
-    "name": "lf-comment-after-blank",
-    "source": "project: prefix\n\n# \"\\uE000\"\nnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix",
-      "next": ""
-    }
-  },
-  {
-    "name": "lf-comment-ends-plain",
-    "source": "project: prefix\n\n  # comment\n  \"\\uE000\"",
-    "expected": null
-  },
-  {
-    "name": "lf-dedented-quoted-node",
-    "source": "project: prefix\n\nnext: \"\\uE000\"",
-    "expected": {
-      "project": "prefix",
-      "next": ""
-    }
-  },
-  {
-    "name": "lf-verbatim-tag-blank",
-    "source": "project: !<tag:yaml.org,2002:str> prefix\n\n  \"\\uE000\"",
-    "expected": {
-      "project": "prefix\n\"\\uE000\""
-    }
-  }
+  {"name":"tab-only-blank","source":"a: x\n\t\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"tab-space-blank","source":"a: x\n\t  \n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"seq-tab-blank","source":"- x\n\t\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"mixed-blank-run","source":"a: x\n  \n\t\n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"tab-only-blank-crlf","source":"a: x\r\n\t\r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-plain-continuation","source":"project: prefix\r  \"\\uE000\"","expected":{"project":"prefix \"\\uE000\""}},
+  {"name":"cr-plain-blank","source":"project: prefix\r\r  \"\\uE000\"","expected":{"project":"prefix\n\"\\uE000\""}},
+  {"name":"cr-plain-space-blanks","source":"project: prefix\r  \r    \r  \"\\uE000uD800\\uE000\"","expected":{"project":"prefix\n\n\"\\uE000uD800\\uE000\""}},
+  {"name":"cr-plain-single-quote","source":"project: prefix\r\r  '\\uE000'","expected":{"project":"prefix\n'\\uE000'"}},
+  {"name":"cr-plain-literal-sentinel","source":"project: prefix\r\r  \"uD800\"","expected":{"project":"prefix\n\"uD800\""}},
+  {"name":"cr-single-quoted-blank","source":"project: 'prefix\r\r  \\uE000 '","expected":{"project":"prefix\n\\uE000 "}},
+  {"name":"cr-double-quoted-blank","source":"project: \"prefix\r\r  \\uE000 \"","expected":{"project":"prefix\n "}},
+  {"name":"cr-double-quoted-following-node","source":"project: \"prefix\r\r  \\uE000\"\rnext: \"\\uE000\"","expected":{"project":"prefix\n","next":""}},
+  {"name":"cr-literal-block-blank","source":"project: |\r  prefix\r\r  \"\\uE000 \"\r","expected":{"project":"prefix\n\n\"\\uE000 \"\n"}},
+  {"name":"cr-folded-block-blank","source":"project: >\r  prefix\r\r  \"\\uE000 \"\r","expected":{"project":"prefix\n\"\\uE000 \"\n"}},
+  {"name":"cr-comment-after-blank","source":"project: prefix\r\r# \"\\uE000\"\rnext: \"\\uE000\"","expected":{"project":"prefix","next":""}},
+  {"name":"cr-comment-ends-plain","source":"project: prefix\r\r  # comment\r  \"\\uE000\"","expected":null},
+  {"name":"cr-dedented-quoted-node","source":"project: prefix\r\rnext: \"\\uE000\"","expected":{"project":"prefix","next":""}},
+  {"name":"cr-verbatim-tag-blank","source":"project: !<tag:yaml.org,2002:str> prefix\r\r  \"\\uE000\"","expected":{"project":"prefix\n\"\\uE000\""}},
+  {"name":"cr-tab-plain-map","source":"a: x\r\t\r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-plain-sequence","source":"- x\r\t\r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-plain-blank-run","source":"a: x\r  \r\t\r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-tab-plain-following-node","source":"a: x\r\t\rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-tab-plain-eof","source":"a: x\r\t","expected":{"a":"x"}},
+  {"name":"cr-tab-flow-map","source":"{a: x\r\t\r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-flow-sequence","source":"[x\r\t\r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-single-quoted","source":"a: 'x\r\t\r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-tab-double-quoted","source":"a: \"x\r\t\r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-tab-literal-leading","source":"a: |\r\t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-folded-leading","source":"a: >\r\t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-literal-content","source":"a: |\r  x\r\t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-folded-content","source":"a: >\r  x\r\t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-literal-explicit","source":"a: |2\r\t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-folded-explicit","source":"a: >2\r\t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-plain-map","source":"a: x\r\t \r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-space-plain-sequence","source":"- x\r\t \r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-space-plain-blank-run","source":"a: x\r  \r\t \r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-tab-space-plain-following-node","source":"a: x\r\t \rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-tab-space-plain-eof","source":"a: x\r\t ","expected":{"a":"x"}},
+  {"name":"cr-tab-space-flow-map","source":"{a: x\r\t \r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-space-flow-sequence","source":"[x\r\t \r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-space-single-quoted","source":"a: 'x\r\t \r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-tab-space-double-quoted","source":"a: \"x\r\t \r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-tab-space-literal-leading","source":"a: |\r\t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-folded-leading","source":"a: >\r\t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-literal-content","source":"a: |\r  x\r\t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-folded-content","source":"a: >\r  x\r\t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-literal-explicit","source":"a: |2\r\t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-folded-explicit","source":"a: >2\r\t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-plain-map","source":"a: x\r \t\r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-space-tab-plain-sequence","source":"- x\r \t\r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-space-tab-plain-blank-run","source":"a: x\r  \r \t\r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-space-tab-plain-following-node","source":"a: x\r \t\rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-space-tab-plain-eof","source":"a: x\r \t","expected":{"a":"x"}},
+  {"name":"cr-space-tab-flow-map","source":"{a: x\r \t\r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-space-tab-flow-sequence","source":"[x\r \t\r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-space-tab-single-quoted","source":"a: 'x\r \t\r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-space-tab-double-quoted","source":"a: \"x\r \t\r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-space-tab-literal-leading","source":"a: |\r \t\r  \"\\uE000\"\r","expected":{"a":"\t\n \"\\uE000\"\n"}},
+  {"name":"cr-space-tab-folded-leading","source":"a: >\r \t\r  \"\\uE000\"\r","expected":{"a":"\t\n \"\\uE000\"\n"}},
+  {"name":"cr-space-tab-literal-content","source":"a: |\r  x\r \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-folded-content","source":"a: >\r  x\r \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-literal-explicit","source":"a: |2\r \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-folded-explicit","source":"a: >2\r \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-spaces-plain-map","source":"a: x\r\t  \r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-spaces-plain-sequence","source":"- x\r\t  \r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-spaces-plain-blank-run","source":"a: x\r  \r\t  \r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-tab-spaces-plain-following-node","source":"a: x\r\t  \rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-tab-spaces-plain-eof","source":"a: x\r\t  ","expected":{"a":"x"}},
+  {"name":"cr-tab-spaces-flow-map","source":"{a: x\r\t  \r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-spaces-flow-sequence","source":"[x\r\t  \r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-spaces-single-quoted","source":"a: 'x\r\t  \r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-tab-spaces-double-quoted","source":"a: \"x\r\t  \r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-tab-spaces-literal-leading","source":"a: |\r\t  \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-spaces-folded-leading","source":"a: >\r\t  \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-spaces-literal-content","source":"a: |\r  x\r\t  \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-spaces-folded-content","source":"a: >\r  x\r\t  \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-spaces-literal-explicit","source":"a: |2\r\t  \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-spaces-folded-explicit","source":"a: >2\r\t  \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-spaces-tab-plain-map","source":"a: x\r  \t\r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-spaces-tab-plain-sequence","source":"- x\r  \t\r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-spaces-tab-plain-blank-run","source":"a: x\r  \r  \t\r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-spaces-tab-plain-following-node","source":"a: x\r  \t\rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-spaces-tab-plain-eof","source":"a: x\r  \t","expected":{"a":"x"}},
+  {"name":"cr-spaces-tab-flow-map","source":"{a: x\r  \t\r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-spaces-tab-flow-sequence","source":"[x\r  \t\r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-spaces-tab-single-quoted","source":"a: 'x\r  \t\r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-spaces-tab-double-quoted","source":"a: \"x\r  \t\r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-spaces-tab-literal-leading","source":"a: |\r  \t\r  \"\\uE000\"\r","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"cr-spaces-tab-folded-leading","source":"a: >\r  \t\r  \"\\uE000\"\r","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"cr-spaces-tab-literal-content","source":"a: |\r  x\r  \t\r  \"\\uE000\"\r","expected":{"a":"x\n\t\n\"\\uE000\"\n"}},
+  {"name":"cr-spaces-tab-folded-content","source":"a: >\r  x\r  \t\r  \"\\uE000\"\r","expected":{"a":"x\n\t\n\"\\uE000\"\n"}},
+  {"name":"cr-spaces-tab-literal-explicit","source":"a: |2\r  \t\r  \"\\uE000\"\r","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"cr-spaces-tab-folded-explicit","source":"a: >2\r  \t\r  \"\\uE000\"\r","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"cr-space-tab-space-plain-map","source":"a: x\r \t \r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-space-tab-space-plain-sequence","source":"- x\r \t \r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-space-tab-space-plain-blank-run","source":"a: x\r  \r \t \r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-space-tab-space-plain-following-node","source":"a: x\r \t \rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-space-tab-space-plain-eof","source":"a: x\r \t ","expected":{"a":"x"}},
+  {"name":"cr-space-tab-space-flow-map","source":"{a: x\r \t \r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-space-tab-space-flow-sequence","source":"[x\r \t \r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-space-tab-space-single-quoted","source":"a: 'x\r \t \r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-space-tab-space-double-quoted","source":"a: \"x\r \t \r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-space-tab-space-literal-leading","source":"a: |\r \t \r  \"\\uE000\"\r","expected":{"a":"\t \n \"\\uE000\"\n"}},
+  {"name":"cr-space-tab-space-folded-leading","source":"a: >\r \t \r  \"\\uE000\"\r","expected":{"a":"\t \n \"\\uE000\"\n"}},
+  {"name":"cr-space-tab-space-literal-content","source":"a: |\r  x\r \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-space-folded-content","source":"a: >\r  x\r \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-space-literal-explicit","source":"a: |2\r \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-space-folded-explicit","source":"a: >2\r \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-tab-plain-map","source":"a: x\r\t \t\r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-space-tab-plain-sequence","source":"- x\r\t \t\r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-space-tab-plain-blank-run","source":"a: x\r  \r\t \t\r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-tab-space-tab-plain-following-node","source":"a: x\r\t \t\rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-tab-space-tab-plain-eof","source":"a: x\r\t \t","expected":{"a":"x"}},
+  {"name":"cr-tab-space-tab-flow-map","source":"{a: x\r\t \t\r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-tab-space-tab-flow-sequence","source":"[x\r\t \t\r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-tab-space-tab-single-quoted","source":"a: 'x\r\t \t\r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-tab-space-tab-double-quoted","source":"a: \"x\r\t \t\r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-tab-space-tab-literal-leading","source":"a: |\r\t \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-tab-folded-leading","source":"a: >\r\t \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-tab-literal-content","source":"a: |\r  x\r\t \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-tab-folded-content","source":"a: >\r  x\r\t \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-tab-literal-explicit","source":"a: |2\r\t \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-tab-space-tab-folded-explicit","source":"a: >2\r\t \t\r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-space-tab-space-plain-map","source":"a: x\r \t \t \r  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-space-tab-space-tab-space-plain-sequence","source":"- x\r \t \t \r  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-space-tab-space-tab-space-plain-blank-run","source":"a: x\r  \r \t \t \r    \r  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"cr-space-tab-space-tab-space-plain-following-node","source":"a: x\r \t \t \rb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"cr-space-tab-space-tab-space-plain-eof","source":"a: x\r \t \t ","expected":{"a":"x"}},
+  {"name":"cr-space-tab-space-tab-space-flow-map","source":"{a: x\r \t \t \r  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"cr-space-tab-space-tab-space-flow-sequence","source":"[x\r \t \t \r  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"cr-space-tab-space-tab-space-single-quoted","source":"a: 'x\r \t \t \r  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"cr-space-tab-space-tab-space-double-quoted","source":"a: \"x\r \t \t \r  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"cr-space-tab-space-tab-space-literal-leading","source":"a: |\r \t \t \r  \"\\uE000\"\r","expected":{"a":"\t \t \n \"\\uE000\"\n"}},
+  {"name":"cr-space-tab-space-tab-space-folded-leading","source":"a: >\r \t \t \r  \"\\uE000\"\r","expected":{"a":"\t \t \n \"\\uE000\"\n"}},
+  {"name":"cr-space-tab-space-tab-space-literal-content","source":"a: |\r  x\r \t \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-space-tab-space-folded-content","source":"a: >\r  x\r \t \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-space-tab-space-literal-explicit","source":"a: |2\r \t \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"cr-space-tab-space-tab-space-folded-explicit","source":"a: >2\r \t \t \r  \"\\uE000\"\r","expected":null},
+  {"name":"crlf-plain-continuation","source":"project: prefix\r\n  \"\\uE000\"","expected":{"project":"prefix \"\\uE000\""}},
+  {"name":"crlf-plain-blank","source":"project: prefix\r\n\r\n  \"\\uE000\"","expected":{"project":"prefix\n\"\\uE000\""}},
+  {"name":"crlf-plain-space-blanks","source":"project: prefix\r\n  \r\n    \r\n  \"\\uE000uD800\\uE000\"","expected":{"project":"prefix\n\n\"\\uE000uD800\\uE000\""}},
+  {"name":"crlf-plain-single-quote","source":"project: prefix\r\n\r\n  '\\uE000'","expected":{"project":"prefix\n'\\uE000'"}},
+  {"name":"crlf-plain-literal-sentinel","source":"project: prefix\r\n\r\n  \"uD800\"","expected":{"project":"prefix\n\"uD800\""}},
+  {"name":"crlf-single-quoted-blank","source":"project: 'prefix\r\n\r\n  \\uE000 '","expected":{"project":"prefix\n\\uE000 "}},
+  {"name":"crlf-double-quoted-blank","source":"project: \"prefix\r\n\r\n  \\uE000 \"","expected":{"project":"prefix\n "}},
+  {"name":"crlf-double-quoted-following-node","source":"project: \"prefix\r\n\r\n  \\uE000\"\r\nnext: \"\\uE000\"","expected":{"project":"prefix\n","next":""}},
+  {"name":"crlf-literal-block-blank","source":"project: |\r\n  prefix\r\n\r\n  \"\\uE000 \"\r\n","expected":{"project":"prefix\n\n\"\\uE000 \"\n"}},
+  {"name":"crlf-folded-block-blank","source":"project: >\r\n  prefix\r\n\r\n  \"\\uE000 \"\r\n","expected":{"project":"prefix\n\"\\uE000 \"\n"}},
+  {"name":"crlf-comment-after-blank","source":"project: prefix\r\n\r\n# \"\\uE000\"\r\nnext: \"\\uE000\"","expected":{"project":"prefix","next":""}},
+  {"name":"crlf-comment-ends-plain","source":"project: prefix\r\n\r\n  # comment\r\n  \"\\uE000\"","expected":null},
+  {"name":"crlf-dedented-quoted-node","source":"project: prefix\r\n\r\nnext: \"\\uE000\"","expected":{"project":"prefix","next":""}},
+  {"name":"crlf-verbatim-tag-blank","source":"project: !<tag:yaml.org,2002:str> prefix\r\n\r\n  \"\\uE000\"","expected":{"project":"prefix\n\"\\uE000\""}},
+  {"name":"crlf-tab-plain-map","source":"a: x\r\n\t\r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-plain-sequence","source":"- x\r\n\t\r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-plain-blank-run","source":"a: x\r\n  \r\n\t\r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-tab-plain-following-node","source":"a: x\r\n\t\r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-tab-plain-eof","source":"a: x\r\n\t","expected":{"a":"x"}},
+  {"name":"crlf-tab-flow-map","source":"{a: x\r\n\t\r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-flow-sequence","source":"[x\r\n\t\r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-single-quoted","source":"a: 'x\r\n\t\r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-tab-double-quoted","source":"a: \"x\r\n\t\r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-tab-literal-leading","source":"a: |\r\n\t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-folded-leading","source":"a: >\r\n\t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-literal-content","source":"a: |\r\n  x\r\n\t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-folded-content","source":"a: >\r\n  x\r\n\t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-literal-explicit","source":"a: |2\r\n\t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-folded-explicit","source":"a: >2\r\n\t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-plain-map","source":"a: x\r\n\t \r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-space-plain-sequence","source":"- x\r\n\t \r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-space-plain-blank-run","source":"a: x\r\n  \r\n\t \r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-tab-space-plain-following-node","source":"a: x\r\n\t \r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-tab-space-plain-eof","source":"a: x\r\n\t ","expected":{"a":"x"}},
+  {"name":"crlf-tab-space-flow-map","source":"{a: x\r\n\t \r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-space-flow-sequence","source":"[x\r\n\t \r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-space-single-quoted","source":"a: 'x\r\n\t \r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-tab-space-double-quoted","source":"a: \"x\r\n\t \r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-tab-space-literal-leading","source":"a: |\r\n\t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-folded-leading","source":"a: >\r\n\t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-literal-content","source":"a: |\r\n  x\r\n\t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-folded-content","source":"a: >\r\n  x\r\n\t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-literal-explicit","source":"a: |2\r\n\t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-folded-explicit","source":"a: >2\r\n\t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-plain-map","source":"a: x\r\n \t\r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-plain-sequence","source":"- x\r\n \t\r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-space-tab-plain-blank-run","source":"a: x\r\n  \r\n \t\r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-plain-following-node","source":"a: x\r\n \t\r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-space-tab-plain-eof","source":"a: x\r\n \t","expected":{"a":"x"}},
+  {"name":"crlf-space-tab-flow-map","source":"{a: x\r\n \t\r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-flow-sequence","source":"[x\r\n \t\r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-space-tab-single-quoted","source":"a: 'x\r\n \t\r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-space-tab-double-quoted","source":"a: \"x\r\n \t\r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-space-tab-literal-leading","source":"a: |\r\n \t\r\n  \"\\uE000\"\r\n","expected":{"a":"\t\n \"\\uE000\"\n"}},
+  {"name":"crlf-space-tab-folded-leading","source":"a: >\r\n \t\r\n  \"\\uE000\"\r\n","expected":{"a":"\t\n \"\\uE000\"\n"}},
+  {"name":"crlf-space-tab-literal-content","source":"a: |\r\n  x\r\n \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-folded-content","source":"a: >\r\n  x\r\n \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-literal-explicit","source":"a: |2\r\n \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-folded-explicit","source":"a: >2\r\n \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-spaces-plain-map","source":"a: x\r\n\t  \r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-spaces-plain-sequence","source":"- x\r\n\t  \r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-spaces-plain-blank-run","source":"a: x\r\n  \r\n\t  \r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-tab-spaces-plain-following-node","source":"a: x\r\n\t  \r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-tab-spaces-plain-eof","source":"a: x\r\n\t  ","expected":{"a":"x"}},
+  {"name":"crlf-tab-spaces-flow-map","source":"{a: x\r\n\t  \r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-spaces-flow-sequence","source":"[x\r\n\t  \r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-spaces-single-quoted","source":"a: 'x\r\n\t  \r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-tab-spaces-double-quoted","source":"a: \"x\r\n\t  \r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-tab-spaces-literal-leading","source":"a: |\r\n\t  \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-spaces-folded-leading","source":"a: >\r\n\t  \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-spaces-literal-content","source":"a: |\r\n  x\r\n\t  \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-spaces-folded-content","source":"a: >\r\n  x\r\n\t  \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-spaces-literal-explicit","source":"a: |2\r\n\t  \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-spaces-folded-explicit","source":"a: >2\r\n\t  \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-spaces-tab-plain-map","source":"a: x\r\n  \t\r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-spaces-tab-plain-sequence","source":"- x\r\n  \t\r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-spaces-tab-plain-blank-run","source":"a: x\r\n  \r\n  \t\r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-spaces-tab-plain-following-node","source":"a: x\r\n  \t\r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-spaces-tab-plain-eof","source":"a: x\r\n  \t","expected":{"a":"x"}},
+  {"name":"crlf-spaces-tab-flow-map","source":"{a: x\r\n  \t\r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-spaces-tab-flow-sequence","source":"[x\r\n  \t\r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-spaces-tab-single-quoted","source":"a: 'x\r\n  \t\r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-spaces-tab-double-quoted","source":"a: \"x\r\n  \t\r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-spaces-tab-literal-leading","source":"a: |\r\n  \t\r\n  \"\\uE000\"\r\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"crlf-spaces-tab-folded-leading","source":"a: >\r\n  \t\r\n  \"\\uE000\"\r\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"crlf-spaces-tab-literal-content","source":"a: |\r\n  x\r\n  \t\r\n  \"\\uE000\"\r\n","expected":{"a":"x\n\t\n\"\\uE000\"\n"}},
+  {"name":"crlf-spaces-tab-folded-content","source":"a: >\r\n  x\r\n  \t\r\n  \"\\uE000\"\r\n","expected":{"a":"x\n\t\n\"\\uE000\"\n"}},
+  {"name":"crlf-spaces-tab-literal-explicit","source":"a: |2\r\n  \t\r\n  \"\\uE000\"\r\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"crlf-spaces-tab-folded-explicit","source":"a: >2\r\n  \t\r\n  \"\\uE000\"\r\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"crlf-space-tab-space-plain-map","source":"a: x\r\n \t \r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-space-plain-sequence","source":"- x\r\n \t \r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-space-tab-space-plain-blank-run","source":"a: x\r\n  \r\n \t \r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-space-plain-following-node","source":"a: x\r\n \t \r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-space-tab-space-plain-eof","source":"a: x\r\n \t ","expected":{"a":"x"}},
+  {"name":"crlf-space-tab-space-flow-map","source":"{a: x\r\n \t \r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-space-flow-sequence","source":"[x\r\n \t \r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-space-tab-space-single-quoted","source":"a: 'x\r\n \t \r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-space-tab-space-double-quoted","source":"a: \"x\r\n \t \r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-space-tab-space-literal-leading","source":"a: |\r\n \t \r\n  \"\\uE000\"\r\n","expected":{"a":"\t \n \"\\uE000\"\n"}},
+  {"name":"crlf-space-tab-space-folded-leading","source":"a: >\r\n \t \r\n  \"\\uE000\"\r\n","expected":{"a":"\t \n \"\\uE000\"\n"}},
+  {"name":"crlf-space-tab-space-literal-content","source":"a: |\r\n  x\r\n \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-space-folded-content","source":"a: >\r\n  x\r\n \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-space-literal-explicit","source":"a: |2\r\n \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-space-folded-explicit","source":"a: >2\r\n \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-tab-plain-map","source":"a: x\r\n\t \t\r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-space-tab-plain-sequence","source":"- x\r\n\t \t\r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-space-tab-plain-blank-run","source":"a: x\r\n  \r\n\t \t\r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-tab-space-tab-plain-following-node","source":"a: x\r\n\t \t\r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-tab-space-tab-plain-eof","source":"a: x\r\n\t \t","expected":{"a":"x"}},
+  {"name":"crlf-tab-space-tab-flow-map","source":"{a: x\r\n\t \t\r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-tab-space-tab-flow-sequence","source":"[x\r\n\t \t\r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-tab-space-tab-single-quoted","source":"a: 'x\r\n\t \t\r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-tab-space-tab-double-quoted","source":"a: \"x\r\n\t \t\r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-tab-space-tab-literal-leading","source":"a: |\r\n\t \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-tab-folded-leading","source":"a: >\r\n\t \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-tab-literal-content","source":"a: |\r\n  x\r\n\t \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-tab-folded-content","source":"a: >\r\n  x\r\n\t \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-tab-literal-explicit","source":"a: |2\r\n\t \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-tab-space-tab-folded-explicit","source":"a: >2\r\n\t \t\r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-space-tab-space-plain-map","source":"a: x\r\n \t \t \r\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-space-tab-space-plain-sequence","source":"- x\r\n \t \t \r\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-space-tab-space-tab-space-plain-blank-run","source":"a: x\r\n  \r\n \t \t \r\n    \r\n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-space-tab-space-plain-following-node","source":"a: x\r\n \t \t \r\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"crlf-space-tab-space-tab-space-plain-eof","source":"a: x\r\n \t \t ","expected":{"a":"x"}},
+  {"name":"crlf-space-tab-space-tab-space-flow-map","source":"{a: x\r\n \t \t \r\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"crlf-space-tab-space-tab-space-flow-sequence","source":"[x\r\n \t \t \r\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"crlf-space-tab-space-tab-space-single-quoted","source":"a: 'x\r\n \t \t \r\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"crlf-space-tab-space-tab-space-double-quoted","source":"a: \"x\r\n \t \t \r\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"crlf-space-tab-space-tab-space-literal-leading","source":"a: |\r\n \t \t \r\n  \"\\uE000\"\r\n","expected":{"a":"\t \t \n \"\\uE000\"\n"}},
+  {"name":"crlf-space-tab-space-tab-space-folded-leading","source":"a: >\r\n \t \t \r\n  \"\\uE000\"\r\n","expected":{"a":"\t \t \n \"\\uE000\"\n"}},
+  {"name":"crlf-space-tab-space-tab-space-literal-content","source":"a: |\r\n  x\r\n \t \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-space-tab-space-folded-content","source":"a: >\r\n  x\r\n \t \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-space-tab-space-literal-explicit","source":"a: |2\r\n \t \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"crlf-space-tab-space-tab-space-folded-explicit","source":"a: >2\r\n \t \t \r\n  \"\\uE000\"\r\n","expected":null},
+  {"name":"lf-plain-continuation","source":"project: prefix\n  \"\\uE000\"","expected":{"project":"prefix \"\\uE000\""}},
+  {"name":"lf-plain-blank","source":"project: prefix\n\n  \"\\uE000\"","expected":{"project":"prefix\n\"\\uE000\""}},
+  {"name":"lf-plain-space-blanks","source":"project: prefix\n  \n    \n  \"\\uE000uD800\\uE000\"","expected":{"project":"prefix\n\n\"\\uE000uD800\\uE000\""}},
+  {"name":"lf-plain-single-quote","source":"project: prefix\n\n  '\\uE000'","expected":{"project":"prefix\n'\\uE000'"}},
+  {"name":"lf-plain-literal-sentinel","source":"project: prefix\n\n  \"uD800\"","expected":{"project":"prefix\n\"uD800\""}},
+  {"name":"lf-single-quoted-blank","source":"project: 'prefix\n\n  \\uE000 '","expected":{"project":"prefix\n\\uE000 "}},
+  {"name":"lf-double-quoted-blank","source":"project: \"prefix\n\n  \\uE000 \"","expected":{"project":"prefix\n "}},
+  {"name":"lf-double-quoted-following-node","source":"project: \"prefix\n\n  \\uE000\"\nnext: \"\\uE000\"","expected":{"project":"prefix\n","next":""}},
+  {"name":"lf-literal-block-blank","source":"project: |\n  prefix\n\n  \"\\uE000 \"\n","expected":{"project":"prefix\n\n\"\\uE000 \"\n"}},
+  {"name":"lf-folded-block-blank","source":"project: >\n  prefix\n\n  \"\\uE000 \"\n","expected":{"project":"prefix\n\"\\uE000 \"\n"}},
+  {"name":"lf-comment-after-blank","source":"project: prefix\n\n# \"\\uE000\"\nnext: \"\\uE000\"","expected":{"project":"prefix","next":""}},
+  {"name":"lf-comment-ends-plain","source":"project: prefix\n\n  # comment\n  \"\\uE000\"","expected":null},
+  {"name":"lf-dedented-quoted-node","source":"project: prefix\n\nnext: \"\\uE000\"","expected":{"project":"prefix","next":""}},
+  {"name":"lf-verbatim-tag-blank","source":"project: !<tag:yaml.org,2002:str> prefix\n\n  \"\\uE000\"","expected":{"project":"prefix\n\"\\uE000\""}},
+  {"name":"lf-tab-plain-map","source":"a: x\n\t\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-plain-sequence","source":"- x\n\t\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-plain-blank-run","source":"a: x\n  \n\t\n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-tab-plain-following-node","source":"a: x\n\t\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-tab-plain-eof","source":"a: x\n\t","expected":{"a":"x"}},
+  {"name":"lf-tab-flow-map","source":"{a: x\n\t\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-flow-sequence","source":"[x\n\t\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-single-quoted","source":"a: 'x\n\t\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-tab-double-quoted","source":"a: \"x\n\t\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-tab-literal-leading","source":"a: |\n\t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-folded-leading","source":"a: >\n\t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-literal-content","source":"a: |\n  x\n\t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-folded-content","source":"a: >\n  x\n\t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-literal-explicit","source":"a: |2\n\t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-folded-explicit","source":"a: >2\n\t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-plain-map","source":"a: x\n\t \n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-space-plain-sequence","source":"- x\n\t \n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-space-plain-blank-run","source":"a: x\n  \n\t \n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-tab-space-plain-following-node","source":"a: x\n\t \nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-tab-space-plain-eof","source":"a: x\n\t ","expected":{"a":"x"}},
+  {"name":"lf-tab-space-flow-map","source":"{a: x\n\t \n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-space-flow-sequence","source":"[x\n\t \n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-space-single-quoted","source":"a: 'x\n\t \n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-tab-space-double-quoted","source":"a: \"x\n\t \n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-tab-space-literal-leading","source":"a: |\n\t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-folded-leading","source":"a: >\n\t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-literal-content","source":"a: |\n  x\n\t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-folded-content","source":"a: >\n  x\n\t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-literal-explicit","source":"a: |2\n\t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-folded-explicit","source":"a: >2\n\t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-plain-map","source":"a: x\n \t\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-space-tab-plain-sequence","source":"- x\n \t\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-space-tab-plain-blank-run","source":"a: x\n  \n \t\n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-space-tab-plain-following-node","source":"a: x\n \t\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-space-tab-plain-eof","source":"a: x\n \t","expected":{"a":"x"}},
+  {"name":"lf-space-tab-flow-map","source":"{a: x\n \t\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-space-tab-flow-sequence","source":"[x\n \t\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-space-tab-single-quoted","source":"a: 'x\n \t\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-space-tab-double-quoted","source":"a: \"x\n \t\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-space-tab-literal-leading","source":"a: |\n \t\n  \"\\uE000\"\n","expected":{"a":"\t\n \"\\uE000\"\n"}},
+  {"name":"lf-space-tab-folded-leading","source":"a: >\n \t\n  \"\\uE000\"\n","expected":{"a":"\t\n \"\\uE000\"\n"}},
+  {"name":"lf-space-tab-literal-content","source":"a: |\n  x\n \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-folded-content","source":"a: >\n  x\n \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-literal-explicit","source":"a: |2\n \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-folded-explicit","source":"a: >2\n \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-spaces-plain-map","source":"a: x\n\t  \n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-spaces-plain-sequence","source":"- x\n\t  \n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-spaces-plain-blank-run","source":"a: x\n  \n\t  \n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-tab-spaces-plain-following-node","source":"a: x\n\t  \nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-tab-spaces-plain-eof","source":"a: x\n\t  ","expected":{"a":"x"}},
+  {"name":"lf-tab-spaces-flow-map","source":"{a: x\n\t  \n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-spaces-flow-sequence","source":"[x\n\t  \n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-spaces-single-quoted","source":"a: 'x\n\t  \n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-tab-spaces-double-quoted","source":"a: \"x\n\t  \n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-tab-spaces-literal-leading","source":"a: |\n\t  \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-spaces-folded-leading","source":"a: >\n\t  \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-spaces-literal-content","source":"a: |\n  x\n\t  \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-spaces-folded-content","source":"a: >\n  x\n\t  \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-spaces-literal-explicit","source":"a: |2\n\t  \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-spaces-folded-explicit","source":"a: >2\n\t  \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-spaces-tab-plain-map","source":"a: x\n  \t\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-spaces-tab-plain-sequence","source":"- x\n  \t\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-spaces-tab-plain-blank-run","source":"a: x\n  \n  \t\n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-spaces-tab-plain-following-node","source":"a: x\n  \t\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-spaces-tab-plain-eof","source":"a: x\n  \t","expected":{"a":"x"}},
+  {"name":"lf-spaces-tab-flow-map","source":"{a: x\n  \t\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-spaces-tab-flow-sequence","source":"[x\n  \t\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-spaces-tab-single-quoted","source":"a: 'x\n  \t\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-spaces-tab-double-quoted","source":"a: \"x\n  \t\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-spaces-tab-literal-leading","source":"a: |\n  \t\n  \"\\uE000\"\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"lf-spaces-tab-folded-leading","source":"a: >\n  \t\n  \"\\uE000\"\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"lf-spaces-tab-literal-content","source":"a: |\n  x\n  \t\n  \"\\uE000\"\n","expected":{"a":"x\n\t\n\"\\uE000\"\n"}},
+  {"name":"lf-spaces-tab-folded-content","source":"a: >\n  x\n  \t\n  \"\\uE000\"\n","expected":{"a":"x\n\t\n\"\\uE000\"\n"}},
+  {"name":"lf-spaces-tab-literal-explicit","source":"a: |2\n  \t\n  \"\\uE000\"\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"lf-spaces-tab-folded-explicit","source":"a: >2\n  \t\n  \"\\uE000\"\n","expected":{"a":"\t\n\"\\uE000\"\n"}},
+  {"name":"lf-space-tab-space-plain-map","source":"a: x\n \t \n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-space-tab-space-plain-sequence","source":"- x\n \t \n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-space-tab-space-plain-blank-run","source":"a: x\n  \n \t \n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-space-tab-space-plain-following-node","source":"a: x\n \t \nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-space-tab-space-plain-eof","source":"a: x\n \t ","expected":{"a":"x"}},
+  {"name":"lf-space-tab-space-flow-map","source":"{a: x\n \t \n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-space-tab-space-flow-sequence","source":"[x\n \t \n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-space-tab-space-single-quoted","source":"a: 'x\n \t \n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-space-tab-space-double-quoted","source":"a: \"x\n \t \n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-space-tab-space-literal-leading","source":"a: |\n \t \n  \"\\uE000\"\n","expected":{"a":"\t \n \"\\uE000\"\n"}},
+  {"name":"lf-space-tab-space-folded-leading","source":"a: >\n \t \n  \"\\uE000\"\n","expected":{"a":"\t \n \"\\uE000\"\n"}},
+  {"name":"lf-space-tab-space-literal-content","source":"a: |\n  x\n \t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-space-folded-content","source":"a: >\n  x\n \t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-space-literal-explicit","source":"a: |2\n \t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-space-folded-explicit","source":"a: >2\n \t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-tab-plain-map","source":"a: x\n\t \t\n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-space-tab-plain-sequence","source":"- x\n\t \t\n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-space-tab-plain-blank-run","source":"a: x\n  \n\t \t\n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-tab-space-tab-plain-following-node","source":"a: x\n\t \t\nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-tab-space-tab-plain-eof","source":"a: x\n\t \t","expected":{"a":"x"}},
+  {"name":"lf-tab-space-tab-flow-map","source":"{a: x\n\t \t\n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-tab-space-tab-flow-sequence","source":"[x\n\t \t\n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-tab-space-tab-single-quoted","source":"a: 'x\n\t \t\n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-tab-space-tab-double-quoted","source":"a: \"x\n\t \t\n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-tab-space-tab-literal-leading","source":"a: |\n\t \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-tab-folded-leading","source":"a: >\n\t \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-tab-literal-content","source":"a: |\n  x\n\t \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-tab-folded-content","source":"a: >\n  x\n\t \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-tab-literal-explicit","source":"a: |2\n\t \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-tab-space-tab-folded-explicit","source":"a: >2\n\t \t\n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-space-tab-space-plain-map","source":"a: x\n \t \t \n  \"\\uE000\"","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-space-tab-space-tab-space-plain-sequence","source":"- x\n \t \t \n  \"\\uE000\"","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-space-tab-space-tab-space-plain-blank-run","source":"a: x\n  \n \t \t \n    \n  \"\\uE000\"","expected":{"a":"x\n\n\n\"\\uE000\""}},
+  {"name":"lf-space-tab-space-tab-space-plain-following-node","source":"a: x\n \t \t \nb: \"\\uE000\"","expected":{"a":"x","b":""}},
+  {"name":"lf-space-tab-space-tab-space-plain-eof","source":"a: x\n \t \t ","expected":{"a":"x"}},
+  {"name":"lf-space-tab-space-tab-space-flow-map","source":"{a: x\n \t \t \n  \"\\uE000\"}","expected":{"a":"x\n\"\\uE000\""}},
+  {"name":"lf-space-tab-space-tab-space-flow-sequence","source":"[x\n \t \t \n  \"\\uE000\"]","expected":["x\n\"\\uE000\""]},
+  {"name":"lf-space-tab-space-tab-space-single-quoted","source":"a: 'x\n \t \t \n  \\uE000'","expected":{"a":"x\n\\uE000"}},
+  {"name":"lf-space-tab-space-tab-space-double-quoted","source":"a: \"x\n \t \t \n  \\uE000\"","expected":{"a":"x\n"}},
+  {"name":"lf-space-tab-space-tab-space-literal-leading","source":"a: |\n \t \t \n  \"\\uE000\"\n","expected":{"a":"\t \t \n \"\\uE000\"\n"}},
+  {"name":"lf-space-tab-space-tab-space-folded-leading","source":"a: >\n \t \t \n  \"\\uE000\"\n","expected":{"a":"\t \t \n \"\\uE000\"\n"}},
+  {"name":"lf-space-tab-space-tab-space-literal-content","source":"a: |\n  x\n \t \t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-space-tab-space-folded-content","source":"a: >\n  x\n \t \t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-space-tab-space-literal-explicit","source":"a: |2\n \t \t \n  \"\\uE000\"\n","expected":null},
+  {"name":"lf-space-tab-space-tab-space-folded-explicit","source":"a: >2\n \t \t \n  \"\\uE000\"\n","expected":null}
 ]

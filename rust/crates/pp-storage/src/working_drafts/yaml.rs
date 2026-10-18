@@ -1132,12 +1132,52 @@ mod tests {
     }
 
     #[test]
+    fn yaml_tab_blank_regressions_preserve_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut actual = Vec::new();
+        for source in [
+            "a: x\n\t\n  \"\\uE000\"",
+            "a: x\n\t  \n  \"\\uE000\"",
+            "- x\n\t\n  \"\\uE000\"",
+            "a: x\n  \n\t\n    \n  \"\\uE000\"",
+            "a: x\r\n\t\r\n  \"\\uE000\"",
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
+            let id = if source.starts_with('-') {
+                let Node::Sequence(items) = doc.node(doc.root, &mut budget).unwrap() else {
+                    panic!("expected a sequence");
+                };
+                items[0]
+            } else {
+                doc.get(doc.root, "a", &mut budget).unwrap().unwrap()
+            };
+            actual.push(doc.text(id, &mut budget).unwrap().units().to_vec());
+        }
+        let expected = [
+            "x\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+            "x\n\n\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+        ]
+        .map(|value| value.encode_utf16().collect::<Vec<_>>());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn yaml_line_breaks_match_js_yaml() {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Expected {
+            Mapping(HashMap<String, String>),
+            Sequence(Vec<String>),
+        }
         #[derive(serde::Deserialize)]
         struct Case {
             name: String,
             source: String,
-            expected: Option<HashMap<String, String>>,
+            expected: Option<Expected>,
         }
         let cases: Vec<Case> = serde_json::from_str(include_str!(
             "../../tests/fixtures/yaml-line-breaks-node.json"
@@ -1157,17 +1197,30 @@ mod tests {
                 continue;
             };
             let doc = result.unwrap_or_else(|err| panic!("{}: {err:?}", case.name));
-            let Node::Mapping(entries) = doc.node(doc.root, &mut budget).unwrap() else {
-                panic!("{}: expected a mapping", case.name);
-            };
-            assert_eq!(entries.len(), expected.len(), "{}", case.name);
-            for (key, value) in expected {
-                assert_eq!(
-                    units(&doc, &key, &mut budget),
-                    value.encode_utf16().collect::<Vec<_>>(),
-                    "{}: {key}",
-                    case.name
-                );
+            match (doc.node(doc.root, &mut budget).unwrap(), expected) {
+                (Node::Mapping(entries), Expected::Mapping(expected)) => {
+                    assert_eq!(entries.len(), expected.len(), "{}", case.name);
+                    for (key, value) in expected {
+                        assert_eq!(
+                            units(&doc, &key, &mut budget),
+                            value.encode_utf16().collect::<Vec<_>>(),
+                            "{}: {key}",
+                            case.name
+                        );
+                    }
+                }
+                (Node::Sequence(items), Expected::Sequence(expected)) => {
+                    assert_eq!(items.len(), expected.len(), "{}", case.name);
+                    for (id, value) in items.iter().zip(expected) {
+                        assert_eq!(
+                            doc.text(*id, &mut budget).unwrap().units(),
+                            value.encode_utf16().collect::<Vec<_>>(),
+                            "{}",
+                            case.name
+                        );
+                    }
+                }
+                _ => panic!("{}: unexpected collection", case.name),
             }
         }
     }

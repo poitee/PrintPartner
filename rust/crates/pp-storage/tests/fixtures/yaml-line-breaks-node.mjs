@@ -20,17 +20,62 @@ const templates = [
   ['dedented-quoted-node', 'project: prefix\n\nnext: "\\uE000"'],
   ['verbatim-tag-blank', 'project: !<tag:yaml.org,2002:str> prefix\n\n  "\\uE000"'],
 ];
+const tabLines = [
+  ['tab', '\t'],
+  ['tab-space', '\t '],
+  ['space-tab', ' \t'],
+  ['tab-spaces', '\t  '],
+  ['spaces-tab', '  \t'],
+  ['space-tab-space', ' \t '],
+  ['tab-space-tab', '\t \t'],
+  ['space-tab-space-tab-space', ' \t \t '],
+];
+const tabTemplates = [
+  ['plain-map', 'a: x\n@\n  "\\uE000"'],
+  ['plain-sequence', '- x\n@\n  "\\uE000"'],
+  ['plain-blank-run', 'a: x\n  \n@\n    \n  "\\uE000"'],
+  ['plain-following-node', 'a: x\n@\nb: "\\uE000"'],
+  ['plain-eof', 'a: x\n@'],
+  ['flow-map', '{a: x\n@\n  "\\uE000"}'],
+  ['flow-sequence', '[x\n@\n  "\\uE000"]'],
+  ['single-quoted', "a: 'x\n@\n  \\uE000'"],
+  ['double-quoted', 'a: "x\n@\n  \\uE000"'],
+  ['literal-leading', 'a: |\n@\n  "\\uE000"\n'],
+  ['folded-leading', 'a: >\n@\n  "\\uE000"\n'],
+  ['literal-content', 'a: |\n  x\n@\n  "\\uE000"\n'],
+  ['folded-content', 'a: >\n  x\n@\n  "\\uE000"\n'],
+  ['literal-explicit', 'a: |2\n@\n  "\\uE000"\n'],
+  ['folded-explicit', 'a: >2\n@\n  "\\uE000"\n'],
+];
 const cases = [];
+function add(name, source) {
+  let expected;
+  try {
+    expected = load(source);
+  } catch {
+    expected = null;
+  }
+  cases.push({ name, source, expected });
+}
+for (const [name, source] of [
+  ['tab-only-blank', 'a: x\n\t\n  "\\uE000"'],
+  ['tab-space-blank', 'a: x\n\t  \n  "\\uE000"'],
+  ['seq-tab-blank', '- x\n\t\n  "\\uE000"'],
+  ['mixed-blank-run', 'a: x\n  \n\t\n    \n  "\\uE000"'],
+  ['tab-only-blank-crlf', 'a: x\r\n\t\r\n  "\\uE000"'],
+]) {
+  add(name, source);
+}
 for (const [ending, separator] of [['cr', '\r'], ['crlf', '\r\n'], ['lf', '\n']]) {
   for (const [name, template] of templates) {
     const source = template.replaceAll('\n', separator);
-    let expected;
-    try {
-      expected = load(source);
-    } catch {
-      expected = null;
+    add(`${ending}-${name}`, source);
+  }
+  for (const [whitespaceName, whitespace] of tabLines) {
+    for (const [name, template] of tabTemplates) {
+      const source = template.replace('@', whitespace).replaceAll('\n', separator);
+      add(`${ending}-${whitespaceName}-${name}`, source);
     }
-    cases.push({ name: `${ending}-${name}`, source, expected });
   }
 }
-process.stdout.write(`${JSON.stringify(cases, null, 2)}\n`);
+process.stdout.write(`[\n${cases.map((entry) => `  ${JSON.stringify(entry)}`).join(',\n')}\n]\n`);
