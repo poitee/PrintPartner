@@ -309,11 +309,16 @@ fn cancellation_after_admission_does_not_retract_publication() {
 }
 
 fn await_publication(
-    _client: &PublicationClient,
+    client: &PublicationClient,
     completed: &mpsc::Receiver<()>,
     wait: Duration,
 ) -> std::result::Result<(), mpsc::RecvTimeoutError> {
-    completed.recv_timeout(wait)
+    let result = completed.recv_timeout(wait);
+    if result.is_err() {
+        client.shared.queue.lock().unwrap().pending.clear();
+        client.shared.changed.notify_all();
+    }
+    result
 }
 
 #[test]
@@ -427,12 +432,16 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
             "control envelope was not dequeued"
         );
         drop(queue);
-        let caller = scope.spawn(|| {
-            client.apply(
+        let (finished, completed) = mpsc::channel();
+        let publication = &client;
+        let caller = scope.spawn(move || {
+            let result = publication.apply(
                 input(case).unwrap(),
                 &AtomicBool::new(false),
                 Duration::ZERO,
-            )
+            );
+            let _ = finished.send(());
+            result
         });
         let (queue, _) = client
             .shared
@@ -469,6 +478,8 @@ fn owner_installs_schema_dispatches_random_tokens_and_drains_before_stop() {
         assert!(!shutdown.is_finished(), "shutdown abandoned admitted work");
         drop(queue);
         drop(checkpoint);
+        await_publication(&client, &completed, Duration::from_secs(5))
+            .expect("admitted publication did not complete during shutdown");
         control
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
