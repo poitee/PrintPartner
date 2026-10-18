@@ -3248,7 +3248,7 @@ pub(crate) fn publication_conflicts(
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/common/claimed_attempt.rs"
+        "/src/claimed_attempt.rs"
     ));
     use super::*;
 
@@ -3462,13 +3462,11 @@ mod tests {
     }
     #[cfg(feature = "desktop_rebuild")]
     fn test_storage() -> SettingsClient {
-        let (owner, _) = WriterOwner::open(
-            &std::env::temp_dir().join(format!("pp-claim-unit-{}", random())),
-            crate::Limits::default(),
-        )
-        .unwrap();
+        let root = std::env::temp_dir().join(format!("pp-claim-unit-{}", random()));
+        let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
         let client = owner.client();
         owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         client
     }
 

@@ -45,6 +45,8 @@ describe("Bambu Connect upload HTTP feature admission", () => {
   beforeEach(async () => {
     vi.stubEnv("PP_DESKTOP_REBUILD", "1");
     vi.stubEnv("DEPLOY_MODE", "self-host");
+    vi.stubEnv("PRINT_PARTNER_IN_CONTAINER", "0");
+    vi.stubEnv("BAMBU_CONNECT_LAUNCH", "auto");
     root = mkdtempSync(join(tmpdir(), "pp-bambu-admission-"));
     sqlite = new SqliteDatabase(root);
     sqlite.connect();
@@ -150,6 +152,14 @@ describe("Bambu Connect upload HTTP feature admission", () => {
       expect((await request(prefix)).statusCode).toBe(200);
     });
   }
+  it.each(prefixes)("%s admits uploads in containers without launching Bambu Connect", async (prefix) => {
+    vi.stubEnv("PRINT_PARTNER_IN_CONTAINER", "1");
+    repo.setSetting("feature_toggles", '{"bambu":true}');
+    const response = await request(prefix);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().launched).toBe(false);
+    expect(bambu.tryLaunchBambuConnectUrl).not.toHaveBeenCalled();
+  });
   it("does not let an enabled Plan rescue corrupt tenant settings or another corrupt Plan deny admission", async () => {
     repo.setSetting("feature_toggles", "broken");
     repo.setSetting(`feature_toggles:plan:${profileId}`, '{"bambu":true}');
