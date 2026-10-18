@@ -1695,3 +1695,29 @@ which cannot hold unpaired surrogates.
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild
 ```
+
+### D23 auth HTTP wiring, GRE-617 PR 1
+
+Main's `pp-api` `auth/http.rs` and its `auth_http` tests are newer than
+`desktop/source-sync-local-current-20261008`. They keep the reset delivery
+window, health `degraded_detail`, `hasPassword` and the no-panic rewrites. No
+handler code is ported back from the reference.
+
+`pp-api` gains a `desktop_rebuild` feature. `auth_router` accepts an
+`AuthBackend`: the existing pooled `AuthClient`, or, with the feature, D6's
+`RebuildAuthClient`. Existing callers pass `AuthClient` unchanged.
+
+With `desktop_rebuild`, `pp_core::rebuild_api::router(rebuild, owner, routes)`
+is the single place that registers Rust auth routes. It returns `None` before
+creating any client unless the stored `DesktopRebuild` setting is on. When it
+is on, it selects `rebuild_auth_with_policy` with the caller's lifetimes, as D6
+requires. Default builds do not compile the module.
+
+The desktop gateway does not mount this router. The desktop process holds the
+storage lease that `WriterOwner::open` needs, and Node owns those writes until
+cutover. Gateway mounting belongs to D26.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core --features desktop_rebuild
+```
