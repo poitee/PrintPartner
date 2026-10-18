@@ -4281,18 +4281,32 @@ database.close();`,
     child.stderr?.on("data", (chunk: Buffer) => {
       childError += chunk.toString("utf8");
     });
-    const childExit = once(child, "exit");
-    const waitForFile = (path: string) => {
+    let childClosed = false;
+    const childExit = once(child, "close").finally(() => {
+      childClosed = true;
+    });
+    const waitForChildFile = async (path: string) => {
       const deadline = Date.now() + 15_000;
       while (!existsSync(path)) {
-        if (Date.now() >= deadline) {
-          throw new Error(`child barrier timed out: ${path}\n${childError}`);
+        if (childClosed) {
+          throw new Error(
+            `child exited before barrier ${path} (code ${child.exitCode}, signal ${child.signalCode})`,
+          );
         }
+        if (Date.now() >= deadline) throw new Error(`child barrier timed out: ${path}`);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    };
+    // Apply's transaction callback is synchronous, so this wait cannot yield to the event loop.
+    const waitForFileSync = (path: string) => {
+      const deadline = Date.now() + 15_000;
+      while (!existsSync(path)) {
+        if (Date.now() >= deadline) throw new Error(`child barrier timed out: ${path}`);
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
     };
     try {
-      waitForFile(readyPath);
+      await waitForChildFile(readyPath);
       const nativeTransaction = first.repo.transaction.bind(first.repo);
       let started = false;
       first.repo.transaction = <T>(
@@ -4303,7 +4317,7 @@ database.close();`,
           if (!started) {
             started = true;
             writeFileSync(startPath, "start");
-            waitForFile(attemptedPath);
+            waitForFileSync(attemptedPath);
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
           }
           return fn();
@@ -4326,6 +4340,10 @@ database.close();`,
           .get(newPartId),
       ).toBe(0);
       expect(readFileSync(attemptedPath, "utf8")).toBe("attempted");
+    } catch (error) {
+      if (!childClosed) child.kill("SIGKILL");
+      await childExit;
+      throw new Error(`${(error as Error).message}\nchild stderr:\n${childError}`, { cause: error });
     } finally {
       if (child.exitCode == null && child.signalCode == null) {
         child.kill("SIGKILL");

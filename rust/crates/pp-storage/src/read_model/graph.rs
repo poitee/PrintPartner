@@ -17,8 +17,7 @@ pub(crate) fn build_summary(
     repos: &std::path::Path,
     budget: &mut Budget,
 ) -> Result<Option<crate::build_graph::ProfileSummary>> {
-    let accepted = match read_with_purpose(tx, tenant, profile, repos, budget, ReadPurpose::Summary)
-    {
+    let accepted = match read(tx, tenant, profile, repos, budget) {
         Ok(read) => read,
         Err(error) => match error.downcast_ref::<Integrity>() {
             Some(error) => super::AcceptedRead::IntegrityFailure {
@@ -619,27 +618,12 @@ fn canonical_part(r: &Row) -> Result<String> {
     let part = DraftPart::new(Value::Object(scalar), r.2.clone());
     String::from_utf8(part.json_fields(&fields, false)).map_err(Into::into)
 }
-enum ReadPurpose {
-    Snapshot,
-    #[cfg(feature = "desktop_rebuild")]
-    Summary,
-}
 pub(crate) fn read(
     tx: &Transaction<'_>,
     tenant: &str,
     id: i64,
     repos: &Path,
     b: &mut Budget,
-) -> Result<AcceptedRead> {
-    read_with_purpose(tx, tenant, id, repos, b, ReadPurpose::Snapshot)
-}
-fn read_with_purpose(
-    tx: &Transaction<'_>,
-    tenant: &str,
-    id: i64,
-    repos: &Path,
-    b: &mut Budget,
-    _purpose: ReadPurpose,
 ) -> Result<AcceptedRead> {
     let Some(p) = one(
         tx,

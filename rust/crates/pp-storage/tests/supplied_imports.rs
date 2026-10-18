@@ -6,7 +6,7 @@
 //! the reference, the attempt limit does not bound that cleanup claim.
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/common/claimed_attempt.rs"
+    "/src/claimed_attempt.rs"
 ));
 use pp_storage::jobs::ClaimedAttempt;
 use pp_storage::{
