@@ -21,7 +21,7 @@ Usage:
   pr_status_sync.py reconcile [--dry-run] # cron fallback over recent PRs
 Env: LINEAR_API_KEY, GH_TOKEN (read), GITHUB_REPOSITORY (default poitee/PrintPartner)
 """
-import argparse, datetime as dt, json, os, re, subprocess, sys, time, urllib.error, urllib.request
+import argparse, datetime as dt, http.client, json, os, re, subprocess, sys, time, urllib.error, urllib.request
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "poitee/PrintPartner")
 TEAM = os.environ.get("LINEAR_TEAM_KEY", "GRE")
@@ -32,6 +32,7 @@ REF_RE = re.compile(r"\b(?:refs?|part of|towards?)\s*:?\s+((?:GRE-\d+[\s,]*(?:an
 ID_RE = re.compile(r"GRE-(\d+)", re.I)
 BRANCH_RE = re.compile(r"^gre-(\d+)\b", re.I)
 TERMINAL = {"completed", "canceled", "duplicate"}
+_request_deadline = None
 
 
 def gql(query, variables=None):
@@ -45,15 +46,18 @@ def gql(query, variables=None):
     # rate-limit rejection is safe to replay; issueUpdate sets an absolute state.
     replay_safe = "commentCreate" not in query
     for attempt in range(3):
+        timeout = 30 if _request_deadline is None else min(30, _request_deadline - time.monotonic())
+        if timeout <= 0:
+            raise RuntimeError("Linear reconciliation request deadline exhausted") from None
         try:
             try:
-                response = urllib.request.urlopen(req, timeout=30)
+                response = urllib.request.urlopen(req, timeout=timeout)
             except urllib.error.HTTPError as error:
                 response = error
             with response:
                 status = getattr(response, "status", None) or getattr(response, "code", 200)
                 body = response.read().decode("utf-8", errors="replace")
-        except OSError:
+        except (OSError, http.client.HTTPException):
             failure = "Linear API transport failed"
             retry = replay_safe
             print(failure, file=sys.stderr)
@@ -77,11 +81,20 @@ def gql(query, variables=None):
             print(f"Linear API HTTP {status}: {json.dumps(diagnostic, ensure_ascii=False)}", file=sys.stderr)
             failure = "Linear API returned GraphQL errors" if errors else f"Linear API HTTP {status} failed"
             rejected = (rate_limited or status == 429) and not out.get("data")
-            transient = rate_limited or status == 429 or 500 <= status < 600
-            retry = transient and (replay_safe or rejected) and (not errors or rate_limited)
+            server_error = 500 <= status < 600
+            invalid_request = any(
+                isinstance(error, dict) and error.get("extensions", {}).get("code") in
+                {"BAD_USER_INPUT", "GRAPHQL_VALIDATION_FAILED", "GRAPHQL_PARSE_FAILED"}
+                for error in errors)
+            transient = rate_limited or status == 429 or server_error
+            retry = transient and (replay_safe or rejected) and not invalid_request and (
+                not errors or rate_limited or server_error)
         if not retry or attempt == 2:
             raise RuntimeError(failure) from None
-        time.sleep(2 ** attempt)
+        delay = 2 ** attempt
+        if _request_deadline is not None and time.monotonic() + delay >= _request_deadline:
+            raise RuntimeError("Linear reconciliation request deadline exhausted") from None
+        time.sleep(delay)
 
 
 def gh(*args):
@@ -226,6 +239,16 @@ def apply_event(pr, event):
 
 
 def reconcile(hours):
+    global _request_deadline
+    previous_deadline = _request_deadline
+    _request_deadline = time.monotonic() + 240
+    try:
+        _reconcile(hours)
+    finally:
+        _request_deadline = previous_deadline
+
+
+def _reconcile(hours):
     def ts(value):
         return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
