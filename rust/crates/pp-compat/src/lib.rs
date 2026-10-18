@@ -1747,6 +1747,7 @@ mod tests {
         std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test_name, "--format=pretty", "--color=never"])
             .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
+            .stderr(std::process::Stdio::inherit())
             .output()
             .unwrap()
     }

@@ -20,6 +20,8 @@ named fixture, and one libtest summary with one passed test and no failures,
 ignored tests, or measured tests. A missing exact test name exits zero with zero
 tests, which the validator rejects. The existing descendant assertions still
 run in the isolated child.
+The launcher inherits stderr so a paused descendant cannot keep a failed
+fixture's captured stderr pipe open.
 
 Run these commands from `rust/` to prepare disposable simulator assets and
 verify the two regressions and the original fixture in both feature modes.
