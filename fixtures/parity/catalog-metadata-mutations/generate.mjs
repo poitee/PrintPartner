@@ -52,6 +52,10 @@ const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
 const json = (value) => quote(JSON.stringify(value));
 const global = structuredClone(DEFAULT_NAMING_PROFILE);
 global.quantity.default = 2;
+const changedGlobal = structuredClone(global);
+changedGlobal.quantity.default = 6;
+changedGlobal.slug.strip_markers = false;
+changedGlobal.slug.strip_quantity = false;
 const override = structuredClone(global);
 override.quantity.default = 4;
 override.slug.strip_markers = false;
@@ -65,9 +69,13 @@ const commands = [
   { name: "create category tree", request: categories([" Hardware / Frame ", "Hardware/Panels", "Mods"]) },
   { name: "assign category and deduplicate selectors", request: assign([7, 9, 7], " Hardware / Panels ") },
   { name: "rename ancestor and move assigned descendants", request: categories(["Printer parts/Frame", "Printer parts/Panels", "Mods"], { Hardware: "Printer parts" }) },
+  { name: "set global scalar naming defaults", request: { operation: "save_global_naming", profile: changedGlobal } },
+  { name: "read changed global naming defaults", request: { operation: "get_global_naming" } },
+  { name: "Source inherits changed global naming defaults", request: { operation: "get_naming", id: 7 } },
   { name: "set scalar naming override", request: naming(7, custom) },
   { name: "read scalar naming override", request: { operation: "get_naming", id: 7 } },
   { name: "reopen with override persisted", request: { operation: "get_naming", id: 7 }, reopen: true },
+  { name: "read global naming defaults after reopen", request: { operation: "get_global_naming" } },
   { name: "read categories after reopen", request: { operation: "get_categories_with_tree" } },
   { name: "read complete Source after reopen", request: { operation: "get", id: 7 } },
   { name: "read sentinel activity after reopen", request: { operation: "source_activity", limit: 100 } },
@@ -78,13 +86,16 @@ const commands = [
   { name: "delete child category and fall back to ancestor", request: categories(["Printer parts/Frame", "Mods"]) },
   { name: "delete ancestor category with explicit uncategorise", request: categories(["Mods"], { "Printer parts": null }) },
   { name: "clear scalar naming override using defaults", request: naming(7, defaults) },
-  { name: "assign then clear category", request: assign([7], "Mods") },
+  { name: "reset global scalar naming defaults", request: { operation: "save_global_naming", profile: DEFAULT_NAMING_PROFILE } },
+  { name: "Source inherits reset global naming defaults", request: { operation: "get_naming", id: 7 } },
+  { name: "reassign category", request: assign([7], "Mods") },
   { name: "clear category assignment", request: assign([7], null) },
   { name: "delete disposable Source", request: { operation: "delete", id: 9 }, status: 204 },
   { name: "deleted Source ID category edit preserves state", request: assign([9], "Mods"), preservesState: true },
   { name: "deleted Source ID naming set preserves state", request: naming(9, custom), status: 404, preservesState: true },
   { name: "deleted Source ID naming clear preserves state", request: naming(9, defaults), status: 404, preservesState: true },
   { name: "reopen after clears and rejected edits", request: { operation: "get_naming", id: 7 }, reopen: true },
+  { name: "read reset global naming defaults after reopen", request: { operation: "get_global_naming" } },
   { name: "read final complete Source", request: { operation: "get", id: 7 } },
   { name: "read final categories", request: { operation: "get_categories_with_tree" } },
   { name: "read final sentinel activity", request: { operation: "source_activity", limit: 100 } },
@@ -149,7 +160,7 @@ function normalize(value, key = "") {
 function snapshot() {
   return normalize({
     projects: raw.prepare("SELECT * FROM projects ORDER BY id").all().map((row) => ({ ...row, metadata_json: JSON.parse(row.metadata_json) })),
-    settings: raw.prepare("SELECT * FROM app_settings WHERE key IN ('source_categories','stl_naming_defaults','catalog_metadata_sentinel') ORDER BY tenant_id,key").all().map((row) => ({ ...row, value: row.key === "catalog_metadata_sentinel" ? row.value : JSON.parse(row.value) })),
+    settings: raw.prepare("SELECT * FROM app_settings ORDER BY tenant_id,key").all().map((row) => ({ ...row, value: ["source_categories", "stl_naming_defaults"].includes(row.key) ? JSON.parse(row.value) : row.value })),
     activity: raw.prepare("SELECT * FROM app_events ORDER BY id").all().map((row) => ({ ...row, payload_json: JSON.parse(row.payload_json) })),
   });
 }
@@ -161,6 +172,8 @@ function route(request) {
     case "apply_numeric_category": return { method: "POST", url: "/sources/bulk-category", payload: { source_ids: request.command.selectors, category: request.command.category } };
     case "save_naming": return { method: "PUT", url: `/sources/${request.id}/naming`, payload: request.settings.kind === "use_defaults" ? { use_defaults: true } : { use_defaults: false, override: request.settings.profile } };
     case "get_naming": return { method: "GET", url: `/sources/${request.id}/naming` };
+    case "save_global_naming": return { method: "PUT", url: "/settings/stl-naming", payload: { profile: request.profile } };
+    case "get_global_naming": return { method: "GET", url: "/settings/stl-naming" };
     case "get": return { method: "GET", url: `/sources/${request.id}` };
     case "delete": return { method: "DELETE", url: `/sources/${request.id}` };
     case "source_activity": return { method: "GET", url: `/sources/activity?limit=${request.limit}` };

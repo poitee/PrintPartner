@@ -114,7 +114,7 @@ impl Fixture {
         .unwrap();
         let mut snapshot = json!({
             "projects": rows(&db, "SELECT * FROM projects ORDER BY id"),
-            "settings": rows(&db, "SELECT * FROM app_settings WHERE key IN ('source_categories','stl_naming_defaults','catalog_metadata_sentinel') ORDER BY tenant_id,key"),
+            "settings": rows(&db, "SELECT * FROM app_settings ORDER BY tenant_id,key"),
             "activity": rows(&db, "SELECT * FROM app_events ORDER BY id"),
         });
         for row in snapshot["projects"].as_array_mut().unwrap() {
@@ -122,7 +122,7 @@ impl Fixture {
                 serde_json::from_str(row["metadata_json"].as_str().unwrap()).unwrap();
         }
         for row in snapshot["settings"].as_array_mut().unwrap() {
-            if row["key"] != "catalog_metadata_sentinel" {
+            if row["key"] == "source_categories" || row["key"] == "stl_naming_defaults" {
                 row["value"] = serde_json::from_str(row["value"].as_str().unwrap()).unwrap();
             }
         }
@@ -172,11 +172,13 @@ fn outcome(client: &SourceCatalogClient, request: Request) -> Value {
     enum Transport {
         Json,
         Naming,
+        GlobalNaming,
         Delete(i64),
         Activity,
     }
     let transport = match &request {
         Request::GetNaming { .. } | Request::SaveNaming { .. } => Transport::Naming,
+        Request::GetGlobalNaming {} | Request::SaveGlobalNaming { .. } => Transport::GlobalNaming,
         Request::Delete { id } => Transport::Delete(*id),
         Request::SourceActivity { .. } => Transport::Activity,
         Request::Get { .. }
@@ -203,6 +205,10 @@ fn outcome(client: &SourceCatalogClient, request: Request) -> Value {
             json!({"status": 200, "body": {"events": events}})
         }
         (Transport::Activity, result) => panic!("unexpected activity outcome: {result:?}"),
+        (Transport::GlobalNaming, Ok(Outcome::Data(profile))) => {
+            json!({"status": 200, "body": {"profile": profile}})
+        }
+        (Transport::GlobalNaming, result) => panic!("unexpected global naming outcome: {result:?}"),
         (_, Ok(result)) => json!({"status": 200, "body": serde_json::to_value(result).unwrap()}),
         (_, Err(error)) => panic!("unmapped catalog error: {error:?}"),
     }
@@ -218,7 +224,7 @@ fn node_catalog_metadata_mutations_match_public_client_and_reopen() {
         transcript.generated,
         "fixtures/parity/catalog-metadata-mutations/generate.mjs"
     );
-    assert_eq!(transcript.steps.len(), 26);
+    assert_eq!(transcript.steps.len(), 33);
     let fixture = Fixture::new();
     let mut owner = fixture.open();
     fixture.seed(&transcript.seed_sql);

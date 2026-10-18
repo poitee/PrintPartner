@@ -5,17 +5,19 @@ integration test replays its public serde requests through `SourceCatalogClient`
 and compares the entire outcome and persistent snapshot after every command.
 All data lives in disposable temporary SQLite databases and local directories.
 The generator initializes its database through the existing `storage-fixture`
-binary and `WriterOwner`, using the fleet Cargo wrapper. Node's real repository
+binary and `WriterOwner`, through Cargo. Node's real repository
 then connects directly through Drizzle. This preserves Rust's current schema,
 including `source_configuration_version`, in every raw project snapshot.
 
-The 26-command transcript covers:
+The 33-command transcript covers:
 
 - Category creation, ordered tree responses, assignment with duplicate selectors,
   ancestor rename with descendant moves, child deletion with ancestor fallback,
   explicit uncategorisation, and assignment clearing.
 - Full naming-profile saves changing only `quantity.default`,
   `slug.strip_markers`, and `slug.strip_quantity`, followed by `UseDefaults`.
+- Global scalar naming-default changes and resets, Source inheritance of both,
+  and complete global profile reads after each reopen.
 - Two database reopens, with public reads of naming, categories, complete Source
   summaries, and activity. The first reopen retains the nondefault override;
   the second retains the clear and the successful Source deletion.
@@ -37,10 +39,9 @@ body for a successful deletion, and the existing 404 naming error contract for
 typed `CatalogFailure::NotFound`. Its detail comes from the actual Rust error.
 Bulk per-item errors remain untouched.
 
-Snapshots select every column of every `projects` and `app_events` row, and every
-column of `app_settings` rows with keys `source_categories`,
-`stl_naming_defaults`, or `catalog_metadata_sentinel`, across both tenants.
-JSON-valued metadata, settings, and activity payloads are parsed before literal
+Snapshots select every column of every `projects`, `app_events`, and
+`app_settings` row, across both tenants. Metadata, category and naming settings,
+and activity payloads are parsed as JSON before literal
 JSON comparison; no semantic fields are discarded. Other raw columns, including
 `imported_paths`, are retained verbatim. Only temporary `local_path` prefixes
 become `@DATA_DIR@`, after validating the exact expected path and its existence.
