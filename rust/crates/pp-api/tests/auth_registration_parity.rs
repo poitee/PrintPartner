@@ -209,7 +209,10 @@ fn read_raw(db: &Connection) -> RawRows {
 }
 
 fn unchanged(before: &RawRows, after: &RawRows) -> Result<()> {
-    ensure!(before == after, "refusal changed raw auth rows");
+    ensure!(
+        before == after,
+        "non-registration request changed raw auth rows"
+    );
     Ok(())
 }
 fn string(value: &Value) -> Result<&str> {
@@ -476,6 +479,8 @@ async fn replay(fixture: &Fixture) -> (Vec<Observation>, RawObservation, Registr
                 body,
                 json!({"detail": "The single-user administrator already exists"})
             );
+        }
+        if step.id != StepId::Register {
             unchanged(&before, &rows).unwrap();
         }
         let raw = RawObservation {
@@ -489,6 +494,23 @@ async fn replay(fixture: &Fixture) -> (Vec<Observation>, RawObservation, Registr
             registered = Some(raw);
         }
     }
+    let account = fixture.steps[1].request.body.as_ref().unwrap();
+    let login = client
+        .post(format!("{origin}/auth/login"))
+        .header("Origin", &origin)
+        .json(&json!({"email": account["email"], "password": account["password"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        login.status().as_u16(),
+        200,
+        "registered password authenticates"
+    );
+    assert_eq!(
+        login.json::<Value>().await.unwrap(),
+        registered.as_ref().unwrap().body
+    );
     shutdown.send(()).unwrap();
     task.await.unwrap();
     drop(db);

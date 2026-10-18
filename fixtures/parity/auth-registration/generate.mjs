@@ -148,10 +148,19 @@ if (process.argv.includes("--probe")) {
       assert.equal(response.statusCode, refused ? 403 : 200);
       if (refused) {
         assert.deepEqual(body, { detail: "The single-user administrator already exists" });
-        assert.deepEqual(db, before, `${step.id} leaves every raw row unchanged`);
       }
+      if (step.id !== "register") assert.deepEqual(db, before, `${step.id} leaves every raw row unchanged`);
       recorded.push({ ...step, node: normalize({ status: response.statusCode, body, setCookie, db }, facts, step.id === "register") });
     }
+    const login = await app.inject({
+      method: "POST", url: "/auth/login",
+      payload: { email: account.email, password: account.password },
+    });
+    assert.equal(login.statusCode, 200, "registered password authenticates");
+    assert.deepEqual(login.json(), {
+      ...recorded[1].node.body,
+      user: { ...recorded[1].node.body.user, user_id: facts.userId },
+    });
     process.stdout.write(JSON.stringify(recorded));
   } finally {
     try { await app.close(); } finally {
