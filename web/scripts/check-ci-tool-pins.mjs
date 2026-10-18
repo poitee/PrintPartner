@@ -240,7 +240,7 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
   }
   for (const [name, lane, code, major] of desktopNodeLanes) {
     if (new RegExp(`^${name}\\.ya?ml$`, 'i').test(basename(file))) {
-      checkNodeLanes(workflow, file, [lane], code, undefined, major);
+      checkNodeLanes(workflow, file, [lane], code, "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')", major);
     }
   }
   for (const [name, lanes] of Object.entries(desktopNodeSetups)) {
