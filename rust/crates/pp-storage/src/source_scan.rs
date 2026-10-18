@@ -307,10 +307,7 @@ pub(crate) fn mark_local_failure(
         params![tenant, source_id],
         |row| row.get(0),
     )?;
-    let mut metadata = raw
-        .map(|raw| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw))
-        .transpose()?
-        .unwrap_or_default();
+    let mut metadata = crate::catalog::metadata(raw).unwrap_or_default();
     metadata.insert("sync_error".into(), detail.into());
     metadata.insert("sync_required".into(), true.into());
     ensure!(

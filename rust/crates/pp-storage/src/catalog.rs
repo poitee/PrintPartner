@@ -676,7 +676,7 @@ pub(super) fn execute(
 fn trim(s: &str) -> &str {
     s.trim_matches(|c:char|matches!(c,'\u{0009}'..='\u{000d}'|' '|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}'))
 }
-fn metadata(raw: Option<String>) -> Option<Map<String, Value>> {
+pub(crate) fn metadata(raw: Option<String>) -> Option<Map<String, Value>> {
     raw.filter(|s| !s.is_empty())
         .map(|s| match serde_json::from_str::<Value>(&s) {
             Ok(Value::Object(m)) => m,
