@@ -699,9 +699,28 @@ async fn wait_shell_crash(
     let mut startup_ticks = 0;
     let mut cleanup_ticks = 0;
     let mut next_tick = std::time::Instant::now();
+    let trace_started = std::time::Instant::now();
+    let trace = std::env::var_os("PP_GRE671_TRACE").is_some();
+    let mut previous = String::new();
     loop {
         let state = supervisor.handle.status.borrow().clone();
         let pids = recorded_pids(&scratch.pidfile());
+        if trace {
+            let pid = pids.get(expected - 1).copied();
+            let observation = format!(
+                "state={state:?} pid={pid:?} exited={} probes={} startup_ticks={startup_ticks} cleanup_ticks={cleanup_ticks}",
+                pid.is_some_and(shell_exited),
+                *supervisor.health_probes_completed.borrow(),
+            );
+            if observation != previous {
+                eprintln!(
+                    "GRE671 crash={expected} wall={:?} policy={:?} {observation}",
+                    trace_started.elapsed(),
+                    policy_started.elapsed(),
+                );
+                previous = observation;
+            }
+        }
         if pids.len() == expected
             && if guarded {
                 matches!(state, super::Status::Guarded)
@@ -731,6 +750,12 @@ async fn wait_shell_crash(
                 _ => None,
             };
             if let Some(tick) = tick {
+                if trace {
+                    eprintln!(
+                        "GRE671 crash={expected} wall={:?} advance={tick:?}",
+                        trace_started.elapsed()
+                    );
+                }
                 tokio::time::advance(tick).await;
                 next_tick = std::time::Instant::now() + Duration::from_secs(1);
             }
