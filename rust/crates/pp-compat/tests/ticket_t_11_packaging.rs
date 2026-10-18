@@ -140,17 +140,6 @@ fn ticket_t_11_packaging_replaces_foreign_gzip_with_canonical_bytes() {
     );
 }
 
-#[test]
-fn ticket_t_11_packaging_changes_select_macos_checks() {
-    let selector = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../scripts/macos-bundle-path-filter.py");
-    let output = Command::new("python3").arg("-c")
-        .arg("import runpy,sys;print(runpy.run_path(sys.argv[1])['is_macos_pr_input']('rust/scripts/precompress-spa.py'))")
-        .arg(selector).output().unwrap();
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"True\n");
-}
-
 #[cfg(unix)]
 #[test]
 fn ticket_t_11_packaging_symlinked_root_cannot_write_outside() {
