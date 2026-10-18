@@ -103,6 +103,13 @@ fn fixture() -> Fixture {
         assert_eq!(case.path, path);
         assert_eq!(case.callback, callback);
         assert_eq!(
+            case.client_id,
+            match case.provider {
+                Provider::Github => "fixture github+id/&=é",
+                Provider::Discord => "fixture discord+id/&=é",
+            }
+        );
+        assert_eq!(
             case.origin,
             if case.secure {
                 "https://127.0.0.1:48885"
