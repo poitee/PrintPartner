@@ -1,0 +1,9 @@
+# Restart tests remeasure the release and start real Node processes within 20s.
+# Reserve the local runner's test capacity while these cases execute.
+[[profile.pp-local-linux.overrides]]
+filter = '''
+test(=crash_guard_stops_after_five_failures_and_recovers_explicitly)
+| test(=stable_child_resets_backoff_without_erasing_rapid_crash_escalation)
+| test(=ticket_t_68_desktop_account_mapping::mapping_pin_survives_compat_crash_and_full_restart)
+'''
+threads-required = "num-test-threads"
