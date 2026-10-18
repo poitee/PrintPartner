@@ -2,6 +2,7 @@ name: Desktop WebKitGTK WebGL smoke
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - 'rust/**'
       - 'rust-toolchain.toml'
@@ -12,6 +13,10 @@ on:
       - 'web/scripts/atomic-package-build.mjs'
       - 'scripts/setup-ci-linux.sh'
       - '.github/workflows/desktop-webkit.yml'
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -23,6 +28,7 @@ concurrency:
 
 jobs:
   webkit-stl:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 40
     env:
