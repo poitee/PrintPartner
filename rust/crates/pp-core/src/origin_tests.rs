@@ -530,8 +530,11 @@ fn run_crash_child(test: &str, fixture: &Fixture, case: usize, new_bytes: &str) 
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    let runtime = std::fs::read(fixture.0.join("crash-runtime")).unwrap();
-    std::fs::remove_dir(std::ffi::OsStr::from_bytes(&runtime)).unwrap();
+    // A child that failed before taking the lease leaves no runtime record;
+    // let the status assertions below report that failure instead.
+    if let Ok(runtime) = std::fs::read(fixture.0.join("crash-runtime")) {
+        std::fs::remove_dir(std::ffi::OsStr::from_bytes(&runtime)).unwrap();
+    }
     assert!(!timed_out, "publication child exceeded its crash deadline");
     assert_eq!(status.signal(), Some(libc::SIGKILL));
 }
