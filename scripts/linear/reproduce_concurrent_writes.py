@@ -31,6 +31,7 @@ class ConcurrentWriteReproduction(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("pr_status_sync.py"))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        module.STALE_HOURS = 48
         module._prs = copy.deepcopy(prs)
         module.gql = lambda query, variables: self.linear(name, query, variables)
         return module
