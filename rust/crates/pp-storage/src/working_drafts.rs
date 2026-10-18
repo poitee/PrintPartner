@@ -204,6 +204,16 @@ pub enum RecomputeOutcome {
     NoStls,
 }
 
+/// Node's `PlanDraftWorkspaceService.recompute` result.
+#[derive(Debug)]
+pub enum RecomputeWorkspaceOutcome {
+    /// Node's `autoReconcile` over the created or existing draft.
+    Selected(WorkspaceOutcome),
+    /// Any other `recomputePlanDraft` result, which Node's `recomputeFailure`
+    /// maps.
+    Refused(RecomputeOutcome),
+}
+
 #[derive(Debug)]
 pub enum Outcome {
     Listed {
@@ -475,8 +485,12 @@ enum Operation {
     Recompute {
         request: RecomputeRequest,
         observations: Observations,
-        reply: mpsc::Sender<Result<RecomputeOutcome>>,
+        reply: RecomputeReply,
     },
+}
+enum RecomputeReply {
+    Draft(mpsc::Sender<Result<RecomputeOutcome>>),
+    Workspace(mpsc::Sender<Result<RecomputeWorkspaceOutcome>>),
 }
 impl WriterOwner {
     pub fn working_drafts_with_policy(
@@ -598,11 +612,50 @@ impl WorkingDraftClient {
         cancelled: Arc<AtomicBool>,
         wait: Duration,
     ) -> Result<RecomputeOutcome> {
+        self.enqueue_recompute(
+            credential,
+            profile,
+            request,
+            cancelled,
+            wait,
+            RecomputeReply::Draft,
+        )
+    }
+    /// Recomputes as Node's `PlanDraftWorkspaceService.recompute` does,
+    /// including its automatic Required-unit selection. The recompute commits
+    /// before the selection starts, so a selection error or cancellation keeps
+    /// it.
+    pub fn recompute_and_select(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        request: RecomputeRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<RecomputeWorkspaceOutcome> {
+        self.enqueue_recompute(
+            credential,
+            profile,
+            request,
+            cancelled,
+            wait,
+            RecomputeReply::Workspace,
+        )
+    }
+    fn enqueue_recompute<T>(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        request: RecomputeRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+        reply: fn(mpsc::Sender<Result<T>>) -> RecomputeReply,
+    ) -> Result<T> {
         let observations = self
             .observations
             .clone()
             .ok_or_else(|| anyhow!("Working-draft observations are not configured"))?;
-        self.enqueue(cancelled, wait, |reply, cancelled| {
+        self.enqueue(cancelled, wait, |sender, cancelled| {
             Envelope::WorkingDraftWrite {
                 command: Write {
                     credential,
@@ -612,7 +665,7 @@ impl WorkingDraftClient {
                     operation: Operation::Recompute {
                         request,
                         observations,
-                        reply,
+                        reply: reply(sender),
                     },
                 },
             }
@@ -726,22 +779,9 @@ pub(super) fn write(
             });
             let _ = reply.send(edited.and_then(|edited| match edited {
                 Edited::Done(outcome) => Ok(outcome),
-                Edited::Unselected(digest) => {
-                    let command = ReconciliationCommand::new(
-                        profile,
-                        draft_id,
-                        serde_json::from_value(
-                            json!({"expected_snapshot_digest":digest, "decisions":[]}),
-                        )?,
-                        &format!("auto-{}", digest.as_str()),
-                        credential,
-                    )?;
-                    // Node's selection is a separate transaction with its own busy wait.
-                    let admission = writer_admission::Deadline::at_dequeue();
-                    transact(connection, admission, &cancelled, |tx| {
-                        required_units::reconcile::run(tx, &command, policy)
-                    })
-                }
+                Edited::Unselected(digest) => auto_select(
+                    connection, credential, policy, profile, draft_id, &digest, &cancelled,
+                ),
             }));
         }
         Operation::Abandon {
@@ -758,7 +798,7 @@ pub(super) fn write(
             observations,
             reply,
         } => {
-            let _ = reply.send(recompute(
+            let recomputed = recompute(
                 connection,
                 &credential,
                 policy,
@@ -766,9 +806,86 @@ pub(super) fn write(
                 &request,
                 &observations,
                 &cancelled,
-            ));
+            );
+            match reply {
+                RecomputeReply::Draft(reply) => {
+                    let _ = reply.send(recomputed);
+                }
+                RecomputeReply::Workspace(reply) => {
+                    let _ = reply.send(recomputed.and_then(|outcome| {
+                        select_recomputed(
+                            connection, credential, policy, profile, &cancelled, outcome,
+                        )
+                    }));
+                }
+            }
         }
     }
+}
+/// Node's `autoReconcile` after `recomputePlanDraft`. A draft that already has
+/// a selection returns its workspace from a read transaction.
+fn select_recomputed(
+    connection: &mut Connection,
+    credential: Credential,
+    policy: auth::AuthPolicy,
+    profile: PositiveId,
+    cancelled: &Arc<AtomicBool>,
+    outcome: RecomputeOutcome,
+) -> Result<RecomputeWorkspaceOutcome> {
+    let draft = match outcome {
+        RecomputeOutcome::Created { draft } | RecomputeOutcome::Existing { draft } => draft,
+        refused => return Ok(RecomputeWorkspaceOutcome::Refused(refused)),
+    };
+    let draft_id = draft.identity.draft_id;
+    if !draft.ordinary["requiredUnitReconciliation"].is_null() {
+        let read = Command {
+            credential,
+            profile,
+            request: Request::Workspace { draft_id },
+            policy,
+            cancelled: cancelled.clone(),
+        };
+        return match execute(connection, read)? {
+            Outcome::Workspace { workspace } => Ok(RecomputeWorkspaceOutcome::Selected(
+                WorkspaceOutcome::Ready { workspace },
+            )),
+            _ => Err(anyhow!("Recomputed Plan draft is missing")),
+        };
+    }
+    auto_select(
+        connection,
+        credential,
+        policy,
+        profile,
+        draft_id,
+        &draft.identity.snapshot_digest,
+        cancelled,
+    )
+    .map(RecomputeWorkspaceOutcome::Selected)
+}
+/// Node's `autoReconcile` for an unselected draft: a selection with no
+/// decisions, keyed by the snapshot digest.
+fn auto_select(
+    connection: &mut Connection,
+    credential: Credential,
+    policy: auth::AuthPolicy,
+    profile: PositiveId,
+    draft_id: PositiveId,
+    digest: &Digest,
+    cancelled: &AtomicBool,
+) -> Result<WorkspaceOutcome> {
+    let command = ReconciliationCommand::new(
+        profile,
+        draft_id,
+        serde_json::from_value(json!({"expected_snapshot_digest":digest, "decisions":[]}))?,
+        &format!("auto-{}", digest.as_str()),
+        credential,
+    )?;
+    // Node's selection is a separate transaction with its own busy wait.
+    let admission = writer_admission::Deadline::at_dequeue();
+    transact(connection, admission, cancelled, |tx| {
+        required_units::reconcile::run(tx, &command, policy)
+    })
 }
 fn transact<T>(
     connection: &mut Connection,

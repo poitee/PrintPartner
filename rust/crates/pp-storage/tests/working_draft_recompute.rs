@@ -3,8 +3,9 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{self, Secret},
     read_model::Credential,
+    required_units::ReconciliationCommand,
     working_drafts::{
-        Failure, PositiveId, RecomputeRequest,
+        Failure, PositiveId, RecomputeRequest, RecomputeWorkspaceOutcome,
         observation::{
             ArtifactRead, CheckoutManifestUse, DocumentRead, DraftReads, InventoryPath,
             OwnedCatalogReadRequest, OwnedCheckoutReadRequest, OwnedStlReadRequest,
@@ -22,7 +23,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn session() -> Credential {
@@ -216,6 +217,8 @@ impl Fixture {
             "drafts": self.rows("SELECT id,tenant_id,profile_id,base_revision_id,base_plan_version,state,lifecycle_version,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest,digest_format,snapshot_digest,created_by,idempotency_key,created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z' AS created_at_iso,current_required_unit_reconciliation_id,consumed_revision_id,consumed_at FROM plan_drafts ORDER BY id"),
             "inputs": self.rows("SELECT * FROM plan_draft_inputs ORDER BY id"),
             "parts": self.rows("SELECT * FROM plan_draft_parts ORDER BY id"),
+            "reconciliations": self.rows("SELECT id,draft_id,actor_id,idempotency_key,planning_digest,result_kind,reconciliation_digest,payload_digest FROM plan_draft_required_unit_reconciliations ORDER BY id"),
+            "assignments": self.rows("SELECT reconciliation_id,target_draft_part_id,unit_index,kind,required_unit_token FROM plan_draft_required_unit_assignments ORDER BY reconciliation_id,target_draft_part_id,unit_index"),
         })
     }
     fn open(&self) -> WriterOwner {
@@ -263,6 +266,29 @@ fn recompute(
     Ok(outcome)
 }
 
+fn recompute_and_select(
+    owner: &WriterOwner,
+    reads: Arc<Shared>,
+    key: &str,
+    cancelled: Arc<AtomicBool>,
+) -> anyhow::Result<Value> {
+    let outcome = owner
+        .working_drafts_with_observations(policy(), reads, PreparationLimits::default())?
+        .recompute_and_select(
+            session(),
+            id(1),
+            RecomputeRequest::new(key, true)?,
+            cancelled,
+            Duration::from_secs(60),
+        )?;
+    Ok(match outcome {
+        RecomputeWorkspaceOutcome::Selected(outcome) => serde_json::to_value(outcome)?,
+        RecomputeWorkspaceOutcome::Refused(outcome) => {
+            serde_json::from_slice(&outcome.into_json_body().into_bytes())?
+        }
+    })
+}
+
 fn compare_node(name: &str) {
     let case = node(name);
     let f = Fixture::new(&case);
@@ -270,6 +296,12 @@ fn compare_node(name: &str) {
     let results = case["results"].as_array().unwrap();
     assert_eq!(calls.len(), results.len());
     for (index, (call, expected)) in calls.iter().zip(results).enumerate() {
+        if call["op"] == "sql" {
+            f.sql()
+                .execute_batch(call["sql"].as_str().unwrap())
+                .unwrap();
+            continue;
+        }
         let owner = f.open();
         let actual = match call["op"].as_str().unwrap() {
             "edit" => owner
@@ -284,6 +316,35 @@ fn compare_node(name: &str) {
                     Duration::from_secs(5),
                 )
                 .map(|outcome| serde_json::to_value(outcome).unwrap()),
+            "reconcile" => {
+                let request = serde_json::from_value(
+                    json!({"expected_snapshot_digest":call["digest"], "decisions":[]}),
+                )
+                .unwrap();
+                let command = ReconciliationCommand::new(
+                    id(call["profile"].as_u64().unwrap()),
+                    id(call["draft"].as_u64().unwrap()),
+                    request,
+                    call["key"].as_str().unwrap(),
+                    session(),
+                )
+                .unwrap();
+                owner
+                    .required_units_with_policy(policy())
+                    .unwrap()
+                    .reconcile(
+                        command,
+                        Arc::new(AtomicBool::new(false)),
+                        Duration::from_secs(5),
+                    )
+                    .map(|outcome| serde_json::to_value(outcome).unwrap())
+            }
+            "service" => recompute_and_select(
+                &owner,
+                f.reads(&case["files"], &call["between"], None),
+                call["key"].as_str().unwrap(),
+                Arc::new(AtomicBool::new(false)),
+            ),
             "recompute" => recompute(
                 &owner,
                 f.reads(&case["files"], &call["between"], None),
@@ -306,7 +367,13 @@ fn compare_node(name: &str) {
         owner.shutdown().unwrap();
     }
     let rows = f.recorded_rows();
-    for table in ["drafts", "inputs", "parts"] {
+    for table in [
+        "drafts",
+        "inputs",
+        "parts",
+        "reconciliations",
+        "assignments",
+    ] {
         assert_eq!(rows[table], case[table], "{name} {table}");
     }
 }
@@ -362,6 +429,111 @@ node_case!(
 );
 node_case!(a_profile_without_layers_is_no_layers, "no-layers");
 node_case!(a_profile_without_stls_is_no_stls, "no-stls");
+node_case!(
+    a_created_draft_is_selected_and_its_replay_is_not_reselected,
+    "service-created-then-selected"
+);
+node_case!(
+    an_existing_draft_is_selected,
+    "service-existing-then-selected"
+);
+node_case!(
+    a_failed_selection_keeps_the_recompute_and_a_retry_selects,
+    "service-selection-fails-then-retried"
+);
+node_case!(
+    an_existing_selection_is_kept,
+    "service-existing-already-selected"
+);
+
+/// Cancels a selecting recompute while a slow trigger holds the selection
+/// transaction, after the recompute has committed.
+#[test]
+fn cancellation_during_selection_keeps_the_recompute_and_a_retry_selects() {
+    let repository = node("created-then-replayed");
+    let f = Fixture::new(&repository);
+    f.sql().execute_batch("CREATE TRIGGER slow_selection AFTER INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT sum(n) FROM (WITH RECURSIVE n(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM n WHERE n<1000000) SELECT n FROM n); END").unwrap();
+    let owner = f.open();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let client = owner
+            .working_drafts_with_observations(
+                policy(),
+                f.reads(&repository["files"], &Value::Null, None),
+                PreparationLimits::default(),
+            )
+            .unwrap();
+        let cancelled = cancelled.clone();
+        std::thread::spawn(move || {
+            client.recompute_and_select(
+                session(),
+                id(1),
+                RecomputeRequest::new("first", true).unwrap(),
+                cancelled,
+                Duration::from_secs(5),
+            )
+        })
+    };
+    let probe = f.sql();
+    probe.busy_timeout(Duration::ZERO).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if f.rows("SELECT id FROM plan_drafts WHERE id=3") == json!([{"id":3}]) {
+            match probe.execute_batch("BEGIN IMMEDIATE") {
+                Ok(()) => probe.execute_batch("ROLLBACK").unwrap(),
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if error.code == rusqlite::ErrorCode::DatabaseBusy =>
+                {
+                    break;
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+        assert!(Instant::now() < deadline, "selection never started");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    cancelled.store(true, Ordering::Release);
+    let error = worker.join().unwrap().unwrap_err();
+    assert!(
+        matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+        "{error:?}"
+    );
+    owner.shutdown().unwrap();
+    f.sql()
+        .execute_batch("DROP TRIGGER slow_selection")
+        .unwrap();
+    let rows = f.recorded_rows();
+    for table in [
+        "drafts",
+        "inputs",
+        "parts",
+        "reconciliations",
+        "assignments",
+    ] {
+        assert_eq!(rows[table], repository[table], "{table}");
+    }
+    let retried = node("service-selection-fails-then-retried");
+    let owner = f.open();
+    let selected = recompute_and_select(
+        &owner,
+        f.reads(&repository["files"], &Value::Null, None),
+        "first",
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    owner.shutdown().unwrap();
+    assert_eq!(selected, retried["results"][2]);
+    let rows = f.recorded_rows();
+    for table in [
+        "drafts",
+        "inputs",
+        "parts",
+        "reconciliations",
+        "assignments",
+    ] {
+        assert_eq!(rows[table], retried[table], "{table}");
+    }
+}
 
 fn refused(f: &Fixture, cancel: bool, limits: PreparationLimits) -> anyhow::Error {
     let owner = f.open();

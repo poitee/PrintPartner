@@ -14,6 +14,9 @@ const { parseEditPlanDraftPartsRequest } = await import(join(server, '../../pack
 const opened = 'ae11e670337e3e5eab736b29b4e294edbea8b564661cf15972625783f8930ee3';
 const files = ['bracket.stl', 'excluded.stl', 'gear.stl', 'new.stl'];
 const recompute = (key, applyManifest = true, between = null, profile = 1) => ({ op: 'recompute', profile, key, applyManifest, between });
+const selecting = (key) => ({ ...recompute(key), op: 'service' });
+const reconcile = (draft, digest, key) => ({ op: 'reconcile', profile: 1, draft, digest, key });
+const failSelection = "CREATE TRIGGER injected_selection_failure BEFORE INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT RAISE(ABORT,'injected selection write failure'); END";
 const edited = { op: 'edit', profile: 1, draft: 2, request: { expected_snapshot_digest: opened, decisions: [
   { kind: 'set_included', draft_part_ids: [5], value: true },
   { kind: 'set_quantity_override', draft_part_ids: [6], value: 7 },
@@ -39,6 +42,10 @@ const cases = [
   { name: 'winner-after-prepare', calls: [recompute('first', true, copyDraft('first'))] },
   { name: 'no-layers', setup: ['DELETE FROM profile_layers'], calls: [recompute('first')] },
   { name: 'no-stls', files: [], calls: [recompute('first')] },
+  { name: 'service-created-then-selected', calls: [selecting('first'), selecting('first')] },
+  { name: 'service-existing-then-selected', calls: [selecting('working')] },
+  { name: 'service-selection-fails-then-retried', setup: [failSelection], calls: [selecting('first'), { op: 'sql', sql: 'DROP TRIGGER injected_selection_failure' }, selecting('first')] },
+  { name: 'service-existing-already-selected', calls: [reconcile(2, opened, 'core-selection'), selecting('working')] },
 ];
 
 if (!process.argv.includes('--large-carry')) {
@@ -60,13 +67,19 @@ if (!process.argv.includes('--large-carry')) {
       const repo = ports.repository;
       const service = new PlanDraftWorkspaceService(repo);
       const prepare = repo.preparePlanDraft;
-      const results = calls.map(({ op, profile, draft, request, key, applyManifest, between }) => {
+      const results = calls.map(({ op, profile, draft, request, key, applyManifest, between, digest, sql }) => {
         repo.preparePlanDraft = function (...args) {
           const prepared = prepare.apply(this, args);
           if (between) raw.exec(between);
           return prepared;
         };
+        if (op === 'sql') {
+          raw.exec(sql);
+          return null;
+        }
         try {
+          if (op === 'service') return service.recompute({ profileId: profile, actorId: 'default', idempotencyKey: key, applyManifest });
+          if (op === 'reconcile') return service.reconcile({ profileId: profile, draftId: draft, actorId: 'default', idempotencyKey: key, request: { expected_snapshot_digest: digest, decisions: [] } });
           if (op === 'edit') return service.editParts({ profileId: profile, draftId: draft, actorId: 'default', request: parseEditPlanDraftPartsRequest(request) });
           if (!repo.getOwnedProfileIdentity(profile)) return { kind: 'profile_not_found' };
           const result = repo.recomputePlanDraft({ profileId: profile, actor: 'default', idempotencyKey: key, applyManifest, preferAccepted: applyManifest === false });
@@ -81,6 +94,8 @@ if (!process.argv.includes('--large-carry')) {
         drafts: rows("SELECT id,tenant_id,profile_id,base_revision_id,base_plan_version,state,lifecycle_version,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest,digest_format,snapshot_digest,created_by,idempotency_key,created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z' AS created_at_iso,current_required_unit_reconciliation_id,consumed_revision_id,consumed_at FROM plan_drafts ORDER BY id"),
         inputs: rows('SELECT * FROM plan_draft_inputs ORDER BY id'),
         parts: rows('SELECT * FROM plan_draft_parts ORDER BY id'),
+        reconciliations: rows('SELECT id,draft_id,actor_id,idempotency_key,planning_digest,result_kind,reconciliation_digest,payload_digest FROM plan_draft_required_unit_reconciliations ORDER BY id'),
+        assignments: rows('SELECT reconciliation_id,target_draft_part_id,unit_index,kind,required_unit_token FROM plan_draft_required_unit_assignments ORDER BY reconciliation_id,target_draft_part_id,unit_index'),
       });
     } finally {
       raw.close();
