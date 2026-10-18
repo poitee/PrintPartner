@@ -10,7 +10,7 @@ manifest = Path('crates/pp-storage/src/working_drafts/manifest.rs')
 read_model = Path('crates/pp-storage/src/read_model.rs')
 context = Path('crates/pp-storage/src/read_model/context.rs')
 mutants = [
-    ('optional invalid is fatal', manifest, 'Err(ReadFailure::InvalidDocument) => Ok(None)', 'Err(ReadFailure::InvalidDocument) => Err(ReadFailure::InvalidDocument)'),
+    ('optional invalid is fatal', manifest, 'Err(ReadFailure::InvalidDocument) => b.check().map(|()| None)', 'Err(ReadFailure::InvalidDocument) => Err(ReadFailure::InvalidDocument)'),
     ('kit ignores stored selections', manifest, '.selection_projection();', '.selection_projection();\n    let selections = if selections.is_empty() { selections } else { Vec::new() };'),
     ('manifest defaults override kit', manifest, 'if !selections.iter().any(|(k, _)| k == key)', 'if selections.iter().any(|(k, _)| k == key)'),
     ('project filtering omitted', manifest, 'if d.project.as_ref().is_some_and', 'if false && d.project.as_ref().is_some_and'),
@@ -20,7 +20,7 @@ mutants = [
     ('group maximum ignored', manifest, '(ids.len() as u64) <= max', 'true'),
     ('exclusion omitted', manifest, 'if excluded {', 'if false && excluded {'),
     ('stale base reused', read_model, 'if !context::draft_freshness_current', 'if false && !context::draft_freshness_current'),
-    ('accepted validation bypassed', read_model, 'let accepted = graph::read(tx, tenant, profile, repos, &mut budget)?;', 'let accepted = AcceptedRead::Empty { profile: Profile { id: profile, name: String::new(), order_number: None, special_request: None, archived_at: None } };'),
+    ('accepted validation bypassed', read_model, 'let accepted = graph::read(tx, tenant, profile, repos, &mut budget)?;\n    preparation.check()?;', 'let accepted = AcceptedRead::Empty { profile: Profile { id: profile, name: String::new(), order_number: None, special_request: None, archived_at: None } };\n    preparation.check()?;'),
     ('freshness always current', context, 'FreshnessFacts::Current { .. }\n    ))', 'FreshnessFacts::Current { .. } | FreshnessFacts::Untracked { .. }\n    ))'),
     ('path entry budget omitted', manifest, '        b.entry(0, key.len())?;', ''),
     ('comparison work uncharged', manifest, '    b.comparison(work)?;', ''),
