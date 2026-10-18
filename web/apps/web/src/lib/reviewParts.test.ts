@@ -220,7 +220,6 @@ describe("maskSpoolmanReviewPart", () => {
   it.each([
     { filament_color_id: " spoolman:int-1:filament:2 ", spoolman_spool_id: null },
     { filament_color_id: null, spoolman_spool_id: " spoolman:int-1:spool:5 " },
-    { filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5" },
   ])("masks enrichment for assignment %j", (assignment) => {
     const part = {
       ...samplePart({ id: 1, ...assignment }),
@@ -235,10 +234,11 @@ describe("maskSpoolmanReviewPart", () => {
     expect(part.filament_display).toBe("Spoolman Blue");
   });
 
-  it("preserves catalog color enrichment for a blank spool reference", () => {
+  it.each(["  ", "spoolman:int-1:spool:5"])("preserves catalog color enrichment for spool reference %s", (spoolman_spool_id) => {
     const part = {
-      ...samplePart({ id: 1, filament_color_id: "catalog:red", spoolman_spool_id: "  " }),
+      ...samplePart({ id: 1, filament_color_id: "catalog:red", spoolman_spool_id }),
       filament_display: "Catalog Red", filament_hex: "#ff0000",
+      spool_badge: "450g left", spool_summary: [{ remaining_g: 450, spool_id: 5 }],
     };
     expect(maskSpoolmanReviewPart(part)).toEqual({ ...part, spool_badge: null, spool_summary: undefined });
   });
