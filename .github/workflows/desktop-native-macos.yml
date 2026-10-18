@@ -436,6 +436,8 @@ jobs:
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: nextest@0.9.148
+      - name: Test owned image cleanup and native holder reporting
+        run: python3 scripts/test_native_image_cleanup.py -v
       - name: Verify source Unicode and case regressions on macOS
         shell: bash
         run: |
@@ -460,6 +462,8 @@ jobs:
                 sleep 2
               fi
             done
+            echo "Open files on owned test fixture at $fixture_mount before forced detach:"
+            lsof +f -- "$fixture_mount" || echo "::warning::lsof found no holders or failed at $fixture_mount (status $?)"
             if ! hdiutil detach -force "$fixture_mount"; then
               echo "::warning::Could not detach owned test fixture at $fixture_mount"
             fi
