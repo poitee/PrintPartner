@@ -12,9 +12,11 @@ use std::{
     collections::{BTreeMap, HashSet},
     net::SocketAddr,
     path::PathBuf,
-    process::Command,
     time::Duration,
 };
+
+#[path = "../../pp-storage/tests/common/process.rs"]
+mod child_process;
 
 type Multimap = BTreeMap<String, Vec<String>>;
 type Attributes = BTreeMap<String, Option<String>>;
@@ -465,7 +467,7 @@ async fn changed_callback_uri_disabled_redirect_and_missing_binding_are_rejected
 fn node_authorization_start_fixture_is_fresh() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let node = std::env::var_os("PP_SCHEMA_PARITY_NODE").unwrap_or_else(|| "node".into());
-    let output = Command::new(node)
+    let output = child_process::command(node)
         .arg(root.join("fixtures/parity/auth-authorization-start/generate.mjs"))
         .arg("--check")
         .current_dir(root)
