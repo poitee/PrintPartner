@@ -1,7 +1,13 @@
 #![cfg(feature = "desktop_rebuild")]
 
 use pp_api::auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router};
-use pp_storage::{Limits, WriterOwner, auth::FirstUserTenant};
+use pp_storage::{
+    Limits, WriterOwner,
+    auth::{
+        AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy,
+        rebuild::AuthLifetimes,
+    },
+};
 use reqwest::{Client, Method};
 use rusqlite::{Connection, params};
 use serde::Deserialize;
@@ -134,7 +140,16 @@ impl Server {
         let owner = WriterOwner::open(&directory.0, Limits::default())
             .unwrap()
             .0;
-        let auth = owner.auth(FirstUserTenant::NewUser);
+        let auth = owner
+            .rebuild_auth_with_policy(
+                AuthPolicy {
+                    registration: RegistrationPolicy::Open,
+                    first_user: FirstUserTenant::NewUser,
+                    session_tenant: SessionTenantPolicy::AccountTenant,
+                },
+                AuthLifetimes::default(),
+            )
+            .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let router = auth_router(
