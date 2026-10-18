@@ -1,0 +1,272 @@
+{
+  "source": "web/apps/server/src/services/accepted-plan-review.ts",
+  "database": "rust/crates/pp-storage/tests/fixtures/accepted-plan-node.db",
+  "cell": "typeof(\"{column}\")||':'||CASE typeof(\"{column}\") WHEN 'real' THEN printf('%.17g',\"{column}\") ELSE hex(\"{column}\") END",
+  "rowsQuery": "SELECT 'parts',id,typeof(\"requirement\")||':'||CASE typeof(\"requirement\") WHEN 'real' THEN printf('%.17g',\"requirement\") ELSE hex(\"requirement\") END,typeof(\"option_group_id\")||':'||CASE typeof(\"option_group_id\") WHEN 'real' THEN printf('%.17g',\"option_group_id\") ELSE hex(\"option_group_id\") END FROM parts UNION ALL SELECT 'plan_revision_parts',id,typeof(\"requirement\")||':'||CASE typeof(\"requirement\") WHEN 'real' THEN printf('%.17g',\"requirement\") ELSE hex(\"requirement\") END,typeof(\"option_group_id\")||':'||CASE typeof(\"option_group_id\") WHEN 'real' THEN printf('%.17g',\"option_group_id\") ELSE hex(\"option_group_id\") END FROM plan_revision_parts UNION ALL SELECT 'plan_revisions',id,typeof(\"snapshot_digest\")||':'||CASE typeof(\"snapshot_digest\") WHEN 'real' THEN printf('%.17g',\"snapshot_digest\") ELSE hex(\"snapshot_digest\") END,NULL FROM plan_revisions ORDER BY 1,2",
+  "sentinel": {
+    "path": "repos/1/revisions/accepted/sentinel.txt",
+    "contents": "review-refusal sentinel\n"
+  },
+  "cases": [
+    {
+      "name": "malformed-parts-ppjs",
+      "sql": "UPDATE parts SET requirement=X'50504A5301' WHERE id=1",
+      "node": {
+        "thrown": {
+          "name": "AcceptedPlanOperationalIntegrityError",
+          "code": "projection",
+          "message": "Accepted Plan projection differs from its revision"
+        },
+        "routeClass": "integrity_failure"
+      },
+      "preserved": {
+        "rows": [
+          [
+            "parts",
+            1,
+            "blob:50504A5301",
+            "null:"
+          ],
+          [
+            "parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            1,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revisions",
+            1,
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
+            null
+          ]
+        ],
+        "files": [
+          [
+            "repos/1/revisions/accepted/sentinel.txt",
+            "review-refusal sentinel\n"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "malformed-plan-revision-parts-ppjs",
+      "sql": "UPDATE plan_revision_parts SET requirement=X'50504A5301' WHERE id=1",
+      "node": {
+        "thrown": {
+          "name": "AcceptedPlanOperationalIntegrityError",
+          "code": "revision_digest",
+          "message": "Accepted Plan revision digest is corrupt"
+        },
+        "routeClass": "integrity_failure"
+      },
+      "preserved": {
+        "rows": [
+          [
+            "parts",
+            1,
+            "null:",
+            "null:"
+          ],
+          [
+            "parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            1,
+            "blob:50504A5301",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revisions",
+            1,
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
+            null
+          ]
+        ],
+        "files": [
+          [
+            "repos/1/revisions/accepted/sentinel.txt",
+            "review-refusal sentinel\n"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "non-scalar-metadata-stale-digest",
+      "sql": "UPDATE parts SET requirement=X'50504A530100000001D800',option_group_id=X'50504A530100000001DC00' WHERE id=1;UPDATE plan_revision_parts SET requirement=X'50504A530100000001D800',option_group_id=X'50504A530100000001DC00' WHERE id=1",
+      "node": {
+        "thrown": {
+          "name": "AcceptedPlanOperationalIntegrityError",
+          "code": "revision_digest",
+          "message": "Accepted Plan revision digest is corrupt"
+        },
+        "routeClass": "integrity_failure"
+      },
+      "preserved": {
+        "rows": [
+          [
+            "parts",
+            1,
+            "blob:50504A530100000001D800",
+            "blob:50504A530100000001DC00"
+          ],
+          [
+            "parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            1,
+            "blob:50504A530100000001D800",
+            "blob:50504A530100000001DC00"
+          ],
+          [
+            "plan_revision_parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revisions",
+            1,
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
+            null
+          ]
+        ],
+        "files": [
+          [
+            "repos/1/revisions/accepted/sentinel.txt",
+            "review-refusal sentinel\n"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "non-scalar-projection-mismatch",
+      "sql": "UPDATE parts SET requirement=X'50504A530100000001D800' WHERE id=1",
+      "node": {
+        "thrown": {
+          "name": "AcceptedPlanOperationalIntegrityError",
+          "code": "projection",
+          "message": "Accepted Plan projection differs from its revision"
+        },
+        "routeClass": "integrity_failure"
+      },
+      "preserved": {
+        "rows": [
+          [
+            "parts",
+            1,
+            "blob:50504A530100000001D800",
+            "null:"
+          ],
+          [
+            "parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            1,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revisions",
+            1,
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
+            null
+          ]
+        ],
+        "files": [
+          [
+            "repos/1/revisions/accepted/sentinel.txt",
+            "review-refusal sentinel\n"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "unrelated-renamed-column",
+      "sql": "ALTER TABLE plan_revision_parts RENAME COLUMN notes TO notes_renamed",
+      "node": {
+        "thrown": {
+          "name": "SqliteError",
+          "code": "SQLITE_ERROR",
+          "message": "no such column: plan_revision_parts.notes"
+        },
+        "routeClass": "unexpected"
+      },
+      "preserved": {
+        "rows": [
+          [
+            "parts",
+            1,
+            "null:",
+            "null:"
+          ],
+          [
+            "parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            1,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revision_parts",
+            2,
+            "null:",
+            "null:"
+          ],
+          [
+            "plan_revisions",
+            1,
+            "text:62616332303238666530356533303366336330666633623261663235623065626339373862616438336537363434333230633338316539666562616463383736",
+            null
+          ]
+        ],
+        "files": [
+          [
+            "repos/1/revisions/accepted/sentinel.txt",
+            "review-refusal sentinel\n"
+          ]
+        ]
+      }
+    }
+  ]
+}
