@@ -477,6 +477,35 @@ fn an_oversized_source_draft_exceeds_the_comparison_budget() {
     assert_eq!(f.recorded_rows(), before);
 }
 
+/// Another Plan's draft is not found without charging the budget for it.
+#[test]
+fn another_plans_draft_is_not_found_before_it_is_charged() {
+    let case = node("base-unchanged");
+    let f = Fixture::new(&case);
+    f.sql()
+        .execute_batch(
+            "INSERT INTO build_profiles(id,tenant_id,name) VALUES(3,'default','New Build')",
+        )
+        .unwrap();
+    let owner = f.open();
+    let limits = PreparationLimits {
+        comparison_work: 1,
+        ..PreparationLimits::default()
+    };
+    let reads = f.reads(&case["files"], &Value::Null, None);
+    let mut call = case["calls"][0].clone();
+    call["profile"] = json!(3);
+    let outcome = rebase(
+        &owner,
+        reads,
+        &call,
+        limits,
+        Arc::new(AtomicBool::new(false)),
+    );
+    owner.shutdown().unwrap();
+    assert_eq!(outcome.unwrap(), json!({"kind": "not_found"}));
+}
+
 #[test]
 fn a_cancelled_request_is_refused_before_reading() {
     let case = node("base-unchanged");

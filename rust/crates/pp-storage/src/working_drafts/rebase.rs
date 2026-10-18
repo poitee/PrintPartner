@@ -436,7 +436,8 @@ fn stored(
 }
 
 /// `draft`, charging what it reads to the budget and checking cancellation
-/// between rows, as recompute's carry does.
+/// between rows, as recompute's carry does. Another Plan's draft is not
+/// charged.
 fn load(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -444,6 +445,10 @@ fn load(
     id: i64,
     budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<Option<Draft>> {
+    let scoped = "SELECT id FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND id=?";
+    if one(tx, scoped, &[&tenant, &profile, &id])?.is_none() {
+        return Ok(None);
+    }
     charge_open_draft(tx, tenant, id, budget)?;
     storage::draft_checked(tx, tenant, profile, id, &|| Ok(budget.check()?))
 }
@@ -495,22 +500,21 @@ fn accepted_parts(
         .is_some(),
         "Plan draft base revision is missing"
     );
-    rows(
-        tx,
+    let mut statement = tx.prepare(
         "SELECT id,projection_part_id,included,quantity_override FROM plan_revision_parts WHERE tenant_id=? AND revision_id=? ORDER BY id",
-        &[&tenant, &revision],
-    )?
-    .into_iter()
-    .map(|row| {
+    )?;
+    let mut query = statement.query(params![tenant, revision])?;
+    let mut parts = Vec::new();
+    while let Some(row) = query.next()? {
         budget.visit(0)?;
-        Ok(Accepted {
-            id: num(&row, "id")?,
-            projection: row["projectionPartId"].as_i64(),
-            included: json!(num(&row, "included")? != 0),
-            quantity_override: row["quantityOverride"].clone(),
-        })
-    })
-    .collect()
+        parts.push(Accepted {
+            id: row.get(0)?,
+            projection: row.get(1)?,
+            included: json!(row.get::<_, i64>(2)? != 0),
+            quantity_override: json!(row.get::<_, Option<i64>>(3)?),
+        });
+    }
+    Ok(parts)
 }
 
 /// Where a draft's Parts come from: each layer's Source, or `None` when two
@@ -686,19 +690,21 @@ fn merge(
         match candidates.as_slice() {
             [] => {}
             [target] if !ambiguous => targets.push((index, *target)),
-            _ => conflicts.push(Conflict::TargetAmbiguous {
-                source_part_id,
-                target_part_ids: candidates.iter().map(|target| target + 1).collect(),
-            }),
+            _ => {
+                budget.comparison(candidates.len())?;
+                conflicts.push(Conflict::TargetAmbiguous {
+                    source_part_id,
+                    target_part_ids: candidates.iter().map(|target| target + 1).collect(),
+                });
+            }
         }
     }
-    let mut claims = Vec::<(usize, Vec<i64>)>::new();
+    let mut claims = std::collections::BTreeMap::<usize, Vec<i64>>::new();
     for (index, target) in &targets {
-        let id = num(&source.parts[*index], "id")?;
-        match claims.iter_mut().find(|(claimed, _)| claimed == target) {
-            Some((_, ids)) => ids.push(id),
-            None => claims.push((*target, vec![id])),
-        }
+        claims
+            .entry(*target)
+            .or_default()
+            .push(num(&source.parts[*index], "id")?);
     }
     for (target, source_part_ids) in claims {
         if source_part_ids.len() > 1 {
