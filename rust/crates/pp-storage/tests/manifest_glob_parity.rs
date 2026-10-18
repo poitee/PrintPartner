@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
+    process::Command,
     sync::{Arc, RwLock, atomic::AtomicBool},
     time::Duration,
 };
@@ -151,6 +152,28 @@ impl Drop for Fixture {
         self.owner.take().unwrap().shutdown().unwrap();
         std::fs::remove_dir_all(&self.path).unwrap();
     }
+}
+
+#[test]
+fn committed_matrix_matches_current_node() {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../fixtures/parity/manifest-globs/generate.mjs");
+    let output =
+        Command::new(std::env::var_os("PP_SCHEMA_PARITY_NODE").unwrap_or_else(|| "node".into()))
+            .arg(script)
+            .arg("--check")
+            .output()
+            .expect("run Node fixture generator");
+    assert!(
+        output.status.success(),
+        "Node fixture drift check failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        "102 patterns x 55 keys = 5610 Node matchKeyMatches outcomes verified (264 accept, 5346 reject)"
+    );
 }
 
 #[test]

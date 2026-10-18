@@ -30,6 +30,11 @@ matches `optional`; unmatched keys must return JSON `null` for `requirement`.
 The test checks every key's exact requirement, inventory size, and uniqueness.
 A `*` fallback would reject internal line terminators, so the test uses absent
 requirement metadata to observe rejection.
+
+`committed_matrix_matches_current_node` runs the generator with `--check` from
+the Rust test suite. CI supplies its pinned Node 22 executable through
+`PP_SCHEMA_PARITY_NODE`; local runs otherwise use `node` from PATH. The check
+rejects stale fixture output when the Node matcher or bounded domain changes.
 The test copies `unchanged.db` into a disposable directory and clears its
 imported-path filter there. It supplies inventory, manifests, and artifact
 bytes in memory. The fixture owner shuts down and removes the disposable directory, including
