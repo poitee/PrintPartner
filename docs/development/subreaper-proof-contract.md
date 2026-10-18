@@ -49,7 +49,8 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; N filtered out; fini
 
 `N` and `T` are placeholders in this illustration.
 The validator requires the exact summary prefix through `0 measured; ` and the separator ` filtered out; finished in `.
-It parses `N` as `usize`. It does not validate `T`, including its duration or unit.
+It parses `N` as `usize` without comparing it with an expected filtered count.
+It does not validate `T`, including its duration or unit.
 Whitespace-only lines are not empty lines and therefore count toward the three-line requirement.
 The test name and result line must match exactly.
 The `--format=pretty` and `--color=never` flags are part of this text contract.
@@ -59,7 +60,7 @@ The failure messages distinguish the following cases:
 
 - An unsuccessful child status returns `isolated subreaper fixture failed`.
 - Invalid UTF-8 returns `isolated subreaper fixture output is not UTF-8`.
-- A line-count, name, result, summary, or filtered-count mismatch returns `isolated subreaper fixture did not pass exactly once`.
+- A line-count, name, result, or summary-format mismatch, or a filtered count that cannot parse as `usize`, returns `isolated subreaper fixture did not pass exactly once`.
 
 Both successful-launch callers assert that validation returns `Ok(())` and include the child `Output` in the assertion diagnostic.
 A toolchain change to the checked wording therefore fails the parent test loudly.
