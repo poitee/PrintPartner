@@ -46,10 +46,14 @@ if (process.argv.includes("--probe")) {
   const { createSelfHostPorts } = await import(pathToFileURL(join(root, "web/apps/server/src/adapters/self-host/index.ts")).href);
   const { loadConfig } = await import(pathToFileURL(join(root, "web/apps/server/src/config.ts")).href);
   const directory = mkdtempSync(join(tmpdir(), "pp-auth-reset-complete-"));
+  const ports = createSelfHostPorts(directory);
   try {
     const config = {
       ...loadConfig(),
       dataDir: directory,
+      deployMode: "self-host",
+      saasAllowAnonymous: false,
+      saasBasicAuth: null,
       multiUser: true,
       singleUserAuth: false,
       authRequired: true,
@@ -60,7 +64,6 @@ if (process.argv.includes("--probe")) {
       smtpConfigured: false,
       passwordResetDevExpose: true,
     };
-    const ports = createSelfHostPorts(directory);
     await ports.db.connect();
     const app = await buildApp(config, ports);
     const db = new Database(join(directory, "print-partner.db"));
@@ -111,12 +114,19 @@ if (process.argv.includes("--probe")) {
     await app.close();
     writeFileSync(process.argv.at(-1), JSON.stringify(observations));
   } finally {
+    await ports.db.close();
     rmSync(directory, { recursive: true, force: true });
   }
   process.exit(0);
 }
 
 const tsx = join(root, "web/node_modules/tsx/dist/esm/index.mjs");
+// Only platform variables pass through, so DEPLOY_MODE, SAAS_*, SMTP_* and
+// desktop mapping in the caller's shell cannot change the golden.
+const probeEnv = { NODE_ENV: "test" };
+for (const key of ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SystemRoot", "USERPROFILE"]) {
+  if (process.env[key] !== undefined) probeEnv[key] = process.env[key];
+}
 const scratch = mkdtempSync(join(tmpdir(), "pp-auth-reset-complete-out-"));
 let observations;
 try {
@@ -125,7 +135,7 @@ try {
   execFileSync(
     process.execPath,
     ["--conditions=development", "--import", pathToFileURL(tsx).href, fileURLToPath(import.meta.url), "--probe", result],
-    { cwd: join(root, "web/apps/server"), stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, NODE_ENV: "test" } },
+    { cwd: join(root, "web/apps/server"), stdio: ["ignore", "ignore", "inherit"], env: probeEnv },
   );
   observations = JSON.parse(readFileSync(result, "utf8"));
 } finally {
