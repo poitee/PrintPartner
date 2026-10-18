@@ -187,8 +187,6 @@ fn line_end(chars: &[char], start: usize, budget: &PreparationBudget<'_>) -> Rea
 
 struct FlowProperty {
     line: usize,
-    // Output length after the property, where an empty node ends.
-    end: usize,
     // A `:` after the empty node would separate it as a mapping key.
     key: bool,
 }
@@ -440,9 +438,6 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 if !separator && !matches!(c, ',' | ']' | '}') {
                     return invalid();
                 }
-                // saphyr reads the empty node only when it ends on the property's line.
-                output.truncate(property.end);
-                output.push(' ');
                 shallow_flow = line_indent < flow_indent;
             }
             // js-yaml indents every other flow line at least to the collection.
@@ -498,7 +493,6 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             } else if !flow.is_empty() {
                 flow_property = Some(FlowProperty {
                     line: line_begin,
-                    end: output.len(),
                     key: flow_key,
                 });
             }
