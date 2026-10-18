@@ -1291,6 +1291,8 @@ fn refused_requests_write_nothing() {
 fn preparation_large_quantity_refusal_preserves_rows_and_files() {
     for quantity in [
         "9007199254740992",
+        "9007199254740993",
+        "1000000000000000128",
         "100000000000000000000",
         "1000000000000000000000",
     ] {
