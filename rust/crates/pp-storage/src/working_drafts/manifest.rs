@@ -297,12 +297,311 @@ fn union<E>(
         .into_iter()
         .chain(right.iter().cloned())
     {
-        charge(left.len())?;
-        if !left.contains(&s) {
+        let found = left.iter().position(|existing| *existing == s);
+        charge(found.map_or(left.len(), |index| index + 1))?;
+        if found.is_none() {
             left.push(s);
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod inspected_merge_tests {
+    use super::super::observation::PreparationLimits;
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    fn group() -> Group {
+        Group {
+            rule: "pick_one".into(),
+            label: None,
+            parts: vec![],
+            variants: vec![],
+            min: None,
+            max: None,
+        }
+    }
+
+    #[test]
+    fn early_group_matches_fit_inspected_work_grant() {
+        let mut target: Groups = (0..128)
+            .map(|i| {
+                (
+                    OptionGroupId(JsText::scalar(&format!("group-{i}"))),
+                    group(),
+                )
+            })
+            .collect();
+        let incoming = (0..4).map(|_| (target[0].0.clone(), group())).collect();
+        let cancelled = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                comparison_work: 4 + 128,
+                visits: 5,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        merge(&mut target, incoming, &mut budget).unwrap();
+        assert_eq!(target.len(), 128);
+        assert_eq!(target[0].0.0.as_scalar().as_deref(), Some("group-0"));
+    }
+
+    fn text(value: &str) -> ManifestText {
+        ManifestText(JsText::scalar(value))
+    }
+
+    fn variant(id: &str) -> Variant {
+        Variant {
+            id: VariantId(JsText::scalar(id)),
+            label: None,
+            parts: vec![],
+            excludes: vec![],
+        }
+    }
+
+    fn named_group(id: &str, group: Group) -> (OptionGroupId, Group) {
+        (OptionGroupId(JsText::scalar(id)), group)
+    }
+
+    fn assert_grants(target: Groups, incoming: Groups, expected: &[usize]) -> Groups {
+        use super::super::observation::Resource;
+
+        let mut actual = Vec::new();
+        let mut result = target.clone();
+        merge_with(&mut result, incoming.clone(), &mut |work| {
+            actual.push(work);
+            Ok::<_, ReadFailure>(())
+        })
+        .unwrap();
+        assert_eq!(actual, expected);
+
+        let work: usize = expected.iter().sum();
+        for (comparison_work, visits, refusal) in [
+            (work, expected.len(), None),
+            (work, expected.len() - 1, Some(Resource::Visits)),
+        ]
+        .into_iter()
+        .chain(
+            work.checked_sub(1)
+                .map(|under| (under, expected.len(), Some(Resource::ComparisonWork))),
+        ) {
+            let cancelled = AtomicBool::new(false);
+            let mut budget = PreparationBudget::new(
+                &cancelled,
+                PreparationLimits {
+                    comparison_work,
+                    visits,
+                    ..PreparationLimits::default()
+                },
+            )
+            .unwrap();
+            let outcome = merge(&mut target.clone(), incoming.clone(), &mut budget);
+            match refusal {
+                None => outcome.unwrap(),
+                Some(resource) => {
+                    let Err(ReadFailure::LimitExceeded(actual)) = outcome else {
+                        panic!("expected {resource:?}, got {outcome:?}");
+                    };
+                    assert_eq!(
+                        std::mem::discriminant(&actual),
+                        std::mem::discriminant(&resource)
+                    );
+                }
+            }
+        }
+
+        for stop in 0..expected.len() {
+            let mut calls = Vec::new();
+            let outcome = merge_with(&mut target.clone(), incoming.clone(), &mut |work| {
+                calls.push(work);
+                if calls.len() == stop + 1 {
+                    Err(ReadFailure::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(matches!(outcome, Err(ReadFailure::Cancelled)));
+            assert_eq!(calls, expected[..=stop]);
+
+            let cancelled = AtomicBool::new(false);
+            let mut budget =
+                PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+            budget.cancel_after_checks(stop * 2);
+            assert!(matches!(
+                merge(&mut target.clone(), incoming.clone(), &mut budget),
+                Err(ReadFailure::Cancelled)
+            ));
+        }
+        result
+    }
+
+    #[test]
+    fn group_lookup_boundaries_and_sort_order() {
+        let target = vec![
+            named_group("2", group()),
+            named_group("word", group()),
+            named_group("1", group()),
+        ];
+        for (key, charges, ids) in [
+            ("2", vec![1, 3], vec!["1", "2", "word"]),
+            ("1", vec![3, 3], vec!["1", "2", "word"]),
+            ("new", vec![3, 4], vec!["1", "2", "word", "new"]),
+        ] {
+            let result = assert_grants(target.clone(), vec![named_group(key, group())], &charges);
+            assert_eq!(
+                result
+                    .iter()
+                    .map(|(key, _)| key.0.as_scalar().unwrap())
+                    .collect::<Vec<_>>(),
+                ids
+            );
+        }
+        let result = assert_grants(target, vec![], &[3]);
+        assert_eq!(
+            result
+                .iter()
+                .map(|(key, _)| key.0.as_scalar().unwrap())
+                .collect::<Vec<_>>(),
+            ["1", "2", "word"]
+        );
+        let result = assert_grants(vec![], vec![named_group("new", group())], &[0, 1]);
+        assert_eq!(result[0].0.0.as_scalar().as_deref(), Some("new"));
+        assert!(assert_grants(vec![], vec![], &[0]).is_empty());
+    }
+
+    #[test]
+    fn variant_lookup_boundaries() {
+        for (id, inspected) in [("a", 1), ("c", 3), ("d", 3)] {
+            let mut prior = group();
+            prior.variants = vec![variant("a"), variant("b"), variant("c")];
+            let mut incoming = group();
+            let mut v = variant(id);
+            v.label = Some(text("incoming"));
+            incoming.variants.push(v);
+            let result = assert_grants(
+                vec![named_group("g", prior)],
+                vec![named_group("g", incoming)],
+                &[1, 0, 1, 2, inspected, 1],
+            );
+            let variants = &result[0].1.variants;
+            assert_eq!(
+                variants
+                    .iter()
+                    .map(|v| v.id.0.as_scalar().unwrap())
+                    .collect::<Vec<_>>(),
+                if id == "d" {
+                    vec!["a", "b", "c", "d"]
+                } else {
+                    vec!["a", "b", "c"]
+                }
+            );
+            assert_eq!(
+                variants
+                    .iter()
+                    .find(|v| v.id.0.as_scalar().as_deref() == Some(id))
+                    .unwrap()
+                    .label,
+                Some(text("incoming"))
+            );
+        }
+    }
+
+    #[test]
+    fn prior_variant_dedup_counts_matches_and_keeps_last_value_at_first_position() {
+        for (id, inspected) in [("a", 1), ("c", 3), ("d", 3)] {
+            let mut prior = group();
+            prior.variants = vec![variant("a"), variant("b"), variant("c")];
+            let mut last = variant(id);
+            last.label = Some(text("last"));
+            prior.variants.push(last);
+            let result = assert_grants(
+                vec![named_group("g", prior)],
+                vec![named_group("g", group())],
+                &[1, 0, 1, 2, inspected, 1],
+            );
+            let variants = &result[0].1.variants;
+            assert_eq!(
+                variants
+                    .iter()
+                    .map(|v| v.id.0.as_scalar().unwrap())
+                    .collect::<Vec<_>>(),
+                if id == "d" {
+                    vec!["a", "b", "c", "d"]
+                } else {
+                    vec!["a", "b", "c"]
+                }
+            );
+            assert_eq!(
+                variants
+                    .iter()
+                    .find(|v| v.id.0.as_scalar().as_deref() == Some(id))
+                    .unwrap()
+                    .label,
+                Some(text("last"))
+            );
+        }
+    }
+
+    #[test]
+    fn path_lookup_boundaries_preserve_union_order() {
+        for (path, inspected) in [("a", 1), ("c", 3), ("d", 3)] {
+            let mut prior = group();
+            prior.parts = vec![text("a"), text("b"), text("c")];
+            let mut incoming = group();
+            incoming.parts.push(text(path));
+            let result = assert_grants(
+                vec![named_group("g", prior)],
+                vec![named_group("g", incoming)],
+                &[1, 0, 1, 2, inspected, 1],
+            );
+            assert_eq!(
+                result[0].1.parts,
+                if path == "d" {
+                    vec![text("a"), text("b"), text("c"), text("d")]
+                } else {
+                    vec![text("a"), text("b"), text("c")]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn merge_preserves_node_precedence_and_variant_path_dedup() {
+        let mut prior = group();
+        prior.rule = "pick_any".into();
+        prior.label = Some(text("prior group"));
+        prior.min = Some(1);
+        let mut a = variant("a");
+        a.label = Some(text("prior variant"));
+        a.parts = vec![text("p"), text("p")];
+        a.excludes = vec![text("x"), text("x")];
+        prior.variants.push(a);
+        let mut incoming = group();
+        incoming.label = Some(text("incoming group"));
+        incoming.min = Some(2);
+        incoming.max = Some(3);
+        let mut a = variant("a");
+        a.label = Some(text("incoming variant"));
+        a.parts = vec![text("p"), text("q")];
+        a.excludes = vec![text("x"), text("y")];
+        incoming.variants = vec![a, variant("b")];
+        let result = assert_grants(
+            vec![named_group("g", prior)],
+            vec![named_group("g", incoming)],
+            &[1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1],
+        );
+        let prior = &result[0].1;
+        assert_eq!(prior.rule, "pick_any");
+        assert_eq!(prior.label, Some(text("prior group")));
+        assert_eq!((prior.min, prior.max), (Some(1), Some(3)));
+        assert_eq!(prior.variants[0].label, Some(text("prior variant")));
+        assert_eq!(prior.variants[0].parts, vec![text("p"), text("q")]);
+        assert_eq!(prior.variants[0].excludes, vec![text("x"), text("y")]);
+        assert_eq!(prior.variants[1].id.0.as_scalar().as_deref(), Some("b"));
+    }
 }
 /// Merges option groups as Node does. Preparation charges a visit for each group,
 /// variant, and path it merges and for the final sort, plus the entries each one
@@ -365,16 +664,18 @@ pub(crate) fn merge_with<E>(
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> Result<(), E> {
     for (key, g) in incoming {
-        charge(target.len())?;
-        if let Some((_, prior)) = target.iter_mut().find(|(k, _)| *k == key) {
+        let found = target.iter().position(|(k, _)| *k == key);
+        charge(found.map_or(target.len(), |index| index + 1))?;
+        if let Some(index) = found {
+            let prior = &mut target[index].1;
             let mut variants: Vec<Variant> = Vec::new();
             for variant in std::mem::take(&mut prior.variants) {
-                charge(variants.len())?;
-                if let Some(existing) = variants
-                    .iter_mut()
-                    .find(|existing| existing.id == variant.id)
-                {
-                    *existing = variant;
+                let found = variants
+                    .iter()
+                    .position(|existing| existing.id == variant.id);
+                charge(found.map_or(variants.len(), |index| index + 1))?;
+                if let Some(index) = found {
+                    variants[index] = variant;
                 } else {
                     variants.push(variant);
                 }
@@ -382,8 +683,10 @@ pub(crate) fn merge_with<E>(
             prior.variants = variants;
             union(&mut prior.parts, &g.parts, charge)?;
             for v in g.variants {
-                charge(prior.variants.len())?;
-                if let Some(p) = prior.variants.iter_mut().find(|p| p.id == v.id) {
+                let found = prior.variants.iter().position(|p| p.id == v.id);
+                charge(found.map_or(prior.variants.len(), |index| index + 1))?;
+                if let Some(index) = found {
+                    let p = &mut prior.variants[index];
                     union(&mut p.parts, &v.parts, charge)?;
                     union(&mut p.excludes, &v.excludes, charge)?;
                     if p.label.as_ref().is_none_or(|s| s.is_empty())
