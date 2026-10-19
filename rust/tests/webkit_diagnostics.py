@@ -72,12 +72,12 @@ Object.defineProperty(state, 'capturePreview', {value: (phase, element, selector
 }});
 for (const kind of ['click', 'pointerdown', 'pointerup']) {
   document.addEventListener(kind, e => {
-    try {
-      record(kind, {target: label(e.target), trusted: e.isTrusted, button: e.button,
-        phase: 'dispatch', pointer: {clientX: e.clientX, clientY: e.clientY,
-          pageX: e.pageX, pageY: e.pageY, screenX: e.screenX, screenY: e.screenY},
-        geometry: geometry(e.target)});
-    } catch (_) {}
+    const data = {target: label(e.target), trusted: e.isTrusted, button: e.button,
+      phase: 'dispatch', pointer: {clientX: e.clientX, clientY: e.clientY,
+        pageX: e.pageX, pageY: e.pageY, screenX: e.screenX, screenY: e.screenY}};
+    try { data.geometry = geometry(e.target); }
+    catch (error) { data.geometryError = text(error); }
+    record(kind, data);
   }, true);
 }
 const canvases = new WeakMap();

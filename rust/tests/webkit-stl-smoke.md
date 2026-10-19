@@ -41,7 +41,8 @@ Each geometry entry includes the following fields.
   `screenX`, and `screenY` without conversion.
 
 Installation and checkpoints catch diagnostic failures and report them to
-stderr. Dispatch capture catches its own failures. These diagnostics do not
+stderr. Dispatch capture retains the pointer record with `geometryError` if
+geometry collection fails. These diagnostics do not
 scroll, retry, replace the clicked element, or change smoke deadlines or pass
 criteria. Geometry reads and the two extra WebDriver script commands can affect
 timing. They cannot observe layout changes inside WebDriver between the last
