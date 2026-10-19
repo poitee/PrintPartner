@@ -719,8 +719,38 @@ pub(crate) fn execute(
             phase,
             policy,
         } => {
-            let mut job = jobs::claimed_job(&tx, &lease)?;
+            let mut job = match jobs::claimed_job(&tx, &lease) {
+                Ok(job) => job,
+                Err(error) if matches!(phase, Phase::Cleanup) => {
+                    let Some(job) = jobs::load(&tx, lease.job_id())? else {
+                        return Err(error);
+                    };
+                    ensure!(
+                        job.tenant == lease.tenant()
+                            && job.generation == lease.generation()
+                            && job.state.terminal()
+                            && job.fence.is_none()
+                            && job.worker.is_none(),
+                        "Stale attempt fence"
+                    );
+                    job
+                }
+                Err(error) => return Err(error),
+            };
             let mut op = bound(&tx, &job)?.ok_or_else(|| anyhow!("Missing import operation"))?;
+            let cleanup_retry = job.state.terminal();
+            if cleanup_retry {
+                ensure!(
+                    op.cleanup_settled
+                        && repeats_observation(
+                            &tx,
+                            &op,
+                            "cleanup",
+                            Observed::fenced(&job, &lease, &op),
+                        )?,
+                    "Stale attempt fence"
+                );
+            }
             crate::source_scan::require_live_reservation(
                 catalog_state,
                 &source_work,
@@ -731,14 +761,18 @@ pub(crate) fn execute(
             )?;
             if let Err(error) = jobs::revalidate_source_authority(&tx, &job, policy) {
                 let observed = Observed::fenced(&job, &lease, &op);
-                if jobs::commit_source_authority_refusal(&tx, &mut job, &error)? {
+                if !cleanup_retry && jobs::commit_source_authority_refusal(&tx, &mut job, &error)? {
                     record_observation(&tx, &mut op, "authority_refused", observed)?;
                     store(&tx, &op)?;
                     tx.commit()?;
                 }
                 return Err(error);
             }
-            advance(&tx, catalog_state, &lease, job, op, phase)?
+            if cleanup_retry {
+                op
+            } else {
+                advance(&tx, catalog_state, &lease, job, op, phase)?
+            }
         }
     };
     tx.commit()?;
@@ -798,6 +832,11 @@ fn advance(
         }
         Phase::Fail => {
             ensure!(op.receipt.is_none(), "Import already completed");
+            if matches!(op.state, State::Failed | State::Cancelled)
+                && repeats_observation(tx, &op, "failed", Observed::fenced(&job, lease, &op))?
+            {
+                return Ok(op);
+            }
             op.state = if job.cancel_requested {
                 State::Cancelled
             } else {
@@ -907,6 +946,40 @@ pub(crate) fn source_reserved(tx: &Transaction<'_>, tenant: &str, id: i64) -> Re
     Ok(tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM source_import_operations o JOIN source_import_quota q USING(tenant,operation_key) WHERE o.tenant=?1 AND o.source_id=?2 AND q.settled=0)",
         params![tenant, id],
+        |row| row.get(0),
+    )?)
+}
+
+fn repeats_observation(
+    tx: &Transaction<'_>,
+    op: &Operation,
+    phase: &str,
+    observed: Observed,
+) -> Result<bool> {
+    let Observed::Attempt {
+        job_id,
+        generation,
+        fence: Some(fence),
+        receipt,
+        cancel,
+    } = observed
+    else {
+        return Ok(false);
+    };
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_revision_observations WHERE tenant_id=?1 AND operation_key=?2 AND cursor=?3 AND phase=?4 AND job_id=?5 AND attempt_generation=?6 AND attempt_fence=?7 AND revision_id IS ?8 AND receipt_activated IS ?9 AND cancel_requested=?10)",
+        params![
+            op.tenant,
+            op.key,
+            op.observation_cursor,
+            phase,
+            job_id,
+            generation,
+            fence,
+            receipt.map(|(revision, _)| revision),
+            receipt.map(|(_, activated)| activated),
+            cancel,
+        ],
         |row| row.get(0),
     )?)
 }
