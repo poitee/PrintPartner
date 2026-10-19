@@ -5,12 +5,18 @@ import {
   type PlanFeatures,
 } from "@print-partner/contracts";
 
-export function spoolmanWorkflowAccess({ profileId, health, plan }: {
+type WorkflowAccessInput = {
   profileId: number | null | undefined;
   health: Pick<QueryState<HealthResponse>, "status" | "data"> | undefined;
   plan: Pick<QueryState<PlanFeatures>, "status" | "data" | "isInvalidated"> | undefined;
-}) {
-  const gated = Boolean(profileId != null && health?.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY));
+};
+
+export function spoolmanWorkflowGated({ profileId, health }: Pick<WorkflowAccessInput, "profileId" | "health">) {
+  return Boolean(profileId != null && health?.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY));
+}
+
+export function spoolmanWorkflowAccess({ profileId, health, plan }: WorkflowAccessInput) {
+  const gated = spoolmanWorkflowGated({ profileId, health });
   const allowed = !gated || (health?.status === "success" && health.data?.ok === true
     && plan?.status === "success" && !plan.isInvalidated
     && plan.data != null && plan.data.profile_id === profileId && plan.data.effective.spoolman.enabled);

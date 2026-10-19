@@ -91,6 +91,28 @@ beforeEach(() => {
 afterEach(() => { cleanup(); client.clear(); focusManager.setFocused(undefined); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Spoolman workflow access", () => {
+  it("fetches discovery once when a failed features query retries on mount", async () => {
+    client.setQueryData(queryKeys.health, { ok: true, capabilities });
+    await expect(client.fetchQuery({
+      queryKey: queryKeys.planFeatures(1),
+      queryFn: () => Promise.reject(new Error("offline")),
+    })).rejects.toThrow("offline");
+    const fetch = globalThis.fetch;
+    let finishFeatures: (response: Response) => void = () => {};
+    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => String(input).endsWith("/features")
+      ? new Promise<Response>((resolve) => { finishFeatures = resolve; }) : fetch(input)));
+
+    const { result } = renderHook(() => useFilamentCatalogQuery({ profileId: 1 }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    await act(async () => {
+      finishFeatures(new Response(JSON.stringify(features(1, true)), { headers: { "content-type": "application/json" } }));
+    });
+    await waitFor(() => expect(result.current.data?.spoolman_colors).toEqual(catalog.spoolman_colors));
+    expect(requests.filter((path) => path.startsWith("/filaments/catalog"))).toEqual([
+      "/filaments/catalog?profile_id=1",
+    ]);
+  });
+
   it("masks loaded spools while Plan features are pending, then reveals them when allowed", async () => {
     client.setQueryData(queryKeys.health, { ok: true, capabilities });
     const fetch = globalThis.fetch;

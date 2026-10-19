@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HealthResponse, PlanFeatures } from "@print-partner/contracts";
-import { spoolmanWorkflowAccess } from "../lib/spoolmanWorkflowAccess";
+import { spoolmanWorkflowAccess, spoolmanWorkflowGated } from "../lib/spoolmanWorkflowAccess";
 import { useHealthQuery } from "../queries/health";
 import { queryKeys } from "../queries/keys";
 import { usePlanFeaturesQuery } from "../queries/planFeatures";
@@ -9,12 +9,14 @@ import { usePlanFeaturesQuery } from "../queries/planFeatures";
 export function useSpoolmanWorkflowAccess(profileId: number | null | undefined) {
   const client = useQueryClient();
   const health = useHealthQuery();
+  const gated = spoolmanWorkflowGated({ profileId, health });
+  const plan = usePlanFeaturesQuery(profileId ?? 0, gated);
+  const planState = client.getQueryState(queryKeys.planFeatures(profileId ?? 0));
   const access = spoolmanWorkflowAccess({
     profileId,
     health,
-    plan: client.getQueryState<PlanFeatures>(queryKeys.planFeatures(profileId ?? 0)),
+    plan: { status: plan.status, data: plan.data, isInvalidated: planState?.isInvalidated ?? false },
   });
-  usePlanFeaturesQuery(profileId ?? 0, access.gated);
   const scope = useRef<{ profileId: typeof profileId } | null>(null);
 
   useLayoutEffect(() => {
