@@ -151,8 +151,19 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        self.owner.take().unwrap().shutdown().unwrap();
-        std::fs::remove_dir_all(&self.path).unwrap();
+        let shutdown = self.owner.take().map(WriterOwner::shutdown).transpose();
+        let removal = std::fs::remove_dir_all(&self.path);
+        if shutdown.is_err() || removal.is_err() {
+            let message = format!(
+                "manifest glob fixture cleanup failed: shutdown {shutdown:?}, remove directory {removal:?}"
+            );
+            if std::thread::panicking() {
+                let _ =
+                    std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("{message}\n"));
+            } else {
+                panic!("{message}");
+            }
+        }
     }
 }
 

@@ -78,6 +78,11 @@ for (const [name, mutate] of [
   });
 }
 
+const step = (w, name) => w.jobs.parity.steps.find(s => s.name === name);
+const prerequisites = 'Set up ephemeral Linux prerequisites';
+const rustSetup = 'Set up Rust on ephemeral runners';
+const hostedOnly = "runner.environment == 'self-hosted'";
+
 const modify = change => directory => {
   const workflow = YAML.parse(original);
   change(workflow);
@@ -132,6 +137,13 @@ for (const [name, change] of [
   ['step conditional always', w => { w.jobs.parity.steps[0].if = 'always() && false'; }],
   ['always step failure ignored', w => { w.jobs.parity.steps[0].if = 'always()'; w.jobs.parity.steps[0]['continue-on-error'] = true; }],
   ['step failure ignored', w => { w.jobs.parity.steps[0]['continue-on-error'] = true; }],
+  ['verification only on ephemeral runners', w => { step(w, 'Verify contracts and frozen corpus').if = hostedOnly; }],
+  ['hosted Rust install only on ephemeral runners', w => { step(w, 'Install pinned Rust checks').if = hostedOnly; }],
+  ['verification disguised as bootstrap', w => { step(w, prerequisites).run += ' && npm run contracts:verify'; }],
+  ['bootstrap failure ignored', w => { step(w, prerequisites)['continue-on-error'] = true; }],
+  ['bootstrap with another condition', w => { step(w, prerequisites).if = `${hostedOnly} && false`; }],
+  ['Rust bootstrap with another action', w => { step(w, rustSetup).uses = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'; }],
+  ['Rust bootstrap with another toolchain', w => { step(w, rustSetup).with.toolchain = 'stable'; }],
   ['verification removed', w => { w.jobs.parity.steps = w.jobs.parity.steps.filter(s => !s.run?.includes('npm run contracts:verify')); }],
 ]) {
   test(`event tree rejects disabled workflow ${name}`, t => {
@@ -142,6 +154,14 @@ for (const [name, change] of [
     assert.match(result.stderr, /INVALID_DESKTOP_TRIGGERS|DISABLED_DESKTOP_|MISSING_DESKTOP_VERIFICATION/);
   });
 }
+
+test('event tree limits runner conditions to the two bootstrap steps', t => {
+  const workflow = YAML.parse(original);
+  const conditioned = workflow.jobs.parity.steps.filter(s => s.if !== undefined && s.if !== 'always()');
+  assert.deepEqual(conditioned.map(s => [s.name, s.if]), [[prerequisites, hostedOnly], [rustSetup, hostedOnly]]);
+  const result = fixture(t).run();
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test('event tree accepts always-run steps that propagate failure', t => {
   const f = fixture(t, modify(w => {
