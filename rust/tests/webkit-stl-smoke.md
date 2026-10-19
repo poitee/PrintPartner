@@ -24,11 +24,11 @@ separate runner GLX probe. The viewer's `getContext` entries are the evidence
 for its actual renderer. Driver stderr goes to `verify.log` through `2>&1 | tee`.
 `desktop-driver.log` retains driver stdout.
 
-Run the disposable fixture checks locally with the shared build slot.
+Run the disposable fixture checks from the repository root. On shared hosts,
+acquire the host build slot first.
 
 ```sh
-python3 /persist/home/.agents/skills/landing/scripts/land.py slot -- \
-  dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' \
+dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' \
   env LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 \
   python3 rust/tests/test_webkit_diagnostics.py -v
 ```
