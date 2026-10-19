@@ -117,11 +117,15 @@ export async function applyColorPreset(
   },
 ): Promise<number> {
   const roles = options?.allowSpoolman && !options.allowSpoolman()
-    ? preset.roles.map((role) => ({
-        ...role,
-        filament_color_id: hasSpoolmanAssignment({ filament_color_id: role.filament_color_id }) ? null : role.filament_color_id,
-        spoolman_spool_id: null,
-      })).filter((role) => role.filament_color_id || role.filament_custom_hex)
+    ? preset.roles.flatMap((role) => {
+        const stripped = {
+          ...role,
+          filament_color_id: hasSpoolmanAssignment({ filament_color_id: role.filament_color_id }) ? null : role.filament_color_id,
+          spoolman_spool_id: null,
+        };
+        return hasSpoolmanAssignment(role) && !stripped.filament_color_id && !stripped.filament_custom_hex
+          ? [] : [stripped];
+      })
     : preset.roles;
 
   let applied = 0;

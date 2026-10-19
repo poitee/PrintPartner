@@ -446,7 +446,8 @@ for (const [filename, name, code, optional, major = 22] of [
   ['desktop-webkit.yml', 'webkit-stl', 'WEBKIT', false, 24],
 ]) {
   const source = () => ({ jobs: { [name]: {
-    ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" } : {}),
+    ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" }
+      : ['E2E', 'WEBKIT'].includes(code) ? { if: "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')" } : {}),
     steps: JSON.parse(JSON.stringify(webCI.jobs.web.steps).replaceAll('22.23.3', `${major}.23.3`)),
   } } });
   for (const extension of ['yml', 'yaml', 'YML']) {
@@ -470,7 +471,7 @@ for (const [filename, name, code, optional, major = 22] of [
     ['renamed lane', data => { data.jobs.other = data.jobs[name]; delete data.jobs[name]; }, `INVALID_${code}_NODE_SETUP`],
     ['matrix override', data => { data.jobs[name].strategy = { matrix: { node: ['22'] } }; }, `INVALID_${code}_NODE_SETUP`],
     ['tolerated lane', data => { data.jobs[name]['continue-on-error'] = true; }, `INVALID_${code}_NODE_SETUP`],
-    ...(optional ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
+    ...((optional || ['E2E', 'WEBKIT'].includes(code)) ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
       `unexpected smoke condition ${condition}`, data => {
         if (condition === undefined) delete data.jobs[name].if;
         else data.jobs[name].if = condition;
