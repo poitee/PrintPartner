@@ -10,13 +10,15 @@ python3 scripts/cache_census/census.py compare /tmp/cache-before.json /tmp/cache
 python3 -m unittest discover -s scripts/cache_census -p 'test_*.py' -v
 ```
 
-All reports use JSON. Capture writes to stdout unless `--output` is supplied. Use `--output` to publish a complete snapshot atomically. Existing files are never overwritten. Output files use the temporary file's private permissions; publication does not guarantee durability across a system crash. API failures, malformed entries, duplicate IDs, changing counts, and incomplete pagination exit nonzero without a snapshot. Shell redirection can still create an empty file before the command runs.
+All reports use JSON. Capture writes to stdout unless `--output` is supplied. Use `--output` to publish a complete snapshot atomically. Existing files are never overwritten. `--output` requires a filesystem with hardlink support. On filesystems without hardlinks, omit `--output` and use stdout. Output files use the temporary file's private permissions; publication does not guarantee durability across a system crash. API failures, malformed entries, duplicate IDs, changing counts, and incomplete pagination exit nonzero without a snapshot. Shell redirection can still create an empty file before the command runs.
 
 Capture calls only `gh api --method GET --hostname github.com repos/OWNER/REPO/actions/caches` with `per_page=100`, ascending creation time, `--paginate`, and `--slurp`. It never changes caches, repository settings, workflows, or schedules. See the [cache API reference](https://docs.github.com/en/rest/actions/cache#list-github-actions-caches-for-a-repository) and [gh api reference](https://cli.github.com/manual/gh_api).
 
 ## Snapshot and reports
 
-Schema version 1 contains `repository`, `collection_started_at`, `collection_finished_at`, `entries`, and `api`. Collection timestamps use UTC. `entries` maps decimal cache IDs to `id`, `key`, `ref`, `version`, `size_in_bytes`, `created_at`, and `last_accessed_at`. `api` records `per_page` and each page's ordinal, `total_count`, and observed `entries_count`. Loading saved snapshots revalidates these fields and counts.
+Schema version 1 contains `repository`, `collection_started_at`, `collection_finished_at`, `entries`, and `api`. Collection timestamps use UTC. `entries` maps decimal cache IDs to `id`, `key`, `ref`, `version`, `size_in_bytes`, `created_at`, and `last_accessed_at`. `api` records `per_page` and each page's ordinal, `total_count`, and observed `entries_count`. Loading saved snapshots revalidates these fields and counts. Repository names composed only of dots are rejected.
+
+Timestamp validation accepts fractional seconds of any length on Python 3.10 and newer. Comparisons use microsecond resolution: shorter fractions are padded with zeros, and digits beyond six are truncated. Timestamps that differ only beyond six digits compare as equal, so they cannot establish strictly nonoverlapping collection windows. Snapshots and reports preserve the original timestamp strings.
 
 Summary totals entries and bytes by exact key, ref, key/ref pair, and key family. Family matching uses these prefixes, and unrecognized keys remain in `other`:
 

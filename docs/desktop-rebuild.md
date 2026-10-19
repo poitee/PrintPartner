@@ -1806,8 +1806,12 @@ Cancel, a worker `Fail` and a revoked original credential halt the batch. Pendin
 targets become not-run. A claimed target is kept for reconciliation, and the Job
 becomes `reconciliation_required`. Otherwise the Job is cancelled or failed. A
 revoked credential records a Source-writer refusal. Until D18 (b), a claimed
-target cannot be settled. Until D18 (c), generic Finish and effects are still
-accepted for Sync.
+target cannot be settled. GRE-854 rejects generic `Finish`, `FinishPublic`,
+`BeginEffect` and `ConfirmEffect` for Sync before authority revalidation.
+These calls leave the Job, batch, target, history and Source reservation unchanged.
+Heartbeat and progress updates remain available, and worker `Fail` still halts
+the batch. Non-Sync jobs and builds without `desktop_rebuild` keep their existing
+generic worker behavior. Target settlement remains in GRE-775 and GRE-776.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
@@ -1830,11 +1834,19 @@ job over a missing id and a Local Source. The Rust test asserts the target order
 and Node's literal failure. Node has no durable batch, Source reservation or
 authority check. The claim-before-open, restart-recovery and ordinal tests adapt
 the reference `pp-core/tests/source_sync_local.rs` cases. The halt, refusal,
-busy-Source and bridge tests are new.
+busy-Source and bridge tests are new. The generic-worker regression checks every
+effect kind and both Finish APIs after a target claim, with the original session
+valid and revoked. It compares database snapshots and verifies that the same
+Source reservation still prevents other work.
+The non-Sync regression confirms that generic effects and Finish still work.
 
 ```sh
 node fixtures/parity/source-sync/generate.mjs --check
+umask 022
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test job_feature_admission
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --test durable_jobs
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test durable_jobs
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests
