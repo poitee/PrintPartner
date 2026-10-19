@@ -40,6 +40,7 @@ pub(super) enum Boundary {
     FileSync,
     Recheck,
     Rename,
+    HardLink,
     DirectorySync,
 }
 
@@ -86,6 +87,7 @@ pub(super) fn publish_with(
             std::fs::rename(&temporary, owner.data_dir().join(name))?;
         } else {
             std::fs::hard_link(&temporary, owner.data_dir().join(name))?;
+            boundary(Boundary::HardLink)?;
         }
         Ok(())
     })();
