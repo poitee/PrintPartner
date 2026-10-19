@@ -613,6 +613,7 @@ class ParserTests(unittest.TestCase):
             script = (
                 'import os,sys,time\n'
                 'heartbeat=sys.argv[1]\n'
+                'time.sleep(0.75)\n'  # Startup deliberately exceeds the probe deadline.
                 'parent_pid=os.getpid()\n'
                 'pid=os.fork()\n'
                 'if pid:\n'
@@ -630,17 +631,36 @@ class ParserTests(unittest.TestCase):
                 'os.close(fd)\n'
                 'os._exit(0)\n'
             )
+            popen = subprocess.Popen
+            started = None
+
+            def ready_popen(*args, **kwargs):
+                nonlocal started
+                process = popen(*args, **kwargs)
+                startup_deadline = time.monotonic() + 10
+                while not (heartbeat.exists() and heartbeat.stat().st_size):
+                    if time.monotonic() >= startup_deadline:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        stdout, stderr = process.communicate(timeout=1)
+                        self.fail(f'Heartbeat fixture did not start: {stdout!r} {stderr!r}')
+                    time.sleep(0.01)
+                started = time.monotonic()
+                return process
+
             group_pid = None
             descendant_pid = None
             cleanup_complete = False
             try:
-                started = time.monotonic()
-                capture = run_bundle_probe(
-                    [sys.executable, '-c', script, str(heartbeat)],
-                    cwd=pathlib.Path.cwd(),
-                    env=os.environ.copy(),
-                    timeout_seconds=0.5,
-                )
+                with patch.object(subprocess, 'Popen', side_effect=ready_popen):
+                    capture = run_bundle_probe(
+                        [sys.executable, '-c', script, str(heartbeat)],
+                        cwd=pathlib.Path.cwd(),
+                        env=os.environ.copy(),
+                        timeout_seconds=0.5,
+                    )
                 elapsed = time.monotonic() - started
                 group_pid, descendant_pid = map(int, capture.stdout.split())
                 heartbeats = [float(value) for value in heartbeat.read_text().splitlines()]
