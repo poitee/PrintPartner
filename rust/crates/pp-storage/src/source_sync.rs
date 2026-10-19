@@ -173,14 +173,21 @@ fn validate_basis(tx: &Transaction<'_>, job: &JobRecord) -> Result<Vec<i64>> {
 
 /// Seals the batch's targets on first open. A later attempt revalidates the
 /// sealed basis and returns earlier attempts' unsettled claims to pending.
+/// A recognized authority refusal is returned for reporting after commit.
 pub(crate) fn open(
     tx: &Transaction<'_>,
     lease: &AttemptLease,
     policy: crate::auth::AuthPolicy,
-) -> Result<()> {
-    let job = require_sync_job(tx, lease)?;
+) -> Result<Option<anyhow::Error>> {
+    let mut job = require_sync_job(tx, lease)?;
     ensure!(!job.cancel_requested, "Sync was cancelled");
-    crate::jobs::require_original_authority(tx, &job, policy)?;
+    if let Err(error) = crate::jobs::require_original_authority(tx, &job, policy) {
+        if !crate::jobs::set_sync_source_writer_authority_refusal(&mut job, &error) {
+            return Err(error);
+        }
+        halt_job(tx, job, "authority_refused", &format!("{error:#}"))?;
+        return Ok(Some(error));
+    }
     let opened: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM source_sync_batches WHERE job_id=?1)",
         [&job.job_id],
@@ -192,7 +199,7 @@ pub(crate) fn open(
             "UPDATE source_sync_targets SET state='pending',parent_generation=NULL,attempt_worker=NULL,attempt_fence_digest=NULL,reservation_incarnation=NULL,reservation_token=NULL,configuration_version=NULL,authority_actor=NULL,authority_basis_digest=NULL,activation_observation_digest=NULL,path_observation_digest=NULL,updated_at=?2 WHERE job_id=?1 AND state='claimed' AND parent_generation<>?3 AND result_json IS NULL AND failure_code IS NULL",
             params![job.job_id, now(), job.generation],
         )?;
-        return Ok(());
+        return Ok(None);
     }
     let (selection_kind, source_ids) = match selected(&job.payload)? {
         Some(ids) => ("explicit", ids),
@@ -223,7 +230,7 @@ pub(crate) fn open(
             params![job.job_id, i64::try_from(ordinal)?, source_id, job.tenant, now()],
         )?;
     }
-    Ok(())
+    Ok(None)
 }
 
 fn progress(tx: &Transaction<'_>, job_id: &str) -> Result<u8> {

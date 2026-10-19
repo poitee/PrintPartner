@@ -766,6 +766,14 @@ fn open_and_advance_authority_refusals_preserve_claimed_target_evidence() {
             ]
         );
         if !at_open {
+            sync.login();
+            sync.catalog = sync
+                .owner
+                .source_catalog_with_policy(
+                    catalog::Credentials::Session(auth::Secret::new(sync.token.clone())),
+                    policy(),
+                )
+                .unwrap();
             let busy = sync.begin_work(first).err().unwrap();
             assert!(busy.downcast_ref::<SourceBusy>().is_some());
         }
@@ -895,7 +903,7 @@ fn assert_refusal_survives_reopen(sync: Fixture, job_id: &str) {
 }
 
 #[test]
-fn cancel_closes_an_open_batch_after_worker_advance_refusal() {
+fn cancel_preserves_a_batch_halted_by_worker_advance_refusal() {
     let mut sync = Fixture::new();
     let id = sync.source("Pending");
     let job_id = sync.enqueue(Some(vec![id as u64]));
@@ -934,16 +942,19 @@ fn cancel_closes_an_open_batch_after_worker_advance_refusal() {
     assert_eq!(refused.state, PersistentState::ReconciliationRequired);
     assert_eq!(
         refused.authority_refusal.as_ref().unwrap().phase,
-        AuthorityRefusalPhase::WorkerAdvance
+        AuthorityRefusalPhase::SourceWriter
     );
-    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
     sync.login();
     let cancelled = sync.user(UserOperation::Cancel {
         job_id: job_id.clone(),
     });
     assert!(cancelled.cancel_requested);
     assert_eq!(cancelled.state, PersistentState::ReconciliationRequired);
-    assert_eq!(cancelled.generation, refused.generation + 1);
+    assert_eq!(cancelled.generation, refused.generation);
     assert_eq!(cancelled.authority_refusal, refused.authority_refusal);
     assert_eq!(
         sync.batch(&job_id),

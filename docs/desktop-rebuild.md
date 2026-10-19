@@ -1820,8 +1820,15 @@ remain unchanged.
 A second Cancel writes nothing. Repeating the same authority-refusal halt also
 writes nothing, including when the first halt failed the Job without a claim.
 The regression tests cancel twice and reopen storage to check the saved evidence.
-A worker-advance refusal can leave the batch open. Cancel still halts that batch
-and marks its pending targets not-run.
+GRE-855 applies the same Source-writer refusal and batch halt during
+`open_source_sync`, heartbeat, progress and worker `Fail`. A recognized refusal
+commits before returning its typed authority error. It fences the attempt even
+before a batch exists. An existing batch halts with pending targets marked
+not-run, or requires reconciliation when claims or retained effects remain.
+Open-time refusal preserves a prior attempt's claim evidence instead of resetting
+it to pending. Unrecognized errors still roll back. Tests reopen storage to check
+that the refusal, batch and target evidence persist. Cancel preserves a completed
+worker-advance halt and its refusal evidence.
 
 The reference schema numbers Source Sync 42 because its 41 validates manifest
 columns, which main does not have. Here the 40 to 41 step installs
