@@ -443,17 +443,17 @@ fn kit_charges_stored_json_to_the_preparation_budget() {
         depth,
         ..PreparationLimits::default()
     };
-    // Root, its key, the selections object, its surviving key, the array and "b".
+    // Root, its key, selections, both tool keys, "a", the array and "b".
     assert_eq!(
-        selection_json(&kit(raw(), &mut budget(limits(6, 3))).unwrap()),
+        selection_json(&kit(raw(), &mut budget(limits(8, 3))).unwrap()),
         r#"[["tool",["b"]]]"#
     );
     assert!(matches!(
-        kit(raw(), &mut budget(limits(5, 3))),
+        kit(raw(), &mut budget(limits(7, 3))),
         Err(ReadFailure::LimitExceeded(Resource::Nodes))
     ));
     assert!(matches!(
-        kit(raw(), &mut budget(limits(6, 2))),
+        kit(raw(), &mut budget(limits(8, 2))),
         Err(ReadFailure::LimitExceeded(Resource::Depth))
     ));
     let mut b = budget(PreparationLimits::default());
