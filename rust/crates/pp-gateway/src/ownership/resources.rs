@@ -69,6 +69,10 @@ enum ReviewedEntry {
     GetWorkflowHelp { resources: Vec<ResourceId> },
     #[serde(rename = "tool.check_hardware_interfaces")]
     CheckHardwareInterfaces { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_add_custom_filament")]
+    ProposeAddCustomFilament { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_create_build")]
+    ProposeCreateBuild { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -155,6 +159,14 @@ impl ReviewedEntry {
             }
             Self::CheckHardwareInterfaces { resources } => {
                 ("tool.check_hardware_interfaces", resources, BTreeSet::new())
+            }
+            Self::ProposeAddCustomFilament { resources } => (
+                "tool.propose_add_custom_filament",
+                resources,
+                BTreeSet::new(),
+            ),
+            Self::ProposeCreateBuild { resources } => {
+                ("tool.propose_create_build", resources, BTreeSet::new())
             }
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
@@ -388,6 +400,8 @@ impl Declarations {
             "tool.get_workflow_help",
             "tool.get_job_status",
             "tool.check_hardware_interfaces",
+            "tool.propose_add_custom_filament",
+            "tool.propose_create_build",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

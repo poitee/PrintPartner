@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AcceptedProfileProgress, AppRepository } from "../db/repository.js";
 import { loadFleet } from "../services/printer-fleet.js";
+import { probeFleetHostStatus } from "../services/printer-fleet-status.js";
 import type { IntegrationPort } from "../integrations/store.js";
 import {
   extractApiKey,
@@ -235,19 +236,9 @@ export async function registerMetricsRoutes(
           let idleCount = 0;
           let printingCount = 0;
 
-          if (deps.integrations) {
-            await Promise.allSettled(
-              fleet.map(async (m) => {
-                if (!m.integration_id) return;
-                try {
-                  const status = await deps.integrations!.getStatus(m.integration_id);
-                  if (status.state === "idle" || status.state === "complete") idleCount++;
-                  else if (status.state === "printing" || status.state === "paused") printingCount++;
-                } catch {
-                  // unreachable printer — skip
-                }
-              }),
-            );
+          for (const status of await probeFleetHostStatus(repo, deps.integrations, fleet)) {
+            if (status?.state === "idle" || status?.state === "complete") idleCount++;
+            else if (status?.state === "printing" || status?.state === "paused") printingCount++;
           }
 
           lines.push("# HELP printers_idle Number of printers currently idle");

@@ -41,6 +41,40 @@ cargo clippy --manifest-path rust/Cargo.toml --locked --workspace --all-targets 
 
 The Python proofs expect `/usr/bin/node` and the built server binary. They create fresh temporary directories and retain redacted receipts and databases for inspection. The local STL fixture is copied from the accepted Plate export baseline fixture. They never configure a printer or import production data. `runtime_m0` includes real Node children, actual 61-second bootstrap expiry, persisted-origin reuse, failed bind, wrong release, copied-artifact tampering, cleanup failure, Drop after caller runtime teardown and the crash guard. It needs the built Node server and React assets first.
 
+## Run pp-api health parity tests
+
+`cargo test -p pp-api` also runs a Node health snapshot freshness check.
+Use Node 22.x and npm 10 or later, as declared by `web/package.json`, and install
+the web workspace dependencies first. From the repository root:
+
+```sh
+npm --prefix web ci
+"${PP_TEST_NODE:-node}" --conditions=development fixtures/parity/auth-health/generate.mjs --check
+CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_health_parity
+CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_health_parity --features desktop_rebuild
+```
+
+The generator loads the registered Node handlers through `tsx` and uses native
+SQLite modules from the web installation. Keep the Node runtime used for
+`npm ci` and the tests consistent. If `node` on PATH differs, export `PP_TEST_NODE`
+as that runtime's executable before running the checks above. The standalone
+check and Rust commands both honor this selection. This suite needs no web
+build or desktop bundle manifest. It uses temporary databases and test sessions.
+
+See the [health fixture contract](../fixtures/parity/auth-health/README.md) for
+intentional differences and the [release maintenance checks](../docs/release.md#check-health-parity-fixtures)
+for snapshot regeneration after version changes.
+
+The health test currently includes `pp-storage/tests/common/process.rs` through
+a cross-crate `#[path]`. That helper only wraps `std::process::Command::new`.
+A move or rename in pp-storage therefore also affects pp-api tests. A shared
+dev-dependency test-support crate would make that dependency explicit, but a
+new crate for this one-function helper adds little value today. Reassess that
+interface when the helper next changes or more crates need it, together with
+its callers and process-lint rules.
+
+## Runtime details
+
 The launcher takes `--data`, `--web`, `--node` and `--commit`. It prints only the clean origin. Automated fixtures may explicitly request `--test-credential-file` to receive the one-use bootstrap URL in a newly created 0600 file. Treat that file as a credential and delete it after use. The native shell takes the same launch capability directly from CoreRuntime. Its default store is `~/.print-partner`, reusing existing desktop data in place. Startup failures print allowlisted diagnostic codes and OS error numbers to stderr before showing the error dialog; arbitrary paths, URLs and backend error payloads are omitted.
 
 The persisted `desktop.toml` must be a readable regular file of at most 4096 bytes. CoreRuntime refuses symbolic links, including dangling links, and non-regular files before it starts Node. Missing configuration selects and atomically persists a loopback port. Corrupt configuration fails startup without replacing the configuration. Only an occupied valid saved port triggers recovery. CoreRuntime holds a new loopback listener while it durably replaces the saved port, before starting Node. `origin_change()` exposes immutable `OriginChange::PersistedPortInUse` disclosure with a credential-free display notice. Missing and reused origins carry no disclosure. Publication failure aborts startup and closes the selected listener. Failures before rename preserve the old bytes. Directory sync failure after rename can leave the complete new port file. The `ticket_t_12` core tests exercise the actual storage lease and listener, including FIFO admission in a bounded child process. This hardening uses the existing runtime path with either rebuild flag setting. Launcher integration with per-OS paths remains follow-up work.
