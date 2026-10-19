@@ -2,7 +2,12 @@
 
 The **Rust cross-OS** workflow (`.github/workflows/rust-cross-os.yml`) builds and tests the Rust workspace on Linux, macOS and Windows. It starts on every pull request, every push to `main`, merge groups, a nightly schedule and manual runs.
 
-On PRs, the jobs are selected as follows:
+Draft pull requests skip CI jobs before runner allocation, while each job still
+reports a skipped check. Marking a PR ready starts CI with the existing path and
+label filters. Converting it back to a draft cancels its older PR run. Main,
+merge groups, schedules and manual runs keep their existing behavior.
+
+On ready PRs, the jobs are selected as follows:
 
 - `rust (linux)` and `rust (windows)` run when a `changes` job finds a change to `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, `fixtures/**`, `scripts/setup-ci-linux.sh`, the workflow itself, or the CI filter script and its tests. Other changes skip both jobs while keeping their check reports present.
 - `rust (macos)` uses the same path selection. It runs only when relevant inputs change and the PR has the exact `macos` label and is not a draft. Adding or removing the label, marking the PR ready for review and converting it to a draft each start a new run.

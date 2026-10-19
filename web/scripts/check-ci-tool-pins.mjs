@@ -22,6 +22,8 @@ try {
   console.error('MISSING_PARSER: run npm ci --ignore-scripts in web/ before checking CI tool pins');
   process.exit(2);
 }
+const draftGuard = "github.event_name != 'pull_request' || !github.event.pull_request.draft";
+const draftPrefix = `(${draftGuard}) && (`;
 const desktopNodeLanes = [
   ['desktop-e2e', 'linux-smoke', 'E2E', 22],
   ['desktop-webkit', 'webkit-stl', 'WEBKIT', 24],
@@ -96,11 +98,14 @@ function checkNodeLanes(workflow, file, names, code = 'WEB', condition, major = 
   for (const name of names) {
     const path = `jobs.${name}`;
     const job = workflow.jobs[name];
+    const jobCondition = typeof job?.if === 'string' && job.if.startsWith(draftPrefix) && job.if.endsWith(')')
+      ? job.if.slice(draftPrefix.length, -1) : job?.if;
+    const hasCondition = Object.hasOwn(job ?? {}, 'if') && job.if !== draftGuard;
     const steps = Array.isArray(job?.steps) ? job.steps : [];
     const setups = steps.filter(step => mapping(step) && typeof step.uses === 'string'
       && step.uses.split('@')[0].toLowerCase() === 'actions/setup-node');
     if (!mapping(job) || ['strategy', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))
-      || (condition === undefined ? Object.hasOwn(job, 'if') : job.if !== condition)
+      || (condition === undefined ? hasCondition : jobCondition !== condition)
       || setups.length !== 1) {
       report(file, path, `INVALID_${code}_NODE_SETUP`, 'expected one setup-node step in each required lane with its permitted condition and without strategy or failure overrides');
       continue;

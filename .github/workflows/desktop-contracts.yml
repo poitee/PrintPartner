@@ -22,6 +22,7 @@ on:
       - "docs/adr/0006-autosave-text-contract.md"
       - ".github/workflows/desktop-contracts.yml"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "fixtures/http/routes-inventory.json"
       - "fixtures/parity/auth-login/**"
@@ -49,6 +50,7 @@ concurrency:
 
 jobs:
   parity:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 30 || 5 }}
     strategy:

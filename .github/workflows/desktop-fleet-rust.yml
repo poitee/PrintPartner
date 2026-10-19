@@ -4,6 +4,7 @@ name: Desktop Rust (hosted)
 # ast-grep ratchet, which reads Rust sources and the rules under rust/.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths: &fleet-paths
       - 'rust/**'
       - 'scripts/setup-ci-linux.sh'
@@ -24,7 +25,7 @@ concurrency:
 jobs:
   ast-grep:
     name: ast-grep ratchet
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:

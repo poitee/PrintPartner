@@ -28,6 +28,7 @@ defaults:
 
 jobs:
   changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -72,7 +73,7 @@ jobs:
   # so doomed commits never burn a macOS queue slot.
   linux-precheck:
     needs: changes
-    if: ${{ needs.changes.outputs.macos == 'true' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.changes.outputs.macos == 'true')
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
@@ -100,7 +101,7 @@ jobs:
 
   server-smoke:
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success')
     concurrency:
       group: native-macos-server-smoke-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -184,7 +185,7 @@ jobs:
     # Explicit architecture jobs keep both check names present even when skipped.
     name: bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success')
     concurrency:
       group: native-macos-bundle-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -373,7 +374,7 @@ jobs:
     name: bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...
     needs: [changes, linux-precheck]
     # Intel runs on every non-PR event, including merge groups.
-    if: ${{ !cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success')
     concurrency:
       group: native-macos-bundle-intel-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -393,7 +394,7 @@ jobs:
 
   macos-storage-gate:
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository))
     concurrency:
       group: native-macos-storage-gate-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -522,7 +523,7 @@ jobs:
 
   alert-macos-main:
     needs: [changes, linux-precheck, server-smoke, bundle, bundle-intel, macos-storage-gate]
-    if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (failure() && github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
