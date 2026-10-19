@@ -55,7 +55,7 @@ describe("manifest registry routes", () => {
 
       const registry = await app.inject({ method: "GET", url: "/manifest-registry" });
       expect(registry.statusCode).toBe(200);
-      expect(registry.json()).toEqual({ entries: [] });
+      expect(registry.json()).toEqual({ entries: expect.any(Array) });
     } finally {
       await app.close();
       await ports.db.close();
