@@ -1809,6 +1809,16 @@ revoked credential records a Source-writer refusal. Until D18 (b), a claimed
 target cannot be settled. Until D18 (c), generic Finish and effects are still
 accepted for Sync.
 
+GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
+Cancel marks the Job for cancellation during reconciliation. The refusal
+observation, target failure code and detail, recovery message, and generation
+remain unchanged.
+A second Cancel writes nothing. Repeating the same authority-refusal halt also
+writes nothing, including when the first halt failed the Job without a claim.
+The regression tests cancel twice and reopen storage to check the saved evidence.
+A worker-advance refusal can leave the batch open. Cancel still halts that batch
+and marks its pending targets not-run.
+
 The reference schema numbers Source Sync 42 because its 41 validates manifest
 columns, which main does not have. Here the 40 to 41 step installs
 `source_sync_batches` and `source_sync_targets` from `source_sync/schema.sql`,
@@ -1825,6 +1835,8 @@ busy-Source and bridge tests are new.
 ```sh
 node fixtures/parity/source-sync/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests
 ```
 
