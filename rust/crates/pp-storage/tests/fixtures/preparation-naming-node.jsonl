@@ -1,0 +1,5 @@
+{"name":"null-class","override":{"folder_rules":[{"path_contains":"frame","role_id":"primary","functional_class":null}]},"catalog":"invalid_state","error":"override.folder_rules.0.functional_class: Invalid option: expected one of \"functional\"|\"cosmetic\""}
+{"name":"blank-label","override":{"roles":[{"id":"accent"},{"id":"primary","label":" ﻿"}]},"catalog":"invalid_state","error":"override.roles.1.label: must not be blank"}
+{"name":"blank-folder","override":{"folder_rules":[{"path_contains":" ","role_id":"primary"}]},"catalog":"invalid_state","error":"override.folder_rules.0.path_contains: must not be blank"}
+{"name":"blank-regex","override":{"quantity":{"regex":" "}},"catalog":"invalid_state","error":"override.quantity.regex: must not be blank"}
+{"name":"missing-base","override":{},"catalog":"found","error":"Accepted Plan revision is missing"}
