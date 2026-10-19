@@ -121,6 +121,52 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    #[tokio::test(start_paused = true)]
+    async fn ticket_t_3_drain_coordinator_shares_one_deadline() {
+        use std::{future::Future, task::Poll};
+
+        let gate = ShutdownGate::new();
+        let work = gate.track().unwrap();
+        let bound = crate::MUTATION_DRAIN;
+        let slack = Duration::from_millis(10);
+        let started = tokio::time::Instant::now();
+        let drain = reject_and_wait(
+            bound,
+            &gate,
+            || {},
+            |bound| async move {
+                tokio::time::timeout(bound, std::future::pending::<()>())
+                    .await
+                    .is_ok()
+            },
+            || {},
+        );
+        tokio::pin!(drain);
+
+        assert!(
+            std::future::poll_fn(|cx| Poll::Ready(drain.as_mut().poll(cx)))
+                .await
+                .is_pending()
+        );
+        assert!(gate.track().is_err());
+        assert!(gate.cancellation().is_cancelled());
+        tokio::time::advance(bound - Duration::from_millis(1)).await;
+        assert!(
+            std::future::poll_fn(|cx| Poll::Ready(drain.as_mut().poll(cx)))
+                .await
+                .is_pending()
+        );
+
+        let outcome = tokio::time::timeout_at(started + bound + slack, drain)
+            .await
+            .expect("coordinator drains exceeded one shared deadline");
+        assert_eq!(outcome, (false, false));
+        let elapsed = started.elapsed();
+        assert!(elapsed >= bound);
+        assert!(elapsed <= bound + slack);
+        drop(work);
+    }
+
     #[tokio::test]
     async fn ticket_t_3_drain_rejects_gateway_before_tracked_idle() {
         let gate = ShutdownGate::new();
