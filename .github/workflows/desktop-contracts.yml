@@ -7,6 +7,7 @@ on:
     paths:
       - "fixtures/http/routes-inventory.json"
       - "fixtures/parity/auth-login/**"
+      - "fixtures/parity/auth-registration/**"
       - "rust/**"
       - "rust-toolchain.toml"
       - 'scripts/setup-ci-linux.sh'
@@ -24,6 +25,7 @@ on:
     paths:
       - "fixtures/http/routes-inventory.json"
       - "fixtures/parity/auth-login/**"
+      - "fixtures/parity/auth-registration/**"
       - "rust/**"
       - "rust-toolchain.toml"
       - 'scripts/setup-ci-linux.sh'
@@ -77,11 +79,12 @@ jobs:
         run: npm ci && npm rebuild better-sqlite3
       - name: Build authority packages
         run: npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain
-      - name: Verify auth refusal Node fixtures
+      - name: Verify auth Node fixtures
         run: |
           case "$(node --version)" in
             v22.*)
               node ../fixtures/parity/auth-login/generate.mjs --check
+              node ../fixtures/parity/auth-registration/generate.mjs --check
               ;;
           esac
       - name: Verify required-unit Node fixtures

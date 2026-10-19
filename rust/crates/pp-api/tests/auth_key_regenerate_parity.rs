@@ -384,15 +384,16 @@ async fn run_case(case: &Value, mutate: bool) {
         Some(body)
     } else {
         assert_safe(&body);
-        assert_eq!(
-            body,
-            json!({ "detail": "API key not found" }),
-            "Rust problem body"
-        );
-        assert_eq!(
-            body["detail"], entry["body"]["detail"],
-            "Node problem detail"
-        );
+        assert_eq!(body, entry["body"], "rotation problem body");
+        assert_eq!(body["status"], json!(status), "problem status field");
+        for field in ["title", "status"] {
+            let mut mutant = body.clone();
+            mutant.as_object_mut().unwrap().remove(field);
+            assert_ne!(mutant, entry["body"], "comparison ignores {field}");
+        }
+        let mut mutant = body.clone();
+        mutant["status"] = json!("404");
+        assert_ne!(mutant, entry["body"], "comparison ignores status type");
         None
     };
     assert_eq!(
@@ -417,6 +418,12 @@ async fn run_case(case: &Value, mutate: bool) {
         case["rotationEffects"],
         "raw setting changes"
     );
+    if new_key.is_none() {
+        assert_eq!(
+            stored_before, stored_after,
+            "failed rotation changed settings"
+        );
+    }
     for entry in transcript
         .iter()
         .skip_while(|entry| entry["id"] != "rotate")
