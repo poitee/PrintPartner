@@ -39,3 +39,4 @@ axum.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
+rusqlite.workspace = true
