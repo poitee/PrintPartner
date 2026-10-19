@@ -21,6 +21,8 @@ import urllib.error
 import urllib.request
 import urllib.parse
 
+from webkit_diagnostics import INSTALL, save_artifacts
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -599,7 +601,7 @@ def main():
         env['XDG_CACHE_HOME'] = str(Path(temporary) / 'xdg-cache')
         with (output / 'desktop-driver.log').open('w') as log:
             driver = subprocess.Popen(['WebKitWebDriver', f'--port={port}', '--host=127.0.0.1'],
-                                      env=env, stdout=log, stderr=log, start_new_session=True)
+                                      env=env, stdout=log, start_new_session=True)
 
             def command(path, body=None, method=None):
                 request = urllib.request.Request(base + path,
@@ -651,6 +653,7 @@ def main():
                 # Reload to populate the UI's initial cached Build list with the
                 # fixture; do not mutate React state or its query cache in the test.
                 command(f'/session/{session}/url', {'url': f'{origin}/plan?profile={seeded["plan_id"]}'})
+                execute(INSTALL)
                 selector = f'button[aria-label="Preview 3D model of {filename}"]'
                 element = wait_for(lambda: command(f'/session/{session}/elements',
                     {'using': 'css selector', 'value': selector}), 'Plan preview button')[0]
@@ -677,16 +680,12 @@ def main():
                     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                     'capabilities': result['capabilities'], 'fixture_sha256': hashlib.sha256(fixture).hexdigest(),
                     **seeded, **pixels}
+                save_artifacts(execute, None, output)
                 (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
                 print(json.dumps(receipt), flush=True)
             except Exception as error:
-                (output / 'failure.json').write_text(json.dumps({'error': str(error)}, indent=2) + '\n')
-                if session:
-                    try:
-                        (output / 'failure.png').write_bytes(base64.b64decode(command(f'/session/{session}/screenshot')))
-                        (output / 'failure-ui.txt').write_text(execute('return document.body.innerText;'))
-                    except Exception:
-                        pass
+                save_artifacts(execute,
+                    lambda: command(f'/session/{session}/screenshot'), output, error)
                 raise
             finally:
                 # WebDriver closes the window, but this app hides on close. Stop
