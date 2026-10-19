@@ -758,6 +758,9 @@ export async function registerPlanRoutes(
         detail: acceptedStateDetail(snapshot.kind),
       });
     }
+    if (snapshot.snapshot.profile.archivedAt) {
+      return sendAcceptedFilamentFailure(reply, { kind: "plan_archived" });
+    }
     const savedDefaults = loadRoleFilamentDefaults(deps.repo, id);
     const includedParts = snapshot.snapshot.parts.filter((part) => part.included);
     const includedRoles = new Set(includedParts.map((part) => normalizePartRole(part.effectiveRole)));

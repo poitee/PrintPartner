@@ -13,7 +13,9 @@ pub(crate) fn parse_builder_manifest(
 }
 
 pub(crate) fn merge_builder_groups(target: &mut BuilderGroups, incoming: BuilderGroups) {
-    super::manifest::merge(target, incoming)
+    let Ok(()) = super::manifest::merge_with(target, incoming, &mut |_| {
+        Ok::<_, std::convert::Infallible>(())
+    });
 }
 
 pub(crate) type BuilderHint = super::manifest::HintRule;
