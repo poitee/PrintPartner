@@ -600,10 +600,12 @@ fn inferred(
                         max: None,
                     },
                 )],
-            );
+                b,
+            )?;
         }
     }
-    manifest::merge(&mut groups, manifest::infer_siblings(paths, b)?);
+    let siblings = manifest::infer_siblings(paths, b)?;
+    manifest::merge(&mut groups, siblings, b)?;
     Ok(groups)
 }
 pub(super) fn prepare(
@@ -847,7 +849,7 @@ pub(super) fn prepare(
         } else {
             declared
         };
-        manifest::merge(&mut groups, resolved);
+        manifest::merge(&mut groups, resolved, b)?;
     }
     let manifest_sources = connection.read(|tx| source_rows(tx, tenant, profile))?;
     let mut docs = Vec::new();

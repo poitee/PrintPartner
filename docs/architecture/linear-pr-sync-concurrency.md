@@ -9,11 +9,12 @@ Run the diagnostics and existing tests locally:
 
 ```sh
 python3 -B scripts/linear/reproduce_concurrent_writes.py -v
+python3 -B scripts/linear/reproduce_reference_recovery.py -v
 python3 -B -m unittest discover -s scripts/linear -p 'test_*.py' -v
 ```
 
-The diagnostics reproduce their asserted outcomes, and the existing suite
-passes. Diagnostic success confirms the unsafe outcomes and the independence
+The four concurrency diagnostics, six recovery diagnostics, and ordinary tests
+pass. Diagnostic success confirms the unsafe outcomes and the independence
 control, not prevention. The diagnostics stay outside ordinary `test_*.py`
 discovery so that future regression tests do not require preserving these bugs.
 
@@ -72,23 +73,56 @@ worker, a pending removal event for GRE-1, and then a reconcile worker that
 replaces the removal job. The surviving worker cannot recover that removal's
 provenance from current PR snapshots.
 
-Possible recovery paths have different commitments:
+## Historical recovery decision
 
-- An aggregate worker can move In Review issues with no current open PR to
-  In Progress, using a generic explanation when removal provenance is missing.
-  This changes behavior for manually placed In Review issues without PRs.
-- Historical recovery may preserve event-specific behavior without new storage.
-  GitHub exposes PR [userContentEdits](https://docs.github.com/en/graphql/reference/pulls)
-  and title [RenamedTitleEvent](https://docs.github.com/en/graphql/reference/issues)
-  records.
-  Existing `[pr-status-sync] PR #N open` Linear comments also identify prior
-  references. Their completeness must be verified before relying on them.
-  [GitHub allows deletion of edit-history content and limits retained edits](https://docs.github.com/en/communities/moderating-comments-and-conversations/tracking-changes-in-a-comment).
-  Sync comments are not a complete ledger either, because `move()` skips them
-  when the issue already has the target state.
-- Retaining removed-reference deltas before replaceable processing can preserve
-  event-specific behavior even when history is unavailable. A new storage
-  service or write permission must be explicitly approved if needed.
+`reproduce_reference_recovery.py` adds six fake-only diagnostics through production
+`apply_event()`, `move()`, and `reconcile()`. It reuses the fake Linear store and
+isolated production-module loader from the concurrency diagnostic. Network and
+process execution are forbidden. The issue's update is one hour old, below the
+48-hour stall threshold, so the stall sweep cannot obscure the removal result.
+
+The controlled outcomes are:
+
+- An OPEN PR with `Refs GRE-1` only in its body creates no comment or state write
+  when GRE-1 is already In Review. The title and branch contain no reference.
+- Retaining the edited event's previous body moves GRE-1 to In Progress and
+  creates exactly `[pr-status-sync] PR #1 removed its reference; no other open PR.`
+- Replacing that pending removal with reconciliation leaves GRE-1 In Review
+  with no comment or state write. This models the successor running alone,
+  rather than executing an Actions scheduler.
+- Two modeled histories have the same current PR, empty title-rename history,
+  unavailable body-edit content with equal surviving metadata, Linear issue,
+  and empty Linear comments. One old body says `Refs GRE-1`. The other has no
+  reference. Replaying their retained events proves that only the first needs
+  the removal transition and explanation.
+- Another current open PR referencing GRE-1 preserves In Review after removal.
+  A manually In Review issue with no past reference also stays In Review.
+
+GitHub documents [UserContentEdit](https://docs.github.com/en/graphql/reference/users#usercontentedit)
+with deletion metadata and a nullable diff summary.
+[RenamedTitleEvent](https://docs.github.com/en/graphql/reference/issues#renamedtitleevent)
+records previous and current titles. Body-only edits leave the title unchanged,
+so title renames cannot recover the missing body reference in this case.
+GitHub also documents that [deleting revision content leaves edit metadata visible](https://docs.github.com/en/communities/moderating-comments-and-conversations/tracking-changes-in-a-comment).
+
+The indistinguishable-history fixture models allowed history deletion. It does
+not validate a live GitHub response, parse GitHub diff strings, or prove live
+history completeness. Live GraphQL introspection was attempted during this
+investigation, but the GraphQL quota was exhausted. No successful live history
+inspection supports this decision.
+
+Preserved history and existing sync comments may help recovery. They cannot
+guarantee removed-reference provenance when revision content is deleted and
+`move()` has omitted an unchanged-state comment. The two histories require
+different behavior from identical available evidence. An aggregate rule that
+moves every In Review issue without an open PR would violate the manual-state
+control and is excluded from this slice.
+
+Escalate durable event retention and any required storage permissions, or a
+compatible bounded queue with an explicit overflow policy, before per-issue
+rollout. Retention must preserve removal deltas before replaceable processing.
+
+## Queue and rollout constraints
 
 GitHub also documents `queue: max`, which retains up to 100 pending jobs per
 group. A local syntax-only fixture with this property fails the repository's
@@ -107,29 +141,81 @@ process lock cannot coordinate the hosted runners. Linear comments used as
 leases would need unverified write semantics and cannot fence delayed
 `issueUpdate` requests. None of these alternatives was applied.
 
-## Escalation and next slice
+## Local retained-event inbox candidate
 
-Assess historical recovery before deciding whether an aggregate
-orphaned-In-Review rule is acceptable or removal deltas need durable retention.
-Then implement the per-issue writer with bounded fanout, queue handling, and a
-rollout plan. Reuse these interleavings as regression tests that assert Done and
-In Review are preserved and exactly one comment is created.
+`scripts/linear/event_inbox.py` is a stdlib-only SQLite candidate for local
+experiments. It is not an approved production storage backend or product
+decision. No production script imports it, and no workflow uses it.
+
+`EventInbox` stores one immutable byte payload per delivery ID and separate
+pending issue destinations. The caller supplies the complete original PR
+snapshot and event, including `changes.title.from` and `changes.body.from` when
+present, and supplies the discovered issue IDs. The inbox treats payload bytes
+as opaque. It does not validate completeness, reconstruct history, discover
+references, or invent provenance. Tests encode `{"pr": snapshot, "event": event}`
+and pass the decoded values to production `apply_event()` against the existing
+fake Linear store. Retained body removal produces the exact removal comment and
+In Progress. Another open PR and manual In Review without past provenance both
+preserve In Review. A failed fake update leaves the delivery pending for retry.
+
+All four bounds are required positive integers. They limit unique issue fanout
+per event, pending deliveries per issue, global pending deliveries, and payload
+bytes per event. Every connection verifies the same persisted bounds, even after
+the queue empties. Event IDs contain 1 to 128 ASCII letters, digits, dots,
+underscores, colons, or hyphens. Issue IDs contain 1 to 64 ASCII letters, digits,
+underscores, or hyphens. Both start with a letter or digit. These opaque token
+formats accept ticket identifiers and UUIDs without duplicating reference
+parsing. The token sizes and fanout bound also constrain retained metadata.
+Logical retained rows and bytes are bounded. SQLite file overhead and allocated
+pages are not a strict disk quota, and deletion does not promise file shrinkage.
+
+`enqueue(delivery_id, payload, issue_ids)` accepts all destinations atomically or
+raises `CapacityExceeded` without evicting accepted events. An identical replay
+returns false and does not restore acknowledged destinations. Input validation
+and payload and fanout limits run before the retained-ID lookup. Within those
+limits, different bytes or a different destination set for a retained ID raise
+`DeliveryConflict`. Target
+order and duplicate destinations do not change that set. Empty targets and
+invalid IDs are rejected. Payloads must be immutable `bytes`.
+
+`pending(issue_id)` returns non-destructive `(delivery_id, payload)` pairs in
+acceptance order. Callers apply them in order, then call
+`acknowledge(issue_id, delivery_id)` only after successful application. This
+deletes only the specified pending pair. Other issues can progress while that
+issue remains unacknowledged. The final destination acknowledgement deletes the
+event and its payload. Deduplication lasts only while an event remains retained.
+A replay after final deletion can be accepted anew. There is no permanent
+acknowledgement ledger, lease, claim, automatic reclaim, or worker orchestration.
+
+`BEGIN IMMEDIATE` serializes capacity checks and writes across connections to one
+local SQLite file. Each instance owns one connection for one thread. Reads do
+not reserve work, and the inbox does not serialize external application. Local
+transaction serialization is not hosted runner coordination or proof of exactly
+once Linear writes. A crash after application but before acknowledgement can
+replay the external write.
+
+A write-lock timeout raises `sqlite3.OperationalError` after SQLite's default
+five-second wait. The enqueue has not accepted the input. The caller must retain
+it and retry or escalate, just as with capacity rejection.
+
+Any future durable ingestion must retain the complete event **before**
+replaceable Actions pending processing. An inbox on an ephemeral runner cannot
+recover `changes.from` that Actions already dropped. Overflow rejects ingestion.
+Upstream must retain the rejected input and retry or escalate, rather than
+acknowledge success. Choosing a durable backend, permissions, failure handling,
+and rollout remains separate work. This candidate makes no production
+prevention claim and authorizes no writer rollout or drain.
+
+## Next slice
+
+Resolve durable event retention and its permissions, or queue compatibility and
+overflow behavior. Then prove per-issue event and reconcile writers with bounded
+matrix fanout and an operator-controlled drain of old writers before rollout.
+Convert the concurrency diagnostics into regression tests that preserve Done
+and In Review and create exactly one comment. Preserve the removal explanation
+and both negative controls from the recovery diagnostic. This slice implements
+no production prevention or rollout, and requests no aggregate behavior change.
 
 This decision is separate from the existing rapid same-PR edit limitation.
 Per-issue pending-job replacement introduces a loss path across different PR
 events and reconciliation, so it cannot be dismissed as that existing limit.
-
-Prepared ticket comment, not posted because real Linear writes are prohibited:
-
-> ESCALATE GRE-749. Fake API interleavings reproduce stale Done and In Review
-> overwrites and duplicate comments. Per-issue Actions workers can use existing
-> permissions, but pending-job replacement can lose removed-reference deltas.
-> First assess recovery from GitHub userContentEdits, RenamedTitleEvent, and
-> prior sync comments. Edit history can be deleted, and sync comments omit
-> already-unchanged states. If recovery is insufficient, choose an aggregate
-> rule for In Review issues with no open PR or durable removal-delta retention.
-> `queue: max` is another candidate, but the pinned actionlint rejects it and
-> its queue is bounded. No production workflow or Linear write was performed.
->
-> next slice: verify historical recovery and resolve the queue policy, then prove
-> per-issue event/reconcile writers with bounded fanout and a safe rollout.

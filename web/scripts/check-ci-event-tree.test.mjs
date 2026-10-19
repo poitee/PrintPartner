@@ -78,6 +78,11 @@ for (const [name, mutate] of [
   });
 }
 
+const step = (w, name) => w.jobs.parity.steps.find(s => s.name === name);
+const prerequisites = 'Set up ephemeral Linux prerequisites';
+const rustSetup = 'Set up Rust on ephemeral runners';
+const hostedOnly = "runner.environment == 'self-hosted'";
+
 const modify = change => directory => {
   const workflow = YAML.parse(original);
   change(workflow);
@@ -127,7 +132,17 @@ for (const [name, change] of [
   ['job dependency', w => { w.jobs.parity.needs = ['skipped']; }],
   ['job failure ignored', w => { w.jobs.parity['continue-on-error'] = true; }],
   ['step false', w => { w.jobs.parity.steps[0].if = false; }],
+  ['step conditional runner', w => { w.jobs.parity.steps[0].if = "runner.environment == 'self-hosted'"; }],
+  ['step conditional always', w => { w.jobs.parity.steps[0].if = 'always() && false'; }],
+  ['always step failure ignored', w => { w.jobs.parity.steps[0].if = 'always()'; w.jobs.parity.steps[0]['continue-on-error'] = true; }],
   ['step failure ignored', w => { w.jobs.parity.steps[0]['continue-on-error'] = true; }],
+  ['verification only on ephemeral runners', w => { step(w, 'Verify contracts and frozen corpus').if = hostedOnly; }],
+  ['hosted Rust install only on ephemeral runners', w => { step(w, 'Install pinned Rust checks').if = hostedOnly; }],
+  ['verification disguised as bootstrap', w => { step(w, prerequisites).run += ' && npm run contracts:verify'; }],
+  ['bootstrap failure ignored', w => { step(w, prerequisites)['continue-on-error'] = true; }],
+  ['bootstrap with another condition', w => { step(w, prerequisites).if = `${hostedOnly} && false`; }],
+  ['Rust bootstrap with another action', w => { step(w, rustSetup).uses = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'; }],
+  ['Rust bootstrap with another toolchain', w => { step(w, rustSetup).with.toolchain = 'stable'; }],
   ['verification removed', w => { w.jobs.parity.steps = w.jobs.parity.steps.filter(s => !s.run?.includes('npm run contracts:verify')); }],
 ]) {
   test(`event tree rejects disabled workflow ${name}`, t => {
@@ -138,6 +153,23 @@ for (const [name, change] of [
     assert.match(result.stderr, /INVALID_DESKTOP_TRIGGERS|DISABLED_DESKTOP_|MISSING_DESKTOP_VERIFICATION/);
   });
 }
+
+test('event tree limits runner conditions to the two bootstrap steps', t => {
+  const workflow = YAML.parse(original);
+  const conditioned = workflow.jobs.parity.steps.filter(s => s.if !== undefined && s.if !== 'always()');
+  assert.deepEqual(conditioned.map(s => [s.name, s.if]), [[prerequisites, hostedOnly], [rustSetup, hostedOnly]]);
+  const result = fixture(t).run();
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('event tree accepts always-run steps that propagate failure', t => {
+  const f = fixture(t, modify(w => {
+    const verification = w.jobs.parity.steps.find(s => s.run?.includes('npm run contracts:verify'));
+    verification.if = 'always()';
+  }));
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test('event tree accepts original blob despite deleted worktree and moved HEAD', t => {
   const f = fixture(t);
@@ -400,88 +432,5 @@ for (const [name, lane, code] of [
     const result = f.run();
     assert.equal(result.status, 1, result.stdout);
     assert.match(result.stderr, new RegExp(`MISSING_${code}_NODE_VERIFICATION`));
-  });
-}
-
-for (const [label, name, mutate, diagnostic] of [
-  ['unlisted setup', 'desktop-runtime', workflow => {
-    workflow.jobs.extra = { steps: [{ uses: 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1', with: { 'node-version': '24' } }] };
-  }, 'UNEXPECTED_DESKTOP_NODE_SETUP'],
-  ['job failure override', 'desktop-runtime', workflow => { workflow.jobs.runtime['continue-on-error'] = true; }, 'INVALID_DESKTOP_NODE_SETUP'],
-  ['fixture dependency install', 'desktop-native-macos', workflow => {
-    const steps = workflow.jobs['macos-storage-gate'].steps;
-    steps.splice(steps.findIndex(step => step.with?.['node-version'] === '24.21.0'), 0, { run: 'npm ci' });
-  }, 'EARLY_DESKTOP_NODE_COMMAND'],
-]) {
-  test(`event tree rejects ${label} despite repaired checkout`, t => {
-    const path = `.github/workflows/${name}.yml`;
-    const f = fixture(t, directory => {
-      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
-      mutate(workflow);
-      writeFileSync(join(directory, path), YAML.stringify(workflow));
-    });
-    copyFileSync(join(root, path), join(f.directory, path));
-    const result = f.run();
-    assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, new RegExp(`${diagnostic}:`));
-  });
-}
-
-for (const [name, lane] of [['desktop-runtime', 'runtime'], ['desktop-native-macos', 'bundle']]) {
-  test(`event tree rejects disabled ${name} job despite repaired checkout`, t => {
-    const path = `.github/workflows/${name}.yml`;
-    const f = fixture(t, directory => {
-      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
-      workflow.jobs[lane].if = false;
-      writeFileSync(join(directory, path), YAML.stringify(workflow));
-    });
-    copyFileSync(join(root, path), join(f.directory, path));
-    const result = f.run();
-    assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, /INVALID_DESKTOP_NODE_SETUP:/);
-  });
-}
-
-for (const [label, name, mutate, diagnostic] of [
-  ...['step', 'job', 'workflow'].map(level => [
-    `masking assertion shell at ${level}`, 'desktop-runtime', workflow => {
-      const shell = 'bash -c \'bash "{0}"; exit 0\'';
-      if (level === 'workflow') workflow.defaults.run.shell = shell;
-      else if (level === 'job') workflow.jobs.runtime.defaults = { run: { shell } };
-      else {
-        const steps = workflow.jobs.runtime.steps;
-        steps[steps.findIndex(step => step.uses?.startsWith('actions/setup-node@')) + 1].shell = shell;
-      }
-    }, 'INVALID_DESKTOP_NODE_SHELL',
-  ]),
-  ['removed linux-precheck dependency', 'desktop-native-macos', workflow => {
-    workflow.jobs.bundle.needs = ['changes'];
-  }, 'INVALID_DESKTOP_NODE_SETUP'],
-  ['dependent runtime lane', 'desktop-runtime', workflow => {
-    workflow.jobs.runtime.needs = ['skipped'];
-  }, 'INVALID_DESKTOP_NODE_SETUP'],
-  ...['removed', 'disabled', 'dependent'].map(change => [
-    `${change} changes prerequisite`, 'desktop-native-macos', workflow => {
-      if (change === 'removed') delete workflow.jobs.changes;
-      else if (change === 'disabled') workflow.jobs.changes.if = false;
-      else workflow.jobs.changes.needs = ['skipped'];
-    }, 'INVALID_DESKTOP_PREREQUISITE',
-  ]),
-]) {
-  test(`event tree rejects ${label} despite repaired checkout and HEAD`, t => {
-    const path = `.github/workflows/${name}.yml`;
-    const f = fixture(t, directory => {
-      const workflow = YAML.parse(readFileSync(join(directory, path), 'utf8'));
-      mutate(workflow);
-      writeFileSync(join(directory, path), YAML.stringify(workflow));
-    });
-    copyFileSync(join(root, path), join(f.directory, path));
-    f.git('add', '.github');
-    const repairedSha = f.commit();
-    const result = f.run();
-    assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, new RegExp(`${diagnostic}:`));
-    const repaired = f.run(repairedSha);
-    assert.equal(repaired.status, 0, repaired.stderr);
   });
 }

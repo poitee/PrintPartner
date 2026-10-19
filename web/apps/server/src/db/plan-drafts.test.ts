@@ -3794,6 +3794,61 @@ selections:
     database.close();
   });
 
+  it("blocks Apply with checkoff_remap_unsafe when the checked-off Required unit's Part is excluded", () => {
+    const { database, raw, profile, repo, reconciled, command } = readyTrackedApplyFixture();
+    const gear = reconciled.draft.parts.find((part) => part.filename === "gear.stl");
+    const acceptedGear = repo.getAcceptedPlanRevision(profile.id)?.parts.find((part) => part.filename === "gear.stl");
+    if (!gear || !acceptedGear?.projectionPartId) throw new Error("test gear Part is missing");
+    const oldGearId = acceptedGear.projectionPartId;
+    const edited = repo.editPlanDraftParts({
+      profileId: profile.id,
+      draftId: command.draftId,
+      expectedSnapshotDigest: reconciled.draft.snapshotDigest,
+      decision: { kind: "set_included", partIds: [gear.id], value: false },
+    });
+    if (edited.kind !== "updated") throw new Error("test exclusion failed");
+    const excluded = edited.draft.parts.find((part) => part.id === gear.id);
+    expect(excluded).toMatchObject({
+      partKey: acceptedGear.partKey,
+      quantityEffective: 1,
+      included: false,
+    });
+    const ready = repo.savePlanDraftRequiredUnitReconciliation({
+      profileId: profile.id,
+      draftId: command.draftId,
+      expectedSnapshotDigest: edited.draft.snapshotDigest,
+      decisions: [],
+      actorId: "test:user",
+      idempotencyKey: "excluded-gear-reconciliation",
+    });
+    if (ready.kind !== "saved") throw new Error("test exclusion reconciliation failed");
+    repo.setSetting("printer.checkoff_links", JSON.stringify([
+      {
+        id: "excluded-gear-link",
+        profile_id: profile.id,
+        filename: "gear.bgcode",
+        state: "awaiting_verify",
+        units: [{ part_id: oldGearId, unit_index: 0 }],
+      },
+    ]));
+    const before = snapshotTables(raw, APPLY_STATE_TABLES);
+
+    expect(repo.applyPlanChanges({
+      ...command,
+      expectedSnapshotDigest: ready.draft.snapshotDigest,
+      remapCheckoffLinks: true,
+    })).toEqual({
+      kind: "checkoff_remap_unsafe",
+      unmappable: [{
+        linkId: "excluded-gear-link",
+        filename: "gear.bgcode",
+        reason: `Required unit at Part ${oldGearId} index 0 is absent or excluded in the selected Plan`,
+      }],
+    });
+    expect(snapshotTables(raw, APPLY_STATE_TABLES)).toEqual(before);
+    database.close();
+  });
+
   // Quantity 3 -> 2 with units 1 and 2 completed: reconciliation keeps them at indexes 0 and 1.
   function shrunkQuantityFixture(checkedIndex: number) {
     const { database, raw, repo } = fixture();
