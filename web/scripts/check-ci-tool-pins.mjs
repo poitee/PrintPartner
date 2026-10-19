@@ -290,8 +290,11 @@ function checkDesktopExecution(workflow, file) {
   ];
   for (const event of ['push', 'pull_request']) {
     const trigger = workflow.on?.[event];
-    const allowed = event === 'push' ? ['branches', 'paths'] : ['paths'];
+    const allowed = event === 'push' ? ['branches', 'paths'] : ['paths', 'types'];
     if (!mapping(trigger) || Object.keys(trigger).some(key => !allowed.includes(key))
+      || (event === 'pull_request' && Object.hasOwn(trigger, 'types')
+        && (!Array.isArray(trigger.types) || !['opened', 'synchronize', 'reopened', 'ready_for_review', 'converted_to_draft']
+          .every(type => trigger.types.includes(type))))
       || !Array.isArray(trigger.paths) || !requiredPaths.every(path => trigger.paths.includes(path))
       || trigger.paths.some(path => typeof path !== 'string' || path.startsWith('!'))
       || (event === 'push' && (!Array.isArray(trigger.branches) || !trigger.branches.includes('main')
@@ -300,8 +303,9 @@ function checkDesktopExecution(workflow, file) {
     }
   }
   const job = workflow.jobs.parity;
-  if (!mapping(job) || ['if', 'needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))) {
-    report(file, 'jobs.parity', 'DISABLED_DESKTOP_JOB', 'parity must run unconditionally and propagate failure');
+  if (!mapping(job) || ['needs', 'continue-on-error'].some(key => Object.hasOwn(job, key))
+    || (Object.hasOwn(job, 'if') && job.if !== draftGuard)) {
+    report(file, 'jobs.parity', 'DISABLED_DESKTOP_JOB', 'parity must run on ready PRs and propagate failure');
     return;
   }
   for (const [index, step] of (Array.isArray(job.steps) ? job.steps : []).entries()) {
