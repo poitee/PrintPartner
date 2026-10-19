@@ -257,6 +257,19 @@ pub(crate) fn halt_job(
         "Invalid Sync halt code"
     );
     let detail: String = detail.chars().take(1024).collect();
+    if code == "authority_refused"
+        && matches!(
+            job.state,
+            PersistentState::Failed | PersistentState::ReconciliationRequired
+        )
+        && job.authority_refusal.as_ref().is_some_and(|refusal| {
+            refusal.phase == crate::jobs::AuthorityRefusalPhase::SourceWriter
+                && refusal.generation == job.generation - 1
+        })
+        && job.recovery.as_deref() == Some(detail.as_str())
+    {
+        return Ok(job);
+    }
     let unresolved: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM source_sync_targets WHERE job_id=?1 AND (state IN ('claimed','reconciliation_required') OR (state IN ('succeeded','failed') AND reservation_acknowledged=0)))",
         [&job.job_id],

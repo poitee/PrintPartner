@@ -51,6 +51,30 @@ pub(super) async fn bind_origin_using<F>(
 where
     F: std::future::Future<Output = std::io::Result<TcpListener>>,
 {
+    let mut removed = false;
+    for entry in std::fs::read_dir(owner.data_dir())? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(suffix) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("desktop.toml-"))
+            .and_then(|name| name.strip_suffix(".new"))
+        else {
+            continue;
+        };
+        if suffix.len() == 16
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            && entry.file_type()?.is_file()
+        {
+            std::fs::remove_file(entry.path())?;
+            removed = true;
+        }
+    }
+    if removed {
+        std::fs::File::open(owner.data_dir())?.sync_all()?;
+    }
     let config = state_file::read(owner, "desktop.toml")?;
     let port = config
         .as_ref()

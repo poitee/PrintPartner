@@ -9,10 +9,34 @@ use std::path::PathBuf;
 struct Fixture {
     root: PathBuf,
     connection: Connection,
+    // Fields drop in declaration order, so the connection closes before directory cleanup.
+    _directory: FixtureDirectory,
 }
+
+struct FixtureDirectory(PathBuf);
+
+impl Drop for FixtureDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            if std::thread::panicking() {
+                eprintln!(
+                    "failed to remove fixture directory {}: {error}",
+                    self.0.display()
+                );
+            } else {
+                panic!(
+                    "failed to remove fixture directory {}: {error}",
+                    self.0.display()
+                );
+            }
+        }
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("pp-review-{}", rand::random::<u64>()));
+        let directory = FixtureDirectory(root.clone());
         std::fs::create_dir_all(root.join("repos/1/revisions/accepted")).unwrap();
         let path = root.join("fixture.db");
         std::fs::write(
@@ -23,6 +47,7 @@ impl Fixture {
         Self {
             root,
             connection: Connection::open(path).unwrap(),
+            _directory: directory,
         }
     }
     fn read(&mut self) -> AcceptedRead {
@@ -95,11 +120,61 @@ impl Fixture {
         tx.commit().unwrap();
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.root).unwrap();
+
+#[test]
+fn fixture_closes_connection_before_directory_cleanup() {
+    let fixture = Fixture::new();
+    let root = fixture.root.clone();
+    drop(fixture);
+    assert!(!root.exists());
+}
+
+#[test]
+fn fixture_cleans_up_during_unwind() {
+    let fixture = Fixture::new();
+    let root = fixture.root.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _fixture = fixture;
+        panic!("exercise fixture cleanup during unwind");
+    }));
+    assert!(result.is_err());
+    assert!(!root.exists());
+}
+
+#[test]
+fn fixture_cleanup_reports_removal_errors_without_double_panic() {
+    for panicking in [false, true] {
+        let root = std::env::temp_dir().join(format!("pp-review-{}", rand::random::<u64>()));
+        std::fs::write(&root, b"not a directory").unwrap();
+        let fixture = Fixture {
+            root: root.clone(),
+            connection: Connection::open_in_memory().unwrap(),
+            _directory: FixtureDirectory(root.clone()),
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _fixture = fixture;
+            if panicking {
+                panic!("exercise failed fixture cleanup during unwind");
+            }
+        }));
+        std::fs::remove_file(root).unwrap();
+        let panic = result.unwrap_err();
+        if panicking {
+            assert_eq!(
+                panic.downcast_ref::<&str>(),
+                Some(&"exercise failed fixture cleanup during unwind")
+            );
+        } else {
+            assert!(
+                panic
+                    .downcast_ref::<String>()
+                    .unwrap()
+                    .contains("failed to remove fixture directory")
+            );
+        }
     }
 }
+
 fn observations(read: &AcceptedRead) -> ReviewObservations {
     let AcceptedRead::Ready { snapshot } = read else {
         panic!("{read:?}")
