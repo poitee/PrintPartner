@@ -21,8 +21,8 @@ command. The macOS gate runs the full suite and ten additional native repetition
 
 This fixes the fixture's lifetime contract. It does not establish the cause of
 every DiskImages busy response. Accepting a warning would weaken the successful
-cleanup assertion; changing production retry counts or disk targets would expand
-the change without evidence. The workflow's cleanup trap stays unchanged.
+cleanup assertion. The later runs below supplied the evidence for changing the
+trap's forced-detach target.
 
 Hosted [diagnostic run 39185522717](https://github.com/poitee/PrintPartner/actions/runs/39185522717/job/117847314975)
 passed the suite and eight repetitions, then failed repetition 9 while ejecting
@@ -32,3 +32,16 @@ backs the image; its presence does not establish the cause of the busy eject.
 Failure diagnostics now include privileged open-file inspection, device state and
 DiskArbitration messages restricted to the owned image's device identifiers.
 Verbose forced-detach output preserves the original exit status and assertions.
+
+Hosted [run 39186091368](https://github.com/poitee/PrintPartner/actions/runs/39186091368/job/117848988156)
+failed repetition 8 the same way. DiskArbitration logged the forced unmount of
+`disk8s1` as successful, then the eject of backing `disk7` failed with EBUSY
+19 ms later. The holder had exited and only the DiskImages helper held the image.
+After that partial success the mount path is an ordinary directory, so the trap
+had no safe target to retry. The trap now records the whole-disk device printed
+by `hdiutil attach` and retries `hdiutil detach -force` on it up to three times,
+two seconds apart. This is the retry pattern tools such as create-dmg use for
+`hdiutil detach` EBUSY. The warning still fires if every forced attempt fails.
+The native test also requires that `hdiutil info` no longer lists the image.
+The diagnostic driver now releases the holder after any completed `lsof` attempt,
+not only a successful one.

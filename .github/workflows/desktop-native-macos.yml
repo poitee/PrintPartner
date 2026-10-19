@@ -471,8 +471,8 @@ jobs:
           # One archive test retains two 256 MiB copies alongside parallel fixtures.
           hdiutil create -size 4g -type SPARSE -fs 'Case-sensitive APFS' \
             -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
-          hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
-            "$fixture_root/fixtures.sparseimage"
+          fixture_device=$(hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
+            "$fixture_root/fixtures.sparseimage" | awk '/^\/dev\// && !device { device = $1 } END { print device }')
           cleanup_source_fixture() {
             result=$?
             for attempt in 1 2 3; do
@@ -485,9 +485,17 @@ jobs:
             done
             echo "Open files on owned test fixture at $fixture_mount before forced detach:"
             lsof +f -- "$fixture_mount" || echo "::warning::lsof found no holders or failed at $fixture_mount (status $?)"
-            if ! hdiutil detach -force "$fixture_mount"; then
-              echo "::warning::Could not detach owned test fixture at $fixture_mount"
-            fi
+            # A forced unmount can succeed while ejecting the backing device still returns EBUSY.
+            # The mount path is then an ordinary directory, so retry with the attached device.
+            for attempt in 1 2 3; do
+              if hdiutil detach -force "$fixture_device"; then
+                exit "$result"
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                sleep 2
+              fi
+            done
+            echo "::warning::Could not detach owned test fixture at $fixture_mount"
             exit "$result"
           }
           trap cleanup_source_fixture EXIT

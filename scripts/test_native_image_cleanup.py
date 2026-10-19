@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,7 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/desktop-native-macos.yml'
 STEP = '      - name: Verify source Unicode and case regressions on macOS\n'
 ROWS = 'id,name\n1,disposable fixture\n'
+DEVICE = '/dev/disk42'
 TOOLS = r'''
 import json, os, pathlib, plistlib, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
@@ -60,7 +62,7 @@ if native:
     status = subprocess.call(command)
     if name == 'hdiutil' and '-force' in args and status:
         real = json.loads(os.environ['REAL_TOOLS'])
-        image_path = pathlib.Path(args[-1]).parent / 'fixtures.sparseimage'
+        image_path = next(root.glob('pp-source-case.*/fixtures.sparseimage'))
         info = subprocess.run([real['hdiutil'], 'info', '-plist'],
                               stdout=subprocess.PIPE, timeout=10)
         if info.returncode == 0:
@@ -83,7 +85,7 @@ if native:
                                 '--style', 'compact', '--predicate', predicate], timeout=15)
         subprocess.run(['ps', '-p', (root / 'holder.pid').read_text(),
                         '-o', 'pid,ppid,state,command'], timeout=10)
-    if name == 'lsof' and status == 0:
+    if name == 'lsof':
         (root / 'release').touch()
         deadline = time.monotonic() + 10
         while not (root / 'closed').exists():
@@ -94,12 +96,16 @@ if native:
 if name == 'hdiutil':
     if args[0] == 'create':
         pathlib.Path(args[-1]).write_text('disposable image\n')
+    elif args[0] == 'attach':
+        print('/dev/disk42\tGUID_partition_scheme\n/dev/disk42s1\tApple_APFS\n'
+              f'/dev/disk43\tEF57347C-0000-11AA-AA11-0030654\n/dev/disk43s1\t{args[-2]}')
     elif args[0] == 'detach':
-        if '-force' in args:
-            raise SystemExit(int(os.environ['FORCE_STATUS']))
-        counter = root / 'attempts'
+        counter = root / ('forced' if '-force' in args else 'attempts')
         attempt = int(counter.read_text()) + 1 if counter.exists() else 1
         counter.write_text(str(attempt))
+        if '-force' in args:
+            statuses = os.environ['FORCE_STATUS'].split()
+            raise SystemExit(int(statuses[min(attempt, len(statuses)) - 1]))
         raise SystemExit(0 if attempt == int(os.environ['DETACH_SUCCEEDS']) else 16)
 elif name == 'lsof':
     print('holder 4242 fixture rows.csv', flush=True)
@@ -160,19 +166,17 @@ class CleanupTest(unittest.TestCase):
                 self.assertFalse(os.path.ismount(mount))
         shutil.rmtree(root)
 
-    def retries(self, mount, count=3):
+    def retries(self, target, count=3, *flags):
         trace = []
         for attempt in range(count):
-            trace.append(['hdiutil', 'detach', str(mount)])
+            trace.append(['hdiutil', 'detach', *flags, str(target)])
             if attempt < count - 1:
                 trace.append(['sleep', '2'])
         return trace
 
-    def forced_trace(self, mount):
-        return self.retries(mount) + [
-            ['lsof', '+f', '--', str(mount)],
-            ['hdiutil', 'detach', '-force', str(mount)],
-        ]
+    def forced_trace(self, mount, device=DEVICE, count=1):
+        return (self.retries(mount) + [['lsof', '+f', '--', str(mount)]]
+                + self.retries(device, count, '-force'))
 
     def diagnostic_output(self, mount):
         return (f'Open files on owned test fixture at {mount} before forced detach:\n'
@@ -193,7 +197,7 @@ class CleanupTest(unittest.TestCase):
     def test_cleanup_preserves_failed_test_status(self):
         result, mount, trace = self.run_step(status=23, diagnostic=7, force=9)
         self.assertEqual(result.returncode, 23)
-        self.assertEqual(trace, self.forced_trace(mount))
+        self.assertEqual(trace, self.forced_trace(mount, count=3))
         self.assertEqual(result.stdout, self.diagnostic_output(mount)
                          + 'lsof: diagnostic refused\n'
                          + f'::warning::lsof found no holders or failed at {mount} (status 7)\n'
@@ -203,12 +207,21 @@ class CleanupTest(unittest.TestCase):
     def test_cleanup_errors_preserve_successful_test_status(self):
         result, mount, trace = self.run_step(diagnostic=1, force=9)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(trace, self.forced_trace(mount))
+        self.assertEqual(trace, self.forced_trace(mount, count=3))
         self.assertEqual(result.stdout, self.diagnostic_output(mount)
                          + 'lsof: diagnostic refused\n'
                          + f'::warning::lsof found no holders or failed at {mount} (status 1)\n'
                          + f'::warning::Could not detach owned test fixture at {mount}\n')
         self.assert_preserved(mount)
+
+    def test_forced_detach_retries_busy_device_without_warning(self):
+        for count in (2, 3):
+            with self.subTest(count=count):
+                result, mount, trace = self.run_step(status=23, force='16 ' * (count - 1) + '0')
+                self.assertEqual(result.returncode, 23)
+                self.assertEqual(trace, self.forced_trace(mount, count=count))
+                self.assertEqual(result.stdout, self.diagnostic_output(mount))
+                self.assert_preserved(mount)
 
     def test_normal_detach_never_lists_holders_or_forces(self):
         for attempt in (1, 2, 3):
@@ -234,7 +247,7 @@ class CleanupTest(unittest.TestCase):
                     if succeeds:
                         self.assertEqual(trace, self.retries(mount, succeeds))
                     else:
-                        self.assertEqual(trace, self.forced_trace(mount))
+                        self.assertEqual(trace, self.forced_trace(mount, count=3 if force else 1))
                         expected = self.diagnostic_output(mount)
                         if diagnostic:
                             expected += ('lsof: diagnostic refused\n'
@@ -277,7 +290,9 @@ class CleanupTest(unittest.TestCase):
     def test_native_busy_image_reports_real_holder_before_force(self):
         result, mount, trace = self.run_step(status=23, native=True)
         self.assertEqual(result.returncode, 23, result.stdout)
-        self.assertEqual(trace, self.forced_trace(mount), result.stdout)
+        forced = [entry for entry in trace if entry[:3] == ['hdiutil', 'detach', '-force']]
+        self.assertRegex(forced[0][-1], r'^/dev/disk[0-9]+$', result.stdout)
+        self.assertEqual(trace, self.forced_trace(mount, forced[0][-1], len(forced)), result.stdout)
         listing = result.stdout.split(
             f'Open files on owned test fixture at {mount} before forced detach:\n', 1)[1]
         listing = listing.split('force requested\n', 1)[0]
@@ -287,11 +302,22 @@ class CleanupTest(unittest.TestCase):
                             for line in listing.splitlines()), listing)
         self.assertNotIn('::warning::', result.stdout)
         self.assertFalse(os.path.ismount(mount))
-        self.assertTrue((mount.parent / 'fixtures.sparseimage').is_file())
+        image = (mount.parent / 'fixtures.sparseimage').resolve()
+        self.assertTrue(image.is_file())
+        info = subprocess.run(['hdiutil', 'info', '-plist'], check=True,
+                              stdout=subprocess.PIPE, timeout=10)
+        attached = [Path(entry['image-path']).resolve()
+                    for entry in plistlib.loads(info.stdout).get('images', [])]
+        self.assertNotIn(image, attached, result.stdout)
 
 
 class NativeHolderProtocolTest(unittest.TestCase):
     def test_native_driver_releases_holder_after_diagnostic_before_force(self):
+        for lsof_status in (0, 1):
+            with self.subTest(lsof_status=lsof_status):
+                self.drive_holder_protocol(lsof_status)
+
+    def drive_holder_protocol(self, lsof_status):
         with tempfile.TemporaryDirectory(prefix='pp holder protocol ') as directory:
             root = Path(directory)
             driver = root / 'driver'
@@ -312,11 +338,11 @@ class NativeHolderProtocolTest(unittest.TestCase):
                 print(sys.argv[1], flush=True)
             '''))
             real = {}
-            for name, expected in (('lsof', 'held'), ('hdiutil', 'closed')):
+            for name, expected, status in (('lsof', 'held', lsof_status), ('hdiutil', 'closed', 0)):
                 tool = root / f'real-{name}'
                 tool.write_text(f'#!{sys.executable}\nimport subprocess, sys\n'
                                 f'sys.exit(subprocess.call({[sys.executable, str(probe), expected]!r}'
-                                ' + sys.argv[1:]))\n')
+                                f' + sys.argv[1:]) or {status})\n')
                 tool.chmod(0o755)
                 real[name] = str(tool)
             env = dict(os.environ, RUNNER_TEMP=directory, TMPDIR=directory,
@@ -332,7 +358,7 @@ class NativeHolderProtocolTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 23, result.stdout)
                 self.assertFalse((root / 'closed').exists())
                 result = run('lsof', str(rows))
-                self.assertEqual((result.returncode, result.stdout), (0, 'held\n'))
+                self.assertEqual((result.returncode, result.stdout), (lsof_status, 'held\n'))
                 self.assertTrue((root / 'closed').exists())
                 result = run('hdiutil', 'detach', '-force', str(rows))
                 self.assertEqual((result.returncode, result.stdout),
