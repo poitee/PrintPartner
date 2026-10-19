@@ -29,6 +29,8 @@ const INVALID_SLUGS = [
   "..",
   "a".repeat(65),
   "kit-catalog",
+  "registry-index",
+  " registry-index ",
 ];
 const VALID_SLUGS = ["ldo-2.4-sb-tap", "voron-stealthburner", "example-kit-r2", "a".repeat(64)];
 const SOURCE_URL = "https://github.com/a/addon";
@@ -204,7 +206,7 @@ describe("community manifest slug write boundaries", () => {
         const response = await app.inject({
           method: "POST",
           url: "/admin/import-kit-bundle",
-          remoteAddress: "127.0.0.1",
+          remoteAddress: `127.0.0.${index + 1}`,
           payload: { path },
         });
         expect(response.statusCode).toBe(400);

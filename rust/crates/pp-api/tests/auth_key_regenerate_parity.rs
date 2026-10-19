@@ -351,7 +351,7 @@ async fn run_case(case: &Value, mutate: bool) {
     assert_eq!(snapshot(&server, &names), case["before"], "before rotation");
     let stored_before = stored_settings(&server);
     let target = match case["id"].as_str().unwrap() {
-        "owner-session-rotation" => keys["owner"]["id"].as_str().unwrap(),
+        "owner-session-rotation" | "missing-session" => keys["owner"]["id"].as_str().unwrap(),
         "foreign-tenant" => keys["foreign"]["id"].as_str().unwrap(),
         "missing-key" => "key_missing",
         _ => panic!("unknown fixture case"),
@@ -370,7 +370,8 @@ async fn run_case(case: &Value, mutate: bool) {
         entry["path"],
         format!("/settings/api-keys/{normalized_target}/regenerate")
     );
-    let response = server.post(&path, json!({}), Some(&cookies["owner"])).await;
+    let cookie = entry["actor"].as_str().map(|actor| cookies[actor].as_str());
+    let response = server.post(&path, json!({}), cookie).await;
     let status = response.status().as_u16();
     assert_eq!(json!(status), entry["status"], "rotation HTTP status");
     let body: Value = response.json().await.unwrap();
@@ -384,15 +385,21 @@ async fn run_case(case: &Value, mutate: bool) {
         Some(body)
     } else {
         assert_safe(&body);
-        assert_eq!(
-            body,
-            json!({ "detail": "API key not found" }),
-            "Rust problem body"
-        );
-        assert_eq!(
-            body["detail"], entry["body"]["detail"],
-            "Node problem detail"
-        );
+        assert_eq!(body, entry["body"], "rotation problem body");
+        if status == 404 {
+            assert_eq!(body["status"], json!(status), "problem status field");
+            for field in ["title", "status"] {
+                let mut mutant = body.clone();
+                mutant.as_object_mut().unwrap().remove(field);
+                assert_ne!(mutant, entry["body"], "comparison ignores {field}");
+            }
+            let mut mutant = body.clone();
+            mutant["status"] = json!("404");
+            assert_ne!(mutant, entry["body"], "comparison ignores status type");
+        } else {
+            assert_eq!(status, 401, "unexpected refusal status");
+            assert_eq!(body, json!({"detail":"Authentication required"}));
+        }
         None
     };
     assert_eq!(
@@ -417,6 +424,12 @@ async fn run_case(case: &Value, mutate: bool) {
         case["rotationEffects"],
         "raw setting changes"
     );
+    if new_key.is_none() {
+        assert_eq!(
+            stored_before, stored_after,
+            "failed rotation changed settings"
+        );
+    }
     for entry in transcript
         .iter()
         .skip_while(|entry| entry["id"] != "rotate")
@@ -493,7 +506,7 @@ fn fixture() -> Value {
 async fn node_regeneration_transcripts_match_rust_router_and_client() {
     let fixture = fixture();
     let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 3);
+    assert_eq!(cases.len(), 4);
     for case in cases {
         run_case(case, false).await;
     }

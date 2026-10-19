@@ -1,7 +1,7 @@
 name: Rust cross-OS
 
 # Relevant PRs test Rust on Linux and Windows. Ready PRs with the macos label
-# also test macOS with desktop_rebuild=off. Non-PR events cover both states.
+# also test macOS for relevant paths with desktop_rebuild=off. Non-PR events cover both states.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -71,6 +71,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Configure sccache on pp-local
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
+          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
       - name: Set up ephemeral Linux prerequisites
         if: runner.environment == 'self-hosted' && runner.os == 'Linux'
         run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
@@ -184,12 +190,17 @@ jobs:
       - name: doctests (desktop_rebuild on)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
         run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc --features desktop_rebuild
+      - name: Show sccache stats
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
 
   rust-macos:
     name: rust (macos)
     needs: changes
     # macOS is opt-in on ready PRs, and always selected on non-PR events.
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) }}
     concurrency:
       group: rust-macos-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}

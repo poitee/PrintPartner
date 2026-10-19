@@ -3,7 +3,7 @@ name: Native macOS bundle
 on:
   workflow_dispatch:
   # Job conditions keep skipped check reports present. Hosted macOS runs on
-  # ready PRs only with the macos label. Main, merge groups, nightly and manual
+  # ready PRs only with the macos label and relevant changed paths. Main, merge groups, nightly and manual
   # runs select every macOS job, including Intel, regardless of changed paths.
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -36,10 +36,22 @@ jobs:
       # 'true' only off-PR (push to main, nightly, dispatch).
       intel: ${{ steps.plan.outputs.intel }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed inputs
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci-path-filter.py native
       - name: Decide which macOS jobs run
         id: plan
         shell: bash
         env:
+          RELEVANT: ${{ steps.select.outputs.relevant }}
           EVENT_NAME: ${{ github.event_name }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           HAS_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'macos') }}
@@ -47,7 +59,7 @@ jobs:
           set -euo pipefail
           if [[ "$EVENT_NAME" != pull_request ]]; then
             macos=true intel=true
-          elif [[ "$HAS_LABEL" == true && "$IS_DRAFT" == false ]]; then
+          elif [[ "$HAS_LABEL" == true && "$IS_DRAFT" == false && "$RELEVANT" != false ]]; then
             macos=true intel=false
           else
             macos=false intel=false
@@ -461,7 +473,7 @@ jobs:
             -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
           hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
             "$fixture_root/fixtures.sparseimage"
-          trap '
+          cleanup_source_fixture() {
             result=$?
             for attempt in 1 2 3; do
               if hdiutil detach "$fixture_mount"; then
@@ -477,7 +489,8 @@ jobs:
               echo "::warning::Could not detach owned test fixture at $fixture_mount"
             fi
             exit "$result"
-          ' EXIT
+          }
+          trap cleanup_source_fixture EXIT
           df -h "$fixture_mount"
           mkdir "$fixture_mount/tmp"
           TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source

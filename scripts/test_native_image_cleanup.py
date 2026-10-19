@@ -120,6 +120,8 @@ class CleanupTest(unittest.TestCase):
     def run_step(self, *, status=0, succeeds=0, diagnostic=0, force=0, native=False):
         root = Path(tempfile.mkdtemp(prefix='pp image cleanup ')).resolve()
         self.addCleanup(self.remove_fixture, root, native)
+        (root / 'unowned').mkdir()
+        (root / 'unowned/rows.csv').write_text(ROWS)
         tools = root / 'bin'
         tools.mkdir()
         driver = tools / 'driver'
@@ -177,6 +179,7 @@ class CleanupTest(unittest.TestCase):
                 'holder 4242 fixture rows.csv\n')
 
     def assert_preserved(self, mount):
+        self.assertEqual((mount.parent.parent / 'unowned/rows.csv').read_text(), ROWS)
         self.assertEqual((mount / 'tmp/rows.csv').read_text(), ROWS)
         self.assertEqual((mount.parent / 'fixtures.sparseimage').read_text(), 'disposable image\n')
 
@@ -215,6 +218,60 @@ class CleanupTest(unittest.TestCase):
                 self.assertEqual(trace, self.retries(mount, attempt))
                 self.assertEqual(result.stdout, '')
                 self.assert_preserved(mount)
+
+    def test_cleanup_function_preserves_all_exit_status_cases(self):
+        for status in (0, 1, 23, 130, 255):
+            for succeeds, diagnostic, force in (
+                (1, 0, 0), (2, 0, 0), (3, 0, 0),
+                (0, 0, 0), (0, 7, 0), (0, 0, 9), (0, 7, 9),
+            ):
+                with self.subTest(status=status, succeeds=succeeds,
+                                  diagnostic=diagnostic, force=force):
+                    result, mount, trace = self.run_step(
+                        status=status, succeeds=succeeds, diagnostic=diagnostic, force=force)
+                    self.assertEqual(result.returncode, status)
+                    expected = ''
+                    if succeeds:
+                        self.assertEqual(trace, self.retries(mount, succeeds))
+                    else:
+                        self.assertEqual(trace, self.forced_trace(mount))
+                        expected = self.diagnostic_output(mount)
+                        if diagnostic:
+                            expected += ('lsof: diagnostic refused\n'
+                                         + f'::warning::lsof found no holders or failed at {mount} (status 7)\n')
+                        if force:
+                            expected += f'::warning::Could not detach owned test fixture at {mount}\n'
+                    self.assertEqual(result.stdout, expected)
+                    self.assert_preserved(mount)
+
+    @unittest.skipUnless(shutil.which('actionlint') and shutil.which('shellcheck'),
+                         'requires actionlint and shellcheck on PATH')
+    def test_cleanup_function_passes_actionlint_shellcheck(self):
+        body = workflow_body()
+        self.assertIn('trap cleanup_source_fixture EXIT\n', body)
+        self.assertIn('cleanup_source_fixture() {\n  result=$?\n', body)
+        with tempfile.TemporaryDirectory(prefix='pp cleanup lint ') as directory:
+            script = Path(directory) / 'step.sh'
+            script.write_text(body)
+            for command in (['shellcheck', '--shell=bash', str(script)],
+                            ['actionlint', '-no-color', str(WORKFLOW)]):
+                result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, timeout=30)
+                self.assertEqual((result.returncode, result.stdout), (0, ''))
+            broken = body.replace('  result=$?', '  result=$?\n  echo $fixture_mount', 1)
+            script.write_text(broken)
+            workflow = Path(directory) / 'probe.yml'
+            workflow.write_text('name: Cleanup analysis probe\non: push\njobs:\n'
+                                '  probe:\n    runs-on: macos-latest\n    steps:\n'
+                                '      - shell: bash\n        run: |\n'
+                                + textwrap.indent(broken, '          '))
+            for command in (['shellcheck', '--shell=bash', str(script)],
+                            ['actionlint', '-no-color', str(workflow)]):
+                result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, timeout=30)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('SC2086', result.stdout)
+                self.assertIn('Double quote', result.stdout)
 
     @unittest.skipUnless(sys.platform == 'darwin', 'requires hosted macOS APFS and lsof')
     def test_native_busy_image_reports_real_holder_before_force(self):

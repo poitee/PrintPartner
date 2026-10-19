@@ -92,6 +92,9 @@ The paths and methods remain registered, so that metadata remains applicable.
 ## Available manifest reads and evidence
 
 The embedded registry reads remain available at `GET /manifest-registry` and `GET /manifest-registry/:slug`.
+Community manifest slugs reserve `kit-catalog` and `registry-index`. Requests for either reserved slug return HTTP `404`.
+The registry index remains available through `GET /manifest-registry`.
+Writes reject reserved slugs. Legacy stored reserved slugs produce a warning and skip community manifest reads.
 `fetchManifestRegistry` consumes that GET and remains available.
 `GET /sources/:id/repo-manifest` reads stored repository YAML when present.
 The owned `GET /plans/:id/kit-manifest` reads the stored kit manifest.

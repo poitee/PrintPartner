@@ -13,7 +13,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from webkit_diagnostics import COLLECT, INSTALL, save_artifacts
+from webkit_diagnostics import CAPTURE_PREVIEW, COLLECT, INSTALL, best_effort, save_artifacts
 from webkit_stl_smoke import wait_for
 
 
@@ -181,6 +181,136 @@ return {result, thrown, unavailable, forwarded};
         self.assertTrue(any(e['kind'] == 'webglcontextcreationerror' for e in events))
         warning = next(e for e in events if e['kind'] == 'console.warn')
         self.assertEqual(list(map(len, warning['args'])), [500, 13, 5, 5, 5, 5, 5, 5])
+
+    def select_preview(self):
+        selector = 'button[aria-label="Preview fixture"]'
+        element = self.command(f'/session/{self.session}/element',
+            {'using': 'css selector', 'value': selector})
+        best_effort(self.execute, CAPTURE_PREVIEW, 'selected', element, selector)
+        return element['element-6066-11e4-a52e-4f735466cecf']
+
+    def click_at(self, x, y):
+        self.command(f'/session/{self.session}/actions', {'actions': [{
+            'type': 'pointer', 'id': 'fixture-mouse', 'parameters': {'pointerType': 'mouse'},
+            'actions': [{'type': 'pointerMove', 'duration': 0, 'origin': 'viewport', 'x': x, 'y': y},
+                        {'type': 'pointerDown', 'button': 0}, {'type': 'pointerUp', 'button': 0}]}]})
+
+    def test_layout_shift_records_missed_target_and_keeps_intended_identity(self):
+        self.execute('''document.body.innerHTML = `
+<style>body {margin:0} article {position:absolute; left:100px; top:100px; width:700px; height:700px}
+button {position:absolute; left:40px; top:40px; width:120px; height:40px}</style>
+<article id="sheet"><button aria-label="Preview fixture">Preview</button></article>`;
+window.previewClicks = 0;
+document.querySelector('button').onclick = () => previewClicks++;
+''')
+        element_id = self.select_preview()
+        self.execute("document.querySelector('button').style.top = '247px';")
+        best_effort(self.execute, CAPTURE_PREVIEW, 'before-click')
+        self.click_at(200, 160)
+        events = self.execute(COLLECT)['diagnostics']['events']
+        checkpoints = [e for e in events if e['kind'] == 'preview.geometry']
+        self.assertEqual([e['phase'] for e in checkpoints], ['selected', 'before-click'])
+        self.assertTrue(all(e['pointer'] is None for e in checkpoints))
+        selected, before = [e['geometry'] for e in checkpoints]
+        self.assertEqual(selected['intended']['bounds']['top'], 140)
+        self.assertEqual(before['intended']['bounds']['top'], 347)
+        self.assertEqual(before['intended']['bounds']['pageTop'], 347)
+        self.assertEqual(selected['intended']['nodeId'], before['intended']['nodeId'])
+        missed = [e for e in events if e['kind'] in ('pointerdown', 'pointerup', 'click')]
+        self.assertEqual([e['kind'] for e in missed], ['pointerdown', 'pointerup', 'click'])
+        for event in missed:
+            self.assertTrue(event['trusted'])
+            self.assertEqual(event['phase'], 'dispatch')
+            self.assertEqual(event['pointer']['clientX'], 200)
+            self.assertEqual(event['pointer']['clientY'], 160)
+            geometry = event['geometry']
+            self.assertIn('ARTICLE sheet', geometry['target']['label'])
+            self.assertEqual(geometry['target']['bounds']['top'], 100)
+            self.assertEqual(geometry['intended']['bounds']['top'], 347)
+            self.assertEqual(geometry['intended']['nodeId'], selected['intended']['nodeId'])
+            self.assertTrue(geometry['intendedMatchesSelector'])
+            self.assertFalse(geometry['intendedContainsTarget'])
+        self.assertEqual(self.execute('return previewClicks;'), 0)
+        self.command(f'/session/{self.session}/element/{element_id}/click', {})
+        clicked = self.execute(COLLECT)['diagnostics']['events'][-1]
+        self.assertEqual(clicked['kind'], 'click')
+        self.assertTrue(clicked['geometry']['targetIsIntended'])
+        self.assertEqual(self.execute('return previewClicks;'), 1)
+
+    def test_scroll_coordinates_include_window_and_ancestor_offsets(self):
+        self.execute('''document.body.innerHTML = `
+<style>body {margin:0; height:2400px} #scroller {position:absolute; left:200px; top:900px;
+width:400px; height:300px; overflow:scroll} #content {position:relative; width:1000px; height:1000px}
+button {position:absolute; left:300px; top:250px; width:120px; height:40px}</style>
+<article id="scroller"><div id="content"><button aria-label="Preview fixture">Preview</button></div></article>`;
+window.scrollTo(0, 600);
+document.querySelector('#scroller').scrollTo(100, 150);
+window.rawPointer = null;
+document.addEventListener('click', e => { rawPointer = {clientX:e.clientX, clientY:e.clientY,
+pageX:e.pageX, pageY:e.pageY, screenX:e.screenX, screenY:e.screenY}; }, {once:true});
+''')
+        self.select_preview()
+        best_effort(self.execute, CAPTURE_PREVIEW, 'before-click')
+        self.click_at(460, 420)
+        events = self.execute(COLLECT)['diagnostics']['events']
+        self.assertEqual([e['phase'] for e in events],
+                         ['selected', 'before-click', 'dispatch', 'dispatch', 'dispatch'])
+        for event in events:
+            geometry = event['geometry']
+            self.assertEqual(geometry['window']['scrollY'], 600)
+            self.assertEqual(geometry['window']['scrollX'], 0)
+            bounds = geometry['intended']['bounds']
+            self.assertEqual((bounds['left'], bounds['top'], bounds['pageLeft'], bounds['pageTop']),
+                             (400, 400, 400, 1000))
+            scroller = next(a for a in geometry['intended']['ancestors'] if 'ARTICLE scroller' in a['label'])
+            self.assertEqual((scroller['scrollLeft'], scroller['scrollTop']), (100, 150))
+            self.assertFalse(geometry['intended']['ancestorsTruncated'])
+            self.assertEqual(geometry['viewport']['innerHeight'], self.execute('return innerHeight;'))
+            self.assertEqual(geometry['viewport']['visual']['pageTop'], 600)
+        clicked = events[-1]
+        self.assertTrue(clicked['trusted'])
+        self.assertTrue(clicked['geometry']['targetIsIntended'])
+        self.assertEqual(clicked['pointer'], self.execute('return rawPointer;'))
+        self.assertEqual({k: clicked['pointer'][k] for k in ('clientX', 'clientY', 'pageX', 'pageY')},
+                         {'clientX': 460, 'clientY': 420, 'pageX': 460, 'pageY': 1020})
+
+    def test_replaced_selector_match_does_not_replace_webdriver_identity(self):
+        self.select_preview()
+        self.execute("const old = document.querySelector('button'); old.replaceWith(old.cloneNode(true));")
+        best_effort(self.execute, CAPTURE_PREVIEW, 'before-click')
+        replacement = self.command(f'/session/{self.session}/element', {'using': 'css selector', 'value': 'button'})
+        element_id = replacement['element-6066-11e4-a52e-4f735466cecf']
+        self.command(f'/session/{self.session}/element/{element_id}/click', {})
+        events = self.execute(COLLECT)['diagnostics']['events']
+        selected = events[0]['geometry']['intended']
+        for event in events[1:]:
+            geometry = event['geometry']
+            self.assertEqual(geometry['intended']['nodeId'], selected['nodeId'])
+            self.assertFalse(geometry['intended']['connected'])
+            self.assertFalse(geometry['intendedMatchesSelector'])
+            self.assertNotEqual(geometry['selectorMatch']['nodeId'], selected['nodeId'])
+        self.assertEqual(events[-1]['geometry']['target']['nodeId'],
+                         events[-1]['geometry']['selectorMatch']['nodeId'])
+
+    def test_geometry_failure_does_not_prevent_original_click(self):
+        element_id = self.select_preview()
+        element = {'element-6066-11e4-a52e-4f735466cecf': element_id}
+        with contextlib.redirect_stderr(io.StringIO()) as log:
+            best_effort(self.execute, CAPTURE_PREVIEW, 'selected', element, '[')
+            best_effort(self.execute, CAPTURE_PREVIEW, 'before-click')
+        self.assertIn('Could not capture smoke diagnostics', log.getvalue())
+        self.execute("document.querySelector('button').onclick = () => { window.clicked = true; };")
+        self.command(f'/session/{self.session}/element/{element_id}/click', {})
+        self.assertTrue(self.execute('return window.clicked;'))
+        events = self.execute(COLLECT)['diagnostics']['events']
+        self.assertEqual(events[0]['phase'], 'selected')
+        self.assertEqual([e['kind'] for e in events[1:]], ['pointerdown', 'pointerup', 'click'])
+        for event in events[1:]:
+            self.assertTrue(event['trusted'])
+            self.assertIn('BUTTON Preview fixture', event['target'])
+            self.assertIn('SyntaxError', event['geometryError'])
+            self.assertIsInstance(event['pointer']['clientX'], (int, float))
+            self.assertNotIn('geometry', event)
 
     def test_browser_collection_failure_preserves_original(self):
         self.execute("Object.defineProperty(window, '__smokeDiagnostics', {get() {throw Error('collection failure');}});")

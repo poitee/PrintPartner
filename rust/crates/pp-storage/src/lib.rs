@@ -1,4 +1,7 @@
 #[cfg(feature = "desktop_rebuild")]
+pub mod production;
+
+#[cfg(feature = "desktop_rebuild")]
 mod auth_scheduler;
 #[cfg(feature = "desktop_rebuild")]
 use auth_scheduler::*;
@@ -669,9 +672,13 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Uploads { command, reply } => {
                         let changes_accounting = command.changes_accounting();
+                        let changes_before = connection.total_changes();
                         let result =
                             uploads::execute(&mut connection, &catalog_state, command, admission);
-                        if result.is_ok() && changes_accounting {
+                        if result.is_ok()
+                            && changes_accounting
+                            && connection.total_changes() != changes_before
+                        {
                             worker.import_epoch.fetch_add(1, Ordering::AcqRel);
                         }
                         let _ = reply.send(result);

@@ -1,8 +1,6 @@
 import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL, parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import { readFarmAccess } from "../lib/farm-access.js";
-import { readFeatureAccess } from "../lib/feature-access.js";
-import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
   OwnershipAdmissionError,
@@ -12,7 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
-import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
+import type { AssistantActionType, AssistantProposedAction } from "@print-partner/contracts";
 import {
   categoryLeafName,
   categoryParentPath,
@@ -30,7 +28,8 @@ import {
 import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-progress.js";
-import { getIntegrationConfig, type IntegrationPort } from "../integrations/store.js";
+import type { IntegrationPort } from "../integrations/store.js";
+import { probeFleetHostStatus } from "../services/printer-fleet-status.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store.js";
 import {
@@ -2900,31 +2899,9 @@ export async function invokeAssistantTool(
           // print_jobs unreadable — idle_since degrades to null, status still works.
         }
 
-        const probes = await Promise.all(
-          fleet.map(async (m) => {
-            const isBambu = desktopFeaturesEnabled() && !!m.integration_id
-              && getIntegrationConfig(ctx.repo, m.integration_id)?.type === "bambu";
-            const bambuAccess = isBambu ? readFeatureAccess(() => ctx.repo, "bambu") : null;
-            let hostStatus: PrinterHostStatus | null = null;
-            if (bambuAccess && bambuAccess.kind !== "allowed") {
-              hostStatus = { state: "unknown", message: bambuAccess.error };
-            } else if (m.integration_id && ctx.integrations) {
-              try {
-                hostStatus = await ctx.integrations.getStatus(m.integration_id);
-              } catch {
-                hostStatus = { state: "offline" };
-              }
-            }
-            return { machine: m, isBambu, hostStatus };
-          }),
-        );
-
-        const printers = probes.map(({ machine: m, isBambu, hostStatus: probedStatus }) => {
-          let hostStatus = probedStatus;
-          const bambuAccess = isBambu ? readFeatureAccess(() => ctx.repo, "bambu") : null;
-          if (bambuAccess && bambuAccess.kind !== "allowed") {
-            hostStatus = { state: "unknown", message: bambuAccess.error };
-          }
+        const hostStatuses = await probeFleetHostStatus(ctx.repo, ctx.integrations, fleet);
+        const printers = fleet.map((m, i) => {
+          const hostStatus = hostStatuses[i] ?? null;
           const state = hostStatus?.state ?? "unknown";
           const filament = printerFilamentStatus(m, lookupSpools, hostStatus);
 

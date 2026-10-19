@@ -131,16 +131,22 @@ pub(crate) struct Command {
     policy: auth::AuthPolicy,
 }
 impl WriterOwner {
-    pub fn publication(&self) -> PublicationClient {
-        PublicationClient {
-            shared: self.client.shared.clone(),
-            policy: auth::AuthPolicy {
-                registration: auth::RegistrationPolicy::Open,
-                session_tenant: auth::SessionTenantPolicy::AccountTenant,
-                first_user: auth::FirstUserTenant::NewUser,
-            },
-        }
+    #[cfg(test)]
+    pub(crate) fn publication(&self) -> PublicationClient {
+        self.publication_with_policy(auth::AuthPolicy {
+            registration: auth::RegistrationPolicy::Open,
+            session_tenant: auth::SessionTenantPolicy::AccountTenant,
+            first_user: auth::FirstUserTenant::NewUser,
+        })
+        .expect("Valid publication test policy")
     }
+    /// The deployment must select its authentication policy explicitly.
+    ///
+    /// ```compile_fail,E0599
+    /// fn client(owner: &pp_storage::WriterOwner) {
+    ///     owner.publication();
+    /// }
+    /// ```
     pub fn publication_with_policy(&self, policy: auth::AuthPolicy) -> Result<PublicationClient> {
         auth::validate_policy(policy)?;
         Ok(PublicationClient {
@@ -1145,6 +1151,11 @@ pub(crate) fn publish_in_transaction(
                 stored["createdAt"] == u.created_at && num(&stored, "createdInRevisionId")? > 0,
                 "Invalid Required-unit origin"
             );
+            model::validate_named_text(
+                &stored,
+                &["token", "tenantId", "objectName", "createdAt"],
+                0,
+            )?;
             base.insert(u.token.clone(), (stored, u.completed, u.assembled));
             base_identity.insert(u.token.clone(), (p.id, u));
             old_tokens.insert(
