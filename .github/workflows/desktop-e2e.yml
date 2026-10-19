@@ -2,15 +2,21 @@ name: Desktop embedded driver smoke
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - 'desktop/e2e/**'
       - 'web/**'
       - 'rust/crates/**'
       - 'rust/scripts/**'
       - 'rust-toolchain.toml'
+      - 'scripts/setup-ci-linux.sh'
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
       - '.github/workflows/desktop-e2e.yml'
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -22,10 +28,11 @@ concurrency:
 
 jobs:
   linux-smoke:
-    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 90
     env:
-      CARGO_BUILD_JOBS: '4'
+      CARGO_BUILD_JOBS: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && '3' || '4' }}
       VITE_PRINT_PARTNER_DESKTOP: '1'
       LIBGL_ALWAYS_SOFTWARE: '1'
       WEBKIT_DISABLE_DMABUF_RENDERER: '1'
@@ -33,6 +40,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Configure sccache on pp-local
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
+          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - name: Install WebKitGTK and a virtual display
         run: |
           sudo apt-get update
@@ -50,6 +72,7 @@ jobs:
       - name: Verify Node runtime
         run: test "$(node --version)" = "v22.23.3"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: runner.environment != 'self-hosted' || runner.os != 'Linux'
         with:
           workspaces: rust -> target
       - name: Install the staged Node 24.21.0 runtime
@@ -108,3 +131,8 @@ jobs:
           name: desktop-e2e-smoke
           path: ${{ runner.temp }}/gre492-proof/
           if-no-files-found: error
+      - name: Show sccache stats
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi

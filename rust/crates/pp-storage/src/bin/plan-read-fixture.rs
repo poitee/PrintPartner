@@ -1,3 +1,5 @@
+#[cfg(feature = "desktop_rebuild")]
+use anyhow::Context;
 use anyhow::{Result, ensure};
 use pp_storage::{
     Limits, WriterOwner,
@@ -55,10 +57,21 @@ fn main() -> Result<()> {
     )?;
     let after: i64 = witness.query_row("PRAGMA data_version", [], |r| r.get(0))?;
     ensure!(before == after, "Read operation changed database");
+    #[cfg(not(feature = "desktop_rebuild"))]
     let mut output = serde_json::to_value(&result)?;
+    #[cfg(feature = "desktop_rebuild")]
+    let mut output = json!({"builds": result.builds.iter().map(|build| {
+        let mut scalar = json!({"profileId": build.profile_id, "context": build.context});
+        if let Some(error) = &build.context_error {
+            scalar["contextError"] = json!(error);
+        }
+        scalar
+    }).collect::<Vec<_>>()});
+    #[cfg(feature = "desktop_rebuild")]
+    let mut raw_builds = Vec::new();
     output["readOnly"] =
         json!({"dataVersionBefore":before,"dataVersionAfter":after,"unchanged":before==after});
-    for (i, build) in result.builds.iter().enumerate() {
+    for (i, build) in result.builds.into_iter().enumerate() {
         output["builds"][i]["checkoff"] =
             views::checkoff(build.profile_id, &build.accepted, &CatalogOnly)?;
         output["builds"][i]["progress"] = views::progress(build.profile_id, &build.accepted);
@@ -76,6 +89,8 @@ fn main() -> Result<()> {
                 .map(|id| views::assembled(id, &build.accepted))
                 .collect(),
         );
+        #[cfg(feature = "desktop_rebuild")]
+        let mut raw_fields = std::collections::BTreeMap::new();
         if let Some(obs) = &observations {
             #[cfg(feature = "desktop_rebuild")]
             {
@@ -84,10 +99,18 @@ fn main() -> Result<()> {
                     output["builds"][i]["reviewSummary"] =
                         serde_json::from_slice(&summary.into_bytes())?;
                 }
-                output["builds"][i]["review"] = serde_json::from_slice(&review.into_bytes())?;
-                output["builds"][i]["reviewAll"] = serde_json::from_slice(
-                    &views::review_json(&build.accepted, true, obs, &CatalogOnly)?.into_bytes(),
-                )?;
+                raw_fields.insert(
+                    "review".to_string(),
+                    serde_json::from_slice::<Box<serde_json::value::RawValue>>(
+                        &review.into_bytes(),
+                    )?,
+                );
+                raw_fields.insert(
+                    "reviewAll".to_string(),
+                    serde_json::from_slice::<Box<serde_json::value::RawValue>>(
+                        &views::review_json(&build.accepted, true, obs, &CatalogOnly)?.into_bytes(),
+                    )?,
+                );
             }
             #[cfg(not(feature = "desktop_rebuild"))]
             {
@@ -101,7 +124,34 @@ fn main() -> Result<()> {
                 }
             }
         }
+        #[cfg(feature = "desktop_rebuild")]
+        {
+            raw_fields.insert(
+                "accepted".to_string(),
+                serde_json::from_slice::<Box<serde_json::value::RawValue>>(
+                    &build.accepted.into_json_body()?.into_bytes(),
+                )?,
+            );
+            for (key, value) in output["builds"][i]
+                .as_object()
+                .context("Fixture build output is not an object")?
+            {
+                raw_fields.insert(key.clone(), serde_json::value::to_raw_value(value)?);
+            }
+            raw_builds.push(raw_fields);
+        }
     }
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        let mut raw_output = std::collections::BTreeMap::new();
+        raw_output.insert("builds", serde_json::value::to_raw_value(&raw_builds)?);
+        raw_output.insert(
+            "readOnly",
+            serde_json::value::to_raw_value(&output["readOnly"])?,
+        );
+        println!("{}", serde_json::to_string(&raw_output)?);
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
     println!("{}", json!(output));
     owner.shutdown()?;
     Ok(())

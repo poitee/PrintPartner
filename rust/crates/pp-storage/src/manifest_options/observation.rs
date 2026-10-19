@@ -170,6 +170,7 @@ pub(crate) fn observe(
         sources.push(observed.row);
         stamps.push((source.source_id, observed.stamp));
     }
+    budget.check()?;
     Ok(ObservedBuilder {
         builder: ManifestBuilder {
             profile_id: captured.build,
@@ -406,12 +407,10 @@ fn scanned_paths(
 
 fn import_rules(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<Vec<String>> {
     budget.document(raw.len(), raw.len())?;
-    let parsed = match json::parse(js_trim(raw).as_bytes()) {
-        Ok(parsed) => parsed,
-        Err(JsonError::Syntax) => return Ok(Vec::new()),
-        Err(JsonError::Limit(limit)) => return Err(limit_exceeded(limit)),
+    let parsed = match parse_json(&js_trim(raw), budget)? {
+        Some(parsed) => parsed,
+        None => return Ok(Vec::new()),
     };
-    charge_nodes(&parsed, 0, budget)?;
     let JsonValue::Array(values) = parsed else {
         return Ok(Vec::new());
     };
@@ -439,13 +438,30 @@ fn import_rules(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<Vec
 /// nodes to `budget`. Malformed kits read as empty.
 pub(crate) fn stored_kit(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<KitManifest> {
     budget.document(raw.len(), raw.len())?;
-    match json::parse(raw.as_bytes()) {
-        Ok(parsed) => {
-            charge_nodes(&parsed, 0, budget)?;
-            Ok(KitManifest::from_stored_or_empty(parsed))
-        }
-        Err(JsonError::Syntax) => Ok(KitManifest::default()),
-        Err(JsonError::Limit(limit)) => Err(limit_exceeded(limit)),
+    Ok(parse_json(raw, budget)?
+        .map(KitManifest::from_stored_or_empty)
+        .unwrap_or_default())
+}
+
+enum BudgetedJsonError {
+    Json(JsonError),
+    Budget(ReadFailure),
+}
+
+impl From<JsonError> for BudgetedJsonError {
+    fn from(error: JsonError) -> Self {
+        Self::Json(error)
+    }
+}
+
+fn parse_json(raw: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<Option<JsonValue>> {
+    match json::parse_with_node(raw.as_bytes(), |depth| {
+        budget.node(depth).map_err(BudgetedJsonError::Budget)
+    }) {
+        Ok(parsed) => Ok(Some(parsed)),
+        Err(BudgetedJsonError::Json(JsonError::Syntax)) => Ok(None),
+        Err(BudgetedJsonError::Json(JsonError::Limit(limit))) => Err(limit_exceeded(limit)),
+        Err(BudgetedJsonError::Budget(error)) => Err(error),
     }
 }
 
@@ -455,29 +471,6 @@ fn limit_exceeded(limit: JsonLimit) -> ReadFailure {
         JsonLimit::Depth => Resource::Depth,
         JsonLimit::Nodes => Resource::Nodes,
     })
-}
-
-fn charge_nodes(
-    value: &JsonValue,
-    depth: usize,
-    budget: &mut PreparationBudget<'_>,
-) -> ReadResult<()> {
-    budget.node(depth)?;
-    match value {
-        JsonValue::Array(values) => {
-            for value in values {
-                charge_nodes(value, depth + 1, budget)?;
-            }
-        }
-        JsonValue::Object(object) => {
-            for (_, value) in object.iter() {
-                budget.node(depth + 1)?;
-                charge_nodes(value, depth + 1, budget)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
 }
 
 fn imported(path: &str, rules: &[String]) -> bool {

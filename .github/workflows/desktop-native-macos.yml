@@ -3,7 +3,7 @@ name: Native macOS bundle
 on:
   workflow_dispatch:
   # Job conditions keep skipped check reports present. Hosted macOS runs on
-  # ready PRs only with the macos label. Main, merge groups, nightly and manual
+  # ready PRs only with the macos label and relevant changed paths. Main, merge groups, nightly and manual
   # runs select every macOS job, including Intel, regardless of changed paths.
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -36,10 +36,22 @@ jobs:
       # 'true' only off-PR (push to main, nightly, dispatch).
       intel: ${{ steps.plan.outputs.intel }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed inputs
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci-path-filter.py native
       - name: Decide which macOS jobs run
         id: plan
         shell: bash
         env:
+          RELEVANT: ${{ steps.select.outputs.relevant }}
           EVENT_NAME: ${{ github.event_name }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           HAS_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'macos') }}
@@ -47,7 +59,7 @@ jobs:
           set -euo pipefail
           if [[ "$EVENT_NAME" != pull_request ]]; then
             macos=true intel=true
-          elif [[ "$HAS_LABEL" == true && "$IS_DRAFT" == false ]]; then
+          elif [[ "$HAS_LABEL" == true && "$IS_DRAFT" == false && "$RELEVANT" != false ]]; then
             macos=true intel=false
           else
             macos=false intel=false
@@ -61,17 +73,22 @@ jobs:
   linux-precheck:
     needs: changes
     if: ${{ needs.changes.outputs.macos == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v24.21.0"
       - name: Build desktop web assets on Linux
         env:
           VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -87,7 +104,7 @@ jobs:
     concurrency:
       group: native-macos-server-smoke-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    runs-on: macos-26
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macos","arm64","pp-local-mac"]') || 'macos-26' }}
     timeout-minutes: 30
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -96,6 +113,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python tool cache for the VM user
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - name: Test leftover-process probe status handling
         run: |
           set -euo pipefail
@@ -104,6 +145,8 @@ jobs:
         with:
           node-version: '24.21.0'
           architecture: arm64
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v24.21.0"
       - name: Build desktop assets and pp-server
         run: |
           set -euo pipefail
@@ -145,7 +188,7 @@ jobs:
     concurrency:
       group: native-macos-bundle-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    runs-on: macos-26
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macos","arm64","pp-local-mac"]') || 'macos-26' }}
     timeout-minutes: 90
     env:
       ARCH: arm64
@@ -161,6 +204,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python tool cache for the VM user
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - name: Record runner and check parser controls
         run: |
           export PP_EVIDENCE="$RUNNER_TEMP/desktop-evidence"
@@ -181,6 +248,8 @@ jobs:
           architecture: ${{ env.NODE_ARCH }}
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v24.21.0"
       # Cached Tauri CLI archive; the pinned SHA-256 below is still verified
       # on every run, so a poisoned cache entry fails closed.
       - name: Restore Tauri CLI archive
@@ -220,6 +289,10 @@ jobs:
           test "$(node -p process.version)" = v24.21.0
           test "$(node -p process.versions.modules)" = 137
           npm --version > "$PP_EVIDENCE/npm-version.txt"
+          npm_config_nodedir="$(node -p 'require("path").dirname(require("path").dirname(process.execPath))')"
+          export npm_config_nodedir
+          test -f "$npm_config_nodedir/include/node/node.h"
+          test -f "$npm_config_nodedir/include/node/config.gypi"
           npm --prefix web ci 2>&1 | tee "$PP_EVIDENCE/npm-ci.log"
           npm --prefix web run build 2>&1 | tee "$PP_EVIDENCE/react-build.log"
           git diff --exit-code -- web/package-lock.json
@@ -324,12 +397,36 @@ jobs:
     concurrency:
       group: native-macos-storage-gate-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    runs-on: macos-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macos","arm64","pp-local-mac"]') || 'macos-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Prepare Python tool cache for the VM user
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - name: Fetch pinned historical schema commits
         shell: bash
         run: rust/scripts/fetch-historical-schema-commits.sh
@@ -337,6 +434,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v22.23.3"
       - name: Record storage-fixture executable
         shell: bash
         run: |
@@ -345,12 +444,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v24.21.0"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust -> target
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: nextest@0.9.148
+      - name: Test owned image cleanup and native holder reporting
+        run: python3 scripts/test_native_image_cleanup.py -v
       - name: Verify source Unicode and case regressions on macOS
         shell: bash
         run: |
@@ -365,7 +468,7 @@ jobs:
             -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
           hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
             "$fixture_root/fixtures.sparseimage"
-          trap '
+          cleanup_source_fixture() {
             result=$?
             for attempt in 1 2 3; do
               if hdiutil detach "$fixture_mount"; then
@@ -375,11 +478,14 @@ jobs:
                 sleep 2
               fi
             done
+            echo "Open files on owned test fixture at $fixture_mount before forced detach:"
+            lsof +f -- "$fixture_mount" || echo "::warning::lsof found no holders or failed at $fixture_mount (status $?)"
             if ! hdiutil detach -force "$fixture_mount"; then
               echo "::warning::Could not detach owned test fixture at $fixture_mount"
             fi
             exit "$result"
-          ' EXIT
+          }
+          trap cleanup_source_fixture EXIT
           df -h "$fixture_mount"
           mkdir "$fixture_mount/tmp"
           TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source

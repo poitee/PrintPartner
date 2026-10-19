@@ -494,6 +494,23 @@ fn cancellation_before_matching_without_paths_or_parts_refuses() {
             Err(ReadFailure::Cancelled)
         ));
     }
+    let mut database = Database::oracle();
+    database
+        .connection
+        .execute_batch(
+            "DELETE FROM profile_layers WHERE project_id<>1; UPDATE projects SET imported_paths=NULL, manifest_community_slug='slow-kit' WHERE id=1",
+        )
+        .unwrap();
+    let captured = database.capture(TENANT, 1).unwrap();
+    let reads = LongPaths {
+        manifest: b"option_groups: {slow: {variants: []}}".to_vec(),
+        paths: Vec::new(),
+        checks_before_cancel: 0,
+    };
+    assert!(matches!(
+        observe(&captured, Some(&reads), PreparationLimits::default(), false),
+        Err(ReadFailure::Cancelled)
+    ));
 }
 
 fn import_only_source(imported_paths: &str) -> Database {
@@ -532,6 +549,24 @@ fn import_arrays_over_the_node_limit_refuse_instead_of_dropping_parts() {
     assert_eq!(scanned(99_993), Ok(vec!["part.stl".to_owned()]));
     assert_eq!(scanned(99_994), Err("LimitExceeded(Nodes)".to_owned()));
     assert_eq!(scanned(100_000), Err("LimitExceeded(Nodes)".to_owned()));
+}
+
+#[test]
+fn import_rules_charge_overwritten_nested_unknown_fields() {
+    let mut database = import_only_source(r#"{"unknown":{"nested":[0,1,2]},"unknown":null}"#);
+    let captured = database.capture(TENANT, 1).unwrap();
+    assert!(matches!(
+        observe(
+            &captured,
+            Some(&part_reads()),
+            PreparationLimits {
+                nodes: 8,
+                ..PreparationLimits::default()
+            },
+            false,
+        ),
+        Err(ReadFailure::LimitExceeded(Resource::Nodes))
+    ));
 }
 
 #[test]
@@ -661,6 +696,119 @@ fn stored_kits_over_the_json_limits_refuse_instead_of_dropping_selections() {
         observed(many(99_993)),
         Err("LimitExceeded(Nodes)".to_owned())
     );
+}
+
+#[test]
+fn stored_kit_charges_overwritten_nested_unknown_fields() {
+    let cancelled = AtomicBool::new(false);
+    let limits = PreparationLimits {
+        nodes: 7,
+        ..PreparationLimits::default()
+    };
+    let mut budget = PreparationBudget::new(&cancelled, limits).unwrap();
+    assert!(
+        observation::stored_kit(
+            r#"{"selections":{"zeta":"z1"},"unknown":null}"#,
+            &mut budget,
+        )
+        .is_ok()
+    );
+
+    let mut budget = PreparationBudget::new(&cancelled, limits).unwrap();
+    assert!(matches!(
+        observation::stored_kit(
+            r#"{"selections":{"zeta":"z1"},"unknown":{"nested":[0,1,2]},"unknown":null}"#,
+            &mut budget,
+        ),
+        Err(ReadFailure::LimitExceeded(Resource::Nodes))
+    ));
+}
+
+#[test]
+fn stored_kit_preserves_duplicate_free_node_counts_and_depth() {
+    for (nodes, depth, expected) in [
+        (6, 3, Ok(())),
+        (5, 3, Err("LimitExceeded(Nodes)".to_owned())),
+        (6, 2, Err("LimitExceeded(Depth)".to_owned())),
+    ] {
+        let cancelled = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                nodes,
+                depth,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            observation::stored_kit(r#"{"unknown":{"leaf":[null]}}"#, &mut budget)
+                .map(drop)
+                .map_err(|error| format!("{error:?}")),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn stored_kit_malformed_value_tokens_preserve_the_remaining_node_budget() {
+    for (raw, nodes) in [
+        ("", 0),
+        (" \t\r\n", 0),
+        ("[0,]", 2),
+        (r#"{"key": }"#, 2),
+        ("n", 0),
+        ("tru", 0),
+        ("fals", 0),
+        (r#""\q""#, 0),
+        (r#""unterminated"#, 0),
+        ("1.", 0),
+        ("1e", 0),
+        ("1e+", 0),
+        (r#"{"kept":0,"nested":[true,n]}"#, 6),
+        (r#"{"kept":0,"nested":[true,"\q"]}"#, 6),
+        (r#"{"kept":0,"nested":[true,"unterminated"#, 6),
+        ("[0,1.]", 2),
+        ("[0,1e+]", 2),
+    ] {
+        for remaining in [0, 1] {
+            let cancelled = AtomicBool::new(false);
+            let mut budget = PreparationBudget::new(
+                &cancelled,
+                PreparationLimits {
+                    nodes: nodes + remaining,
+                    ..PreparationLimits::default()
+                },
+            )
+            .unwrap();
+            let kit = observation::stored_kit(raw, &mut budget)
+                .unwrap_or_else(|error| panic!("{raw:?}, {remaining} remaining: {error:?}"));
+            let mut output = Vec::new();
+            kit.write_selections_json(&mut output);
+            assert_eq!(output, b"{}", "{raw:?}");
+            if remaining == 1 {
+                assert!(
+                    observation::stored_kit("{}", &mut budget).is_ok(),
+                    "remaining budget after {raw:?}",
+                );
+            }
+            assert!(matches!(
+                observation::stored_kit("{}", &mut budget),
+                Err(ReadFailure::LimitExceeded(Resource::Nodes))
+            ));
+        }
+    }
+}
+
+#[test]
+fn stored_kit_cancels_during_parse_before_malformed_tail() {
+    let cancelled = AtomicBool::new(false);
+    let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    budget.cancel_after_checks(4);
+    assert!(matches!(
+        observation::stored_kit(r#"{"unknown":[0,1,2,3],"unknown":null,"#, &mut budget),
+        Err(ReadFailure::Cancelled)
+    ));
 }
 
 #[test]
@@ -820,6 +968,20 @@ fn the_stored_kit_shares_the_node_allowance_with_import_rules() {
     // {"selections":{"zeta":"z1"}} charges its root, two keys, the inner object and one value.
     assert_eq!(outcome(&both, 7), Ok(()));
     assert_eq!(outcome(&both, 6), Err("LimitExceeded(Nodes)".to_owned()));
+
+    database
+        .connection
+        .execute(
+            "INSERT INTO app_settings (tenant_id,key,value) VALUES (?1,'kit_manifest_1',?2)",
+            params![TENANT, r#"{"kept":0,"nested":[true,n]}"#],
+        )
+        .unwrap();
+    let malformed = database.capture(TENANT, 1).unwrap();
+    assert_eq!(outcome(&malformed, 8), Ok(()));
+    assert_eq!(
+        outcome(&malformed, 7),
+        Err("LimitExceeded(Nodes)".to_owned())
+    );
 }
 
 #[test]

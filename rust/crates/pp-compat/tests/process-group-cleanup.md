@@ -12,6 +12,41 @@ The fix runs that fixture in a dedicated process. Other tests retain their
 strict assertions that both the descendant PID and its process group disappear.
 It does not add retries, increase cleanup deadlines, or ignore zombies.
 
+## Re-execution proof
+
+The Linux subreaper fixture captures its child test executable's output. A
+successful proof requires exit status zero, exactly one passing result for the
+named fixture, and one libtest summary with one passed test and no failures,
+ignored tests, or measured tests. A missing exact test name exits zero with zero
+tests, which the validator rejects. The existing descendant assertions still
+run in the isolated child.
+The launcher inherits stderr so a paused descendant cannot keep a failed
+fixture's captured stderr pipe open.
+
+Run these commands from `rust/` to prepare disposable simulator assets and
+verify the two regressions and the original fixture in both feature modes.
+
+```sh
+CARGO_TARGET_DIR=/path/to/disposable-target python3 scripts/prove-measured-startup-death.py --evidence /path/to/disposable-evidence
+```
+
+Read `/path/to/disposable-evidence/environment.json` and export its values as
+`PP_DESKTOP_RELEASE_MANIFEST` and `PP_COMPAT_MEASURED_STARTUP_STAGE`. Keep both
+variables set for full package suites. Export `CARGO_TARGET_DIR` with the same
+disposable target path for the following commands.
+
+```sh
+cargo test -p pp-compat --locked --no-default-features --lib subreaper_reexec
+cargo test -p pp-compat --locked --no-default-features --lib ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced
+cargo test -p pp-compat --locked --features desktop_rebuild --lib subreaper_reexec
+cargo test -p pp-compat --locked --features desktop_rebuild --lib ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced
+```
+
+Each regression command runs two tests. Each original-fixture command runs one
+test. `subreaper_reexec_runs_exactly_one_fixture` runs the actual fixture in a
+child executable. `subreaper_reexec_wrong_name_is_failure` confirms that the
+child exits zero with zero tests and that validation rejects its output.
+
 ## Captured failure
 
 Base was `a5e8b16f0f1ea15d1a6e5c4228fb66a1e5148aeb`. Four CPU burners ran
@@ -168,3 +203,32 @@ guards. They failed before the validator correction and pass afterward.
 ```sh
 python3 rust/crates/pp-compat/tests/test_stress_group_cleanup.py
 ```
+
+## GRE-733 macOS group lifetime
+
+The failed-leader-wait fixture now owns both processes in the group. Each shell
+execs `/bin/sleep 300`, so neither process creates descendants. The member
+ignores SIGTERM. After exact-PID `waitpid` reaps the killed leader, the fixture
+runs `drive_shutdown_group` and the member's waiter concurrently. It requires
+SIGKILL for the member, `ECHILD` under the exact `Child reap failed` message,
+and `ESRCH` for the group within the original two-second bound. A five-second
+watchdog fails before explicit member cleanup can satisfy those assertions.
+The fixture runs 50 cases per macOS invocation and one per Linux invocation.
+These are stress cases. The first failure aborts the test.
+
+Apple's [XNU group signal implementation](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_sig.c#L1675) filters `SZOMB` members
+from explicit process-group probes. An existing group with no eligible members
+returns `EPERM`. [Child reaping](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_exit.c#L2827) removes it from its group.
+The macOS-only `ticket_t_3_drain_zombie_group_remains_until_owned_child_is_reaped`
+test checks that mechanism with an owned child. Exact-PID `waitid` with
+`WNOWAIT` observes the exit without reaping it. Before reaping, the test requires
+`EPERM` and production `process_group_absent` to return false. After reaping,
+it requires `ESRCH` and true.
+
+The historical macOS failure reported `EPERM` with no matching `ps` rows.
+That observation is consistent with a zombie-only group, but does not prove
+the exact historical process state. The old fixture orphaned descendants and
+depended on launchd to reap them within two seconds. The new fixture removes
+that dependency. The macOS-only test runs through the existing macOS CI gate; Linux stress
+alone cannot establish these kernel semantics.
+Production `drain.rs` and the true-descendant tests are unchanged.

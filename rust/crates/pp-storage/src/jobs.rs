@@ -751,13 +751,15 @@ impl ServerWorkerClient {
         )?)
         .receive()
     }
-    /// Runs one phase of a claimed supplied import. A refused original authority
+    /// Runs one phase of a claimed supplied import with a live reservation for
+    /// its tenant and Source. A refused original authority
     /// commits the refusal and its Source observation before returning the typed
     /// failure.
     #[cfg(feature = "desktop_rebuild")]
     pub fn import_phase(
         &self,
         lease: &AttemptLease,
+        source_work: &crate::catalog::SourceWorkLease,
         phase: crate::uploads::Phase,
     ) -> Result<crate::uploads::Operation> {
         ensure!(lease.worker == self.identity, "Foreign worker lease");
@@ -766,6 +768,7 @@ impl ServerWorkerClient {
             &self.storage,
             crate::uploads::Command::Phase {
                 lease: lease.clone(),
+                source_work: source_work.proof()?,
                 phase,
                 policy,
             },
@@ -2015,6 +2018,15 @@ pub(crate) fn user(
             job.cancel_requested = true;
             #[cfg(feature = "desktop_rebuild")]
             if job.kind == JobKind::Sync {
+                if job.state == PersistentState::ReconciliationRequired
+                    && job.authority_refusal.as_ref().is_some_and(|refusal| {
+                        refusal.phase == AuthorityRefusalPhase::SourceWriter
+                            && refusal.generation == job.generation - 1
+                    })
+                {
+                    save(tx, &mut job, "cancellation_requested")?;
+                    return Ok(Outcome::Job(job, LocalCommit::Committed));
+                }
                 let job = crate::source_sync::halt_job(tx, job, "cancelled", "Sync was cancelled")?;
                 return Ok(Outcome::Job(job, LocalCommit::Committed));
             }
@@ -2601,6 +2613,18 @@ fn advance(
     #[cfg(feature = "desktop_rebuild")] policy: Option<AuthPolicy>,
 ) -> Result<TransactionDecision> {
     let mut job = claimed_job(tx, &lease)?;
+    #[cfg(feature = "desktop_rebuild")]
+    if job.kind == JobKind::Sync {
+        match &operation {
+            WorkerOperation::BeginEffect(_)
+            | WorkerOperation::ConfirmEffect(_)
+            | WorkerOperation::Finish(_)
+            | WorkerOperation::FinishPublic { .. } => {
+                return Err(anyhow!("Sync operation belongs to its journal owner"));
+            }
+            WorkerOperation::Heartbeat | WorkerOperation::Progress(_) | WorkerOperation::Fail => {}
+        }
+    }
     #[cfg(feature = "desktop_rebuild")]
     if let Some(refusal) = refuse_advance(tx, &mut job, &operation, policy)? {
         return Ok(TransactionDecision::Refused(refusal));
@@ -3245,7 +3269,7 @@ pub(crate) fn publication_conflicts(
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/common/claimed_attempt.rs"
+        "/src/claimed_attempt.rs"
     ));
     use super::*;
 
@@ -3459,13 +3483,11 @@ mod tests {
     }
     #[cfg(feature = "desktop_rebuild")]
     fn test_storage() -> SettingsClient {
-        let (owner, _) = WriterOwner::open(
-            &std::env::temp_dir().join(format!("pp-claim-unit-{}", random())),
-            crate::Limits::default(),
-        )
-        .unwrap();
+        let root = std::env::temp_dir().join(format!("pp-claim-unit-{}", random()));
+        let (owner, _) = WriterOwner::open(&root, crate::Limits::default()).unwrap();
         let client = owner.client();
         owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         client
     }
 

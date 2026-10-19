@@ -131,16 +131,22 @@ pub(crate) struct Command {
     policy: auth::AuthPolicy,
 }
 impl WriterOwner {
-    pub fn publication(&self) -> PublicationClient {
-        PublicationClient {
-            shared: self.client.shared.clone(),
-            policy: auth::AuthPolicy {
-                registration: auth::RegistrationPolicy::Open,
-                session_tenant: auth::SessionTenantPolicy::AccountTenant,
-                first_user: auth::FirstUserTenant::NewUser,
-            },
-        }
+    #[cfg(test)]
+    pub(crate) fn publication(&self) -> PublicationClient {
+        self.publication_with_policy(auth::AuthPolicy {
+            registration: auth::RegistrationPolicy::Open,
+            session_tenant: auth::SessionTenantPolicy::AccountTenant,
+            first_user: auth::FirstUserTenant::NewUser,
+        })
+        .expect("Valid publication test policy")
     }
+    /// The deployment must select its authentication policy explicitly.
+    ///
+    /// ```compile_fail,E0599
+    /// fn client(owner: &pp_storage::WriterOwner) {
+    ///     owner.publication();
+    /// }
+    /// ```
     pub fn publication_with_policy(&self, policy: auth::AuthPolicy) -> Result<PublicationClient> {
         auth::validate_policy(policy)?;
         Ok(PublicationClient {
@@ -687,19 +693,6 @@ fn admission_matches(tx: &Transaction<'_>, parent: &Value, request: &ApplyReques
         None => parent["requestDigest"] == digest,
     })
 }
-fn validate_text(row: &Value) -> Result<()> {
-    ensure!(
-        row.as_object()
-            .ok_or_else(|| anyhow!("Invalid publication row"))?
-            .values()
-            .filter_map(Value::as_str)
-            .map(str::len)
-            .sum::<usize>()
-            <= 65536,
-        "Accepted operational row text limit"
-    );
-    Ok(())
-}
 fn sql_value(value: &Value) -> Result<rusqlite::types::Value> {
     Ok(match value {
         Value::Null => rusqlite::types::Value::Null,
@@ -713,7 +706,34 @@ fn sql_value(value: &Value) -> Result<rusqlite::types::Value> {
     })
 }
 fn insert(tx: &Transaction<'_>, table: &str, row: &Value, ignore: bool) -> Result<i64> {
-    validate_text(row)?;
+    let fields: &[&str] = match table {
+        "plan_revision_input_sets" => &["tenantId", "inputSetDigest", "recordedAt", "recordedAt"],
+        "plan_revision_inputs" => &[
+            "tenant_id",
+            "source_layer",
+            "tracking_kind",
+            "manifest_digest",
+            "effective_naming_digest",
+        ],
+        "plan_revisions" => &[
+            "tenantId",
+            "provenanceKind",
+            "digestFormat",
+            "snapshotDigest",
+            "createdBy",
+            "acceptedBy",
+            "createdAt",
+            "acceptedAt",
+        ],
+        "required_units" => &["tenantId", "token", "objectName", "createdAt"],
+        "plan_revision_required_unit_sets" => &["tenantId", "format", "mappingDigest", "createdAt"],
+        "plan_revision_required_units"
+        | "print_progress"
+        | "plan_apply_requests"
+        | "plan_apply_admissions" => &[],
+        _ => return Err(anyhow!("Unsupported publication table")),
+    };
+    model::validate_named_text(row, fields, 0)?;
     let fields = row.as_object().ok_or_else(|| anyhow!("Invalid row"))?;
     let names: Vec<_> = fields.keys().map(|k| model::snake(k)).collect();
     let values = fields.values().map(sql_value).collect::<Result<Vec<_>>>()?;
@@ -733,7 +753,7 @@ fn insert(tx: &Transaction<'_>, table: &str, row: &Value, ignore: bool) -> Resul
     Ok(tx.last_insert_rowid())
 }
 fn insert_part(tx: &Transaction<'_>, table: &str, part: &DraftPart) -> Result<i64> {
-    validate_text(&part.scalar)?;
+    model::validate_part_text(part, text(part, "tenantId")?.len())?;
     let mut fields = part
         .scalar
         .as_object()
@@ -866,7 +886,16 @@ pub(crate) fn receipt(
 fn validate_inputs(tx: &Transaction<'_>, tenant: &str, inputs: &[Value]) -> Result<()> {
     let mut seen = HashSet::new();
     for i in inputs {
-        validate_text(i)?;
+        model::validate_named_text(
+            i,
+            &[
+                "sourceLayer",
+                "trackingKind",
+                "manifestDigest",
+                "effectiveNamingDigest",
+            ],
+            tenant.len(),
+        )?;
         let source = num(i, "sourceId")?;
         ensure!(seen.insert(source), "Duplicate input Source");
         ensure!(
@@ -888,7 +917,17 @@ fn validate_inputs(tx: &Transaction<'_>, tenant: &str, inputs: &[Value]) -> Resu
                 &[&tenant, &source, &revision],
             )?
             .ok_or_else(|| anyhow!("Missing pinned Source revision"))?;
-            validate_text(&stored)?;
+            model::validate_named_text(
+                &stored,
+                &[
+                    "upstreamRevisionKey",
+                    "manifestDigest",
+                    "snapshotLocator",
+                    "syncedAt",
+                    "completeness",
+                ],
+                tenant.len(),
+            )?;
             ensure!(
                 stored["manifestDigest"] == i["manifestDigest"],
                 "Pinned manifest mismatch"
@@ -1112,6 +1151,11 @@ pub(crate) fn publish_in_transaction(
                 stored["createdAt"] == u.created_at && num(&stored, "createdInRevisionId")? > 0,
                 "Invalid Required-unit origin"
             );
+            model::validate_named_text(
+                &stored,
+                &["token", "tenantId", "objectName", "createdAt"],
+                0,
+            )?;
             base.insert(u.token.clone(), (stored, u.completed, u.assembled));
             base_identity.insert(u.token.clone(), (p.id, u));
             old_tokens.insert(

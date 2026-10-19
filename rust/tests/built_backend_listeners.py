@@ -21,6 +21,7 @@ import tempfile
 import time
 
 from built_backend_lifecycle import ROOT, STARTUP_SECONDS, STOP_SECONDS, group_absent, health, inherited_lock, require, write_json
+from backend_unix_listeners import UnixListenerFound, require_private_listener, unix_listeners
 
 WINDOW_SECONDS = 4
 POLL_SECONDS = .1
@@ -28,6 +29,16 @@ RUN_TOKEN = "PP_LISTENER_PROOF_RUN"
 
 # Each control is preloaded into the built backend with --import.
 CONTROLS = {
+    "extra_backend_unix_listener": """
+import { existsSync } from "node:fs";
+import { createServer } from "node:net";
+const waiting = setInterval(() => {
+  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET)) return;
+  clearInterval(waiting);
+  setTimeout(() => createServer().listen(process.env.PP_LISTENER_CONTROL_SOCKET + ".extra").unref(), 1000).unref();
+}, 50);
+waiting.unref();
+""",
     "child_listener": """
 import { spawn } from "node:child_process";
 spawn(process.execPath, ["-e", "require('node:net').createServer().listen(0, '127.0.0.1')"], { stdio: "ignore" }).unref();
@@ -71,7 +82,8 @@ spawn(process.env.PP_LISTENER_CONTROL_PYTHON, ["-c", helper], { detached: true, 
 Endpoint = namedtuple("Endpoint", "protocol address port uid inode pids")
 
 PROC_TABLES = {"tcp": "tcp4", "tcp6": "tcp6", "udp": "udp4", "udp6": "udp6"}
-OBSERVATION = {"linux": "/proc/net/{tcp,tcp6,udp,udp6}", "darwin": "netstat -anv -p tcp; netstat -anv -p udp"}
+OBSERVATION = {"linux": "/proc/net/{tcp,tcp6,udp,udp6}; backend fd inodes intersected with /proc/<pid>/net/unix",
+               "darwin": "netstat -anv -p tcp; netstat -anv -p udp; libproc backend SO_ACCEPTCONN sockets"}
 TCP_LISTEN, UDP_UNCONNECTED = "0A", "07"
 NETSTAT_PROTOCOLS = ("tcp4", "tcp6", "tcp46", "udp4", "udp6", "udp46")
 
@@ -186,6 +198,8 @@ udp46      0      0  *.62093                *.*                                7
 
 
 def parser_self_test():
+    from test_backend_unix_listeners import self_test
+    self_test()
     require(proc_endpoints("tcp6", LINUX_PROC_FIXTURE) == [
         Endpoint("tcp6", "fd7a:115c:a1e0::5831:6805", 443, 0, 21605, None),
         Endpoint("tcp6", "::1", 40001, 1000, 41002, None)],
@@ -231,9 +245,12 @@ class ListenerFound(AssertionError):
 class Watch:
     """Fails as soon as the kernel lists a new listening endpoint owned by this user or an owner it cannot name."""
 
-    def __init__(self):
+    def __init__(self, socket_path=None):
         self.baseline = endpoints()
         self.backend = None
+        self.socket_path = socket_path
+        self.ready = False
+        self.last_unix = []
         self.polls = 0
         self.other_users = {}
 
@@ -251,6 +268,9 @@ class Watch:
                 self.other_users[endpoint] = finding
         if owned:
             raise ListenerFound(owned, self.baseline, found)
+        if self.backend is not None and self.socket_path is not None:
+            self.last_unix = unix_listeners(self.backend)
+            require_private_listener(self.socket_path, self.last_unix, self.ready)
 
     def describe(self, endpoint):
         if endpoint.pids is None:
@@ -351,7 +371,7 @@ def run_backend(node, evidence, control=None):
     command = [str(node), "--no-global-search-paths", *preload,
                "--import", str(ROOT / "web/apps/server/dist/current/desktop-resolution.js"),
                str(ROOT / "web/apps/server/dist/current/desktop.js"), f"--pp-desktop-package-root={ROOT}"]
-    watch = Watch()
+    watch = Watch(socket_path)
     with (data / "printpartner.lock").open("w+b") as lock, \
             (evidence / "stdout.log").open("wb") as stdout, (evidence / "stderr.log").open("wb") as stderr:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -378,17 +398,23 @@ def run_backend(node, evidence, control=None):
                     time.sleep(.05)
             ready_at = time.monotonic()
             receipt["ready"] = {"polls": watch.polls}
+            watch.ready = True
+            watch.poll()
+            receipt["ready_unix_listeners"] = [listener._asdict() for listener in watch.last_unix]
             require(ready["authenticated"] is True and ready["data_dir"] == str(data), f"unexpected health: {ready}")
             receipt.update(assert_private_socket(socket_path))
             receipt["exercised"] = {"/health": health(socket_path, generation, key)["authenticated"],
                                     "/api/v1/sources": signed_get(socket_path, generation, key, "/api/v1/sources")}
             require(receipt["exercised"] == {"/health": True, "/api/v1/sources": 200},
                     f"exercise failed: {receipt['exercised']}")
+            watch.poll()
             while time.monotonic() - ready_at < WINDOW_SECONDS:
                 watch.poll()
                 require(child.poll() is None, f"backend exited during the observation window; see {evidence}")
                 time.sleep(POLL_SECONDS)
             receipt["window"] = {"seconds": round(time.monotonic() - ready_at, 2), "polls": watch.polls}
+            watch.ready = False
+            watch.socket_path = None
             child.stdin.close()
             stop_deadline = time.monotonic() + STOP_SECONDS
             while child.poll() is None:
@@ -399,7 +425,7 @@ def run_backend(node, evidence, control=None):
             require(child.returncode == -signal.SIGKILL, f"backend stopped with {child.returncode}, not its own SIGKILL")
             receipt.update(returncode=child.returncode, new_listeners=[])
             return receipt
-        except ListenerFound as found:
+        except (ListenerFound, UnixListenerFound) as found:
             found.seconds_after_ready = round(time.monotonic() - ready_at, 2) if "ready" in receipt else None
             raise
         finally:
@@ -407,6 +433,7 @@ def run_backend(node, evidence, control=None):
                 os.killpg(child.pid, signal.SIGKILL)
             child.wait(timeout=5)
             receipt.update(polls=watch.polls, killed_after_stop=kill_token_carriers(token),
+                           backend_unix_listeners=[listener._asdict() for listener in watch.last_unix],
                            ignored_other_users=list(watch.other_users.values()))
             write_json(evidence / "receipt.json", receipt)
             shutil.rmtree(runtime, ignore_errors=True)
@@ -422,6 +449,17 @@ def prove_control(node, evidence, control):
             time.sleep(.05)
         result = {"control": control, "expected_failure": str(error), "seconds_after_ready": error.seconds_after_ready,
                   "listeners_gone": not lingering}
+    except UnixListenerFound as error:
+        require(control == "extra_backend_unix_listener", f"unexpected Unix listener failure: {error}")
+        found = error.found
+        pid = json.loads((evidence / control / "receipt.json").read_text())["pid"]
+        require(any(listener.pid == pid and listener.path == error.expected + ".extra" for listener in found),
+                f"extra Unix listener was not attributed to the backend: {found}")
+        require(error.seconds_after_ready is not None and error.seconds_after_ready >= .9,
+                f"extra Unix listener was not observed after readiness: {error.seconds_after_ready}")
+        result = {"control": control, "expected_failure": str(error), "seconds_after_ready": error.seconds_after_ready,
+                  "listeners_gone": group_absent(pid)}
+        lingering = []
     else:
         raise AssertionError(f"negative control {control} unexpectedly passed")
     write_json(evidence / control / "negative-control.json", result)
@@ -481,6 +519,7 @@ def main():
     print(json.dumps({"parser_self_test": "passed", "observation": OBSERVATION[sys.platform]}), flush=True)
     receipt = run_backend(node, evidence / "backend")
     print(json.dumps(receipt), flush=True)
+    prove_control(node, evidence, "extra_backend_unix_listener")
 
     for control, check in CONTROL_CHECKS.items():
         if control == "non_dumpable_listener" and sys.platform == "darwin":

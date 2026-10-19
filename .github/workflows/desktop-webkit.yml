@@ -2,6 +2,7 @@ name: Desktop WebKitGTK WebGL smoke
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - 'rust/**'
       - 'rust-toolchain.toml'
@@ -10,7 +11,12 @@ on:
       - 'web/package*.json'
       - 'web/tsconfig.base.json'
       - 'web/scripts/atomic-package-build.mjs'
+      - 'scripts/setup-ci-linux.sh'
       - '.github/workflows/desktop-webkit.yml'
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -22,18 +28,33 @@ concurrency:
 
 jobs:
   webkit-stl:
-    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 40
     env:
       CARGO_BUILD_JOBS: '4'
       VITE_PRINT_PARTNER_DESKTOP: '1'
-      # GitHub-hosted runners have no GPU; Mesa llvmpipe supplies real WebGL.
+      # Mesa llvmpipe supplies real WebGL without a GPU.
       LIBGL_ALWAYS_SOFTWARE: '1'
       WEBKIT_DISABLE_DMABUF_RENDERER: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Configure sccache on pp-local
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
+          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on ephemeral Linux
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.99.0
       - name: Install WebKitGTK, WebDriver, Mesa and virtual display
         run: |
           sudo apt-get update
@@ -41,6 +62,13 @@ jobs:
             libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev pkg-config \
             webkit2gtk-driver xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 mesa-utils
+      - name: Verify diagnostic capture in real WebKit
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/webkit-proof"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' \
+            python3 rust/tests/test_webkit_diagnostics.py -v 2>&1 \
+            | tee "$RUNNER_TEMP/webkit-proof/diagnostics-tests.log"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
@@ -49,6 +77,7 @@ jobs:
       - name: Verify Node runtime
         run: test "$(node --version)" = "v24.21.0"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: runner.environment != 'self-hosted' || runner.os != 'Linux'
         with:
           workspaces: rust -> target
       - name: Build and stage the production desktop assets
@@ -65,9 +94,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/webkit-proof"
+          dbus-run-session -- xvfb-run -a glxinfo -B > "$RUNNER_TEMP/webkit-proof/runner-glxinfo.txt" 2>&1 || true
           dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' \
             python3 rust/tests/webkit_stl_smoke.py --stage "$RUNNER_TEMP/webkit-stage" \
-            --output "$RUNNER_TEMP/webkit-proof" | tee "$RUNNER_TEMP/webkit-proof/verify.log"
+            --output "$RUNNER_TEMP/webkit-proof" 2>&1 | tee "$RUNNER_TEMP/webkit-proof/verify.log"
           cat "$RUNNER_TEMP/webkit-proof/receipt.json" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload native screenshot and WebGL proof
         if: always()
@@ -82,3 +112,8 @@ jobs:
         env:
           ARTIFACT_URL: ${{ steps.proof.outputs.artifact-url }}
         run: echo "Screenshot and WebGL receipt $ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Show sccache stats
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi

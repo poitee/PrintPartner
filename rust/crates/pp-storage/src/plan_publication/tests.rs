@@ -1,5 +1,7 @@
 #[path = "tests/client.rs"]
 mod client;
+#[path = "tests/policy.rs"]
+mod policy;
 
 use super::*;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, PartManifestMetadata};
@@ -125,6 +127,170 @@ fn preparation_text_limit_counts_node_fields_as_utf8() {
     // The other named fields hold 51 bytes: 51 + 3 * 21828 = 65535.
     prepare(21828).unwrap();
     assert_eq!(error(prepare(21829)), "Accepted operational row text limit");
+}
+
+#[test]
+fn inserted_rows_count_only_node_named_text_fields() {
+    for (table, fields, excluded) in [
+        (
+            "plan_revision_input_sets",
+            vec!["tenantId", "inputSetDigest", "recordedAt", "recordedAt"],
+            "formatVersion",
+        ),
+        (
+            "plan_revision_inputs",
+            vec![
+                "tenant_id",
+                "source_layer",
+                "tracking_kind",
+                "manifest_digest",
+                "effective_naming_digest",
+            ],
+            "source_id",
+        ),
+        (
+            "plan_revisions",
+            vec![
+                "tenantId",
+                "provenanceKind",
+                "digestFormat",
+                "snapshotDigest",
+                "createdBy",
+                "acceptedBy",
+                "createdAt",
+                "acceptedAt",
+            ],
+            "profileId",
+        ),
+        (
+            "required_units",
+            vec!["tenantId", "token", "objectName", "createdAt"],
+            "profileId",
+        ),
+        (
+            "plan_revision_required_unit_sets",
+            vec!["tenantId", "format", "mappingDigest", "createdAt"],
+            "profileId",
+        ),
+        ("plan_revision_required_units", vec![], "requiredUnitToken"),
+        ("print_progress", vec![], "tenantId"),
+        ("plan_apply_requests", vec![], "actorId"),
+        ("plan_apply_admissions", vec![], "requestFormat"),
+    ] {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let mut row = json!({excluded: "extra"});
+        for field in &fields {
+            row[*field] = json!("");
+        }
+        let columns = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|key| model::snake(key))
+            .collect::<Vec<_>>()
+            .join(",");
+        tx.execute_batch(&format!("CREATE TABLE {table}({columns})"))
+            .unwrap();
+        if fields.is_empty() {
+            row[excluded] = json!("é".repeat(32769));
+            super::insert(&tx, table, &row, false).unwrap();
+        } else {
+            for field in &fields {
+                let occurrences = fields.iter().filter(|other| *other == field).count();
+                row[*field] = json!("é".repeat(32768 / occurrences));
+                super::insert(&tx, table, &row, false)
+                    .unwrap_or_else(|err| panic!("{table}.{field}: {err}"));
+                row[*field] = json!(format!("{}x", row[*field].as_str().unwrap()));
+                assert_eq!(
+                    error(super::insert(&tx, table, &row, false)),
+                    "Accepted operational row text limit",
+                    "{table}.{field}"
+                );
+                row[*field] = json!("");
+            }
+        }
+        let stored: String = tx
+            .query_row(
+                &format!("SELECT {} FROM {table} LIMIT 1", model::snake(excluded)),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, row[excluded].as_str().unwrap());
+    }
+}
+
+#[test]
+fn inserted_parts_count_tenant_and_lossless_manifest_utf8() {
+    for table in ["parts", "plan_revision_parts"] {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        tx.execute_batch(&format!("CREATE TABLE {table}(tenant_id,filename,match_key,requirement,option_group_id,manifest_source)")).unwrap();
+        let mut part = DraftPart::new(
+            json!({"tenantId":"tenant", "filename":"é", "matchKey":"ignored".repeat(10000)}),
+            PartManifestMetadata {
+                requirement: Some(ManifestText(JsText::from_units(vec![0xD800; 21842]))),
+                option_group_id: Some(OptionGroupId(JsText::scalar("é"))),
+                manifest_source: None,
+            },
+        );
+        super::insert_part(&tx, table, &part).unwrap();
+        let mut statement = tx
+            .prepare(&format!("SELECT requirement FROM {table}"))
+            .unwrap();
+        let mut rows = statement.query([]).unwrap();
+        let stored = crate::manifest_text::read_manifest_text(
+            rows.next().unwrap().unwrap().get_ref(0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            stored.as_ref(),
+            part.manifest.requirement.as_ref().map(|text| &text.0)
+        );
+        part.manifest.option_group_id = Some(OptionGroupId(JsText::scalar("éx")));
+        assert_eq!(
+            error(super::insert_part(&tx, table, &part)),
+            "Accepted operational row text limit"
+        );
+    }
+}
+
+#[test]
+fn input_validation_counts_named_fields_and_tenant() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    let tx = connection.transaction().unwrap();
+    tx.execute_batch("CREATE TABLE projects(id,tenant_id); CREATE TABLE source_revisions(id,tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,extra)").unwrap();
+    let tenant = "é".repeat(32731);
+    tx.execute("INSERT INTO projects VALUES(1,?)", [&tenant])
+        .unwrap();
+    let mut input = json!({"sourceId":1,"sourceLayer":"s","trackingKind":"untracked","sourceRevisionId":null,"manifestDigest":null,"effectiveNamingDigest":"a".repeat(64),"extra":"ignored".repeat(10000)});
+    validate_inputs(&tx, &tenant, std::slice::from_ref(&input)).unwrap();
+    input["sourceLayer"] = json!("sx");
+    assert_eq!(
+        error(validate_inputs(&tx, &tenant, &[input])),
+        "Accepted operational row text limit"
+    );
+
+    tx.execute("INSERT INTO projects VALUES(2,'tenant')", [])
+        .unwrap();
+    let upstream = "é".repeat(32729);
+    tx.execute(
+        "INSERT INTO source_revisions VALUES(3,'tenant',2,?,?,'','','complete',?)",
+        params![upstream, "a".repeat(64), "ignored".repeat(1000)],
+    )
+    .unwrap();
+    let input = json!({"sourceId":2,"sourceLayer":"s","trackingKind":"revision","sourceRevisionId":3,"manifestDigest":"a".repeat(64),"effectiveNamingDigest":"b".repeat(64)});
+    validate_inputs(&tx, "tenant", std::slice::from_ref(&input)).unwrap();
+    tx.execute(
+        "UPDATE source_revisions SET upstream_revision_key=upstream_revision_key || 'x'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        error(validate_inputs(&tx, "tenant", &[input])),
+        "Accepted operational row text limit"
+    );
 }
 
 #[test]
@@ -566,6 +732,96 @@ fn empty_settings_and_model_utilities_preserve_reference_behavior() {
     assert!(setting(&tx, "tenant", "blank").unwrap().is_none());
     let empty = production(&tx, "tenant", 1).unwrap();
     write_remap(&tx, "tenant", empty, &HashMap::new(), &HashMap::new()).unwrap();
+}
+
+#[test]
+fn client_validates_reused_required_unit_named_utf8_text_at_boundary() {
+    use crate::auth::Secret;
+    use sha2::{Digest, Sha256};
+
+    let data = golden();
+    let case = data["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "changed")
+        .unwrap();
+    let input = &case["input"];
+    let unit = &case["before"]["required_units"][0];
+    let other_bytes: usize = ["tenant_id", "token", "object_name"]
+        .iter()
+        .map(|field| unit[*field].as_str().unwrap().len())
+        .sum();
+    for excess in [0, 1] {
+        let bytes = 65536 - other_bytes + excess;
+        let created_at = format!("{}{}", "é".repeat(bytes / 2), "x".repeat(bytes % 2));
+        assert_eq!(created_at.len() + other_bytes, 65536 + excess);
+        let mut corrupted = case.clone();
+        corrupted["before"]["required_units"][0]["created_at"] = json!(created_at);
+        let c = transaction::database(
+            &json!({"definitions":data["transactionSchema"]}),
+            &corrupted,
+        );
+        c.execute_batch("DROP TABLE plan_apply_admissions; UPDATE app_settings SET value='35' WHERE key='schema_version' AND tenant_id='default'").unwrap();
+        let session = "reused-unit-text-session";
+        let digest = hex::encode(Sha256::digest(session.as_bytes()));
+        c.execute_batch("INSERT INTO users(id,display_name,is_admin,created_at) VALUES('default','Fixture',0,'2026-09-06T00:00:00.000Z')").unwrap();
+        c.execute("INSERT INTO sessions(id,user_id,expires_at,provider) VALUES(?,'default','2099-01-01T00:00:00.000Z','email')", [digest]).unwrap();
+        let dir = crate::tests::directory("reused-unit-text");
+        c.backup("main", dir.join("print-partner.db"), None)
+            .unwrap();
+        drop(c);
+        let (owner, _) = WriterOwner::open(&dir, crate::Limits::default()).unwrap();
+        let command = PublicationCommand::new(
+            serde_json::from_value(input["profileId"].clone()).unwrap(),
+            serde_json::from_value(input["draftId"].clone()).unwrap(),
+            serde_json::from_value(json!({
+                "expected_snapshot_digest":input["expectedSnapshotDigest"],
+                "expected_lifecycle_version":input["expectedLifecycleVersion"],
+                "expected_base":{
+                    "revision_id":input["expectedBase"]["revisionId"],
+                    "plan_version":input["expectedBase"]["planVersion"]
+                },
+                "remap_checkoff_links":true
+            }))
+            .unwrap(),
+            input["idempotencyKey"].as_str().unwrap().into(),
+            Credential::Session(Secret::new(session.into())),
+        )
+        .unwrap();
+        let result = owner
+            .publication()
+            .apply(command, &AtomicBool::new(false), Duration::ZERO);
+        owner.shutdown().unwrap();
+        let c = Connection::open(dir.join("print-partner.db")).unwrap();
+        let state: (i64, i64, i64) = c.query_row(
+            "SELECT accepted_plan_version,(SELECT COUNT(*) FROM plan_revisions),(SELECT COUNT(*) FROM plan_apply_requests) FROM build_profiles WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        let stored: String = c
+            .query_row(
+                "SELECT created_at FROM required_units WHERE token=?",
+                [unit["token"].as_str().unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(c);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(stored, created_at);
+        if excess == 0 {
+            assert!(matches!(result.unwrap(), Outcome::Applied { .. }));
+            assert_eq!(state, (2, 2, 2));
+        } else {
+            let error = result.err().unwrap();
+            assert_eq!(error.to_string(), "Plan draft update failed");
+            assert_eq!(
+                error.root_cause().to_string(),
+                "Accepted operational row text limit"
+            );
+            assert_eq!(state, (1, 1, 1));
+        }
+    }
 }
 
 mod transaction {
