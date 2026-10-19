@@ -340,6 +340,100 @@ fn apply_charges_raw_pattern_units_before_trimming() {
 }
 
 #[test]
+fn apply_charges_option_group_merging() {
+    let cancelled = AtomicBool::new(false);
+    let budget = |visits| {
+        PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                visits,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap()
+    };
+    let groups: serde_json::Map<_, _> = (0..10_000)
+        .map(|i| (format!("group_{i}"), json!({})))
+        .collect();
+    let yaml = serde_json::to_vec(&json!({ "option_groups": groups })).unwrap();
+    let many = [(
+        "F".into(),
+        "repo".into(),
+        parse(&yaml, &mut budget(100_000)).unwrap(),
+    )];
+    assert!(matches!(
+        apply(&mut [], &many, vec![], vec![], &mut budget(2)),
+        Err(ReadFailure::LimitExceeded(Resource::Visits))
+    ));
+    let cancelling = AtomicBool::new(false);
+    let mut b = PreparationBudget::new(&cancelling, PreparationLimits::default()).unwrap();
+    b.cancel_after_checks(100);
+    assert!(matches!(
+        apply(&mut [], &many, vec![], vec![], &mut b),
+        Err(ReadFailure::Cancelled)
+    ));
+
+    let docs = [(
+        "F".into(),
+        "repo".into(),
+        parse(
+            b"option_groups: { tool: { variants: [{ id: a }] } }",
+            &mut budget(100_000),
+        )
+        .unwrap(),
+    )];
+    let inferred = parse(
+        b"option_groups: { tool: { variants: [{ id: a, parts: [a.stl] }] }, other: {} }",
+        &mut budget(100_000),
+    )
+    .unwrap()
+    .groups;
+    // Two document visits, copying the repository group and its variant, merging
+    // that group, then the duplicate inferred group, its existing variant, its
+    // incoming variant, one incoming path, the new group, and one sort per merge.
+    apply(&mut [], &docs, inferred.clone(), vec![], &mut budget(12)).unwrap();
+    assert!(matches!(
+        apply(&mut [], &docs, inferred, vec![], &mut budget(11)),
+        Err(ReadFailure::LimitExceeded(Resource::Visits))
+    ));
+
+    // Copying a document's groups charges every path before the merge sees them.
+    let paths: Vec<_> = (0..10_000).map(|i| format!("p{i}.stl")).collect();
+    let yaml = serde_json::to_vec(
+        &json!({"option_groups": {"tool": {"variants": [{"id": "a", "parts": paths}]}}}),
+    )
+    .unwrap();
+    let wide = [(
+        "F".into(),
+        "repo".into(),
+        parse(&yaml, &mut budget(100_000)).unwrap(),
+    )];
+    apply(&mut [], &wide, vec![], vec![], &mut budget(10_007)).unwrap();
+    assert!(matches!(
+        apply(&mut [], &wide, vec![], vec![], &mut budget(10_006)),
+        Err(ReadFailure::LimitExceeded(Resource::Visits))
+    ));
+
+    // Each merge charges its sort, even with nothing incoming.
+    let comparison_work = |comparison_work| {
+        PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                comparison_work,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap()
+    };
+    let mut target = many[0].2.groups.clone();
+    merge(&mut target, vec![], &mut comparison_work(10_000)).unwrap();
+    assert!(matches!(
+        merge(&mut target, vec![], &mut comparison_work(9_999)),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+}
+
+#[test]
 fn kit_charges_stored_json_to_the_preparation_budget() {
     let raw = || Some(r#"{"selections":{"tool":"a","tool":["b"]}}"#.to_owned());
     let cancelled = AtomicBool::new(false);
