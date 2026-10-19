@@ -710,3 +710,25 @@ Both rate-limit unit tests passed locally after this addition. A temporary
 with actual 98 and expected 97 bytes. Restoring the source returned both tests
 to green. The mutation was not committed. Logs are `boundary-negative.log` and
 `boundary-restored.log` in the evidence directory above.
+
+## Shared coordinator drain deadline
+
+`drain::tests::ticket_t_3_drain_coordinator_shares_one_deadline` uses a paused
+Tokio clock, a real `ShutdownGate`, and retained tracked work. The gateway
+callback starts its pending-operation timeout only when polled. The test polls
+the coordinator to establish its timers, requires Pending one millisecond before
+`MUTATION_DRAIN`, and requires `(false, false)` within that bound plus 10ms.
+Elapsed simulated time must fall within the same interval. The tracked work
+stays alive through every timing and outcome assertion. The existing two drain
+unit tests keep their admission-order and restart-disarming scope.
+
+Local `pp-core --lib` verification passed the focused test and all three drain
+unit tests with default features and with `desktop_rebuild`. Private copies
+replaced `join!` with sequential waits in each order. Both controls failed once
+at `coordinator drains exceeded one shared deadline` with exit 101. Restoring
+the private source passed once. Exact commands, raw logs, and source hashes are
+in `/tmp/gre448-shared-deadline-evidence/`. The shared production bytes stayed
+unchanged throughout both controls.
+
+This is coordinator simulation evidence. It does not prove a live Gateway or
+`CoreRuntime` shutdown, actual Mac logout, or full GRE-448 completion.
