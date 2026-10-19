@@ -301,9 +301,7 @@ function checkDesktopExecution(workflow, file) {
   }
   for (const [index, step] of (Array.isArray(job.steps) ? job.steps : []).entries()) {
     if (!mapping(step)) continue;
-    const retention = typeof step.uses === 'string' && step.uses.startsWith('actions/upload-artifact@')
-      && step.if === 'always()';
-    if (Object.hasOwn(step, 'continue-on-error') || (Object.hasOwn(step, 'if') && !retention)) {
+    if (Object.hasOwn(step, 'continue-on-error') || (Object.hasOwn(step, 'if') && step.if !== 'always()')) {
       report(file, `jobs.parity.steps[${index}]`, 'DISABLED_DESKTOP_STEP', 'verification steps must run unconditionally and propagate failure');
     }
   }
