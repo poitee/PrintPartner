@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 import test from 'node:test';
+import YAML from 'yaml';
 
 const cli = fileURLToPath(new URL('./check-ci-tool-pins.mjs', import.meta.url));
 const action = 'taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe';
@@ -145,7 +146,7 @@ for (const tracked of [false, true, 'symlink']) {
     copyFileSync(cli, join(directory, 'web/scripts/check-ci-tool-pins.mjs'));
     symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(directory, 'web/node_modules'));
     writeFileSync(join(directory, '.github/workflows/web-ci.yml'), JSON.stringify(webCI));
-    for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit']) {
+    for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit', 'desktop-runtime', 'desktop-native-macos']) {
       copyFileSync(fileURLToPath(new URL(`../../.github/workflows/${name}.yml`, import.meta.url)), join(directory, `.github/workflows/${name}.yml`));
     }
     const contracts = join(directory, '.github/workflows/desktop-contracts.yml');
@@ -153,7 +154,7 @@ for (const tracked of [false, true, 'symlink']) {
     else writeFileSync(contracts, desktop());
     for (const args of [
       ['init', '-q'],
-      ['add', '.github/workflows/web-ci.yml', '.github/workflows/integration-smoke.yml', '.github/workflows/pr-evidence.yml', '.github/workflows/desktop-e2e.yml', '.github/workflows/desktop-webkit.yml'],
+      ['add', '.github/workflows/web-ci.yml', '.github/workflows/integration-smoke.yml', '.github/workflows/pr-evidence.yml', '.github/workflows/desktop-e2e.yml', '.github/workflows/desktop-webkit.yml', '.github/workflows/desktop-runtime.yml', '.github/workflows/desktop-native-macos.yml'],
       ['add', tracked ? '.github/workflows/desktop-contracts.yml' : 'web/scripts/check-ci-tool-pins.mjs'],
       ['-c', 'user.name=CI test', '-c', 'user.email=ci@example.invalid', 'commit', '-qm', 'fixture'],
     ]) {
@@ -168,7 +169,7 @@ for (const tracked of [false, true, 'symlink']) {
     assert.equal(result.error, undefined);
     assert.equal(result.status, tracked === true ? 0 : 1, result.stdout);
     assert.equal(result.stderr, tracked === true ? '' : `${join(directory, '.github/workflows')} $: UNTRACKED_DESKTOP_CONTRACTS: expected exactly one regular desktop contracts workflow in HEAD\n`);
-    assert.equal(result.stdout, summary(0, 0, tracked === true ? 0 : 1));
+    assert.equal(result.stdout, summary(1, 1, tracked === true ? 0 : 1));
   });
 }
 
@@ -445,7 +446,8 @@ for (const [filename, name, code, optional, major = 22] of [
   ['desktop-webkit.yml', 'webkit-stl', 'WEBKIT', false, 24],
 ]) {
   const source = () => ({ jobs: { [name]: {
-    ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" } : {}),
+    ...(optional ? { if: "github.event_name != 'workflow_dispatch' || inputs.postgres" }
+      : ['E2E', 'WEBKIT'].includes(code) ? { if: "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')" } : {}),
     steps: JSON.parse(JSON.stringify(webCI.jobs.web.steps).replaceAll('22.23.3', `${major}.23.3`)),
   } } });
   for (const extension of ['yml', 'yaml', 'YML']) {
@@ -469,7 +471,7 @@ for (const [filename, name, code, optional, major = 22] of [
     ['renamed lane', data => { data.jobs.other = data.jobs[name]; delete data.jobs[name]; }, `INVALID_${code}_NODE_SETUP`],
     ['matrix override', data => { data.jobs[name].strategy = { matrix: { node: ['22'] } }; }, `INVALID_${code}_NODE_SETUP`],
     ['tolerated lane', data => { data.jobs[name]['continue-on-error'] = true; }, `INVALID_${code}_NODE_SETUP`],
-    ...(optional ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
+    ...((optional || ['E2E', 'WEBKIT'].includes(code)) ? [false, true, 'false', '${{ false }}', 'inputs.postgres', undefined].map(condition => [
       `unexpected smoke condition ${condition}`, data => {
         if (condition === undefined) delete data.jobs[name].if;
         else data.jobs[name].if = condition;
@@ -507,4 +509,90 @@ for (const [filename, name, code, optional, major = 22] of [
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, summary(0, 0, 0));
   });
+}
+
+for (const filename of ['desktop-runtime.yml', 'desktop-native-macos.yml']) {
+  const source = readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8');
+  test(`repository ${filename} has exact patches and immediate runtime assertions`, t => {
+    const result = run(t, source, [], filename);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+  });
+  for (const [label, mutate, diagnostic] of [
+    ['floating Node 24', text => text.replaceAll("node-version: '24.21.0'", "node-version: '24'"), 'UNPINNED_DESKTOP_NODE'],
+    ['floating Node 22', text => text.replaceAll("node-version: '22.23.3'", "node-version: '22.x'"), 'UNPINNED_DESKTOP_NODE'],
+    ['wrong major', text => text.replaceAll("node-version: '24.21.0'", "node-version: '22.23.3'"), 'UNPINNED_DESKTOP_NODE'],
+    ['missing assertions', text => text.replaceAll('run: test "$(node --version)" = "v24.21.0"', 'run: echo unchecked'), 'MISSING_DESKTOP_NODE_VERIFICATION'],
+    ['mismatched assertion', text => text.replace('run: test "$(node --version)" = "v24.21.0"', 'run: test "$(node --version)" = "v24.21.1"'), 'MISSING_DESKTOP_NODE_VERIFICATION'],
+    ['version file', text => text.replace("node-version: '24.21.0'", "node-version: '24.21.0'\n          node-version-file: .nvmrc"), 'UNPINNED_DESKTOP_NODE'],
+    ['tolerated setup', text => text.replace('        with:\n          node-version:', '        continue-on-error: true\n        with:\n          node-version:'), 'UNPINNED_DESKTOP_NODE'],
+    ['missing setup', text => text.replace('uses: actions/setup-node@', 'uses: example/other@'), 'INVALID_DESKTOP_NODE_SETUP'],
+    ['late assertion', text => text.replace('      - name: Verify Node runtime', '      - run: npm ci\n      - name: Verify Node runtime'), 'MISSING_DESKTOP_NODE_VERIFICATION'],
+  ]) {
+    test(`reject ${filename} ${label}`, t => {
+      const result = run(t, mutate(source), [], filename);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+    });
+  }
+  test(`accept coordinated future ${filename} patch bump`, t => {
+    const result = run(t, source.replaceAll('24.21.0', '24.21.1').replaceAll('22.23.3', '22.23.4'), [], filename);
+    assert.equal(result.status, 0, result.stderr);
+  });
+  for (const extension of ['yaml', 'YML']) {
+    test(`reject ${filename} floating pins after ${extension} rename`, t => {
+      const result = run(t, source.replaceAll("node-version: '24.21.0'", "node-version: '24.x'"), [], filename.replace('yml', extension));
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, /UNPINNED_DESKTOP_NODE:/);
+    });
+  }
+}
+
+for (const filename of ['desktop-runtime.yml', 'desktop-native-macos.yml']) {
+  const original = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
+  for (const [lane, job] of Object.entries(original.jobs)) {
+    for (const [index, step] of (job.steps ?? []).entries()) {
+      if (!step.uses?.startsWith('actions/setup-node@')) continue;
+      for (const [label, mutate, diagnostic] of [
+        ['floating pin', steps => { steps[index].with['node-version'] = 'lts/*'; }, 'UNPINNED_DESKTOP_NODE'],
+        ['missing assertion', steps => steps.splice(index + 1, 1), 'MISSING_DESKTOP_NODE_VERIFICATION'],
+        ['tolerated assertion', steps => { steps[index + 1]['continue-on-error'] = true; }, 'MISSING_DESKTOP_NODE_VERIFICATION'],
+        ['changed assertion condition', steps => { steps[index + 1].if = false; }, 'MISSING_DESKTOP_NODE_VERIFICATION'],
+        ['changed setup condition', steps => { steps[index].if = false; }, 'UNPINNED_DESKTOP_NODE'],
+      ]) {
+        test(`reject ${filename} ${lane} setup ${index} ${label}`, t => {
+          const data = JSON.parse(JSON.stringify(original));
+          mutate(data.jobs[lane].steps);
+          const result = run(t, JSON.stringify(data), [], filename);
+          assert.equal(result.status, 1, result.stdout);
+          assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+        });
+      }
+    }
+  }
+}
+
+for (const [filename, lane] of [['desktop-runtime.yml', 'source-artifacts'], ['desktop-native-macos.yml', 'linux-precheck']]) {
+  const original = YAML.parse(readFileSync(fileURLToPath(new URL(`../../.github/workflows/${filename}`, import.meta.url)), 'utf8'));
+  for (const [label, mutate, diagnostic] of [
+    ['missing lane', data => delete data.jobs[lane], 'INVALID_DESKTOP_NODE_SETUP'],
+    ['duplicate setup', data => {
+      const steps = data.jobs[lane].steps;
+      steps.push(steps.find(step => step.uses?.startsWith('actions/setup-node@')));
+    }, 'INVALID_DESKTOP_NODE_SETUP'],
+    ['inconsistent patch', data => {
+      const steps = data.jobs[lane].steps;
+      const index = steps.findIndex(step => step.uses?.startsWith('actions/setup-node@'));
+      steps[index].with['node-version'] = '24.21.1';
+      steps[index + 1].run = 'test "$(node --version)" = "v24.21.1"';
+    }, 'MISMATCHED_DESKTOP_NODE'],
+  ]) {
+    test(`reject ${filename} ${label}`, t => {
+      const data = JSON.parse(JSON.stringify(original));
+      mutate(data);
+      const result = run(t, JSON.stringify(data), [], filename);
+      assert.equal(result.status, 1, result.stdout);
+      assert.match(result.stderr, new RegExp(`${diagnostic}:`));
+    });
+  }
 }

@@ -522,7 +522,7 @@ def verify(app, manifest_path, arch, receipt):
         'forbidden': ['DYLD_INSERT_LIBRARIES', 'LD_PRELOAD'],
         'removed': ['NODE_OPTIONS', 'NODE_PATH'],
     }
-    program = "const D=require('better-sqlite3');const db=new D(':memory:');const answer=db.prepare('SELECT 42 answer').get().answer;db.close();if(answer!==42)throw Error('SQLite failed');const {createCanvas}=require('@napi-rs/canvas');const canvas=createCanvas(2,2);const ctx=canvas.getContext('2d');ctx.fillStyle='#123456';ctx.fillRect(0,0,2,2);const pixel=Array.from(ctx.getImageData(0,0,1,1).data);const png=canvas.toBuffer('image/png');if(JSON.stringify(pixel)!=='[18,52,86,255]'||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Canvas failed');console.log(JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch,sqlite_answer:answer,canvas_pixel:pixel,canvas_png_signature:png.subarray(0,8).toString('hex'),native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
+    program = "const D=require('better-sqlite3');const db=new D(':memory:');const sqliteStatement=db.prepare('SELECT 42 answer');const answer=sqliteStatement.get().answer;if(answer!==42)throw Error('SQLite failed');const {createCanvas}=require('@napi-rs/canvas');const canvas=createCanvas(2,2);const ctx=canvas.getContext('2d');ctx.fillStyle='#123456';ctx.fillRect(0,0,2,2);const pixel=Array.from(ctx.getImageData(0,0,1,1).data);const png=canvas.toBuffer('image/png');if(JSON.stringify(pixel)!=='[18,52,86,255]'||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a')throw Error('Canvas failed');console.log(JSON.stringify({version:process.version,abi:process.versions.modules,os:process.platform,arch:process.arch,sqlite_answer:answer,canvas_pixel:pixel,canvas_png_signature:png.subarray(0,8).toString('hex'),native_addons:Object.keys(require.cache).filter(p=>p.endsWith('.node')).map(p=>require('node:fs').realpathSync(p)).sort()}));"
     node_arch = {'arm64': 'arm64', 'x86_64': 'x64'}[arch]
     expected_addons = sorted(str(contained(root, root / WEB / name)) for name in [
         better_sqlite3_addon_path(arch),
@@ -613,6 +613,7 @@ class ParserTests(unittest.TestCase):
             script = (
                 'import os,sys,time\n'
                 'heartbeat=sys.argv[1]\n'
+                'time.sleep(0.75)\n'  # Startup deliberately exceeds the probe deadline.
                 'parent_pid=os.getpid()\n'
                 'pid=os.fork()\n'
                 'if pid:\n'
@@ -630,17 +631,36 @@ class ParserTests(unittest.TestCase):
                 'os.close(fd)\n'
                 'os._exit(0)\n'
             )
+            popen = subprocess.Popen
+            started = None
+
+            def ready_popen(*args, **kwargs):
+                nonlocal started
+                process = popen(*args, **kwargs)
+                startup_deadline = time.monotonic() + 10
+                while not (heartbeat.exists() and heartbeat.stat().st_size):
+                    if time.monotonic() >= startup_deadline:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        stdout, stderr = process.communicate(timeout=1)
+                        self.fail(f'Heartbeat fixture did not start: {stdout!r} {stderr!r}')
+                    time.sleep(0.01)
+                started = time.monotonic()
+                return process
+
             group_pid = None
             descendant_pid = None
             cleanup_complete = False
             try:
-                started = time.monotonic()
-                capture = run_bundle_probe(
-                    [sys.executable, '-c', script, str(heartbeat)],
-                    cwd=pathlib.Path.cwd(),
-                    env=os.environ.copy(),
-                    timeout_seconds=0.5,
-                )
+                with patch.object(subprocess, 'Popen', side_effect=ready_popen):
+                    capture = run_bundle_probe(
+                        [sys.executable, '-c', script, str(heartbeat)],
+                        cwd=pathlib.Path.cwd(),
+                        env=os.environ.copy(),
+                        timeout_seconds=0.5,
+                    )
                 elapsed = time.monotonic() - started
                 group_pid, descendant_pid = map(int, capture.stdout.split())
                 heartbeats = [float(value) for value in heartbeat.read_text().splitlines()]

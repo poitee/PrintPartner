@@ -6,6 +6,7 @@ use crate::manifest_text::{DraftPart, PartManifestMetadata};
 use crate::required_units::storage::{normalize_parts, num, one, part_rows, rows, text};
 use crate::{catalog::naming::NamingProfile, required_units};
 use anyhow::{Result, anyhow, ensure};
+use pp_domain::build_identity::trim_js;
 use rusqlite::{Connection, Transaction};
 use serde_json::{Map, Value, json};
 use std::{
@@ -114,19 +115,16 @@ fn import_rules(value: &Value, b: &mut PreparationBudget<'_>) -> Result<Option<V
     }
     let raw = value.as_str().unwrap_or_default();
     b.document(raw.len(), raw.len())?;
-    let parsed: Value =
-        serde_json::from_str(value.as_str().unwrap_or_default()).unwrap_or(Value::Null);
+    let parsed: Value = serde_json::from_str(trim_js(raw)).unwrap_or(Value::Null);
     let mut rules = Vec::new();
     for value in parsed.as_array().into_iter().flatten() {
         b.visit(0)?;
         let Some(raw) = value.as_str() else { continue };
         b.comparison(raw.len())?;
-        if raw.trim().is_empty() {
+        if trim_js(raw).is_empty() {
             continue;
         }
-        let mut rule = raw
-            .replace('\\', "/")
-            .trim()
+        let mut rule = trim_js(&raw.replace('\\', "/"))
             .trim_start_matches('/')
             .to_owned();
         if !rule.is_empty() && !rule.ends_with('/') && !rule.to_lowercase().ends_with(".stl") {
@@ -145,9 +143,7 @@ fn imported(
 ) -> Result<bool> {
     b.check()?;
     let Some(rules) = rules else { return Ok(true) };
-    let normalized = path
-        .replace('\\', "/")
-        .trim()
+    let normalized = trim_js(&path.replace('\\', "/"))
         .trim_start_matches('/')
         .to_owned();
     for r in rules {
@@ -391,7 +387,7 @@ pub(super) fn parse(
             for marker in &role.markers {
                 b.visit(0)?;
                 b.comparison(marker.len())?;
-                if !marker.trim().is_empty() {
+                if !trim_js(marker).is_empty() {
                     markers.push((marker, role.id, marker.encode_utf16().count()));
                 }
             }
@@ -421,7 +417,7 @@ pub(super) fn parse(
         .map(|r| filename[r].to_owned())
         .filter(|s| !s.is_empty())
         .map(|s| {
-            let s = s.trim_start();
+            let s = trim_js(&s);
             let mut end = 0;
             for (i, c) in s.char_indices() {
                 if c.is_ascii_digit() || (i == 0 && (c == '+' || c == '-')) {
@@ -450,7 +446,7 @@ pub(super) fn parse(
             for marker in &r.markers {
                 b.visit(0)?;
                 b.comparison(slug.len().saturating_add(marker.len().saturating_mul(2)))?;
-                if marker.trim().is_empty() {
+                if trim_js(marker).is_empty() {
                     continue;
                 }
                 let mut escaped = String::new();
@@ -469,7 +465,7 @@ pub(super) fn parse(
             slug.len()
                 .saturating_add(profile.quantity.regex.len().saturating_mul(8)),
         )?;
-        let mut strip = pp_domain::build_identity::trim_js(&profile.quantity.regex).to_owned();
+        let mut strip = trim_js(&profile.quantity.regex).to_owned();
         strip = regress::Regex::new(r"\(\?P<\w+>")?.replace_all(&strip, "(");
         strip = regress::Regex::new(r"\(\?:")?.replace_all(&strip, "(");
         strip = regress::Regex::new(r"\([^?][^)]*\)")?.replace(&strip, "[0-9]+");
@@ -604,10 +600,12 @@ fn inferred(
                         max: None,
                     },
                 )],
-            );
+                b,
+            )?;
         }
     }
-    manifest::merge(&mut groups, manifest::infer_siblings(paths, b)?);
+    let siblings = manifest::infer_siblings(paths, b)?;
+    manifest::merge(&mut groups, siblings, b)?;
     Ok(groups)
 }
 pub(super) fn prepare(
@@ -773,7 +771,7 @@ pub(super) fn prepare(
     for p in merged {
         b.visit(0)?;
         let old = prior.get(&p.key);
-        let default = &role_defaults[p.role.trim().to_lowercase()];
+        let default = &role_defaults[trim_js(&p.role).to_lowercase()];
         if old.is_none() && !spoolman {
             b.comparison(default["filament_color_id"].as_str().map_or(0, str::len))?;
         }
@@ -785,7 +783,7 @@ pub(super) fn prepare(
                         spoolman
                             || match default_key {
                                 "spoolman_spool_id" => false,
-                                "filament_color_id" => !value.trim().starts_with("spoolman:"),
+                                "filament_color_id" => !trim_js(value).starts_with("spoolman:"),
                                 _ => true,
                             }
                     })
@@ -851,7 +849,7 @@ pub(super) fn prepare(
         } else {
             declared
         };
-        manifest::merge(&mut groups, resolved);
+        manifest::merge(&mut groups, resolved, b)?;
     }
     let manifest_sources = connection.read(|tx| source_rows(tx, tenant, profile))?;
     let mut docs = Vec::new();

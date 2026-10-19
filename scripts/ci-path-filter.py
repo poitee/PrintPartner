@@ -12,13 +12,17 @@ def relevant(path, kind):
     # A filter change must test its own consumers.
     if path in {"scripts/ci-path-filter.py", "scripts/test_ci_path_filter.py"}:
         return True
+    if kind == "native" and (path.startswith(".cursor/skills/verify-print-partner-rust/helpers/")
+                             or path in {".github/workflows/desktop-native-macos.yml",
+                                         "scripts/test_native_image_cleanup.py"}):
+        return True
     if kind == "actions":
         return (path.startswith((".github/workflows/", ".github/actions/"))
                 or path in {".github/zizmor.yml", ".github/actionlint.yaml", ".github/actionlint.yml"})
     return (path.startswith(("rust/", "web/apps/", "web/packages/", "web/scripts/storage-fixtures/",
                              "fixtures/"))
             or path in {"rust-toolchain.toml", ".github/workflows/rust-cross-os.yml",
-                        "web/scripts/atomic-package-build.mjs"}
+                        "web/scripts/atomic-package-build.mjs", "scripts/setup-ci-linux.sh"}
             or re.fullmatch(r"web/tsconfig[^/]*\.json", path) is not None
             or re.fullmatch(r"web/package[^/]*\.json", path) is not None)
 
@@ -40,8 +44,8 @@ def select(event, base, head, kind):
 
 if __name__ == "__main__":
     kind = sys.argv[1]
-    if kind not in {"rust", "actions"}:
-        raise SystemExit("Expected rust or actions")
+    if kind not in {"rust", "actions", "native"}:
+        raise SystemExit("Expected rust, actions or native")
     value = str(select(os.environ["EVENT_NAME"], os.environ.get("BASE_SHA"),
                        os.environ.get("HEAD_SHA"), kind)).lower()
     message = f"{kind} inputs changed: {value}\n"

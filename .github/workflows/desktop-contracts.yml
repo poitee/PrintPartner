@@ -6,8 +6,11 @@ on:
     branches: [main, master, "desktop/**"]
     paths:
       - "fixtures/http/routes-inventory.json"
+      - "fixtures/parity/auth-login/**"
+      - "fixtures/parity/auth-registration/**"
       - "rust/**"
       - "rust-toolchain.toml"
+      - 'scripts/setup-ci-linux.sh'
       - "web/packages/contracts/**"
       - "web/packages/domain/**"
       - "web/apps/server/**"
@@ -21,8 +24,11 @@ on:
   pull_request:
     paths:
       - "fixtures/http/routes-inventory.json"
+      - "fixtures/parity/auth-login/**"
+      - "fixtures/parity/auth-registration/**"
       - "rust/**"
       - "rust-toolchain.toml"
+      - 'scripts/setup-ci-linux.sh'
       - "web/packages/contracts/**"
       - "web/packages/domain/**"
       - "web/apps/server/**"
@@ -43,8 +49,8 @@ concurrency:
 
 jobs:
   parity:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 30 || 5 }}
     strategy:
       matrix:
         node: ["22.23.3", "24.21.0"]
@@ -55,6 +61,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Configure sccache on pp-local
+        shell: bash
+        run: |
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ] && [ "$RUNNER_OS" = Linux ] && [ "$RUNNER_ARCH" = X64 ]; then
+            printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
+            if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
+          fi
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
@@ -66,6 +88,14 @@ jobs:
         run: npm ci && npm rebuild better-sqlite3
       - name: Build authority packages
         run: npm run build -w @print-partner/contracts && npm run build -w @print-partner/domain
+      - name: Verify auth Node fixtures
+        run: |
+          case "$(node --version)" in
+            v22.*)
+              node ../fixtures/parity/auth-login/generate.mjs --check
+              node ../fixtures/parity/auth-registration/generate.mjs --check
+              ;;
+          esac
       - name: Verify required-unit Node fixtures
         run: |
           node ../rust/crates/pp-storage/tests/fixtures/required-units/messages-node.mjs --check
@@ -89,3 +119,10 @@ jobs:
         with:
           name: contracts-node-${{ matrix.node }}
           path: ${{ runner.temp }}/contract-receipts/
+      - name: Show sccache stats
+        if: always()
+        shell: bash
+        run: |
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ] && [ "$RUNNER_OS" = Linux ] && [ "$RUNNER_ARCH" = X64 ]; then
+            if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
+          fi

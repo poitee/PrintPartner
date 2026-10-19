@@ -1,3 +1,6 @@
+#[cfg(feature = "desktop_rebuild")]
+pub mod production;
+
 use anyhow::{Context, Result, bail};
 use pp_compat::{Bundle, CompatHandle, SpawnSpec, Supervisor};
 use pp_gateway::ownership::{
@@ -35,6 +38,9 @@ pub mod review_observations;
 
 #[cfg(feature = "desktop_rebuild")]
 pub mod rebuild_api;
+
+#[cfg(feature = "desktop_rebuild")]
+pub mod uploads;
 
 #[cfg(test)]
 mod origin_tests;

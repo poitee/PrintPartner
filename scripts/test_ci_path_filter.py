@@ -31,6 +31,20 @@ class CiPathFilterTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(ci_filter.relevant(path, "rust"))
 
+    def test_native_inputs(self):
+        for path in ["rust/crates/pp-desktop/src/main.rs", "web/apps/web/src/App.tsx",
+                     ".github/workflows/desktop-native-macos.yml",
+                     "scripts/test_native_image_cleanup.py", "scripts/ci-path-filter.py",
+                     ".cursor/skills/verify-print-partner-rust/helpers/test_launch.py",
+                     ".cursor/skills/verify-print-partner-rust/helpers/verify.py",
+                     ".cursor/skills/verify-print-partner-rust/helpers/future_helper.py"]:
+            self.assertTrue(ci_filter.relevant(path, "native"))
+        for path in ["README.md", "docs/ci.md", ".github/workflows/pr-evidence.yml"]:
+            self.assertFalse(ci_filter.relevant(path, "native"))
+
+    def test_linux_setup_selects_rust(self):
+        self.assertTrue(ci_filter.relevant("scripts/setup-ci-linux.sh", "rust"))
+
     def test_actions_inputs(self):
         for path in [".github/workflows/a.yml", ".github/actions/a/action.yml",
                      "scripts/test_ci_path_filter.py", ".github/zizmor.yml",
@@ -40,7 +54,7 @@ class CiPathFilterTests(unittest.TestCase):
             self.assertFalse(ci_filter.relevant(path, "actions"))
 
     def test_unknown_base_and_non_pr_events_run(self):
-        for kind in ["rust", "actions"]:
+        for kind in ["rust", "actions", "native"]:
             self.assertTrue(ci_filter.select("pull_request", "", "", kind))
             self.assertTrue(ci_filter.select("pull_request", "0" * 40, "1" * 40, kind))
             self.assertTrue(ci_filter.select("push", "", "", kind))
@@ -74,8 +88,12 @@ class CiPathFilterTests(unittest.TestCase):
             git("config", "user.name", "Proof")
             base = commit("README.md")
             docs = commit("docs/space and\nnewline.md")
-            for kind in ["rust", "actions"]:
+            for kind in ["rust", "actions", "native"]:
                 self.assertEqual(select(base, docs, kind)[0], "relevant=false\n")
+            git("checkout", "-q", "--detach", base)
+            helper = commit(".cursor/skills/verify-print-partner-rust/helpers/verify.py")
+            self.assertEqual(select(base, helper, "native")[0], "relevant=true\n")
+            self.assertEqual(select(base, helper, "rust")[0], "relevant=false\n")
             git("checkout", "-q", "--detach", base)
             fixture = commit("fixtures/parity/jobs-model/jobs-model.json")
             self.assertEqual(select(base, fixture, "rust")[0], "relevant=true\n")

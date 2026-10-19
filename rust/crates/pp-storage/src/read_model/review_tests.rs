@@ -9,10 +9,34 @@ use std::path::PathBuf;
 struct Fixture {
     root: PathBuf,
     connection: Connection,
+    // Fields drop in declaration order, so the connection closes before directory cleanup.
+    _directory: FixtureDirectory,
 }
+
+struct FixtureDirectory(PathBuf);
+
+impl Drop for FixtureDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            if std::thread::panicking() {
+                eprintln!(
+                    "failed to remove fixture directory {}: {error}",
+                    self.0.display()
+                );
+            } else {
+                panic!(
+                    "failed to remove fixture directory {}: {error}",
+                    self.0.display()
+                );
+            }
+        }
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("pp-review-{}", rand::random::<u64>()));
+        let directory = FixtureDirectory(root.clone());
         std::fs::create_dir_all(root.join("repos/1/revisions/accepted")).unwrap();
         let path = root.join("fixture.db");
         std::fs::write(
@@ -23,6 +47,7 @@ impl Fixture {
         Self {
             root,
             connection: Connection::open(path).unwrap(),
+            _directory: directory,
         }
     }
     fn read(&mut self) -> AcceptedRead {
@@ -95,11 +120,61 @@ impl Fixture {
         tx.commit().unwrap();
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.root).unwrap();
+
+#[test]
+fn fixture_closes_connection_before_directory_cleanup() {
+    let fixture = Fixture::new();
+    let root = fixture.root.clone();
+    drop(fixture);
+    assert!(!root.exists());
+}
+
+#[test]
+fn fixture_cleans_up_during_unwind() {
+    let fixture = Fixture::new();
+    let root = fixture.root.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _fixture = fixture;
+        panic!("exercise fixture cleanup during unwind");
+    }));
+    assert!(result.is_err());
+    assert!(!root.exists());
+}
+
+#[test]
+fn fixture_cleanup_reports_removal_errors_without_double_panic() {
+    for panicking in [false, true] {
+        let root = std::env::temp_dir().join(format!("pp-review-{}", rand::random::<u64>()));
+        std::fs::write(&root, b"not a directory").unwrap();
+        let fixture = Fixture {
+            root: root.clone(),
+            connection: Connection::open_in_memory().unwrap(),
+            _directory: FixtureDirectory(root.clone()),
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _fixture = fixture;
+            if panicking {
+                panic!("exercise failed fixture cleanup during unwind");
+            }
+        }));
+        std::fs::remove_file(root).unwrap();
+        let panic = result.unwrap_err();
+        if panicking {
+            assert_eq!(
+                panic.downcast_ref::<&str>(),
+                Some(&"exercise failed fixture cleanup during unwind")
+            );
+        } else {
+            assert!(
+                panic
+                    .downcast_ref::<String>()
+                    .unwrap()
+                    .contains("failed to remove fixture directory")
+            );
+        }
     }
 }
+
 fn observations(read: &AcceptedRead) -> ReviewObservations {
     let AcceptedRead::Ready { snapshot } = read else {
         panic!("{read:?}")
@@ -143,6 +218,38 @@ fn scalar_review_and_summary_keep_the_node_shape() {
             assert_eq!(part["requirement"], text);
             assert_eq!(part["option_group_id"], "group/α");
             assert!(part.get("optionGroupId").is_none());
+        }
+    }
+    let legacy_keys = [
+        "id",
+        "match_key",
+        "relative_path",
+        "filename",
+        "source_layer",
+        "status",
+        "role",
+        "requirement",
+        "option_group_id",
+        "included",
+        "filament_color_id",
+        "filament_custom_hex",
+        "spoolman_spool_id",
+        "filament_display",
+        "filament_hex",
+        "quantity_auto",
+        "quantity_override",
+        "quantity_effective",
+        "printed_count",
+        "print_units",
+        "assembled_units",
+        "missing",
+        "stl_missing",
+        "thumb_empty",
+    ];
+    for group in review["part_groups"].as_array().unwrap() {
+        for part in group["parts"].as_array().unwrap() {
+            let keys = part.as_object().unwrap().keys().collect::<Vec<_>>();
+            assert_eq!(keys, legacy_keys);
         }
     }
     assert_eq!(summary["totals"], review["totals"]);
@@ -258,34 +365,80 @@ fn empty_and_unavailable_review_bodies_have_the_expected_summaries() {
     assert_eq!(body["body"]["part_groups"], json!([]));
 }
 
+fn assert_metadata_refusal(fixture: &mut Fixture, expected: &str) {
+    let before = fixture.connection.total_changes();
+    let tx = fixture.connection.transaction().unwrap();
+    let error = read(
+        &tx,
+        "default",
+        1,
+        &fixture.root.join("repos"),
+        &mut Budget::default(),
+    )
+    .unwrap_err();
+    let integrity = error.downcast_ref::<Integrity>();
+    assert_eq!(
+        integrity.map(|failure| failure.code),
+        Some(expected),
+        "unexpected refusal: {error:?}"
+    );
+    drop(tx);
+    assert_eq!(before, fixture.connection.total_changes());
+}
+
 #[test]
-fn non_scalar_metadata_still_requires_matching_projection_and_valid_encoding() {
-    for value in [
-        rusqlite::types::Value::Text("changed".into()),
-        rusqlite::types::Value::Blob(b"PPJS\x01".to_vec()),
-    ] {
+fn non_scalar_metadata_requires_matching_projection() {
+    for column in ["requirement", "option_group_id"] {
         let mut fixture = Fixture::new();
         fixture.metadata(
             JsText::from_units(vec![0xd800]),
             JsText::from_units(vec![0xdc00]),
         );
+        let changed = JsText::from_units(vec![0xd801]).sqlite_value().unwrap();
         fixture
             .connection
-            .execute("UPDATE parts SET requirement=?1", [value])
+            .execute(&format!("UPDATE parts SET {column}=?1"), [&changed])
             .unwrap();
-        let before = fixture.connection.total_changes();
-        let tx = fixture.connection.transaction().unwrap();
-        assert!(
-            read(
-                &tx,
-                "default",
-                1,
-                &fixture.root.join("repos"),
-                &mut Budget::default()
-            )
-            .is_err()
+        assert_metadata_refusal(&mut fixture, "projection");
+    }
+}
+
+#[test]
+fn non_scalar_metadata_requires_matching_revision_digest() {
+    for column in ["requirement", "option_group_id"] {
+        let mut fixture = Fixture::new();
+        fixture.metadata(
+            JsText::from_units(vec![0xd800]),
+            JsText::from_units(vec![0xdc00]),
         );
-        drop(tx);
-        assert_eq!(before, fixture.connection.total_changes());
+        let changed = JsText::from_units(vec![0xd801]).sqlite_value().unwrap();
+        for table in ["parts", "plan_revision_parts"] {
+            fixture
+                .connection
+                .execute(&format!("UPDATE {table} SET {column}=?1"), [&changed])
+                .unwrap();
+        }
+        assert_metadata_refusal(&mut fixture, "revision_digest");
+    }
+}
+
+#[test]
+fn non_scalar_metadata_requires_valid_encoding_in_both_tables() {
+    for table in ["parts", "plan_revision_parts"] {
+        for column in ["requirement", "option_group_id"] {
+            let mut fixture = Fixture::new();
+            fixture.metadata(
+                JsText::from_units(vec![0xd800]),
+                JsText::from_units(vec![0xdc00]),
+            );
+            fixture
+                .connection
+                .execute(
+                    &format!("UPDATE {table} SET {column}=?1"),
+                    [b"PPJS\x01".as_slice()],
+                )
+                .unwrap();
+            assert_metadata_refusal(&mut fixture, "manifest_text");
+        }
     }
 }
