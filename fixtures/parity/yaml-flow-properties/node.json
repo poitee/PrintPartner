@@ -1,0 +1,436 @@
+{
+  "format": "yaml-flow-properties-node-v1",
+  "source": {
+    "issue": "GRE-871",
+    "parent": "GRE-841",
+    "parentUrl": "https://linear.app/greetz/issue/GRE-841/p2-working-draft-yaml-remaining-flow-key-and-verbatim-tag-parity-gaps",
+    "generator": "fixtures/parity/yaml-flow-properties/generate.mjs",
+    "dependencyAnchor": "web/apps/server/package.json",
+    "package": "js-yaml",
+    "version": "5.4.3",
+    "api": "yaml.load(input)",
+    "options": "defaults",
+    "nodeMajor": 22,
+    "encoding": "UTF-8",
+    "rustParity": "not asserted"
+  },
+  "cases": [
+    {
+      "id": "explicit-empty-none",
+      "family": "flow-explicit-key",
+      "variant": "none",
+      "input": "[? ]",
+      "utf8Hex": "5b3f205d",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "explicit-empty-lf",
+      "family": "flow-explicit-key",
+      "variant": "lf",
+      "input": "[? ]\n",
+      "utf8Hex": "5b3f205d0a",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "explicit-empty-cr",
+      "family": "flow-explicit-key",
+      "variant": "cr",
+      "input": "[? ]\r",
+      "utf8Hex": "5b3f205d0d",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "explicit-empty-crlf",
+      "family": "flow-explicit-key",
+      "variant": "crlf",
+      "input": "[? ]\r\n",
+      "utf8Hex": "5b3f205d0d0a",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "tag-adjacent-none",
+      "family": "verbatim-tag-adjacency",
+      "variant": "none",
+      "input": "!<tag:yaml.org,2002:str>b c1",
+      "utf8Hex": "213c7461673a79616d6c2e6f72672c323030323a7374723e62206331",
+      "outcome": {
+        "kind": "decoded",
+        "value": "b c1"
+      }
+    },
+    {
+      "id": "tag-adjacent-lf",
+      "family": "verbatim-tag-adjacency",
+      "variant": "lf",
+      "input": "!<tag:yaml.org,2002:str>b c1\n",
+      "utf8Hex": "213c7461673a79616d6c2e6f72672c323030323a7374723e622063310a",
+      "outcome": {
+        "kind": "decoded",
+        "value": "b c1"
+      }
+    },
+    {
+      "id": "tag-adjacent-cr",
+      "family": "verbatim-tag-adjacency",
+      "variant": "cr",
+      "input": "!<tag:yaml.org,2002:str>b c1\r",
+      "utf8Hex": "213c7461673a79616d6c2e6f72672c323030323a7374723e622063310d",
+      "outcome": {
+        "kind": "decoded",
+        "value": "b c1"
+      }
+    },
+    {
+      "id": "tag-adjacent-crlf",
+      "family": "verbatim-tag-adjacency",
+      "variant": "crlf",
+      "input": "!<tag:yaml.org,2002:str>b c1\r\n",
+      "utf8Hex": "213c7461673a79616d6c2e6f72672c323030323a7374723e622063310d0a",
+      "outcome": {
+        "kind": "decoded",
+        "value": "b c1"
+      }
+    },
+    {
+      "id": "implicit-sequence-none",
+      "family": "flow-empty-key",
+      "variant": "none",
+      "input": "[:[]]",
+      "utf8Hex": "5b3a5b5d5d",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "implicit-sequence-lf",
+      "family": "flow-empty-key",
+      "variant": "lf",
+      "input": "[:[]]\n",
+      "utf8Hex": "5b3a5b5d5d0a",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "implicit-sequence-cr",
+      "family": "flow-empty-key",
+      "variant": "cr",
+      "input": "[:[]]\r",
+      "utf8Hex": "5b3a5b5d5d0d",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "implicit-sequence-crlf",
+      "family": "flow-empty-key",
+      "variant": "crlf",
+      "input": "[:[]]\r\n",
+      "utf8Hex": "5b3a5b5d5d0d0a",
+      "outcome": {
+        "kind": "decoded",
+        "value": [
+          {
+            "null": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "implicit-map-tab-lf",
+      "family": "flow-empty-key",
+      "variant": "lf",
+      "input": "{:\ta\n }",
+      "utf8Hex": "7b3a09610a207d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "null": "a"
+        }
+      }
+    },
+    {
+      "id": "implicit-map-tab-cr",
+      "family": "flow-empty-key",
+      "variant": "cr",
+      "input": "{:\ta\r }",
+      "utf8Hex": "7b3a09610d207d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "null": "a"
+        }
+      }
+    },
+    {
+      "id": "implicit-map-tab-crlf",
+      "family": "flow-empty-key",
+      "variant": "crlf",
+      "input": "{:\ta\r\n }",
+      "utf8Hex": "7b3a09610d0a207d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "null": "a"
+        }
+      }
+    },
+    {
+      "id": "block-colon-lf",
+      "family": "block-colon-after-flow",
+      "variant": "lf",
+      "input": "a:\n  []\n\n: ]",
+      "utf8Hex": "613a0a20205b5d0a0a3a205d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "a": [],
+          "null": "]"
+        }
+      }
+    },
+    {
+      "id": "block-colon-cr",
+      "family": "block-colon-after-flow",
+      "variant": "cr",
+      "input": "a:\r  []\r\r: ]",
+      "utf8Hex": "613a0d20205b5d0d0d3a205d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "a": [],
+          "null": "]"
+        }
+      }
+    },
+    {
+      "id": "block-colon-crlf",
+      "family": "block-colon-after-flow",
+      "variant": "crlf",
+      "input": "a:\r\n  []\r\n\r\n: ]",
+      "utf8Hex": "613a0d0a20205b5d0d0a0d0a3a205d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "a": [],
+          "null": "]"
+        }
+      }
+    },
+    {
+      "id": "quoted-tab-lf",
+      "family": "quoted-multiline-flow-key-tab",
+      "variant": "lf",
+      "input": "a:\n  {\"a\n b\":\ta\\}",
+      "utf8Hex": "613a0a20207b22610a2062223a09615c7d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "a": {
+            "a b": "a\\"
+          }
+        }
+      }
+    },
+    {
+      "id": "quoted-tab-cr",
+      "family": "quoted-multiline-flow-key-tab",
+      "variant": "cr",
+      "input": "a:\r  {\"a\r b\":\ta\\}",
+      "utf8Hex": "613a0d20207b22610d2062223a09615c7d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "a": {
+            "a b": "a\\"
+          }
+        }
+      }
+    },
+    {
+      "id": "quoted-tab-crlf",
+      "family": "quoted-multiline-flow-key-tab",
+      "variant": "crlf",
+      "input": "a:\r\n  {\"a\r\n b\":\ta\\}",
+      "utf8Hex": "613a0d0a20207b22610d0a2062223a09615c7d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "a": {
+            "a b": "a\\"
+          }
+        }
+      }
+    },
+    {
+      "id": "comment-adjacent-lf",
+      "family": "comment-after-key-colon",
+      "variant": "lf",
+      "input": "{\"q\":# c\n}",
+      "utf8Hex": "7b2271223a2320630a7d",
+      "outcome": {
+        "kind": "refused",
+        "class": "YAMLException",
+        "reason": "missed comma between flow collection entries"
+      }
+    },
+    {
+      "id": "comment-adjacent-cr",
+      "family": "comment-after-key-colon",
+      "variant": "cr",
+      "input": "{\"q\":# c\r}",
+      "utf8Hex": "7b2271223a2320630d7d",
+      "outcome": {
+        "kind": "refused",
+        "class": "YAMLException",
+        "reason": "missed comma between flow collection entries"
+      }
+    },
+    {
+      "id": "comment-adjacent-crlf",
+      "family": "comment-after-key-colon",
+      "variant": "crlf",
+      "input": "{\"q\":# c\r\n}",
+      "utf8Hex": "7b2271223a2320630d0a7d",
+      "outcome": {
+        "kind": "refused",
+        "class": "YAMLException",
+        "reason": "missed comma between flow collection entries"
+      }
+    },
+    {
+      "id": "null-one-key-none",
+      "family": "one-key-null-control",
+      "variant": "none",
+      "input": "{\"q\":}",
+      "utf8Hex": "7b2271223a7d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "q": null
+        }
+      }
+    },
+    {
+      "id": "null-one-key-lf",
+      "family": "one-key-null-control",
+      "variant": "lf",
+      "input": "{\"q\":}\n",
+      "utf8Hex": "7b2271223a7d0a",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "q": null
+        }
+      }
+    },
+    {
+      "id": "null-one-key-cr",
+      "family": "one-key-null-control",
+      "variant": "cr",
+      "input": "{\"q\":}\r",
+      "utf8Hex": "7b2271223a7d0d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "q": null
+        }
+      }
+    },
+    {
+      "id": "null-one-key-crlf",
+      "family": "one-key-null-control",
+      "variant": "crlf",
+      "input": "{\"q\":}\r\n",
+      "utf8Hex": "7b2271223a7d0d0a",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "q": null
+        }
+      }
+    },
+    {
+      "id": "comment-separated-lf",
+      "family": "comment-after-key-colon",
+      "variant": "lf",
+      "input": "{\"q\": # c\n}",
+      "utf8Hex": "7b2271223a202320630a7d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "q": null
+        }
+      }
+    },
+    {
+      "id": "comment-separated-cr",
+      "family": "comment-after-key-colon",
+      "variant": "cr",
+      "input": "{\"q\": # c\r}",
+      "utf8Hex": "7b2271223a202320630d7d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "q": null
+        }
+      }
+    },
+    {
+      "id": "comment-separated-crlf",
+      "family": "comment-after-key-colon",
+      "variant": "crlf",
+      "input": "{\"q\": # c\r\n}",
+      "utf8Hex": "7b2271223a202320630d0a7d",
+      "outcome": {
+        "kind": "decoded",
+        "value": {
+          "q": null
+        }
+      }
+    }
+  ]
+}
