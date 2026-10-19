@@ -273,9 +273,9 @@ enum TransactionDecision {
     },
 }
 #[cfg(feature = "desktop_rebuild")]
-struct CommittedRefusal {
-    job: JobRecord,
-    failure: auth::AuthorityFailure,
+pub(crate) struct CommittedRefusal {
+    pub(crate) job: JobRecord,
+    pub(crate) failure: auth::AuthorityFailure,
 }
 /// The original credential of a claimed attempt, revalidated under the
 /// current policy.
@@ -1561,7 +1561,7 @@ pub(crate) fn execute(
         #[cfg(feature = "desktop_rebuild")]
         Command::OpenSourceSync { lease, policy } => {
             match crate::source_sync::open(&tx, &lease, policy)? {
-                Some(error) => TransactionDecision::ErrorAfterCommit(error),
+                Some(refusal) => TransactionDecision::Refused(refusal),
                 None => TransactionDecision::Outcome(Outcome::SourceSyncOpened),
             }
         }

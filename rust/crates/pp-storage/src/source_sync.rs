@@ -178,15 +178,18 @@ pub(crate) fn open(
     tx: &Transaction<'_>,
     lease: &AttemptLease,
     policy: crate::auth::AuthPolicy,
-) -> Result<Option<anyhow::Error>> {
+) -> Result<Option<crate::jobs::CommittedRefusal>> {
     let mut job = require_sync_job(tx, lease)?;
     ensure!(!job.cancel_requested, "Sync was cancelled");
     if let Err(error) = crate::jobs::require_original_authority(tx, &job, policy) {
         if !crate::jobs::set_sync_source_writer_authority_refusal(&mut job, &error) {
             return Err(error);
         }
-        halt_job(tx, job, "authority_refused", &format!("{error:#}"))?;
-        return Ok(Some(error));
+        let job = halt_job(tx, job, "authority_refused", &format!("{error:#}"))?;
+        return Ok(Some(crate::jobs::CommittedRefusal {
+            job,
+            failure: error.downcast()?,
+        }));
     }
     let opened: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM source_sync_batches WHERE job_id=?1)",

@@ -665,6 +665,47 @@ fn cancel_and_revoked_authority_close_the_batch() {
 }
 
 #[test]
+fn open_authority_refusal_prunes_terminal_jobs() {
+    let sync = Fixture::new();
+    let id = sync.source("Pending");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let ClaimedAttempt { lease, .. } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    sync.worker.open_source_sync(&lease).unwrap();
+    let mut connection = sync.connection();
+    let tx = connection.transaction().unwrap();
+    let mut older = jobs::load(&tx, &job_id).unwrap().unwrap();
+    older.job_id = "older-terminal".into();
+    older.state = PersistentState::Failed;
+    older.worker = None;
+    older.fence = None;
+    older.lease_until = None;
+    jobs::save(&tx, &mut older, "test_terminal").unwrap();
+    tx.execute(
+        "UPDATE durable_jobs SET updated=?1 WHERE id=?2",
+        params![now() - 86401, older.job_id],
+    )
+    .unwrap();
+    tx.execute("DELETE FROM sessions", []).unwrap();
+    tx.commit().unwrap();
+    let error = sync.worker.open_source_sync(&lease).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<auth::AuthorityFailure>(),
+        Some(&auth::AuthorityFailure::CredentialInvalid)
+    );
+    assert_sync_refusal(&sync, &job_id, &lease, false, true);
+    let tx = connection.transaction().unwrap();
+    assert!(jobs::load(&tx, "older-terminal").unwrap().is_none());
+    assert_eq!(
+        tx.query_row("SELECT count(*) FROM durable_jobs", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(tx);
+    assert_refusal_survives_reopen(sync, &job_id);
+}
+
+#[test]
 fn open_and_advance_authority_refusal_halts_without_claimed_targets() {
     for (opened, advance) in [(false, false), (true, false), (true, true)] {
         let sync = Fixture::new();
