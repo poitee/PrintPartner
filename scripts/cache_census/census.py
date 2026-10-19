@@ -57,8 +57,9 @@ def timestamp(value, label):
     require(isinstance(value, str) and re.fullmatch(
         r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", value
     ), f"{label} must be an ISO 8601 timestamp with timezone")
+    normalized = re.sub(r"\.(\d+)", lambda match: "." + match[1][:6].ljust(6, "0"), value)
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError as error:
         raise CensusError(f"invalid {label}: {value}") from error
 
@@ -67,6 +68,7 @@ def repository_name(value):
     require(isinstance(value, str) and re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+", value
     ), "repository must be OWNER/REPO")
+    require(bool(value.split("/")[1].strip(".")), "repository name must not contain only dots")
     return value.lower()
 
 
