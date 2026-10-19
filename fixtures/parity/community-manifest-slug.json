@@ -12,7 +12,10 @@
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "kit-catalogs",
     "kit-catalog.v2",
-    "my-kit-catalog"
+    "my-kit-catalog",
+    "registry-indexes",
+    "registry-index.v2",
+    "my-registry-index"
   ],
   "invalid": [
     "",
@@ -38,6 +41,7 @@
     "a\u0000b",
     "a.yaml/../b",
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "kit-catalog"
+    "kit-catalog",
+    "registry-index"
   ]
 }

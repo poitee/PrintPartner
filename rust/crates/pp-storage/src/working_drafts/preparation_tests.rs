@@ -659,6 +659,7 @@ fn invalid_stored_community_slugs_make_no_community_read() {
         "../kit-catalog",
         // ast-grep-ignore: no-writer-family-literal -- Test input that the slug check must refuse.
         "kit-catalog",
+        "registry-index",
         "oracle-kit/..",
         "Oracle-Kit",
     ] {

@@ -162,6 +162,7 @@ beforeEach(() => {
 afterEach(() => {
   observer.state.active = false;
   observer.state.afterAccess = undefined;
+  observer.state.virtual.clear();
   sqlite?.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.rmSync(userRoot, { recursive: true, force: true });
@@ -2317,7 +2318,7 @@ const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "tabl
 const OPTION_GROUP_UNION = ["file:community-manifests", "file:path-hints", "file:source-workspace", ...OPTION_GROUP_TABLES];
 const SHIPPED_PATH_HINTS = fileURLToPath(new URL("../data/path-hints.yaml", import.meta.url));
 const COMMUNITY_MANIFEST_DIR = fileURLToPath(new URL("../data/manifests", import.meta.url));
-const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml");
+const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "gre402-fixture.yaml");
 type FileCall = [string, ...unknown[]];
 
 function optionGroupSelect(statement: unknown, tenantId: string, planId?: number): string {
@@ -2336,7 +2337,7 @@ function optionGroupFileResources(files: FileCall[]): string[] {
     const path = z.string().parse(candidate);
     if (path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml")) resources.add("file:path-hints");
     else if (path === COMMUNITY_MANIFEST_DIR && api === "realpathSync"
-      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!kit-catalog\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
+      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!(?:kit-catalog|registry-index)\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
     else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
     else throw new Error(`Unclassified option group path: ${api} ${path}`);
   }
@@ -2425,7 +2426,8 @@ for (const isolated of [false, true]) {
     const inferred = optionGroupCheckout("Inferred", true);
     fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
     fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
-    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("registry-index", inferred.id);
+    observer.state.virtual.set(COMMUNITY_MANIFEST, join(inferred.checkout, "print-partner.manifest.yaml"));
+    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-fixture", inferred.id);
     const plan = repo.createProfile("Options", declared.id);
     repo.addAddonLayer(plan.id, inferred.id);
     const empty = repo.createProfile("Empty");
@@ -2605,17 +2607,17 @@ for (const isolated of [false, true]) {
   });
 }
 
-it("traces get_plan_option_groups reserved kit-catalog slug as no community manifest", async () => {
+it.each(["kit-catalog", "registry-index"])("traces get_plan_option_groups reserved %s slug as no community manifest", async (slug) => {
   const source = optionGroupCheckout("Reserved");
   const plan = repo.createProfile("Reserved", source.id);
   const probes = optionGroupPathProbes(source, false);
   const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
-  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("kit-catalog", source.id);
+  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run(slug, source.id);
   const log = vi.spyOn(getLogger(), "log");
   try {
     const output = await traceOptionGroups({ input: { plan_id: plan.id }, planId: plan.id, tables: OPTION_GROUP_TABLES, files: sourceFiles });
     expect(output).toMatchObject({ plan_id: plan.id, selections: {}, sources: [{ source_id: source.id }] });
-    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug: "kit-catalog" });
+    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug });
   } finally { log.mockRestore(); }
 });
 
@@ -2626,7 +2628,7 @@ it("classifies option group files by family roots and rejects every unknown path
     ["readFileSync", join(dataDir, "path-hints.yaml")],
     ["readFileSync", COMMUNITY_MANIFEST],
   ])).toEqual(["file:source-workspace", "file:path-hints", "file:community-manifests"]);
-  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(dataDir, "repos-other", "part.stl")]) {
+  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml"), join(dataDir, "repos-other", "part.stl")]) {
     expect(() => optionGroupFileResources([["readFileSync", path]])).toThrow("Unclassified option group path:");
   }
 });
