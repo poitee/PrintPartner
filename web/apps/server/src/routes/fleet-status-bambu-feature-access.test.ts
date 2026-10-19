@@ -11,6 +11,7 @@ import { createIntegrationPort, type IntegrationAdapter } from "../integrations/
 import * as outbound from "../lib/outbound-url.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import * as discordNotify from "../services/discord-notify.js";
+import type { sendFarmDigest } from "../services/discord-notify.js";
 import { registerDiscordDigestRoute } from "./discord-digest.js";
 import { registerMetricsRoutes } from "./metrics.js";
 
@@ -39,7 +40,7 @@ describe("metrics and Discord digest Bambu feature admission", () => {
   let execution: StatusExecution;
   const bambu = vi.fn<NonNullable<IntegrationAdapter["getStatus"]>>(async () => telemetry);
   const moonraker = vi.fn<NonNullable<IntegrationAdapter["getStatus"]>>(async () => ({ state: "idle" }));
-  const send = vi.fn<typeof discordNotify.sendFarmDigest>(async () => ({ ok: true, status: 204, attempts: 1 }));
+  const send = vi.fn<typeof sendFarmDigest>(async () => ({ ok: true, status: 204, attempts: 1 }));
 
   beforeEach(async () => {
     vi.stubEnv("PP_DESKTOP_REBUILD", "1");
