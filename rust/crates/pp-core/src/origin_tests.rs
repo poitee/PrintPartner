@@ -555,6 +555,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
     // First publication has no previous file, so it links instead of
     // renaming and never reaches Recheck or Rename.
     let cases = [
+        (Boundary::HardLink, true),
         (Boundary::Write, false),
         (Boundary::FileSync, false),
         (Boundary::DirectorySync, true),
@@ -582,7 +583,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
         .unwrap();
         panic!("publication did not reach the crash checkpoint");
     }
-    for (index, &(_, published)) in cases.iter().enumerate() {
+    for (index, &(checkpoint, published)) in cases.iter().enumerate() {
         let fixture = Fixture::new();
         let crashed = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let crashed_address = crashed.local_addr().unwrap();
@@ -603,6 +604,20 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
             index,
             &crashed_bytes,
         );
+        if checkpoint == Boundary::HardLink {
+            use std::os::unix::fs::MetadataExt;
+            let temporary = std::fs::read_dir(&fixture.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|extension| extension == "new"))
+                .unwrap();
+            let config = std::fs::metadata(fixture.config()).unwrap();
+            let temporary_metadata = std::fs::symlink_metadata(&temporary).unwrap();
+            assert!(temporary_metadata.is_file());
+            assert_eq!(temporary_metadata.dev(), config.dev());
+            assert_eq!(temporary_metadata.ino(), config.ino());
+            assert_eq!(std::fs::read(temporary).unwrap(), crashed_bytes.as_bytes());
+        }
         if published {
             assert_eq!(
                 std::fs::read(fixture.config()).unwrap(),
@@ -622,6 +637,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
         let address = listener.local_addr().unwrap();
         assert_eq!(change, None);
         assert_eq!(address == crashed_address, published);
+        assert_no_temporary(&fixture);
         let expected = format!("port = {}\n", address.port());
         assert_eq!(
             std::fs::read(fixture.config()).unwrap(),
@@ -708,5 +724,90 @@ async fn other_bind_errors_never_retry_or_replace_valid_config() {
         );
         assert_eq!(std::fs::read(fixture.config()).unwrap(), bytes.as_bytes());
         assert_no_temporary(&fixture);
+    }
+}
+
+#[tokio::test]
+async fn ticket_t_12_origin_cleanup_removes_only_owned_regular_temporary_files() {
+    for config in ["missing", "valid", "corrupt"] {
+        let fixture = Fixture::new();
+        let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = reserved.local_addr().unwrap();
+        let bytes = if config == "corrupt" {
+            b"invalid config\n".to_vec()
+        } else {
+            format!("  port = {}\n\n", address.port()).into_bytes()
+        };
+        if config != "missing" {
+            std::fs::write(fixture.config(), &bytes).unwrap();
+        }
+        let stale = fixture.0.join("desktop.toml-0123456789abcdef.new");
+        std::fs::write(&stale, b"stale publication").unwrap();
+        let preserved = [
+            "desktop.toml-0123456789abcde.new",
+            "desktop.toml-0123456789abcdef0.new",
+            "desktop.toml-0123456789abcdeF.new",
+            "desktop.toml-0123456789abcdeg.new",
+            "desktop.toml-0123456789abcdef.new.bak",
+            "other.toml-0123456789abcdef.new",
+            "print-partner.db",
+            "browser-preferences.json",
+        ];
+        for name in preserved {
+            std::fs::write(fixture.0.join(name), b"preserved bytes").unwrap();
+        }
+        let directory = fixture.0.join("desktop.toml-1111111111111111.new");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("child"), b"directory contents").unwrap();
+        let linked = fixture.0.join("desktop.toml-2222222222222222.new");
+        symlink("print-partner.db", &linked).unwrap();
+        let dangling = fixture.0.join("desktop.toml-3333333333333333.new");
+        symlink("absent", &dangling).unwrap();
+        let fifo = fixture.0.join("desktop.toml-4444444444444444.new");
+        let fifo_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+        let owner = StorageLease::acquire(&fixture.0).unwrap();
+        drop(reserved);
+        let result = bind_origin(&owner).await;
+        if config == "corrupt" {
+            assert!(result.is_err());
+        } else {
+            let (listener, change) = result.unwrap();
+            assert_eq!(change, None);
+            if config == "valid" {
+                assert_eq!(listener.local_addr().unwrap(), address);
+            } else {
+                assert_eq!(
+                    std::fs::read(fixture.config()).unwrap(),
+                    format!("port = {}\n", listener.local_addr().unwrap().port()).as_bytes()
+                );
+            }
+        }
+        assert!(!stale.exists());
+        if config != "missing" {
+            assert_eq!(std::fs::read(fixture.config()).unwrap(), bytes);
+        }
+        for name in preserved {
+            assert_eq!(
+                std::fs::read(fixture.0.join(name)).unwrap(),
+                b"preserved bytes"
+            );
+        }
+        assert_eq!(
+            std::fs::read(directory.join("child")).unwrap(),
+            b"directory contents"
+        );
+        assert_eq!(
+            std::fs::read_link(linked).unwrap(),
+            Path::new("print-partner.db")
+        );
+        assert_eq!(std::fs::read_link(dangling).unwrap(), Path::new("absent"));
+        use std::os::unix::fs::FileTypeExt;
+        assert!(
+            std::fs::symlink_metadata(fifo)
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
     }
 }
