@@ -23,3 +23,12 @@ This fixes the fixture's lifetime contract. It does not establish the cause of
 every DiskImages busy response. Accepting a warning would weaken the successful
 cleanup assertion; changing production retry counts or disk targets would expand
 the change without evidence. The workflow's cleanup trap stays unchanged.
+
+Hosted [diagnostic run 39185522717](https://github.com/poitee/PrintPartner/actions/runs/39185522717/job/117847314975)
+passed the suite and eight repetitions, then failed repetition 9 while ejecting
+the backing disk. The Python holder had exited. The exact image remained attached,
+with its DiskImages helper holding the sparseimage file. That helper normally
+backs the image; its presence does not establish the cause of the busy eject.
+Failure diagnostics now include privileged open-file inspection, device state and
+DiskArbitration messages restricted to the owned image's device identifiers.
+Verbose forced-detach output preserves the original exit status and assertions.

@@ -52,10 +52,12 @@ with open(sys.argv[1]) as fixture:
             raise SystemExit('holder did not open fixture')
     raise SystemExit(int(os.environ['TEST_STATUS']))
 if native:
+    command = [json.loads(os.environ['REAL_TOOLS'])[name], *args]
     if name == 'hdiutil' and '-force' in args:
         assert (root / 'closed').exists(), 'holder was not closed before force'
         print('force requested', flush=True)
-    status = subprocess.call([json.loads(os.environ['REAL_TOOLS'])[name], *args])
+        command.insert(-1, '-verbose')
+    status = subprocess.call(command)
     if name == 'hdiutil' and '-force' in args and status:
         real = json.loads(os.environ['REAL_TOOLS'])
         image_path = pathlib.Path(args[-1]).parent / 'fixtures.sparseimage'
@@ -70,6 +72,15 @@ if native:
                 devices = [item['dev-entry'] for item in image.get('system-entities', [])
                            if 'dev-entry' in item]
                 subprocess.run([real['lsof'], '-nP', str(image_path), *devices], timeout=10)
+                subprocess.run(['sudo', '-n', real['lsof'], '-nP', str(image_path), *devices],
+                               timeout=10)
+                for device in devices:
+                    subprocess.run(['diskutil', 'info', device], timeout=3)
+                predicate = 'process == "diskarbitrationd" AND (' + ' OR '.join(
+                    f'eventMessage CONTAINS "{pathlib.Path(device).name}"'
+                    for device in devices) + ')'
+                subprocess.run(['sudo', '-n', '/usr/bin/log', 'show', '--last', '1m',
+                                '--style', 'compact', '--predicate', predicate], timeout=15)
         subprocess.run(['ps', '-p', (root / 'holder.pid').read_text(),
                         '-o', 'pid,ppid,state,command'], timeout=10)
     if name == 'lsof' and status == 0:
