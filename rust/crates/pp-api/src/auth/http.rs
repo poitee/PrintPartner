@@ -606,16 +606,23 @@ async fn rotate_key(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response, Failure> {
-    created(
-        invoke(
-            &app.auth,
-            Request::RotateKey {
-                session: wire::session(&headers)?,
-                key_id: id,
-            },
-        )
-        .await?,
+    match invoke(
+        &app.auth,
+        Request::RotateKey {
+            session: wire::session(&headers)?,
+            key_id: id,
+        },
     )
+    .await?
+    {
+        outcome @ Outcome::KeyCreated { .. } => created(outcome),
+        // Node's regenerate route answers foreign and missing IDs with its full problem body.
+        _ => Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail":"API key not found","title":"Not Found","status":404})),
+        )
+            .into_response()),
+    }
 }
 async fn revoke_key(
     State(app): State<App>,
