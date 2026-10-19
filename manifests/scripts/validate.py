@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import shutil
 import sys
 from typing import Any
@@ -16,6 +17,8 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = REPO_ROOT / "manifests" / "schema"
+COMMUNITY_MANIFEST_SLUG = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+RESERVED_COMMUNITY_MANIFEST_SLUGS = {"kit-catalog", "registry-index"}
 
 
 def _load_yaml(path: Path) -> tuple[Any | None, list[str]]:
@@ -148,6 +151,16 @@ def _canonical_embedded_pairs(repo_root: Path) -> tuple[list[tuple[Path, Path]],
         manifest_file = entry.get("manifest_file")
         if not isinstance(slug, str) or not slug:
             errors.append(f"{registry_path}: entries[{index}].slug must be a non-empty string")
+            continue
+        if (
+            not COMMUNITY_MANIFEST_SLUG.fullmatch(slug)
+            or slug in RESERVED_COMMUNITY_MANIFEST_SLUGS
+        ):
+            errors.append(
+                f"{registry_path}: entries[{index}].slug must be 1 to 64 lowercase "
+                "letters, digits, dots, hyphens or underscores, starting with a letter "
+                "or digit, and not kit-catalog or registry-index"
+            )
             continue
         if not isinstance(manifest_file, str) or not manifest_file:
             errors.append(
