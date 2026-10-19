@@ -304,6 +304,46 @@ fn union<E>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod inspected_merge_tests {
+    use super::*;
+    use super::super::observation::PreparationLimits;
+    use std::sync::atomic::AtomicBool;
+
+    fn group() -> Group {
+        Group {
+            rule: "pick_one".into(),
+            label: None,
+            parts: vec![],
+            variants: vec![],
+            min: None,
+            max: None,
+        }
+    }
+
+    #[test]
+    fn early_group_matches_fit_inspected_work_grant() {
+        let mut target: Groups = (0..128)
+            .map(|i| (OptionGroupId(JsText::scalar(&format!("group-{i}"))), group()))
+            .collect();
+        let incoming = (0..4)
+            .map(|_| (target[0].0.clone(), group()))
+            .collect();
+        let cancelled = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                comparison_work: 4 + 128,
+                visits: 5,
+                ..PreparationLimits::default()
+            },
+        ).unwrap();
+        merge(&mut target, incoming, &mut budget).unwrap();
+        assert_eq!(target.len(), 128);
+        assert_eq!(target[0].0.0.as_scalar().as_deref(), Some("group-0"));
+    }
+}
 /// Merges option groups as Node does. Preparation charges a visit for each group,
 /// variant, and path it merges and for the final sort, plus the entries each one
 /// is compared against.
