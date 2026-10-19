@@ -127,6 +127,9 @@ for (const [name, change] of [
   ['job dependency', w => { w.jobs.parity.needs = ['skipped']; }],
   ['job failure ignored', w => { w.jobs.parity['continue-on-error'] = true; }],
   ['step false', w => { w.jobs.parity.steps[0].if = false; }],
+  ['step conditional runner', w => { w.jobs.parity.steps[0].if = "runner.environment == 'self-hosted'"; }],
+  ['step conditional always', w => { w.jobs.parity.steps[0].if = 'always() && false'; }],
+  ['always step failure ignored', w => { w.jobs.parity.steps[0].if = 'always()'; w.jobs.parity.steps[0]['continue-on-error'] = true; }],
   ['step failure ignored', w => { w.jobs.parity.steps[0]['continue-on-error'] = true; }],
   ['verification removed', w => { w.jobs.parity.steps = w.jobs.parity.steps.filter(s => !s.run?.includes('npm run contracts:verify')); }],
 ]) {
@@ -138,6 +141,15 @@ for (const [name, change] of [
     assert.match(result.stderr, /INVALID_DESKTOP_TRIGGERS|DISABLED_DESKTOP_|MISSING_DESKTOP_VERIFICATION/);
   });
 }
+
+test('event tree accepts always-run steps that propagate failure', t => {
+  const f = fixture(t, modify(w => {
+    const verification = w.jobs.parity.steps.find(s => s.run?.includes('npm run contracts:verify'));
+    verification.if = 'always()';
+  }));
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test('event tree accepts original blob despite deleted worktree and moved HEAD', t => {
   const f = fixture(t);
