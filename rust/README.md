@@ -49,15 +49,16 @@ the web workspace dependencies first. From the repository root:
 
 ```sh
 npm --prefix web ci
-node --conditions=development fixtures/parity/auth-health/generate.mjs --check
+"${PP_TEST_NODE:-node}" --conditions=development fixtures/parity/auth-health/generate.mjs --check
 CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_health_parity
 CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_health_parity --features desktop_rebuild
 ```
 
 The generator loads the registered Node handlers through `tsx` and uses native
 SQLite modules from the web installation. Keep the Node runtime used for
-`npm ci` and the tests consistent. If `node` on PATH differs, set `PP_TEST_NODE`
-to that runtime's executable for the Rust commands. This suite needs no web
+`npm ci` and the tests consistent. If `node` on PATH differs, export `PP_TEST_NODE`
+as that runtime's executable before running the checks above. The standalone
+check and Rust commands both honor this selection. This suite needs no web
 build or desktop bundle manifest. It uses temporary databases and test sessions.
 
 See the [health fixture contract](../fixtures/parity/auth-health/README.md) for

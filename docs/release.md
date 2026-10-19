@@ -15,7 +15,7 @@ Before tagging a release, after updating the app version or release metadata:
 2. Regenerate the version-pinned health snapshot:
 
    ```sh
-   node --conditions=development fixtures/parity/auth-health/generate.mjs
+   "${PP_TEST_NODE:-node}" --conditions=development fixtures/parity/auth-health/generate.mjs
    ```
 
 3. Review the diff in `fixtures/parity/auth-health/node.json` and commit the
@@ -25,7 +25,7 @@ Before tagging a release, after updating the app version or release metadata:
 4. Run the freshness check and the Rust comparison in both feature modes:
 
    ```sh
-   node --conditions=development fixtures/parity/auth-health/generate.mjs --check
+   "${PP_TEST_NODE:-node}" --conditions=development fixtures/parity/auth-health/generate.mjs --check
    CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_health_parity
    CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_health_parity --features desktop_rebuild
    ```
@@ -33,7 +33,8 @@ Before tagging a release, after updating the app version or release metadata:
 The generator must report `auth health: 6 registered-handler cases passed`.
 The Rust suite also checks freshness through `node_health_snapshot_is_current`.
 See the [Rust test prerequisites](../rust/README.md#run-pp-api-health-parity-tests)
-for native-module runtime selection and the [fixture contract](../fixtures/parity/auth-health/README.md)
+for selecting the same Node runtime used by `npm ci` through `PP_TEST_NODE`,
+and the [fixture contract](../fixtures/parity/auth-health/README.md)
 for intentional differences. Fixes to production health behavior require a
 separate change.
 
