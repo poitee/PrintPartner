@@ -1739,24 +1739,85 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    const SUBREAPER_FIXTURE: &str =
+        "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced";
+
+    #[cfg(target_os = "linux")]
+    fn run_subreaper_fixture(test_name: &str) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--format=pretty", "--color=never"])
+            .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn validate_subreaper_fixture(output: &std::process::Output) -> Result<(), &'static str> {
+        if !output.status.success() {
+            return Err("isolated subreaper fixture failed");
+        }
+        let stdout = std::str::from_utf8(&output.stdout)
+            .map_err(|_| "isolated subreaper fixture output is not UTF-8")?;
+        let lines: Vec<_> = stdout.lines().filter(|line| !line.is_empty()).collect();
+        let expected = format!("test {SUBREAPER_FIXTURE} ... ok");
+        let invalid = "isolated subreaper fixture did not pass exactly once";
+        let ["running 1 test", result, summary] = lines.as_slice() else {
+            return Err(invalid);
+        };
+        if *result != expected {
+            return Err(invalid);
+        }
+        let (filtered, _) = summary
+            .strip_prefix("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; ")
+            .and_then(|rest| rest.split_once(" filtered out; finished in "))
+            .ok_or(invalid)?;
+        filtered.parse::<usize>().map_err(|_| invalid)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subreaper_reexec_runs_exactly_one_fixture() {
+        let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
+        assert_eq!(validate_subreaper_fixture(&output), Ok(()), "{output:?}");
+        let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+        for malformed in [
+            stdout.repeat(2),
+            stdout.replace(SUBREAPER_FIXTURE, "unrelated_fixture"),
+            stdout.replace("1 passed;", "2 passed;"),
+            stdout.replace("0 failed;", "1 failed;"),
+        ] {
+            let mut invalid = output.clone();
+            invalid.stdout = malformed.into_bytes();
+            assert_eq!(
+                validate_subreaper_fixture(&invalid),
+                Err("isolated subreaper fixture did not pass exactly once")
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subreaper_reexec_wrong_name_is_failure() {
+        let output = run_subreaper_fixture(&format!("{SUBREAPER_FIXTURE}_missing"));
+        assert_eq!(output.status.code(), Some(0));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 0 tests"));
+        assert_eq!(
+            validate_subreaper_fixture(&output),
+            Err("isolated subreaper fixture did not pass exactly once"),
+            "{output:?}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced() {
         use tokio::io::{AsyncBufReadExt, BufReader};
 
         if std::env::var_os("PP_COMPAT_SUBREAPER_FIXTURE").is_none() {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced",
-                    "--nocapture",
-                ])
-                .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
-                .status()
-                .unwrap();
-            assert!(
-                status.success(),
-                "isolated subreaper fixture failed: {status}"
-            );
+            let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
+            assert_eq!(validate_subreaper_fixture(&output), Ok(()), "{output:?}");
             return;
         }
         assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);

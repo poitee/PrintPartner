@@ -1,0 +1,9 @@
+{
+  "action": "checks_requested",
+  "merge_group": {
+    "base_ref": "refs/heads/main",
+    "base_sha": "1111111111111111111111111111111111111111",
+    "head_ref": "refs/heads/gh-readonly-queue/main/pr-123-2222222",
+    "head_sha": "2222222222222222222222222222222222222222"
+  }
+}

@@ -13,6 +13,7 @@ export async function clientCases({ root, raw: original, profile, draft }) {
   const { SqliteDatabase, getDb } = await load("web/apps/server/src/db/client.ts");
   const { AppRepository } = await load("web/apps/server/src/db/repository.ts");
   const schema = await load("web/apps/server/src/db/schema.ts");
+  const { createApiKey, validateApiKey } = await load("web/apps/server/src/services/api-key-manager.ts");
   const snapshot = original.serialize();
   const request = {
     expected_snapshot_digest: draft.snapshotDigest,
@@ -20,7 +21,7 @@ export async function clientCases({ root, raw: original, profile, draft }) {
     expected_base: { revision_id: null, plan_version: 0 }, remap_checkoff_links: true,
   };
   const cases = [];
-  for (const [id, key, actor, corrupt] of [
+  for (const [id, key, actor, corrupt, credential = "session"] of [
     ["trim", "\ufeff\u00a0 client-key \u2029", "default", false],
     ["empty", "\ufeff \u00a0", "default", false],
     ["missing", null, "default", false],
@@ -29,6 +30,7 @@ export async function clientCases({ root, raw: original, profile, draft }) {
     ["embedded-bom", "client\ufeffkey", "default", false],
     ["other-tenant", "client-key", "other", false],
     ["internal-error", "client-key", "default", true],
+    ["api-key", "client-key", "default", false, "api_key"],
   ]) {
     const dir = mkdtempSync(join(tmpdir(), "pp-publication-client-"));
     writeFileSync(join(dir, "print-partner.db"), snapshot);
@@ -40,19 +42,24 @@ export async function clientCases({ root, raw: original, profile, draft }) {
       clock: () => new Date("2026-09-06T00:00:00.000Z"),
       tokenFactory: () => `ppu_${(++counter).toString(16).padStart(32, "0")}`,
     });
+    // A disposable key in the temporary database; Node's own validator admits it
+    // and, like API-key traffic, the request carries a tenant but no session user.
+    const apiKey = credential === "api_key" ? createApiKey(repo).key : null;
     const app = Fastify();
     app.addHook("onRequest", (request, _reply, done) => {
       request.tenantId = actor;
-      request.sessionUser = { user_id: actor };
+      if (apiKey == null) request.sessionUser = { user_id: actor };
+      else assert.ok(validateApiKey(repo, request.headers["x-api-key"]));
       tenantStorage.run(actor, done);
     });
     try {
       await registerPlanDraftRoutes(app, { repo, reposDir: database.reposDir, thumbsDir: database.thumbsDir, dataDir: dir });
       if (corrupt) raw.exec("CREATE TRIGGER reject_publication BEFORE INSERT ON plan_revisions BEGIN SELECT RAISE(ABORT,'Rust-only probe detail'); END");
-      const inject = () => app.inject({ method: "POST", url: `/plans/${profile.id}/drafts/${draft.id}/apply`, headers: key == null ? {} : { "idempotency-key": key }, payload: request });
+      const inject = () => app.inject({ method: "POST", url: `/plans/${profile.id}/drafts/${draft.id}/apply`, headers: { ...(key == null ? {} : { "idempotency-key": key }), ...(apiKey == null ? {} : { "x-api-key": apiKey }) }, payload: request });
       const response = await inject();
       const body = response.json();
       const receipt = raw.prepare("SELECT idempotency_key,actor_id FROM plan_apply_requests").get() ?? null;
+      const revision = raw.prepare("SELECT created_by,accepted_by FROM plan_revisions").get() ?? null;
       let replay = null;
       if (response.statusCode === 200) {
         const again = await inject();
@@ -60,7 +67,7 @@ export async function clientCases({ root, raw: original, profile, draft }) {
         assert.deepEqual(replay.body, body);
         assert.equal(raw.prepare("SELECT count(*) AS n FROM plan_apply_requests").get().n, 1);
       }
-      cases.push({ id, key, tenant: actor, corrupt, request, profile: profile.id, draft: draft.id, status: response.statusCode, body, receipt, replay });
+      cases.push({ id, key, tenant: actor, credential, corrupt, request, profile: profile.id, draft: draft.id, status: response.statusCode, body, receipt, revision, replay });
     } finally {
       await app.close(); raw.close(); database.close(); rmSync(dir, { recursive: true, force: true });
     }

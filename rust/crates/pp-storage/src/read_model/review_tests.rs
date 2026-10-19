@@ -145,6 +145,38 @@ fn scalar_review_and_summary_keep_the_node_shape() {
             assert!(part.get("optionGroupId").is_none());
         }
     }
+    let legacy_keys = [
+        "id",
+        "match_key",
+        "relative_path",
+        "filename",
+        "source_layer",
+        "status",
+        "role",
+        "requirement",
+        "option_group_id",
+        "included",
+        "filament_color_id",
+        "filament_custom_hex",
+        "spoolman_spool_id",
+        "filament_display",
+        "filament_hex",
+        "quantity_auto",
+        "quantity_override",
+        "quantity_effective",
+        "printed_count",
+        "print_units",
+        "assembled_units",
+        "missing",
+        "stl_missing",
+        "thumb_empty",
+    ];
+    for group in review["part_groups"].as_array().unwrap() {
+        for part in group["parts"].as_array().unwrap() {
+            let keys = part.as_object().unwrap().keys().collect::<Vec<_>>();
+            assert_eq!(keys, legacy_keys);
+        }
+    }
     assert_eq!(summary["totals"], review["totals"]);
     assert_eq!(summary["has_blockers"], review["has_blockers"]);
     assert_eq!(summary["plan_id"], review["profile_id"]);
