@@ -189,6 +189,35 @@ describe("farm status Bambu feature admission", () => {
     expect(moonraker).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['{"farm":true,"bambu":false}', '{"farm":true,"bambu":true}'])(
+    "skips corrupt integration elements instead of failing the farm call for %j", async (value) => {
+      seedFleet(true);
+      const stored = JSON.parse(repo.getSetting("integrations") ?? "[]") as unknown[];
+      repo.setSetting("integrations", JSON.stringify([null, 7, "x", [], { type: "bambu" }, ...stored]));
+      repo.setSetting("feature_toggles", value);
+      const enabled = value.includes('"bambu":true');
+      const moonrakerPrinter = { ...deniedPrinter, id: "moonraker", name: "Saved Moonraker", state: "idle",
+        message: null, integration_id: "bambu-looking-id" };
+      const client = await mcp();
+      const expected = enabled
+        ? { printer_count: 2, printers: [livePrinter, moonrakerPrinter], idle: 1, printing: 1, offline: 0,
+          needs_filament_swap: liveFarm.needs_filament_swap }
+        : { printer_count: 2, printers: [deniedPrinter, moonrakerPrinter], idle: 1, printing: 0, offline: 1,
+          needs_filament_swap: [] };
+      expect(JSON.parse(await call())).toEqual(expected);
+      expect(JSON.parse(await call(client))).toEqual(expected);
+      expect(bambu).toHaveBeenCalledTimes(enabled ? 2 : 0);
+    });
+
+  it("fails closed when the printer's own integration element is corrupt", async () => {
+    repo.setSetting("integrations", JSON.stringify([null, { type: "bambu", config: {} }]));
+    repo.setSetting("feature_toggles", '{"farm":true,"bambu":true}');
+    expect(JSON.parse(await call())).toEqual({ ...deniedFarm,
+      printers: [{ ...deniedPrinter, state: "offline", message: "Integration not found" }] });
+    expect(bambu).toHaveBeenCalledTimes(0);
+    expect(moonraker).toHaveBeenCalledTimes(0);
+  });
+
   it("isolates tenant connector settings and ignores Plan overrides in direct and MCP calls", async () => {
     repo.setSetting("feature_toggles", '{"farm":true,"bambu":false}');
     repo.setSetting("feature_toggles:plan:42", '{"bambu":true}');
