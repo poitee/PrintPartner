@@ -269,6 +269,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_workflow_help",
         "tool.get_job_status",
         "tool.check_hardware_interfaces",
+        "tool.propose_add_custom_filament",
+        "tool.propose_create_build",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -291,8 +293,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 25);
-    assert_eq!(unresolved.len(), 418);
+    assert_eq!(reviewed.len(), 27);
+    assert_eq!(unresolved.len(), 416);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -556,6 +558,8 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_workflow_help",
         "tool.get_job_status",
         "tool.check_hardware_interfaces",
+        "tool.propose_add_custom_filament",
+        "tool.propose_create_build",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -606,6 +610,14 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
 fn reviewed_participants_cannot_swap_operations() {
     for (first, second) in [
         ("tool.get_workflow_help", "tool.check_hardware_interfaces"),
+        (
+            "tool.check_hardware_interfaces",
+            "tool.propose_add_custom_filament",
+        ),
+        (
+            "tool.propose_add_custom_filament",
+            "tool.propose_create_build",
+        ),
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
@@ -2526,4 +2538,70 @@ fn ticket_t_7_ownership_hardware_interfaces_has_reviewed_empty_node_resources() 
 #[test]
 fn ticket_t_7_ownership_hardware_interfaces_refuses_invalid_admission_before_effects() {
     assert_catalog_tool_invalid_admission("tool.check_hardware_interfaces");
+}
+
+#[test]
+fn ticket_t_7_ownership_custom_filament_proposal_has_reviewed_empty_node_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.propose_add_custom_filament";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(index.resources_for(id), Ok(&ResourceSet::new()));
+    let claim = index.lookup(id).unwrap();
+    assert_eq!(claim.operation, id);
+    assert_eq!(claim.disposition, Disposition::Owned(Owner::Node));
+    assert_eq!(index.admit_rollback(id), Ok(&ResourceSet::new()));
+
+    let application = "assistant.propose_add_custom_filament";
+    assert_eq!(
+        index.resources_for(application),
+        Err(AdmissionError::UnresolvedResources {
+            operation: application.into()
+        })
+    );
+    let mut effect = false;
+    assert_eq!(
+        index.admit_rollback(application).map(|_| effect = true),
+        Err(AdmissionError::UnresolvedResources {
+            operation: application.into()
+        })
+    );
+    assert!(!effect);
+}
+
+#[test]
+fn ticket_t_7_ownership_custom_filament_proposal_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.propose_add_custom_filament");
+}
+
+#[test]
+fn ticket_t_7_ownership_create_build_proposal_has_reviewed_empty_node_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.propose_create_build";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(index.resources_for(id), Ok(&ResourceSet::new()));
+    let claim = index.lookup(id).unwrap();
+    assert_eq!(claim.operation, id);
+    assert_eq!(claim.disposition, Disposition::Owned(Owner::Node));
+    assert_eq!(index.admit_rollback(id), Ok(&ResourceSet::new()));
+
+    let application = "assistant.propose_create_build";
+    assert_eq!(
+        index.resources_for(application),
+        Err(AdmissionError::UnresolvedResources {
+            operation: application.into()
+        })
+    );
+    let mut effect = false;
+    assert_eq!(
+        index.admit_rollback(application).map(|_| effect = true),
+        Err(AdmissionError::UnresolvedResources {
+            operation: application.into()
+        })
+    );
+    assert!(!effect);
+}
+
+#[test]
+fn ticket_t_7_ownership_create_build_proposal_refuses_invalid_admission_before_effects() {
+    assert_catalog_tool_invalid_admission("tool.propose_create_build");
 }
