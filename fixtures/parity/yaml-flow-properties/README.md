@@ -2,9 +2,9 @@
 
 This standalone corpus records the six divergence families named in GRE-841 for GRE-871. It records Node outcomes only. It does not assert current Rust parser parity.
 
-The 31 cases cover explicit empty flow keys, implicit empty flow keys, adjacent verbatim-tag text, a block colon after a flow collection, a multiline quoted flow key followed by a tab, and a comment immediately after a quoted key's colon. Controls distinguish a missing value from an empty mapping and show that a space before the comment changes refusal into a one-key mapping with a null value.
+The 31 cases cover explicit empty flow keys, implicit empty flow keys, adjacent verbatim-tag text, a block colon after a flow collection, a multiline quoted flow key followed by a tab, and a comment immediately after a quoted key's colon. Controls distinguish a missing value from an empty mapping: `{"q":}` loads as `{"q":null}`, not `{}`. They also show that a space before the comment changes refusal into a one-key mapping with a null value.
 
-`[? ]` decodes to `[{"null":null}]`. `[:[]]` decodes to `[{"null":[]}]`. The null key is the string `"null"` in these decoded JavaScript objects.
+`[? ]` decodes to `[{"null":null}]`. `[:[]]` decodes to `[{"null":[]}]`. js-yaml itself converts a YAML null mapping key to the string `"null"` in the JavaScript object it returns. The generator serializes that returned value unchanged.
 
 Every seed has LF, CR, and CRLF variants. Seeds without internal line breaks also have an unterminated variant. Tabs remain literal bytes in the empty-key mapping and multiline-key cases.
 
@@ -23,7 +23,7 @@ node fixtures/parity/yaml-flow-properties/verify.mjs
 node fixtures/parity/yaml-flow-properties/verify.mjs --self-test
 ```
 
-The verifier checks 31 cases, including 28 decoded values and 3 refusals. The self-test runs seven CLI tests. One accepts the corpus. Six reject disposable copies with a changed decoded result, lost one-key null semantics, changed refusal class, changed refusal reason, changed source bytes, or a missing case. The tests remove their temporary files.
+The verifier checks 31 cases, including 28 decoded values and 3 refusals. The self-test runs eight CLI tests. One accepts the corpus. Seven reject disposable copies with a changed decoded result, lost one-key null semantics, changed refusal class, changed refusal reason, changed source bytes, a missing case, or a changed `source.version`. The tests remove their temporary files.
 
 To inspect a candidate fixture without replacing the checked-in corpus, pass its path to `verify.mjs`.
 

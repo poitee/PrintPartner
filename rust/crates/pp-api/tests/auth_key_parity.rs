@@ -374,21 +374,6 @@ async fn replay() -> Replay {
     }
 }
 
-/// The one recorded gap: Node's `sendProblem` adds `title` and `status` to a
-/// 404, and the shared Rust `Failure` body carries only `detail`. Remove this
-/// once the auth wire format matches; the strict comparison below then fails.
-fn rust_contract(node: &Value) -> Value {
-    let mut expected = node.clone();
-    if node["status"] == 404 {
-        assert_eq!(
-            node["body"],
-            json!({"detail":"API key not found","title":"Not Found","status":404})
-        );
-        expected["body"] = json!({"detail":"API key not found"});
-    }
-    expected
-}
-
 /// Normalizes raw Rust results in order, as the generator does for Node, and
 /// lists every step that leaks a key or differs from the Node contract.
 fn mismatches(steps: &[Value], raw: &[Value]) -> Vec<String> {
@@ -411,7 +396,7 @@ fn mismatches(steps: &[Value], raw: &[Value]) -> Vec<String> {
             differences.push(format!("step {index} reissues a key or key ID"));
         } else if tokens.leaked(issued_now, result) || reserved(result) {
             differences.push(format!("step {index} leaks a key or carries a token"));
-        } else if rust_contract(&step["node"]) != rust {
+        } else if step["node"] != rust {
             differences.push(format!("step {index} {step}\n  rust {rust}"));
         }
     }

@@ -37,8 +37,9 @@ the Rust test suite. CI supplies its pinned Node 22 executable through
 rejects stale fixture output when the Node matcher or bounded domain changes.
 The test copies `unchanged.db` into a disposable directory and clears its
 imported-path filter there. It supplies inventory, manifests, and artifact
-bytes in memory. The fixture owner shuts down and removes the disposable directory, including
-SQLite sidecars, on completion or assertion failure.
+bytes in memory. Cleanup attempts both owner shutdown and disposable directory
+removal, including SQLite sidecars. Cleanup errors fail a passing test or print
+diagnostics during assertion unwind without a second panic.
 Regenerate or check with Node 22:
 
 ```sh
@@ -54,29 +55,11 @@ CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml \
   -p pp-storage --features desktop_rebuild --test manifest_glob_parity -- --nocapture
 ```
 
-The integration test is gated by `desktop_rebuild`.
+The integration test is gated by the default-off `desktop_rebuild` feature.
 
-Verification used Node v22.23.3. Regeneration with `--check` printed:
-
-```text
-102 patterns x 55 keys = 5610 Node matchKeyMatches outcomes verified (264 accept, 5346 reject)
-```
-
-The focused public test printed:
-
-```text
-public preparation: 102 patterns x 55 keys = 5610 outcomes verified (264 accept, 5346 reject)
-test public_preparation_matches_node_matrix ... ok
-```
-
-Mutation verification changed only `expected[9][7]` from `true` to `false`,
-for literal pattern `probe-aa-end.stl` against key `probe-aa-end.stl`.
-The normal focused test exited 101 with:
-
-```text
-assertion `left == right` failed: Node parity row 9, column 7, pattern "probe-aa-end.stl", key "probe-aa-end.stl"
-  left: Some(String("optional"))
- right: Some(Null)
-```
-
-After restoring the fixture, `--check` and the focused Rust test passed.
+To verify mutation detection, change only `expected[9][7]` in `node.json`
+from `true` to `false`. Run the focused Rust test and confirm that
+`public_preparation_matches_node_matrix` fails at row 9, column 7, for
+literal pattern and key `probe-aa-end.stl`. The assertion must report actual
+`Some(String("optional"))` against expected `Some(Null)`.
+Restore the fixture, then rerun the Node `--check` and focused Rust test.
