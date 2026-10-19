@@ -5,6 +5,15 @@ The Rust test sends the same requests to the landed `pp_api::auth::auth_router`
 over an ephemeral IPv4 loopback listener. It compares the HTTP status, the
 complete public JSON body, and every `Set-Cookie` header.
 
+The request headers differ. Node's `generate.mjs` capture omits `Origin`, while
+the Rust test sends the loopback listener's origin. The Rust router rejects
+unsafe methods such as `POST` without `Origin` with HTTP 403 and
+`{"detail":"Invalid request origin"}` before authentication handling. The
+registered Node auth routes do not enforce this Origin requirement. Rust needs
+the header to reach the authentication responses compared here. This harness
+compares those responses under each runtime's request preconditions. It does
+not establish Origin or CSRF enforcement parity.
+
 Eleven cases require exact equality. Three cases assert explicit Rust security
 differences. The test does not claim parity for those cases or for successful
 login responses.
