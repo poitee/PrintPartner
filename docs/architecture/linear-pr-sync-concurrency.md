@@ -171,8 +171,10 @@ pages are not a strict disk quota, and deletion does not promise file shrinkage.
 
 `enqueue(delivery_id, payload, issue_ids)` accepts all destinations atomically or
 raises `CapacityExceeded` without evicting accepted events. An identical replay
-returns false and does not restore acknowledged destinations. Different bytes or
-a different destination set for a retained ID raise `DeliveryConflict`. Target
+returns false and does not restore acknowledged destinations. Input validation
+and payload and fanout limits run before the retained-ID lookup. Within those
+limits, different bytes or a different destination set for a retained ID raise
+`DeliveryConflict`. Target
 order and duplicate destinations do not change that set. Empty targets and
 invalid IDs are rejected. Payloads must be immutable `bytes`.
 
@@ -191,6 +193,10 @@ not reserve work, and the inbox does not serialize external application. Local
 transaction serialization is not hosted runner coordination or proof of exactly
 once Linear writes. A crash after application but before acknowledgement can
 replay the external write.
+
+A write-lock timeout raises `sqlite3.OperationalError` after SQLite's default
+five-second wait. The enqueue has not accepted the input. The caller must retain
+it and retry or escalate, just as with capacity rejection.
 
 Any future durable ingestion must retain the complete event **before**
 replaceable Actions pending processing. An inbox on an ephemeral runner cannot

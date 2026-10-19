@@ -1,4 +1,4 @@
-"""Bounded local SQLite retention candidate. No production writers use this.
+"""Bounded local SQLite retention candidate.
 
 Payloads are immutable bytes supplied by the caller, including the complete
 original PR snapshot and event changes.from. This module does not discover refs.
