@@ -11,14 +11,10 @@ The golden stores no secret. Generated keys, key IDs and `createdAt`/`lastUsedAt
 
 Before normalizing, both sides check the raw output. An issued key may appear only as the `key` field of the create or regenerate response that issued it. A key or key ID may be issued only once. No raw string may look like a token (`<id:…>` or `<key:…>`), because it would compare equal to the token it imitates. The generator refuses to write a raw `ppk_` key, generated ID or generated time.
 
-`rust/crates/pp-api/tests/auth_key_parity.rs` replays the same steps through `auth_router` with two registered accounts, the owner and the foreign account, each in its own tenant. Key use goes through `Request::ResolveKey` for the step's tenant. The test normalizes Rust output with the same rules and compares each step for equality. It also checks:
+`rust/crates/pp-api/tests/auth_key_parity.rs` replays the same steps through `auth_router` with two registered accounts, the owner and the foreign account, each in its own tenant. Key use goes through `Request::ResolveKey` for the step's tenant. The test normalizes Rust output with the same rules and strictly compares each step's status and complete response body with Node's recorded output. Unknown and foreign key IDs return `{"detail":"API key not found","title":"Not Found","status":404}`. It also checks:
 
 - Stored keys hold digests only, and revocation persists across a reopen.
 - The comparison fails when raw Rust output puts a key in a list entry, a `createdAt` or an error `detail`, when a time is malformed or changes, when a raw value imitates a token, when a key is issued twice, or when a revoked key is accepted.
-
-## Known gap
-
-For an unknown key ID, Node's `sendProblem` returns `{"detail":"API key not found","title":"Not Found","status":404}`. Rust's shared auth `Failure` returns only `detail`. `rust_contract` in the test accounts for exactly this difference. Remove it when the auth error body matches.
 
 Node never sets `expiresAt` when it creates a key. Lifetime-based expiry in the `desktop_rebuild` auth client has no Node counterpart and is not compared here.
 
