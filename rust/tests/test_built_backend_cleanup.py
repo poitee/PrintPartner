@@ -64,7 +64,8 @@ class DescendantCleanupTest(unittest.TestCase):
                     install_handler = signal.signal
 
                     def pause_before_ignore(signum, handler):
-                        if os.getpid() != caller_pid and signum == signal.SIGTERM and handler == signal.SIG_IGN:
+                        if (os.getpid() != caller_pid and signum == signal.SIGTERM
+                                and handler == signal.SIG_IGN and not boundary.exists()):
                             boundary.write_text("callback finished")
                             time.sleep(60)
                         return install_handler(signum, handler)
