@@ -504,9 +504,7 @@ function RoleFilamentPickerInner({
   }, [catalog]);
 
   const refreshAccess = () => {
-    if (spoolmanAccess.gated) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.planFeatures(profileId) });
-    }
+    void queryClient.invalidateQueries({ queryKey: queryKeys.planFeatures(profileId) });
   };
 
   const onPickCatalog = async (role: string, colorId: string) => {
@@ -546,9 +544,6 @@ function RoleFilamentPickerInner({
     if (!parsed) return;
     const action = spoolmanAccess.beginAction();
     setSavingRole(row.role);
-    if (spoolmanAccess.gated) {
-      setRoleSaveStatus((prev) => ({ ...prev, [row.role]: "saving" }));
-    }
     try {
       const spoolman_spool_id = spoolId
         ? buildSpoolmanSpoolId(parsed.integrationId, Number(spoolId))
@@ -560,7 +555,7 @@ function RoleFilamentPickerInner({
       });
       if (spoolmanAccess.gated) {
         await afterColorChange(result, row.role, action, true);
-      } else if (action.isCurrent()) {
+      } else {
         publishRows(result.roles);
         onUpdated?.();
       }

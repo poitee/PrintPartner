@@ -31,12 +31,16 @@ CODEOWNERS assigns these paths to `@poitee`:
 - `scripts/release.mjs`, `web/scripts/atomic-package-build.mjs`, `Dockerfile`, and `docker-entrypoint.sh`, which the release workflow runs directly or builds into the published image.
 - `rust/ast-grep-baseline.json`, `scripts/workaround-baseline.json`, and Rust snapshot directories under `rust/crates/`.
 
-The `actionlint` and `zizmor` jobs in `.github/workflows/actionlint.yml` run on every `pull_request`.
-There is no path filter or job condition, so a documentation-only PR reports both checks.
-They also run on pushes to `main` and `master`, and on manual dispatch.
+The workflow `.github/workflows/actionlint.yml` starts on every `pull_request`, on pushes to `main` and `master`, on merge groups and on manual dispatch.
+Its `changes` job selects the `actionlint` and `zizmor` jobs.
+On PRs, both jobs run when `.github/workflows/**`, `.github/actions/**`, either linter's configuration, or the CI filter script and its tests change.
+For other paths, including documentation-only PRs, both jobs are skipped and still report their named checks.
+Non-PR runs always execute both linters.
+Both jobs fail if the `changes` job fails, so a broken filter cannot skip a required check.
 Both jobs have only `contents: read` permission and disable persisted checkout credentials.
+A new PR push cancels that PR's older run. Every non-PR run has its own concurrency group, so it never waits for or cancels another run.
 
-Actionlint 1.7.12 checks workflow syntax and embedded shell commands with ShellCheck. On PRs, actionlint and zizmor run when `.github/workflows/**`, `.github/actions/**`, either linter's configuration, or the CI filter script and its tests change. Their named jobs report skipped checks for other paths. Pushes and manual runs always execute both linters. New PR pushes cancel older runs; pushes to the default branch do not.
+Actionlint 1.7.12 checks workflow syntax and embedded shell commands with ShellCheck.
 The job verifies the actionlint download against its SHA-256 checksum before execution.
 It reports through the job exit status, so fork PRs do not need permission to create check runs.
 

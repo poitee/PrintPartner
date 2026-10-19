@@ -120,6 +120,70 @@ describe("RoleFilamentPicker Plan access", () => {
     expect(screen.queryByText("Save failed")).toBeNull();
   });
 
+  it.each(["unmount", "switch Plan"])("gate off spool save publishes returned rows after %s", async (transition) => {
+    gated = false;
+    seedAccess();
+    let finish: ((response: Response) => void) | undefined;
+    intercept = (url, init) => url.pathname === "/plans/1/role-filament" && init?.method === "PUT"
+      ? new Promise<Response>((resolve) => { finish = resolve; }) : undefined;
+    const savedRoles = roles.map((row) => row.role === "primary"
+      ? { ...row, spoolman_spool_id: null, filament_display: "Saved Blue" } : row);
+    const onUpdated = vi.fn();
+    const { unmount, rerender } = render(<RoleFilamentPicker profileId={1} onUpdated={onUpdated} />, { wrapper });
+    await openPrimary();
+    fireEvent.change(await screen.findByLabelText("Physical spool for Primary"), { target: { value: "" } });
+    await waitFor(() => expect(writes()).toEqual([{
+      role: "primary", filament_color_id: "spoolman:int-1:filament:2", spoolman_spool_id: null,
+    }]));
+    if (transition === "unmount") unmount();
+    else {
+      rerender(<RoleFilamentPicker profileId={2} onUpdated={onUpdated} />);
+      await screen.findByRole("button", { name: "Change Primary color" });
+    }
+
+    await act(async () => { finish?.(json({ ...mutationResult, roles: savedRoles })); });
+
+    await waitFor(() => expect(onUpdated).toHaveBeenCalledTimes(1));
+    expect(client.getQueryData(queryKeys.roleFilaments(1))).toEqual(savedRoles);
+    if (transition === "switch Plan") {
+      expect(client.getQueryData(queryKeys.roleFilaments(2))).toEqual(roles);
+      expect(screen.queryByText("Saved Blue")).toBeNull();
+      expect(screen.getByText("Spoolman Blue").textContent).toBe("Spoolman Blue");
+    }
+  });
+
+  it("shows Saving while a gated spool save is pending, then Saved", async () => {
+    let finish: ((response: Response) => void) | undefined;
+    intercept = (url, init) => url.pathname === "/plans/1/role-filament" && init?.method === "PUT"
+      ? new Promise<Response>((resolve) => { finish = resolve; }) : undefined;
+    const onUpdated = vi.fn();
+    render(<RoleFilamentPicker profileId={1} onUpdated={onUpdated} />, { wrapper });
+    await openPrimary();
+    fireEvent.change(await screen.findByLabelText("Physical spool for Primary"), { target: { value: "5" } });
+
+    expect((await screen.findByText("Saving…")).textContent).toBe("Saving…");
+    expect(screen.queryByText("Saved")).toBeNull();
+    expect(onUpdated).not.toHaveBeenCalled();
+    await act(async () => { finish?.(json(mutationResult)); });
+    expect((await screen.findByText("Saved")).textContent).toBe("Saved");
+    expect(screen.queryByText("Saving…")).toBeNull();
+    expect(onUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([null, "integration is disabled in Settings"])("hides disabled integration hints when Plan access is denied: %s", async (error) => {
+    allowed = false;
+    seedAccess();
+    catalog = { ...catalog, spoolman_colors: [], spoolman_status: "disabled", spoolman_error: error };
+    render(<RoleFilamentPicker profileId={1} />, { wrapper });
+
+    await openPrimary();
+
+    expect(screen.queryByText(/enable it in Settings/)).toBeNull();
+    expect(screen.queryByText(/Spoolman:/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Catalog Red" }).textContent).toContain("Catalog Red");
+    expect(screen.queryByLabelText("Physical spool for Primary")).toBeNull();
+  });
+
   it("gate off failed spool pick leaves no save status", async () => {
     gated = false;
     seedAccess();
