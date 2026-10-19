@@ -50,21 +50,23 @@ function selfTest() {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Verified 31 literal YAML outcomes/);
   });
+  const literalMismatch = /literal corpus mismatch/;
   const mutations = [
-    ["changed decoded result", (corpus) => { corpus.cases[0].outcome.value = [{ null: "changed" }]; }],
+    ["changed decoded result", (corpus) => { corpus.cases[0].outcome.value = [{ null: "changed" }]; }, literalMismatch],
     ["changed one-key null semantics", (corpus) => {
       corpus.cases.find((entry) => entry.id === "null-one-key-none").outcome.value = {};
-    }],
+    }, literalMismatch],
     ["changed refusal class", (corpus) => {
       corpus.cases.find((entry) => entry.id === "comment-adjacent-lf").outcome.class = "Error";
-    }],
+    }, literalMismatch],
     ["changed refusal reason", (corpus) => {
       corpus.cases.find((entry) => entry.id === "comment-adjacent-lf").outcome.reason = "changed";
-    }],
-    ["changed source bytes", (corpus) => { corpus.cases[0].utf8Hex = "00"; }],
-    ["missing corpus case", (corpus) => { corpus.cases.pop(); }],
+    }, literalMismatch],
+    ["changed source bytes", (corpus) => { corpus.cases[0].utf8Hex = "00"; }, literalMismatch],
+    ["missing corpus case", (corpus) => { corpus.cases.pop(); }, literalMismatch],
+    ["changed source version", (corpus) => { corpus.source.version = "5.4.4"; }, /source metadata differ/],
   ];
-  for (const [name, mutate] of mutations) {
+  for (const [name, mutate, rejection] of mutations) {
     test(`standalone verifier rejects ${name}`, () => {
       const directory = mkdtempSync(join(tmpdir(), "gre-871-"));
       try {
@@ -74,7 +76,7 @@ function selfTest() {
         writeFileSync(path, serialize(corpus));
         const result = spawnSync(process.execPath, [script, path], { encoding: "utf8" });
         assert.equal(result.status, 1, result.stderr);
-        assert.match(result.stderr, /literal corpus mismatch/);
+        assert.match(result.stderr, rejection);
       } finally {
         rmSync(directory, { recursive: true, force: true });
       }
