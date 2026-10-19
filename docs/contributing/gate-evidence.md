@@ -19,12 +19,16 @@ hosts. Those removed requirements are tracked in
 
 ## CI and local checks
 
-`.github/workflows/pr-evidence.yml` runs the tests and body lint on
-`pull_request_target` events, including body edits. It executes the protected
+`.github/workflows/pr-evidence.yml` runs body lint on
+`pull_request` events, including body edits. It executes the protected
 default branch's checker with read-only permissions. This keeps the same
 repository evidence policy for stacked PRs whose base branches predate the
 checker. The PR body enters the checker through an environment variable;
-the workflow never checks out or executes the PR head.
+the body-lint job never checks out or executes the PR head.
+
+`.github/workflows/pr-evidence-tests.yml` tests the proposed checker on a
+GitHub-hosted runner when the checker, its tests, the PR template or an
+Evidence workflow changes. It also supports manual runs.
 
 ```sh
 node --test scripts/lint-pr-evidence.test.mjs
