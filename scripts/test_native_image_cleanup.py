@@ -14,7 +14,7 @@ WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/desktop-nati
 STEP = '      - name: Verify source Unicode and case regressions on macOS\n'
 ROWS = 'id,name\n1,disposable fixture\n'
 TOOLS = r'''
-import json, os, pathlib, subprocess, sys, time
+import json, os, pathlib, plistlib, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 root = pathlib.Path(os.environ['RUNNER_TEMP'])
@@ -56,6 +56,22 @@ if native:
         assert (root / 'closed').exists(), 'holder was not closed before force'
         print('force requested', flush=True)
     status = subprocess.call([json.loads(os.environ['REAL_TOOLS'])[name], *args])
+    if name == 'hdiutil' and '-force' in args and status:
+        real = json.loads(os.environ['REAL_TOOLS'])
+        image_path = pathlib.Path(args[-1]).parent / 'fixtures.sparseimage'
+        info = subprocess.run([real['hdiutil'], 'info', '-plist'],
+                              stdout=subprocess.PIPE, timeout=10)
+        if info.returncode == 0:
+            images = plistlib.loads(info.stdout).get('images', [])
+            for image in images:
+                if pathlib.Path(image['image-path']).resolve() != image_path.resolve():
+                    continue
+                print('Owned image after failed force:', image, flush=True)
+                devices = [item['dev-entry'] for item in image.get('system-entities', [])
+                           if 'dev-entry' in item]
+                subprocess.run([real['lsof'], '-nP', str(image_path), *devices], timeout=10)
+        subprocess.run(['ps', '-p', (root / 'holder.pid').read_text(),
+                        '-o', 'pid,ppid,state,command'], timeout=10)
     if name == 'lsof' and status == 0:
         (root / 'release').touch()
         deadline = time.monotonic() + 10
