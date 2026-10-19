@@ -25,7 +25,7 @@ fn policy() -> AuthPolicy {
 
 fn admission() -> WorkerAdmission {
     WorkerAdmission {
-        kinds: vec![(JobKind::Sync, 1)],
+        kinds: vec![(JobKind::Sync, 1), (JobKind::CheckSourceUpdates, 1)],
         total: 1,
         per_resource: 1,
         lease_seconds: 60,
@@ -226,6 +226,150 @@ fn local(target: NextSyncTarget) -> SyncTargetLease {
         panic!("Local target expected")
     };
     target
+}
+
+#[test]
+fn generic_sync_finish_and_effects_preserve_the_claim_and_reservation() {
+    let mut sync = Fixture::new();
+    let id = sync.source("Owned target");
+    sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let proof = target.source_work.proof().unwrap();
+    let operations = || {
+        let receipt = jobs::ResultArtifact {
+            receipt_id: "generic-receipt".into(),
+            content_hash: "b".repeat(64),
+            target: id.to_string(),
+        };
+        let mut operations = vec![
+            WorkerOperation::Finish(None),
+            WorkerOperation::Finish(Some(receipt.clone())),
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(jobs::CompletedResult::SourceSync(jobs::SourceSyncResult {
+                    synced: 1,
+                    failed: 0,
+                    results: vec![],
+                    failures: vec![],
+                })),
+            },
+            WorkerOperation::ConfirmEffect(receipt),
+        ];
+        operations.extend(
+            [
+                jobs::EffectOperation::SourceRefresh,
+                jobs::EffectOperation::LocalArtifact,
+                jobs::EffectOperation::PrinterUpload,
+                jobs::EffectOperation::PrinterUploadAndStart,
+                jobs::EffectOperation::PrinterStart,
+                jobs::EffectOperation::SpoolmanDeduction,
+            ]
+            .map(|operation| {
+                WorkerOperation::BeginEffect(jobs::EffectIntent {
+                    operation,
+                    basis_hash: "a".repeat(64),
+                    content_hash: "b".repeat(64),
+                    target: id.to_string(),
+                })
+            }),
+        );
+        operations
+    };
+    let before = sync.snapshot();
+    let version = lease.version();
+    for revoke in [false, true] {
+        if revoke {
+            sync.connection()
+                .execute("DELETE FROM sessions", [])
+                .unwrap();
+            sync.login();
+            sync.catalog = sync
+                .owner
+                .source_catalog_with_policy(
+                    catalog::Credentials::Session(auth::Secret::new(sync.token.clone())),
+                    policy(),
+                )
+                .unwrap();
+        }
+        for operation in operations() {
+            let error = sync.worker.update(&mut lease, operation).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Sync operation belongs to its journal owner"
+            );
+            assert_eq!(sync.snapshot(), before);
+            assert_eq!(lease.version(), version);
+            let retained = target.source_work.proof().unwrap();
+            assert_eq!(retained.incarnation, proof.incarnation);
+            assert_eq!(retained.token, proof.token);
+            assert!(
+                sync.begin_work(id)
+                    .err()
+                    .unwrap()
+                    .downcast_ref::<SourceBusy>()
+                    .is_some()
+            );
+        }
+    }
+    drop(target);
+    sync.begin_work(id).unwrap().release().unwrap();
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn non_sync_generic_effects_and_finish_remain_available() {
+    let sync = Fixture::new();
+    sync.user(UserOperation::Enqueue {
+        key: "updates".into(),
+        payload_version: 1,
+        payload: Payload::CheckSourceUpdates {},
+    });
+    let worker = &sync.worker;
+    let mut lease = worker
+        .claim_kind(JobKind::CheckSourceUpdates)
+        .unwrap()
+        .unwrap()
+        .lease;
+    for operation in [
+        jobs::EffectOperation::SourceRefresh,
+        jobs::EffectOperation::LocalArtifact,
+    ] {
+        let target = format!("{operation:?}");
+        worker
+            .update(
+                &mut lease,
+                WorkerOperation::BeginEffect(jobs::EffectIntent {
+                    operation,
+                    basis_hash: "a".repeat(64),
+                    content_hash: "b".repeat(64),
+                    target: target.clone(),
+                }),
+            )
+            .unwrap();
+        worker
+            .update(
+                &mut lease,
+                WorkerOperation::ConfirmEffect(jobs::ResultArtifact {
+                    receipt_id: target.clone(),
+                    content_hash: "b".repeat(64),
+                    target,
+                }),
+            )
+            .unwrap();
+    }
+    let done = worker
+        .update(&mut lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(done.state, PersistentState::Succeeded);
+    assert_eq!(done.progress, Some(100));
+    assert_eq!(done.effects.len(), 2);
+    assert!(done.effects.iter().all(|effect| effect.confirmed));
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -523,15 +667,26 @@ fn cancel_closes_an_open_batch_after_worker_advance_refusal() {
     let id = sync.source("Pending");
     let job_id = sync.enqueue(Some(vec![id as u64]));
     let mut lease = sync.open();
-    sync.worker
-        .update(
-            &mut lease,
-            WorkerOperation::BeginEffect(jobs::EffectIntent {
-                operation: jobs::EffectOperation::SourceRefresh,
-                basis_hash: "a".repeat(64),
-                content_hash: "b".repeat(64),
-                target: id.to_string(),
-            }),
+    // Retained jobs can contain generic effects admitted before GRE-854.
+    let mut legacy = sync.job(&job_id);
+    legacy.effects.push(jobs::EffectReceipt {
+        intent: jobs::EffectIntent {
+            operation: jobs::EffectOperation::SourceRefresh,
+            basis_hash: "a".repeat(64),
+            content_hash: "b".repeat(64),
+            target: id.to_string(),
+        },
+        attempt: legacy.attempt,
+        generation: legacy.generation,
+        confirmed: false,
+        no_effect: false,
+        receipt: None,
+        checklist_completion: None,
+    });
+    sync.connection()
+        .execute(
+            "UPDATE durable_jobs SET state='effect_admitted',document=json_set(document,'$.state','effect_admitted','$.effects',json(?1)) WHERE id=?2",
+            params![serde_json::to_string(&legacy.effects).unwrap(), job_id],
         )
         .unwrap();
     sync.connection()
