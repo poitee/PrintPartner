@@ -1,5 +1,7 @@
 #[path = "tests/client.rs"]
 mod client;
+#[path = "tests/policy.rs"]
+mod policy;
 
 use super::*;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, PartManifestMetadata};
