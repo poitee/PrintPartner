@@ -131,16 +131,22 @@ pub(crate) struct Command {
     policy: auth::AuthPolicy,
 }
 impl WriterOwner {
-    pub fn publication(&self) -> PublicationClient {
-        PublicationClient {
-            shared: self.client.shared.clone(),
-            policy: auth::AuthPolicy {
-                registration: auth::RegistrationPolicy::Open,
-                session_tenant: auth::SessionTenantPolicy::AccountTenant,
-                first_user: auth::FirstUserTenant::NewUser,
-            },
-        }
+    #[cfg(test)]
+    pub(crate) fn publication(&self) -> PublicationClient {
+        self.publication_with_policy(auth::AuthPolicy {
+            registration: auth::RegistrationPolicy::Open,
+            session_tenant: auth::SessionTenantPolicy::AccountTenant,
+            first_user: auth::FirstUserTenant::NewUser,
+        })
+        .expect("Valid publication test policy")
     }
+    /// The deployment must select its authentication policy explicitly.
+    ///
+    /// ```compile_fail,E0599
+    /// fn client(owner: &pp_storage::WriterOwner) {
+    ///     owner.publication();
+    /// }
+    /// ```
     pub fn publication_with_policy(&self, policy: auth::AuthPolicy) -> Result<PublicationClient> {
         auth::validate_policy(policy)?;
         Ok(PublicationClient {
