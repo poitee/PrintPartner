@@ -1,6 +1,6 @@
 # YAML flow-collection parity
 
-`yaml-flow-collections-node.json` records the literal outputs of js-yaml 5.4.3 for 206 inputs. A null expectation means js-yaml rejects the input.
+`yaml-flow-collections-node.json` records the literal outputs of js-yaml 5.4.3 for 446 inputs. A null expectation means js-yaml rejects the input.
 
 92 refusals cover four forms that saphyr-parser accepts and js-yaml rejects:
 
@@ -11,9 +11,11 @@
 
 38 more refusals pin a quoted scalar continuation indented less than js-yaml allows, followed by a tagged or anchored empty flow node whose closing token sits on the next line, as in `- - {a: "a\n  b", !!str\n}`. saphyr rejects the closing line, so the pre-pass must leave that line where it is.
 
+144 refusals cover a shallow quoted continuation followed by a line-broken empty key and a colon, including `- - {a: "a\n  b", !!str\n  :x}`. The matrix varies compact and block parents, nested flow collections, quote styles, line endings, tags, anchors, and colon indentation. The 96 adjacent controls indent the quoted continuation to the collection's required depth. The pre-pass checks that depth before colon normalization can hide saphyr's later refusal.
+
 Every refusal that uses a `!!` tag appears again with the verbatim spelling `!<tag:yaml.org,2002:*>`.
 
-The 76 accepted near misses sit next to those forms. They include indicators inside plain or quoted scalars, tabs inside scalars or before a line break, and a tab in a collection that opens on a deeper line. They also include an escaped CR or CRLF inside a double-quoted entry before a tab, and a tag line break followed by deeper content, a comma, a closing bracket, or a mapping colon.
+The 172 accepted near misses sit next to those forms. They include indicators inside plain or quoted scalars, tabs inside scalars or before a line break, and a tab in a collection that opens on a deeper line. They also include an escaped CR or CRLF inside a double-quoted entry before a tab, and a tag line break followed by deeper content, a comma, a closing bracket, or a mapping colon.
 
 The generator fails if js-yaml accepts a refusal or rejects a near miss. From the repository root, install the locked web dependencies, then regenerate and check the fixture:
 

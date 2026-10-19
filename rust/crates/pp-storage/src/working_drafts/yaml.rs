@@ -330,6 +330,27 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         }
         let c = chars[i];
         if let Some(q) = quote {
+            // js-yaml checks quoted continuation lines before reading flow keys.
+            if !flow.is_empty() && i > 0 && matches!(chars[i - 1], '\r' | '\n') {
+                let mut end = i;
+                while chars.get(end) == Some(&' ') {
+                    if (end - i).is_multiple_of(1024) {
+                        budget.check()?;
+                    }
+                    end += 1;
+                }
+                let indent = end - i;
+                while chars.get(end).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                    if (end - i).is_multiple_of(1024) {
+                        budget.check()?;
+                    }
+                    end += 1;
+                }
+                if indent < flow_indent && chars.get(end).is_some_and(|c| !matches!(c, '\r' | '\n'))
+                {
+                    return invalid();
+                }
+            }
             if q == '"' && c == '\\' {
                 let width = match chars.get(i + 1) {
                     Some('u') => Some(4),

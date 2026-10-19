@@ -162,6 +162,26 @@ const accepted = [
   ['tab-tag-multiline-quoted', 'k: [!!str\t"a\n b"]'],
   ['tab-tag-anchor-break', 'k: [!!str\t&x\n ]'],
 ];
+// Keep the quoted continuation shallow while varying the later empty key.
+for (const [context, prefix, suffix] of [
+  ['compact-map', '- - {a: ', '}'],
+  ['compact-seq-map', '- - [{a: ', '}]'],
+  ['block-map', 'outer:\n  k: {a: ', '}'],
+  ['block-seq-map', 'outer:\n  k: [{a: ', '}]'],
+]) {
+  for (const [style, quote] of [['double', '"'], ['single', "'"]]) {
+    for (const [ending, br] of [['lf', '\n'], ['cr', '\r'], ['crlf', '\r\n']]) {
+      for (const [property, token] of [['tag', '!!str'], ['anchor', '&n']]) {
+        for (const indent of [2, 3]) {
+          const name = `${context}-${style}-${ending}-${property}-${indent}`;
+          const source = (depth) => `${prefix}${quote}a${br}${' '.repeat(depth)}b${quote}, ${token}${br}${' '.repeat(indent)}:x${suffix}`;
+          refusals.push([`quoted-indent-colon-${name}`, source(2)]);
+          accepted.push([`quoted-indent-colon-${name}`, source(3)]);
+        }
+      }
+    }
+  }
+}
 const verbatim = (source) => source.replace(/!!(\w+)/g, '!<tag:yaml.org,2002:$1>');
 const cases = [];
 function add(name, source, refused) {
