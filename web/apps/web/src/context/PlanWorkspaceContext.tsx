@@ -10,7 +10,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  TENANT_FEATURE_TOGGLES_CAPABILITY,
   type HealthResponse,
   type PlanFeatures,
   parsePlanDraftWorkspace,
@@ -37,6 +36,7 @@ import {
 } from "../api/endpoints/planDrafts";
 import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
 import { capturePlanSaveCache, hydratePlanSave, includedPlanReview } from "../lib/planSaveCache";
+import { spoolmanWorkflowAccess } from "../lib/spoolmanWorkflowAccess";
 import { formatCheckoffSummary } from "../lib/checkoffProgress";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import {
@@ -668,11 +668,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
               }
               const currentHealth = queryClient.getQueryState<HealthResponse>(queryKeys.health);
               const currentFeatures = queryClient.getQueryState<PlanFeatures>(queryKeys.planFeatures(profileId));
-              const gated = currentHealth?.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY);
-              const queryAllowed = !gated || !currentFeatures || currentFeatures.status === "pending" ||
-                (currentHealth?.status === "success" && currentHealth.data?.ok === true &&
-                  currentFeatures.status === "success" && !currentFeatures.isInvalidated &&
-                  currentFeatures.data?.profile_id === profileId && currentFeatures.data.effective.spoolman.enabled);
+              const { queryAllowed } = spoolmanWorkflowAccess({ profileId, health: currentHealth, plan: currentFeatures });
               const cachedReviews = [true, false].map((includeExcluded) =>
                 queryClient.getQueryState<PlanReview>(queryKeys.planReview(profileId, includeExcluded, queryAllowed)));
               cachedReviews.sort((a, b) =>

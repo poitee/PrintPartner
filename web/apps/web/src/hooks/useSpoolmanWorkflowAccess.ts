@@ -1,10 +1,7 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  TENANT_FEATURE_TOGGLES_CAPABILITY,
-  type HealthResponse,
-  type PlanFeatures,
-} from "@print-partner/contracts";
+import type { HealthResponse, PlanFeatures } from "@print-partner/contracts";
+import { spoolmanWorkflowAccess } from "../lib/spoolmanWorkflowAccess";
 import { useHealthQuery } from "../queries/health";
 import { queryKeys } from "../queries/keys";
 import { usePlanFeaturesQuery } from "../queries/planFeatures";
@@ -12,13 +9,12 @@ import { usePlanFeaturesQuery } from "../queries/planFeatures";
 export function useSpoolmanWorkflowAccess(profileId: number | null | undefined) {
   const client = useQueryClient();
   const health = useHealthQuery();
-  const gated = Boolean(profileId != null && health.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY));
-  const plan = usePlanFeaturesQuery(profileId ?? 0, gated);
-  const planState = client.getQueryState(queryKeys.planFeatures(profileId ?? 0));
-  const allowed = !gated || (health.isSuccess && health.data.ok && plan.isSuccess && !planState?.isInvalidated
-    && plan.data.profile_id === profileId && plan.data.effective.spoolman.enabled);
-  // Keep the same key while features first load, so discovery does not fetch twice.
-  const queryAllowed = plan.isPending || allowed;
+  const access = spoolmanWorkflowAccess({
+    profileId,
+    health,
+    plan: client.getQueryState<PlanFeatures>(queryKeys.planFeatures(profileId ?? 0)),
+  });
+  usePlanFeaturesQuery(profileId ?? 0, access.gated);
   const scope = useRef<{ profileId: typeof profileId } | null>(null);
 
   useLayoutEffect(() => {
@@ -27,12 +23,11 @@ export function useSpoolmanWorkflowAccess(profileId: number | null | undefined) 
   }, [profileId]);
 
   const currentAccessAllowed = useCallback(() => {
-    const currentHealth = client.getQueryState<HealthResponse>(queryKeys.health);
-    if (profileId == null || !currentHealth?.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY)) return true;
-    if (currentHealth.status !== "success" || !currentHealth.data.ok) return false;
-    const currentPlan = client.getQueryState<PlanFeatures>(queryKeys.planFeatures(profileId));
-    return currentPlan?.status === "success" && !currentPlan.isInvalidated
-      && currentPlan.data?.profile_id === profileId && currentPlan.data.effective.spoolman.enabled;
+    return spoolmanWorkflowAccess({
+      profileId,
+      health: client.getQueryState<HealthResponse>(queryKeys.health),
+      plan: client.getQueryState<PlanFeatures>(queryKeys.planFeatures(profileId ?? 0)),
+    }).allowed;
   }, [client, profileId]);
 
   const beginAction = useCallback(() => {
@@ -41,5 +36,5 @@ export function useSpoolmanWorkflowAccess(profileId: number | null | undefined) 
     return { isCurrent };
   }, []);
 
-  return { gated, allowed, queryAllowed, currentAccessAllowed, beginAction };
+  return { ...access, currentAccessAllowed, beginAction };
 }
