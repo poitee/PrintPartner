@@ -29,10 +29,56 @@ addEventListener('error', e => record('window.error', {
   message: text(e.message), filename: text(e.filename), line: e.lineno, column: e.colno
 }));
 addEventListener('unhandledrejection', e => record('unhandledrejection', {reason: text(e.reason)}));
+const nodes = new WeakMap();
+let nextNode = 0;
+let intended = null;
+let previewSelector = null;
+const bounds = node => {
+  const r = node.getBoundingClientRect();
+  return {left: r.left, top: r.top, right: r.right, bottom: r.bottom,
+    width: r.width, height: r.height, pageLeft: r.left + scrollX, pageTop: r.top + scrollY};
+};
+const describe = node => {
+  if (!node || !node.getBoundingClientRect) return null;
+  if (!nodes.has(node)) nodes.set(node, ++nextNode);
+  const ancestors = [];
+  let ancestor = node.parentElement;
+  while (ancestor && ancestors.length < 32) {
+    ancestors.push({label: label(ancestor), scrollLeft: ancestor.scrollLeft,
+      scrollTop: ancestor.scrollTop, clientWidth: ancestor.clientWidth,
+      clientHeight: ancestor.clientHeight, scrollWidth: ancestor.scrollWidth,
+      scrollHeight: ancestor.scrollHeight});
+    ancestor = ancestor.parentElement;
+  }
+  return {nodeId: nodes.get(node), label: label(node), connected: node.isConnected,
+    bounds: bounds(node), ancestors, ancestorsTruncated: !!ancestor};
+};
+const geometry = target => {
+  const match = previewSelector ? document.querySelector(previewSelector) : null;
+  const v = window.visualViewport;
+  return {target: describe(target), intended: describe(intended), selectorMatch: describe(match),
+    selector: previewSelector, intendedMatchesSelector: !!intended && intended === match,
+    targetIsIntended: !!intended && target === intended,
+    intendedContainsTarget: !!intended && !!target && intended.contains(target),
+    window: {scrollX, scrollY, screenX, screenY, devicePixelRatio},
+    viewport: {innerWidth, innerHeight, clientWidth: document.documentElement.clientWidth,
+      clientHeight: document.documentElement.clientHeight,
+      visual: v ? {offsetLeft: v.offsetLeft, offsetTop: v.offsetTop, pageLeft: v.pageLeft,
+        pageTop: v.pageTop, width: v.width, height: v.height, scale: v.scale} : null}};
+};
+Object.defineProperty(state, 'capturePreview', {value: (phase, element, selector) => {
+  if (phase === 'selected') { intended = element; previewSelector = selector; }
+  record('preview.geometry', {phase, pointer: null, geometry: geometry(null)});
+}});
 for (const kind of ['click', 'pointerdown', 'pointerup']) {
-  document.addEventListener(kind, e => record(kind, {
-    target: label(e.target), trusted: e.isTrusted, button: e.button
-  }), true);
+  document.addEventListener(kind, e => {
+    try {
+      record(kind, {target: label(e.target), trusted: e.isTrusted, button: e.button,
+        phase: 'dispatch', pointer: {clientX: e.clientX, clientY: e.clientY,
+          pageX: e.pageX, pageY: e.pageY, screenX: e.screenX, screenY: e.screenY},
+        geometry: geometry(e.target)});
+    } catch (_) {}
+  }, true);
 }
 const canvases = new WeakMap();
 let nextCanvas = 0;
@@ -69,6 +115,10 @@ HTMLCanvasElement.prototype.getContext = function(...args) {
 };
 """
 
+CAPTURE_PREVIEW = r"""
+window.__smokeDiagnostics.capturePreview(...arguments);
+"""
+
 COLLECT = r"""
 const active = document.activeElement;
 return {
@@ -81,6 +131,13 @@ return {
   diagnostics: window.__smokeDiagnostics || null
 };
 """
+
+
+def best_effort(execute, script, *args):
+    try:
+        execute(script, *args)
+    except Exception as error:
+        print(f'Could not capture smoke diagnostics: {error}', file=sys.stderr, flush=True)
 
 
 def save_artifacts(execute, screenshot, output, error=None):
