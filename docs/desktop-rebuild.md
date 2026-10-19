@@ -1844,6 +1844,7 @@ The non-Sync regression confirms that generic effects and Finish still work.
 node fixtures/parity/source-sync/generate.mjs --check
 umask 022
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test job_feature_admission
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --test durable_jobs
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test durable_jobs
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
