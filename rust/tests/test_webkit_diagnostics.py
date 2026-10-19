@@ -302,7 +302,15 @@ pageX:e.pageX, pageY:e.pageY, screenX:e.screenX, screenY:e.screenY}; }, {once:tr
         self.execute("document.querySelector('button').onclick = () => { window.clicked = true; };")
         self.command(f'/session/{self.session}/element/{element_id}/click', {})
         self.assertTrue(self.execute('return window.clicked;'))
-        self.assertEqual(self.execute(COLLECT)['diagnostics']['events'][0]['phase'], 'selected')
+        events = self.execute(COLLECT)['diagnostics']['events']
+        self.assertEqual(events[0]['phase'], 'selected')
+        self.assertEqual([e['kind'] for e in events[1:]], ['pointerdown', 'pointerup', 'click'])
+        for event in events[1:]:
+            self.assertTrue(event['trusted'])
+            self.assertIn('BUTTON Preview fixture', event['target'])
+            self.assertIn('SyntaxError', event['geometryError'])
+            self.assertIsInstance(event['pointer']['clientX'], (int, float))
+            self.assertNotIn('geometry', event)
 
     def test_browser_collection_failure_preserves_original(self):
         self.execute("Object.defineProperty(window, '__smokeDiagnostics', {get() {throw Error('collection failure');}});")
