@@ -2,6 +2,7 @@ name: Desktop embedded driver smoke
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths:
       - 'desktop/e2e/**'
       - 'web/**'
@@ -12,6 +13,10 @@ on:
       - 'rust/Cargo.toml'
       - 'rust/Cargo.lock'
       - '.github/workflows/desktop-e2e.yml'
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -23,6 +28,7 @@ concurrency:
 
 jobs:
   linux-smoke:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke')
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 90
     env:

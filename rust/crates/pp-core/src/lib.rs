@@ -36,6 +36,9 @@ pub mod review_observations;
 #[cfg(feature = "desktop_rebuild")]
 pub mod rebuild_api;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod uploads;
+
 #[cfg(test)]
 mod origin_tests;
 
