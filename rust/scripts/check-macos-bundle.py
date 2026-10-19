@@ -630,17 +630,27 @@ class ParserTests(unittest.TestCase):
                 'os.close(fd)\n'
                 'os._exit(0)\n'
             )
-            group_pid = None
             descendant_pid = None
             cleanup_complete = False
+            process = subprocess.Popen(
+                [sys.executable, '-c', script, str(heartbeat)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+            )
+            group_pid = process.pid
             try:
+                process.wait(timeout=10)
+                ready_deadline = time.monotonic() + 10
+                while not heartbeat.exists() or heartbeat.stat().st_size == 0:
+                    self.assertLess(time.monotonic(), ready_deadline, 'Descendant did not start')
+                    time.sleep(0.01)
                 started = time.monotonic()
-                capture = run_bundle_probe(
-                    [sys.executable, '-c', script, str(heartbeat)],
-                    cwd=pathlib.Path.cwd(),
-                    env=os.environ.copy(),
-                    timeout_seconds=0.5,
-                )
+                with patch('subprocess.Popen', return_value=process):
+                    capture = run_bundle_probe(
+                        [sys.executable, '-c', script, str(heartbeat)],
+                        cwd=pathlib.Path.cwd(),
+                        env=os.environ.copy(),
+                        timeout_seconds=0.5,
+                    )
                 elapsed = time.monotonic() - started
                 group_pid, descendant_pid = map(int, capture.stdout.split())
                 heartbeats = [float(value) for value in heartbeat.read_text().splitlines()]
@@ -660,6 +670,9 @@ class ParserTests(unittest.TestCase):
                         os.killpg(group_pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+                process.wait(timeout=10)
+                process.stdout.close()
+                process.stderr.close()
                 if descendant_pid is not None:
                     cleanup_deadline = time.monotonic() + 1
                     while time.monotonic() < cleanup_deadline:
