@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync, writeFileSync } from "node:fs";
+import { availableParallelism, loadavg, tmpdir } from "node:os";
+import { basename, dirname, join, sep } from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import AdmZip from "adm-zip";
 import { miloFilenameGrouping } from "@print-partner/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,15 +21,36 @@ import {
   parseStlPackUnitTokens,
 } from "./export-stl-pack.js";
 
-const acceptedArtifactTestHook = vi.hoisted(() => ({
-  afterVerifiedOpen: undefined as (() => void) | undefined,
-  failZipRead: false,
-  zipReadFailures: 0,
-  failFileFlush: false,
-  holdCopyFlushes: false,
-  fileFlushCalls: 0,
-  pendingFlushes: new Array<() => void>(),
-}));
+type ExportDiagnostic = {
+  outcome: { kind: "running" } | { kind: "returned"; resultKind: string; elapsedMs: number } | { kind: "threw"; elapsedMs: number };
+  start: number;
+  firstZipSourceAt: number | null;
+  flushCalls: number;
+  flushCallbacks: number;
+  flushErrors: number;
+  flushInflight: number;
+  flushMaxInflight: number;
+  flushLatencyTotalMs: number;
+  flushLatencyMaxMs: number;
+  zipSources: number;
+  zipEnds: number;
+  zipErrors: number;
+  zipBytes: number;
+};
+
+const acceptedArtifactTestHook = vi.hoisted(() => {
+  const diagnostic: { current: ExportDiagnostic | null } = { current: null };
+  return {
+    diagnostic,
+    afterVerifiedOpen: undefined as (() => void) | undefined,
+    failZipRead: false,
+    zipReadFailures: 0,
+    failFileFlush: false,
+    holdCopyFlushes: false,
+    fileFlushCalls: 0,
+    pendingFlushes: new Array<() => void>(),
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -40,7 +62,22 @@ vi.mock("node:fs", async (importOriginal) => {
         callback(new Error("file flush failed"));
         return;
       }
+      const measurement = acceptedArtifactTestHook.diagnostic.current;
+      const start = measurement ? performance.now() : 0;
+      if (measurement) {
+        measurement.flushCalls++;
+        measurement.flushInflight++;
+        measurement.flushMaxInflight = Math.max(measurement.flushMaxInflight, measurement.flushInflight);
+      }
       actual.fsync(descriptor, (error) => {
+        if (measurement) {
+          const elapsed = performance.now() - start;
+          measurement.flushCallbacks++;
+          measurement.flushInflight--;
+          if (error) measurement.flushErrors++;
+          measurement.flushLatencyTotalMs += elapsed;
+          measurement.flushLatencyMaxMs = Math.max(measurement.flushLatencyMaxMs, elapsed);
+        }
         if (acceptedArtifactTestHook.holdCopyFlushes && acceptedArtifactTestHook.fileFlushCalls > 1) {
           acceptedArtifactTestHook.pendingFlushes.push(() => callback(error));
         } else {
@@ -54,7 +91,18 @@ vi.mock("node:fs", async (importOriginal) => {
         acceptedArtifactTestHook.zipReadFailures++;
         return actual.createReadStream(`${path}.missing`, options);
       }
-      return actual.createReadStream(...args);
+      const stream = actual.createReadStream(...args);
+      const measurement = acceptedArtifactTestHook.diagnostic.current;
+      if (measurement && typeof path === "string" && path.split(sep).some((segment) => segment.startsWith(".tmp-")) && path.endsWith(".stl")) {
+        measurement.firstZipSourceAt ??= performance.now();
+        measurement.zipSources++;
+        stream.once("end", () => {
+          measurement.zipEnds++;
+          measurement.zipBytes += stream.bytesRead;
+        });
+        stream.once("error", () => { measurement.zipErrors++; });
+      }
+      return stream;
     },
   };
 });
@@ -76,6 +124,91 @@ vi.mock("./accepted-artifacts.js", async (importOriginal) => {
 });
 
 const roots: string[] = [];
+
+let stopDiagnostic: (() => void) | undefined;
+
+function diagnosticFile(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8").slice(0, 4096).trim();
+  } catch {
+    return null;
+  }
+}
+
+function cgroupCpuContext() {
+  const cgroup = diagnosticFile("/proc/self/cgroup")?.split("\n")
+    .find((line) => line.startsWith("0::/"))?.slice(3);
+  if (!cgroup || cgroup.split("/").includes("..")) return null;
+  const mount = "/sys/fs/cgroup";
+  let directory = join(mount, cgroup);
+  const ancestors = [];
+  for (let depth = 0; depth < 16; depth++) {
+    ancestors.push({
+      depth,
+      cpuMax: diagnosticFile(join(directory, "cpu.max")),
+      cpuStat: diagnosticFile(join(directory, "cpu.stat")),
+    });
+    if (directory === mount) break;
+    directory = dirname(directory);
+  }
+  return ancestors;
+}
+
+function measureLargeExport(root: string) {
+  const filesystem = statfsSync(root);
+  const measurement: ExportDiagnostic = {
+    outcome: { kind: "running" },
+    start: performance.now(), firstZipSourceAt: null,
+    flushCalls: 0, flushCallbacks: 0, flushErrors: 0, flushInflight: 0,
+    flushMaxInflight: 0, flushLatencyTotalMs: 0, flushLatencyMaxMs: 0,
+    zipSources: 0, zipEnds: 0, zipErrors: 0, zipBytes: 0,
+  };
+  const eventLoop = monitorEventLoopDelay({ resolution: 20 });
+  eventLoop.enable();
+  const cpuStart = process.cpuUsage();
+  acceptedArtifactTestHook.diagnostic.current = measurement;
+  const emit = (event: "start" | "progress" | "test-ended") => {
+    const now = performance.now();
+    const cpu = process.cpuUsage(cpuStart);
+    process.stdout.write(`GRE-928 accepted-STL diagnostic ${JSON.stringify({
+      event, node: process.version,
+      runner: process.env.RUNNER_NAME ?? null,
+      runnerEnvironment: process.env.RUNNER_ENVIRONMENT ?? null,
+      runId: process.env.GITHUB_RUN_ID ?? null,
+      runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
+      workerPool: process.env.UV_THREADPOOL_SIZE ?? "default (4)",
+      customTmpdir: process.env.TMPDIR !== undefined,
+      availableParallelism: availableParallelism(), loadAverage: loadavg(),
+      filesystemType: `0x${filesystem.type.toString(16)}`,
+      cgroupV2Cpu: cgroupCpuContext(),
+      cpuQuotaV1: diagnosticFile("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"),
+      cpuPeriodV1: diagnosticFile("/sys/fs/cgroup/cpu/cpu.cfs_period_us"),
+      cpuPressure: diagnosticFile("/proc/pressure/cpu"),
+      ioPressure: diagnosticFile("/proc/pressure/io"),
+      elapsedMs: now - measurement.start,
+      copiesUntilFirstZipSourceMs: measurement.firstZipSourceAt === null
+        ? null : measurement.firstZipSourceAt - measurement.start,
+      firstZipSourceUntilNowMs: measurement.firstZipSourceAt === null
+        ? null : now - measurement.firstZipSourceAt,
+      cpuUserMs: cpu.user / 1000, cpuSystemMs: cpu.system / 1000,
+      eventLoopDelayMs: {
+        mean: Number.isFinite(eventLoop.mean) ? eventLoop.mean / 1e6 : null,
+        max: eventLoop.max / 1e6, p99: eventLoop.percentile(99) / 1e6,
+      },
+      measurement,
+    })}\n`);
+  };
+  emit("start");
+  const timer = setInterval(() => emit("progress"), 15_000);
+  stopDiagnostic = () => {
+    clearInterval(timer);
+    eventLoop.disable();
+    emit("test-ended");
+    acceptedArtifactTestHook.diagnostic.current = null;
+    stopDiagnostic = undefined;
+  };
+  return measurement;
+}
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "print-partner-accepted-stl-"));
@@ -221,6 +354,7 @@ function capture(parts: readonly AcceptedExportPart[]): Extract<
 }
 
 afterEach(() => {
+  stopDiagnostic?.();
   acceptedArtifactTestHook.afterVerifiedOpen = undefined;
   acceptedArtifactTestHook.failZipRead = false;
   acceptedArtifactTestHook.zipReadFailures = 0;
@@ -534,6 +668,7 @@ describe("materializeAcceptedStlBundle", () => {
       assembled: false,
     }));
 
+    const measurement = measureLargeExport(dirname(fixturePaths.tenantExportsDir));
     await expect(
       materializeAcceptedStlBundle({
         capture: capture([{ ...base, quantityEffective: units.length, units }]),
@@ -541,8 +676,22 @@ describe("materializeAcceptedStlBundle", () => {
         selection: "all",
         groupBy: "color_dir",
         roleOrder: ["primary", "accent", "clear", "opaque"],
+      }).then((result) => {
+        measurement.outcome = {
+          kind: "returned", resultKind: result.kind, elapsedMs: performance.now() - measurement.start,
+        };
+        return result;
+      }, (error: unknown) => {
+        measurement.outcome = { kind: "threw", elapsedMs: performance.now() - measurement.start };
+        throw error;
       }),
     ).resolves.toMatchObject({ kind: "materialized", fileCounts: { accent: 10_001 } });
+    expect(measurement).toMatchObject({
+      flushCalls: 10_002, flushCallbacks: 10_002, flushErrors: 0, flushInflight: 0,
+      zipSources: 10_001, zipEnds: 10_001, zipErrors: 0,
+      zipBytes: 10_001 * Buffer.byteLength("accepted-stl"),
+    });
+    expect(measurement.firstZipSourceAt).not.toBeNull();
   }, 60_000);
 
   it("exports more than 256 MiB of source files and 512 MiB of copies", async () => {
