@@ -1002,6 +1002,10 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
     assert_eq!(payloads.len(), kinds.len());
     for (payload, kind) in payloads.into_iter().zip(kinds) {
         assert_eq!(payload.kind(), kind);
+        // Rebuild Sync effects belong to the batch journal, covered by source_sync tests.
+        if cfg!(feature = "desktop_rebuild") && kind == JobKind::Sync {
+            continue;
+        }
         let (path, owner) = fixture();
         #[cfg(feature = "desktop_rebuild")]
         assert_eq!(source(&owner.local_source_catalog(), "Fixture source"), 1);
@@ -4121,6 +4125,9 @@ fn integration_wildcard_uncertainty_and_abandon_guard_until_matching_resolution(
         Payload::Sync { project_ids: None },
         Payload::CheckSourceUpdates {},
     ] {
+        if cfg!(feature = "desktop_rebuild") && matches!(payload, Payload::Sync { .. }) {
+            continue;
+        }
         let (path, owner) = fixture();
         let catalog = owner.local_source_catalog();
         let id = source(&catalog, "Wildcard");
@@ -5012,9 +5019,25 @@ fn scoped_sync_reserves_and_leases_only_listed_sources() {
         .update(&mut other_lease, WorkerOperation::Finish(None))
         .unwrap();
     assert!(worker.claim().unwrap().is_none());
-    worker
-        .update(&mut lease, WorkerOperation::Finish(None))
+    let finish = worker.update(&mut lease, WorkerOperation::Finish(None));
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        assert_eq!(
+            finish.unwrap_err().to_string(),
+            "Sync operation belongs to its journal owner"
+        );
+        assert_eq!(get(&owner, &sync.job_id).state, PersistentState::Running);
+        assert!(worker.claim().unwrap().is_none());
+        call(
+            &owner,
+            UserOperation::Cancel {
+                job_id: sync.job_id,
+            },
+        )
         .unwrap();
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    finish.unwrap();
     assert!(worker.claim().unwrap().is_some());
     owner.shutdown().unwrap();
 }
