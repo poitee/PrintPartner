@@ -395,7 +395,39 @@ async fn authorization_start_matches_node_with_explicit_security_corrections() {
 }
 
 #[tokio::test]
-async fn changed_callback_uri_disabled_redirect_and_missing_binding_are_rejected() {
+async fn enabled_authorization_start_rejects_invalid_host() {
+    let mut seen = HashSet::new();
+    for case in fixture().cases.into_iter().filter(|case| case.enabled) {
+        let server = Server::start(&case).await;
+        let response = server
+            .client
+            .get(format!("{}{}", server.origin, case.path))
+            .header("Host", "invalid.example")
+            .send()
+            .await
+            .expect("loopback invalid host response");
+        assert_eq!(response.status().as_u16(), 403, "{}", case.id);
+        assert!(!response.headers().contains_key("location"), "{}", case.id);
+        assert!(
+            !response.headers().contains_key("set-cookie"),
+            "{}",
+            case.id
+        );
+        assert!(
+            response.json::<Value>().await.unwrap() == json!({"detail": "Invalid request host"}),
+            "{} invalid host refusal body changed",
+            case.id
+        );
+
+        let control = observe(server.request(&case).await, &mut seen).await;
+        assert_eq!(control.status, 302, "{}", case.id);
+        assert!(matches_contract(&case, &control), "{}", case.id);
+        server.close().await;
+    }
+}
+
+#[tokio::test]
+async fn contract_comparator_detects_mutated_authorization_start_observations() {
     let mut seen = HashSet::new();
     for case in fixture().cases {
         let server = Server::start(&case).await;
