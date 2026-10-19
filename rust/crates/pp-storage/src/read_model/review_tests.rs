@@ -376,12 +376,7 @@ fn assert_metadata_refusal(fixture: &mut Fixture, expected: &str) {
         &mut Budget::default(),
     )
     .unwrap_err();
-    let integrity = error.downcast_ref::<Integrity>().or_else(|| {
-        match error.downcast_ref::<rusqlite::Error>()? {
-            rusqlite::Error::ToSqlConversionFailure(source) => source.downcast_ref::<Integrity>(),
-            _ => None,
-        }
-    });
+    let integrity = error.downcast_ref::<Integrity>();
     assert_eq!(
         integrity.map(|failure| failure.code),
         Some(expected),
