@@ -53,6 +53,51 @@ def signal_during_reaping(signaled):
 
 @unittest.skipUnless(sys.platform == "linux", "Linux run-owned descendant cleanup")
 class DescendantCleanupTest(unittest.TestCase):
+    def test_parent_timeout_at_finalization_reaps_descendants(self):
+        for error_type in (None, AssertionError, ValueError):
+            with self.subTest(callback_error=error_type), tempfile.TemporaryDirectory(prefix="pp-cleanup-race-") as directory:
+                root = Path(directory)
+                ready, boundary, receipt = root / "pid", root / "boundary", root / "cleanup.json"
+
+                def exercise():
+                    caller_pid = os.getpid()
+                    install_handler = signal.signal
+
+                    def pause_before_ignore(signum, handler):
+                        if os.getpid() != caller_pid and signum == signal.SIGTERM and handler == signal.SIG_IGN:
+                            boundary.write_text("callback finished")
+                            time.sleep(60)
+                        return install_handler(signum, handler)
+
+                    def callback():
+                        result = leave_detached_descendant(ready, False)
+                        if error_type is not None:
+                            raise error_type("callback failed")
+                        return result
+
+                    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                    try:
+                        with patch.object(signal, "signal", pause_before_ignore):
+                            with self.assertRaisesRegex(TimeoutError, "isolated proof exceeded 1 seconds"):
+                                run_in_subreaper(callback, (), receipt, timeout=1)
+                        self.assertTrue(boundary.exists(), "timeout did not reach the finalization boundary")
+                        self.assertTrue(receipt.exists(), "SIGTERM skipped the descendant cleanup receipt")
+                        pid = int(ready.read_text())
+                        cleanup = json.loads(receipt.read_text())
+                        self.assertIn(pid, cleanup["killed"])
+                        self.assertIn(pid, cleanup["reaped"])
+                        self.assertTrue(cleanup["children_absent"])
+                        self.assertFalse(Path(f"/proc/{pid}").exists(), "detached descendant survived finalization")
+                        self.assertIsNone(unrelated.poll(), "worker cleanup killed an unrelated caller child")
+                    finally:
+                        unrelated.kill()
+                        unrelated.wait(timeout=5)
+
+                # Contain descendants even when the inner worker has the regression.
+                guard_receipt = root / "guard-cleanup.json"
+                run_in_subreaper(exercise, (), guard_receipt, timeout=30)
+                self.assertTrue(json.loads(guard_receipt.read_text())["children_absent"])
+
     def test_unreadable_proc_children_fails_before_callback(self):
         caller_pid = os.getpid()
         read_text = Path.read_text
