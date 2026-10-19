@@ -365,34 +365,85 @@ fn empty_and_unavailable_review_bodies_have_the_expected_summaries() {
     assert_eq!(body["body"]["part_groups"], json!([]));
 }
 
+fn assert_metadata_refusal(fixture: &mut Fixture, expected: &str) {
+    let before = fixture.connection.total_changes();
+    let tx = fixture.connection.transaction().unwrap();
+    let error = read(
+        &tx,
+        "default",
+        1,
+        &fixture.root.join("repos"),
+        &mut Budget::default(),
+    )
+    .unwrap_err();
+    let integrity = error.downcast_ref::<Integrity>().or_else(|| {
+        match error.downcast_ref::<rusqlite::Error>()? {
+            rusqlite::Error::ToSqlConversionFailure(source) => source.downcast_ref::<Integrity>(),
+            _ => None,
+        }
+    });
+    assert_eq!(
+        integrity.map(|failure| failure.code),
+        Some(expected),
+        "unexpected refusal: {error:?}"
+    );
+    drop(tx);
+    assert_eq!(before, fixture.connection.total_changes());
+}
+
 #[test]
-fn non_scalar_metadata_still_requires_matching_projection_and_valid_encoding() {
-    for value in [
-        rusqlite::types::Value::Text("changed".into()),
-        rusqlite::types::Value::Blob(b"PPJS\x01".to_vec()),
-    ] {
+fn non_scalar_metadata_requires_matching_projection() {
+    for column in ["requirement", "option_group_id"] {
         let mut fixture = Fixture::new();
         fixture.metadata(
             JsText::from_units(vec![0xd800]),
             JsText::from_units(vec![0xdc00]),
         );
+        let changed = JsText::from_units(vec![0xd801]).sqlite_value().unwrap();
         fixture
             .connection
-            .execute("UPDATE parts SET requirement=?1", [value])
+            .execute(&format!("UPDATE parts SET {column}=?1"), [&changed])
             .unwrap();
-        let before = fixture.connection.total_changes();
-        let tx = fixture.connection.transaction().unwrap();
-        assert!(
-            read(
-                &tx,
-                "default",
-                1,
-                &fixture.root.join("repos"),
-                &mut Budget::default()
-            )
-            .is_err()
+        assert_metadata_refusal(&mut fixture, "projection");
+    }
+}
+
+#[test]
+fn non_scalar_metadata_requires_matching_revision_digest() {
+    for column in ["requirement", "option_group_id"] {
+        let mut fixture = Fixture::new();
+        fixture.metadata(
+            JsText::from_units(vec![0xd800]),
+            JsText::from_units(vec![0xdc00]),
         );
-        drop(tx);
-        assert_eq!(before, fixture.connection.total_changes());
+        let changed = JsText::from_units(vec![0xd801]).sqlite_value().unwrap();
+        for table in ["parts", "plan_revision_parts"] {
+            fixture
+                .connection
+                .execute(&format!("UPDATE {table} SET {column}=?1"), [&changed])
+                .unwrap();
+        }
+        assert_metadata_refusal(&mut fixture, "revision_digest");
+    }
+}
+
+#[test]
+fn non_scalar_metadata_requires_valid_encoding_in_both_tables() {
+    for table in ["parts", "plan_revision_parts"] {
+        for column in ["requirement", "option_group_id"] {
+            let mut fixture = Fixture::new();
+            fixture.metadata(
+                JsText::from_units(vec![0xd800]),
+                JsText::from_units(vec![0xdc00]),
+            );
+            fixture
+                .connection
+                .execute(
+                    &format!("UPDATE {table} SET {column}=?1"),
+                    [b"PPJS\x01".as_slice()],
+                )
+                .unwrap();
+            assert_metadata_refusal(&mut fixture, "manifest_text");
+        }
     }
 }
