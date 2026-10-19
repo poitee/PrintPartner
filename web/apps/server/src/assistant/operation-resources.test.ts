@@ -26,7 +26,8 @@ import { invokeAssistantTool } from "./tools.js";
 const observer = vi.hoisted(() => {
   type Access = { api: string; args: unknown[]; result?: unknown };
   // `virtual` serves a shipped-data path from a test fixture so tests never write shipped data.
-  const state: { active: boolean; files: Access[]; virtual: Map<string, string> } = { active: false, files: [], virtual: new Map() };
+  // `afterAccess` lets a trace mutate the filesystem between two calls the operation makes.
+  const state: { active: boolean; files: Access[]; virtual: Map<string, string>; afterAccess?: (access: Access) => void } = { active: false, files: [], virtual: new Map() };
   function wrap(module: object, prefix = ""): object {
     return Object.fromEntries(Object.entries(module).map(([name, value]) => {
       if (name === "default" || name === "promises") return [name, wrap(value, prefix + (name === "promises" ? "promises." : ""))];
@@ -39,6 +40,7 @@ const observer = vi.hoisted(() => {
           const result: unknown = backing === undefined ? Reflect.apply(target, receiver, args)
             : name === "realpathSync" ? args[0] : Reflect.apply(target, receiver, [backing, ...args.slice(1)]);
           access.result = result;
+          if (state.active) state.afterAccess?.(access);
           return result;
         },
         get(target, property, receiver) {
@@ -159,6 +161,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   observer.state.active = false;
+  observer.state.afterAccess = undefined;
   sqlite?.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.rmSync(userRoot, { recursive: true, force: true });
@@ -1792,7 +1795,7 @@ it.each(["trusted", "isolated"])("traces analyze_stl_mesh %s SQL, real meshes an
       expect(["realpathSync", "lstatSync", "statSync", "existsSync", "readFileSync"], api).toContain(api);
       const path = z.string().parse(args[0]);
       expect(args).toEqual([path]);
-      expect(path === repos || under(meshRoot, path) || (policy === "trusted" && under(userRoot, path)), `${api} ${path}`).toBe(true);
+      expect(policy === "isolated" ? path === repos || under(meshRoot, path) : under(meshRoot, path) || under(userRoot, path), `${api} ${path}`).toBe(true);
       observed.add("file:source-workspace");
     }
     expect(observer.state.files.filter(({ api }) => api === "readFileSync").map(({ args }) => args[0])).toEqual(reads);
@@ -1828,6 +1831,16 @@ it.each(["trusted", "isolated"])("traces analyze_stl_mesh %s SQL, real meshes an
     ...closed("open.stl"), triangles: 1, vertices: 3, shells_estimate: null, watertight: false, boundary_edges: 3,
   });
   expect(await trace({ source_id: sourceId, path: "invalid.stl" }, resources, [join(meshRoot, "invalid.stl")])).toEqual({ path: "invalid.stl", valid: false, error: "STL mesh could not be parsed" });
+  const raced = join(meshRoot, "raced.stl");
+  fs.writeFileSync(raced, ascii);
+  observer.state.afterAccess = ({ api, args, result }) => {
+    if (api !== "existsSync" || args[0] !== raced || result !== true) return;
+    observer.state.active = false;
+    try { fs.rmSync(raced); } finally { observer.state.active = true; }
+  };
+  expect(await trace({ source_id: sourceId, path: "raced.stl" }, resources, [raced])).toEqual({ error: `ENOENT: no such file or directory, open '${raced}'` });
+  observer.state.afterAccess = undefined;
+  expect(fs.existsSync(raced)).toBe(false);
   for (const path of ["missing.stl", "mesh-directory", "escape.stl", "escape-directory/outside.stl"]) {
     expect(await trace({ source_id: sourceId, path }, resources)).toEqual({ error: "STL path not found" });
   }

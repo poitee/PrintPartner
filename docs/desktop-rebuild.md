@@ -318,7 +318,12 @@ existing `KitManifest` parser. Both propagate preparation budget and cancellatio
 failures. `apply` preserves Node's document order, project filtering, selection
 defaults, explicit group membership, group bounds, and exclusion precedence.
 It accepts the shared `PreparationBudget`, charges each Part as an entry, and
-charges each pattern comparison as a visit. A comparison keeps no memory after it
+charges each pattern comparison as a visit. Option-group merging, in `apply` and
+in preparation's repository, hinted and inferred groups, charges a visit for each
+group, variant, and path it merges and for each merge's final sort, plus the
+entries each is compared against, or sorted, as `comparison_work`. `apply` copies
+each document's groups one group, variant, and path at a time, charging a visit
+before each copy. Builder observation merges the same way without a charge. A comparison keeps no memory after it
 returns, so it does not charge the document-byte cap. It charges the separate
 `comparison_work` counter instead. Before a comparison it charges the raw
 pattern UTF-16 units plus the key's UTF-8 bytes, because normalization scans
@@ -1528,7 +1533,6 @@ check rejects this dependency if it becomes required or reachable by default.
 
 PR 2 adds the transaction entry described below. PR 3 adds `PublicationClient`,
 authenticated admission, schema installation, and writer `Envelope` dispatch.
-Temporary `expect(dead_code)` annotations now identify only PR 3 integration points.
 
 `node fixtures/parity/plan-publication/generate.mjs` regenerates literal Node
 results in `fixtures/parity/plan-publication/node.json`; `--check` detects drift.
@@ -1620,8 +1624,12 @@ index 0, whose token is dropped, and move links at indexes 1 and 2 to 0 and 1.
 
 ## D19 publication client and writer admission, GRE-612 PR 3
 
-With `desktop_rebuild`, `WriterOwner::publication` and
-`publication_with_policy` construct a `PublicationClient`. `PublicationCommand`
+With `desktop_rebuild`, `WriterOwner::publication_with_policy` validates the
+deployment's `AuthPolicy` before constructing a `PublicationClient`.
+`SingleAccountDefault` resolves sessions to tenant `default`; `AccountTenant`
+resolves sessions to the account's tenant. Both retain the account as the receipt
+actor. Invalid policy fails before queue admission or writes. The policy-less
+`publication()` helper is available only in unit tests. `PublicationCommand`
 trims keys with ECMAScript whitespace rules and admits 1 to 160 UTF-16 units.
 `normalized_http` keeps the original admitted request separate from a request
 normalized by a caller. The writer resolves the authenticated tenant and actor
@@ -1801,6 +1809,16 @@ revoked credential records a Source-writer refusal. Until D18 (b), a claimed
 target cannot be settled. Until D18 (c), generic Finish and effects are still
 accepted for Sync.
 
+GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
+Cancel marks the Job for cancellation during reconciliation. The refusal
+observation, target failure code and detail, recovery message, and generation
+remain unchanged.
+A second Cancel writes nothing. Repeating the same authority-refusal halt also
+writes nothing, including when the first halt failed the Job without a claim.
+The regression tests cancel twice and reopen storage to check the saved evidence.
+A worker-advance refusal can leave the batch open. Cancel still halts that batch
+and marks its pending targets not-run.
+
 The reference schema numbers Source Sync 42 because its 41 validates manifest
 columns, which main does not have. Here the 40 to 41 step installs
 `source_sync_batches` and `source_sync_targets` from `source_sync/schema.sql`,
@@ -1817,6 +1835,8 @@ busy-Source and bridge tests are new.
 ```sh
 node fixtures/parity/source-sync/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests
 ```
 

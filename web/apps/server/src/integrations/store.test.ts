@@ -53,6 +53,31 @@ describe("integration store", () => {
     }
   });
 
+  it("skips corrupt stored elements on reads but keeps them through create, update and delete", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-int-corrupt-"));
+    const sqlite = new SqliteDatabase(dir);
+    sqlite.connect();
+    const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
+    const port = createIntegrationPort({ repo, statusExecution: new StatusExecution(), getAdapter: () => undefined });
+    try {
+      const corrupt = [null, 7, { type: "bambu", config: { access_code: "keep-me" } }];
+      repo.setSetting("integrations", JSON.stringify(corrupt));
+      expect(port.list()).toEqual([]);
+      expect(port.get("x")).toBeNull();
+      const created = port.create({ type: "moonraker", name: "Kept", config: {} });
+      expect(port.list().map((x) => x.id)).toEqual([created.id]);
+      expect(port.update(created.id, { name: "Renamed" })?.name).toBe("Renamed");
+      expect(port.update("missing", { name: "Nope" })).toBeNull();
+      expect(JSON.parse(repo.getSetting("integrations") ?? "[]").slice(0, 3)).toEqual(corrupt);
+      expect(port.delete("missing")).toBe(false);
+      expect(port.delete(created.id)).toBe(true);
+      expect(JSON.parse(repo.getSetting("integrations") ?? "[]")).toEqual(corrupt);
+    } finally {
+      sqlite.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("preserves secrets when patch contains redacted placeholders", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-int-store-"));
     const sqlite = new SqliteDatabase(dir);
