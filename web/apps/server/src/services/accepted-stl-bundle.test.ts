@@ -140,7 +140,7 @@ function cgroupCpuContext() {
     .find((line) => line.startsWith("0::/"))?.slice(3);
   if (!cgroup || cgroup.split("/").includes("..")) return null;
   const mount = "/sys/fs/cgroup";
-  let directory = join(mount, cgroup);
+  let directory = join(mount, cgroup.slice(1));
   const ancestors = [];
   for (let depth = 0; depth < 16; depth++) {
     ancestors.push({
