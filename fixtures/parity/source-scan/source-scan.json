@@ -283,6 +283,68 @@
         "sync_required": true
       },
       "error": "disk read failed"
+    },
+    {
+      "id": "overflow-object",
+      "metadata": "{\"keep\":7,\"x\":1e400,\"nested\":[-1e400,{\"x\":1e400}]}",
+      "detail": "disk read failed",
+      "result": {
+        "keep": 7,
+        "x": null,
+        "nested": [
+          null,
+          {
+            "x": null
+          }
+        ],
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "rounded-integer",
+      "metadata": "{\"x\":9007199254740993}",
+      "detail": "disk read failed",
+      "result": {
+        "x": 9007199254740992,
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "category",
+      "metadata": "{\"category\":\" Printers / Frame \"}",
+      "detail": "disk read failed",
+      "result": {
+        "category": "Printers/Frame",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "empty-category",
+      "metadata": "{\"category\":\" / / \"}",
+      "detail": "disk read failed",
+      "result": {
+        "category": "",
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
+    },
+    {
+      "id": "nonstring-category",
+      "metadata": "{\"category\":7}",
+      "detail": "disk read failed",
+      "result": {
+        "category": 7,
+        "sync_error": "disk read failed",
+        "sync_required": true
+      },
+      "error": "disk read failed"
     }
   ]
 }

@@ -83,6 +83,11 @@ if (process.argv.includes("--probe")) {
       ["boolean", "false"],
       ["json-null", "null"],
       ["whitespace", "  "],
+      ["overflow-object", '{"keep":7,"x":1e400,"nested":[-1e400,{"x":1e400}]}'],
+      ["rounded-integer", '{"x":9007199254740993}'],
+      ["category", '{"category":" Printers / Frame "}'],
+      ["empty-category", '{"category":" / / "}'],
+      ["nonstring-category", '{"category":7}'],
     ]) {
       raw.prepare("UPDATE projects SET metadata_json=? WHERE id=?").run(metadata, source.id);
       let error;

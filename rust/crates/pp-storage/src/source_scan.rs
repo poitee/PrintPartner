@@ -307,7 +307,18 @@ pub(crate) fn mark_local_failure(
         params![tenant, source_id],
         |row| row.get(0),
     )?;
-    let mut metadata = crate::catalog::metadata(raw).unwrap_or_default();
+    let mut metadata = raw
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Box<serde_json::value::RawValue>>(raw).ok())
+        .and_then(|raw| node_json_value(&raw, 0))
+        .and_then(|value| match value {
+            serde_json::Value::Object(metadata) => Some(metadata),
+            _ => None,
+        })
+        .unwrap_or_else(|| crate::catalog::metadata(raw).unwrap_or_default());
+    if let Some(serde_json::Value::String(category)) = metadata.get_mut("category") {
+        *category = crate::catalog::normalize_category_path(category);
+    }
     metadata.insert("sync_error".into(), detail.into());
     metadata.insert("sync_required".into(), true.into());
     ensure!(
@@ -318,6 +329,38 @@ pub(crate) fn mark_local_failure(
         "Local Source disappeared while recording failure"
     );
     Ok(())
+}
+
+fn node_json_value(raw: &serde_json::value::RawValue, depth: usize) -> Option<serde_json::Value> {
+    use serde_json::{Value, value::RawValue};
+    if depth >= 128 {
+        return None;
+    }
+    match raw.get().as_bytes().first()? {
+        b'{' => {
+            serde_json::from_str::<std::collections::BTreeMap<String, Box<RawValue>>>(raw.get())
+                .ok()?
+                .into_iter()
+                .map(|(key, value)| Some((key, node_json_value(&value, depth + 1)?)))
+                .collect::<Option<serde_json::Map<String, Value>>>()
+                .map(Value::Object)
+        }
+        b'[' => serde_json::from_str::<Vec<Box<RawValue>>>(raw.get())
+            .ok()?
+            .iter()
+            .map(|value| node_json_value(value, depth + 1))
+            .collect::<Option<Vec<_>>>()
+            .map(Value::Array),
+        b'-' | b'0'..=b'9' => {
+            let number = raw.get().parse::<f64>().ok()?;
+            if number.is_finite() {
+                serde_json::from_str(ryu_js::Buffer::new().format(number)).ok()
+            } else {
+                Some(Value::Null)
+            }
+        }
+        _ => serde_json::from_str(raw.get()).ok(),
+    }
 }
 
 pub(crate) fn observe(

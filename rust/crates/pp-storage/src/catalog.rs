@@ -683,6 +683,10 @@ pub(crate) fn metadata(raw: Option<String>) -> Option<Map<String, Value>> {
             _ => Map::from_iter([("raw".into(), Value::String(s))]),
         })
 }
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn normalize_category_path(category: &str) -> String {
+    categories::normalize(category)
+}
 fn read_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceSummary> {
     let metadata = metadata(row.get(15)?);
     let m = metadata.clone().unwrap_or_default();
