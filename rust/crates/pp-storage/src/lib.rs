@@ -1,4 +1,7 @@
 #[cfg(feature = "desktop_rebuild")]
+pub mod production;
+
+#[cfg(feature = "desktop_rebuild")]
 mod auth_scheduler;
 #[cfg(feature = "desktop_rebuild")]
 use auth_scheduler::*;
