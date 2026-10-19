@@ -1,4 +1,3 @@
-import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import {
@@ -14,6 +13,7 @@ import {
   type SpoolmanFilament,
   type SpoolmanSpool,
 } from "../integrations/spoolman-client.js";
+import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 import { getColorById, type CatalogColor } from "./filament-catalog.js";
 import { listCustomFilaments } from "./custom-filaments.js";
 
