@@ -347,9 +347,14 @@ fn abandoned_publication_reply_is_released_when_completion_times_out() {
                 |queue| queue.pending.is_empty(),
             )
             .unwrap();
-        assert_eq!(queue.pending.len(), 1);
+        let admitted = queue.pending.len();
         queue.closed = true;
+        if admitted != 1 {
+            queue.pending.clear();
+        }
         drop(queue);
+        client.shared.changed.notify_all();
+        assert_eq!(admitted, 1);
         let result = await_publication(&client, &completed, Duration::ZERO);
         let mut queue = client.shared.queue.lock().unwrap();
         let stranded = !queue.pending.is_empty();
