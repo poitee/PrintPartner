@@ -274,6 +274,21 @@ function checkWorkflow(file, source = readFileSync(file, 'utf8')) {
   }
 }
 
+// Hosted runners ship these prerequisites, so only ephemeral runners bootstrap them.
+// The exception covers these exact two steps; every other step stays unconditional.
+const selfHosted = "runner.environment == 'self-hosted'";
+function desktopBootstrap(step) {
+  const keys = Object.keys(step).sort().join();
+  if (step.if !== selfHosted) return false;
+  if (keys === 'if,name,run') {
+    return step.run === 'bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"';
+  }
+  return keys === 'if,name,uses,with' && typeof step.uses === 'string'
+    && step.uses.split('@')[0] === 'dtolnay/rust-toolchain' && mapping(step.with)
+    && Object.keys(step.with).sort().join() === 'components,toolchain'
+    && step.with.toolchain === '1.99.0' && step.with.components === 'rustfmt, clippy';
+}
+
 function checkDesktopExecution(workflow, file) {
   const requiredPaths = [
     'fixtures/http/routes-inventory.json', 'rust/**', 'rust-toolchain.toml',
@@ -300,10 +315,8 @@ function checkDesktopExecution(workflow, file) {
     return;
   }
   for (const [index, step] of (Array.isArray(job.steps) ? job.steps : []).entries()) {
-    if (!mapping(step)) continue;
-    const retention = typeof step.uses === 'string' && step.uses.startsWith('actions/upload-artifact@')
-      && step.if === 'always()';
-    if (Object.hasOwn(step, 'continue-on-error') || (Object.hasOwn(step, 'if') && !retention)) {
+    if (!mapping(step) || desktopBootstrap(step)) continue;
+    if (Object.hasOwn(step, 'continue-on-error') || (Object.hasOwn(step, 'if') && step.if !== 'always()')) {
       report(file, `jobs.parity.steps[${index}]`, 'DISABLED_DESKTOP_STEP', 'verification steps must run unconditionally and propagate failure');
     }
   }

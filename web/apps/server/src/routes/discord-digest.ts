@@ -14,6 +14,7 @@ import type { AppRepository } from "../db/repository.js";
 import type { IntegrationPort } from "../integrations/store.js";
 import { readFarmAccess } from "../lib/farm-access.js";
 import { loadFleet } from "../services/printer-fleet.js";
+import { probeFleetHostStatus } from "../services/printer-fleet-status.js";
 import {
   sendFarmDigest,
   type FarmDigestData,
@@ -70,22 +71,12 @@ export async function registerDiscordDigestRoute(
 
     // Collect farm status
     const fleet = loadFleet(deps.repo);
-    const printers = await Promise.all(
-      fleet.map(async (m) => {
-        let state = "unknown";
-        let activeJob: string | null = null;
-        if (m.integration_id && deps.integrations) {
-          try {
-            const status = await deps.integrations.getStatus(m.integration_id);
-            state = status.state;
-            activeJob = (status as Record<string, unknown>).filename as string | null ?? null;
-          } catch {
-            state = "offline";
-          }
-        }
-        return { name: m.name, state, active_job: activeJob };
-      }),
-    );
+    const statuses = await probeFleetHostStatus(deps.repo, deps.integrations, fleet);
+    const printers = fleet.map((m, i) => ({
+      name: m.name,
+      state: statuses[i]?.state ?? "unknown",
+      active_job: statuses[i]?.filename ?? null,
+    }));
 
     let activePlans: FarmDigestPlanCollection;
     try {

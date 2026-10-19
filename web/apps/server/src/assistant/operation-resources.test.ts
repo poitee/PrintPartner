@@ -67,7 +67,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -162,6 +162,7 @@ beforeEach(() => {
 afterEach(() => {
   observer.state.active = false;
   observer.state.afterAccess = undefined;
+  observer.state.virtual.clear();
   sqlite?.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.rmSync(userRoot, { recursive: true, force: true });
@@ -545,6 +546,202 @@ it("rejects observed reads against the empty check_hardware_interfaces declarati
   expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.check_hardware_interfaces");
   expect(entry).toEqual({ operation: "tool.check_hardware_interfaces", resources: [] });
+  expect(() => expect(statements).toEqual([])).toThrow();
+  expect(() => expect(observer.state.files).toEqual([])).toThrow();
+});
+
+it("traces custom filament proposal validation and coercion without storage access", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_add_custom_filament");
+  expect(entry).toEqual({ operation: "tool.propose_add_custom_filament", resources: [] });
+  const actionSchema = z.object({
+    id: z.uuid(),
+    type: z.literal("propose_add_custom_filament"),
+    plan_id: z.literal(0),
+    label: z.string(),
+    summary: z.literal("Add a named external filament without stock tracking."),
+    params: z.object({ display_name: z.string(), hex: z.string(), product_line: z.string().optional() }).strict(),
+  }).strict();
+  const contentSchema = z.object({
+    status: z.literal("proposed"),
+    note: z.literal("Not applied yet — user must confirm via Apply in the UI."),
+    action: actionSchema,
+  }).strict();
+  const valid: [Record<string, unknown>, z.infer<typeof actionSchema>["params"]][] = [
+    [{ display_name: "  Fixture PLA \n", hex: "  #aBcDeF \t" }, { display_name: "Fixture PLA", hex: "#aBcDeF" }],
+    [{ display_name: "Fixture PLA", hex: "aBcDeF", product_line: "  External PLA  " }, { display_name: "Fixture PLA", hex: "aBcDeF", product_line: "  External PLA  " }],
+    [{ display_name: 42, hex: 123456 }, { display_name: "42", hex: "123456" }],
+    [{ display_name: false, hex: "ABCDEF" }, { display_name: "false", hex: "ABCDEF" }],
+    [{ display_name: {}, hex: ["aBcDeF"] }, { display_name: "[object Object]", hex: "aBcDeF" }],
+    [{ display_name: ["Fixture", "PLA"], hex: "000000" }, { display_name: "Fixture,PLA", hex: "000000" }],
+    ...[undefined, null, false, 42, {}, [], "", "Custom"].map((product_line): [Record<string, unknown>, z.infer<typeof actionSchema>["params"]] => [
+      { display_name: "Fixture PLA", hex: "#123aBc", product_line },
+      { display_name: "Fixture PLA", hex: "#123aBc", ...(typeof product_line === "string" ? { product_line } : {}) },
+    ]),
+  ];
+  const invalid: Record<string, unknown>[] = [
+    {},
+    ...[undefined, null, "", " \n\t", []].map((display_name) => ({ display_name, hex: "#aBcDeF" })),
+    ...[undefined, null, "", " ", "abc", "#abc", "12345", "1234567", "#1234567", "##aBcDeF", "gggggg", "12 456", "0x123456", false, {}, ["abcdef", "123456"]]
+      .map((hex) => ({ display_name: "Fixture PLA", hex })),
+  ];
+  const ids = new Set<string>();
+  for (const tenantId of ["default", "tenant-b"]) {
+    for (const activePlanId of [undefined, 0, 999999]) {
+      for (const selectors of [{}, { plan_id: 999999, profile_id: 888888, source_id: sourceId, source: "Fixture" }, { plan_id: "invalid", profile_id: null, source_id: -1, source: "absent" }]) {
+        for (const [input, params] of [...valid, ...invalid.map((input): [Record<string, unknown>, undefined] => [input, undefined])]) {
+          statements = [];
+          observer.state.files = [];
+          observer.state.active = true;
+          let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+          try {
+            output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_add_custom_filament", { ...input, ...selectors }, { repo, dataDir, activePlanId }));
+          } finally { observer.state.active = false; }
+          expect(statements).toEqual([]);
+          expect(observer.state.files).toEqual([]);
+          if (!params) {
+            expect(output).toEqual({ content: JSON.stringify({ error: "display_name and a six-digit hex color are required" }) });
+            continue;
+          }
+          const content = contentSchema.parse(JSON.parse(output.content));
+          expect(content).toEqual({
+            status: "proposed",
+            note: "Not applied yet — user must confirm via Apply in the UI.",
+            action: {
+              id: content.action.id,
+              type: "propose_add_custom_filament",
+              plan_id: 0,
+              label: `add custom filament ${params.display_name}`,
+              summary: "Add a named external filament without stock tracking.",
+              params,
+            },
+          });
+          expect(output.proposedAction).toStrictEqual({ ...content.action, params: { ...params, product_line: params.product_line } });
+          expect(ids.has(content.action.id)).toBe(false);
+          ids.add(content.action.id);
+        }
+      }
+    }
+  }
+  expect(ids.size).toBe(valid.length * 18);
+});
+
+it("rejects undeclared database and file reads against the empty custom filament proposal declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("propose_add_custom_filament", { display_name: "Fixture PLA", hex: "#aBcDeF" }, { repo, dataDir });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql)))]).toEqual(["table:projects", "table:source_docs"]);
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_add_custom_filament");
+  expect(entry).toEqual({ operation: "tool.propose_add_custom_filament", resources: [] });
+  expect(() => expect(statements).toEqual([])).toThrow();
+  expect(() => expect(observer.state.files).toEqual([])).toThrow();
+});
+
+it("traces create build proposal validation, URL analysis and raw request preservation without storage access", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_create_build");
+  expect(entry).toEqual({ operation: "tool.propose_create_build", resources: [] });
+  const actionSchema = z.object({
+    id: z.uuid(),
+    type: z.literal("propose_create_build"),
+    plan_id: z.literal(0),
+    label: z.string(),
+    summary: z.literal("Create the Build and preserve the customer request verbatim."),
+    params: z.object({ name: z.string(), request: z.string(), urls: z.array(z.string()), idempotency_key: z.string().optional() }).strict(),
+  }).strict();
+  const contentSchema = z.object({
+    status: z.literal("proposed"),
+    note: z.literal("Not applied yet — user must confirm via Apply in the UI."),
+    action: actionSchema,
+  }).strict();
+  const request = "  Build a 300mm printer with USB umbilical and primary color is black.\nUse owner fixture as canonical base and vendor kit as vendor-kit overlay.  ";
+  const urls = [" https://GITHUB.com/owner/fixture/#details ", "https://example.test/vendor/kit/", "https://printables.com/model/123-fixture"];
+  const valid: [Record<string, unknown>, z.infer<typeof actionSchema>["params"]][] = [
+    [{ name: "  Fixture Build \n", request, urls: [null, 7, false, {}, ...urls] }, { name: "Fixture Build", request, urls }],
+    [{ name: 42, request: 0 }, { name: "42", request: "0", urls: [] }],
+    [{ name: false, request: true }, { name: "false", request: "true", urls: [] }],
+    [{ name: {}, request: ["Build", "fixture"] }, { name: "[object Object]", request: "Build,fixture", urls: [] }],
+    ...[undefined, null, "https://example.test", false, 42, {}, [null, 7, false, {}]].map((urls): [Record<string, unknown>, z.infer<typeof actionSchema>["params"]] => [
+      { name: "Fixture Build", request: "Build fixture", urls },
+      { name: "Fixture Build", request: "Build fixture", urls: [] },
+    ]),
+    ...[undefined, null, false, 42, {}, [], "", "  fixture-key  "].map((idempotency_key): [Record<string, unknown>, z.infer<typeof actionSchema>["params"]] => [
+      { name: "Fixture Build", request: "Build fixture", idempotency_key },
+      { name: "Fixture Build", request: "Build fixture", urls: [], ...(typeof idempotency_key === "string" ? { idempotency_key } : {}) },
+    ]),
+  ];
+  const invalid: [Record<string, unknown>, string][] = [
+    [{}, "name and request required"],
+    ...[undefined, null, "", " \n\t", []].flatMap((value): [Record<string, unknown>, string][] => [
+      [{ name: value, request: "Build fixture", urls: ["not a url"] }, "name and request required"],
+      [{ name: "Fixture Build", request: value, urls: ["not a url"] }, "name and request required"],
+    ]),
+    ...["not a url", "", "https://"].map((url): [Record<string, unknown>, string] => [
+      { name: "Fixture Build", request: "Build fixture", urls: [urls[0], url] }, "Invalid URL",
+    ]),
+    ...["file:///fixture", "ftp://example.test/fixture"].map((url): [Record<string, unknown>, string] => [
+      { name: "Fixture Build", request: "Build fixture", urls: [url] }, "Only public HTTP(S) URLs are supported",
+    ]),
+  ];
+  const ids = new Set<string>();
+  for (const tenantId of ["default", "tenant-b"]) {
+    for (const activePlanId of [undefined, 0, 999999]) {
+      for (const selectors of [{}, { plan_id: 999999, profile_id: 888888, source_id: sourceId, source: "Fixture" }, { plan_id: "invalid", profile_id: null, source_id: -1, source: "absent" }]) {
+        const cases: [Record<string, unknown>, z.infer<typeof actionSchema>["params"] | string][] = [...valid, ...invalid];
+        for (const [input, expected] of cases) {
+          statements = [];
+          observer.state.files = [];
+          observer.state.active = true;
+          let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+          try {
+            output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_create_build", { ...input, ...selectors }, { repo, dataDir, activePlanId }));
+          } finally { observer.state.active = false; }
+          expect(statements).toEqual([]);
+          expect(observer.state.files).toEqual([]);
+          if (typeof expected === "string") {
+            expect(output).toEqual({ content: JSON.stringify({ error: expected }) });
+            continue;
+          }
+          const content = contentSchema.parse(JSON.parse(output.content));
+          expect(content).toEqual({
+            status: "proposed",
+            note: "Not applied yet — user must confirm via Apply in the UI.",
+            action: {
+              id: content.action.id,
+              type: "propose_create_build",
+              plan_id: 0,
+              label: `Create Build ${expected.name}`,
+              summary: "Create the Build and preserve the customer request verbatim.",
+              params: expected,
+            },
+          });
+          expect(output.proposedAction).toStrictEqual({ ...content.action, params: { ...expected, idempotency_key: expected.idempotency_key } });
+          expect(ids.has(content.action.id)).toBe(false);
+          ids.add(content.action.id);
+        }
+      }
+    }
+  }
+  expect(ids.size).toBe(valid.length * 18);
+});
+
+it("rejects undeclared database and file reads against the empty create build proposal declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("propose_create_build", { name: "Fixture Build", request: "Build fixture" }, { repo, dataDir });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql)))]).toEqual(["table:projects", "table:source_docs"]);
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_create_build");
+  expect(entry).toEqual({ operation: "tool.propose_create_build", resources: [] });
   expect(() => expect(statements).toEqual([])).toThrow();
   expect(() => expect(observer.state.files).toEqual([])).toThrow();
 });
@@ -2121,7 +2318,7 @@ const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "tabl
 const OPTION_GROUP_UNION = ["file:community-manifests", "file:path-hints", "file:source-workspace", ...OPTION_GROUP_TABLES];
 const SHIPPED_PATH_HINTS = fileURLToPath(new URL("../data/path-hints.yaml", import.meta.url));
 const COMMUNITY_MANIFEST_DIR = fileURLToPath(new URL("../data/manifests", import.meta.url));
-const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml");
+const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "gre402-fixture.yaml");
 type FileCall = [string, ...unknown[]];
 
 function optionGroupSelect(statement: unknown, tenantId: string, planId?: number): string {
@@ -2140,7 +2337,7 @@ function optionGroupFileResources(files: FileCall[]): string[] {
     const path = z.string().parse(candidate);
     if (path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml")) resources.add("file:path-hints");
     else if (path === COMMUNITY_MANIFEST_DIR && api === "realpathSync"
-      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!kit-catalog\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
+      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!(?:kit-catalog|registry-index)\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
     else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
     else throw new Error(`Unclassified option group path: ${api} ${path}`);
   }
@@ -2229,7 +2426,8 @@ for (const isolated of [false, true]) {
     const inferred = optionGroupCheckout("Inferred", true);
     fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
     fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
-    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("registry-index", inferred.id);
+    observer.state.virtual.set(COMMUNITY_MANIFEST, join(inferred.checkout, "print-partner.manifest.yaml"));
+    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-fixture", inferred.id);
     const plan = repo.createProfile("Options", declared.id);
     repo.addAddonLayer(plan.id, inferred.id);
     const empty = repo.createProfile("Empty");
@@ -2409,17 +2607,17 @@ for (const isolated of [false, true]) {
   });
 }
 
-it("traces get_plan_option_groups reserved kit-catalog slug as no community manifest", async () => {
+it.each(["kit-catalog", "registry-index"])("traces get_plan_option_groups reserved %s slug as no community manifest", async (slug) => {
   const source = optionGroupCheckout("Reserved");
   const plan = repo.createProfile("Reserved", source.id);
   const probes = optionGroupPathProbes(source, false);
   const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
-  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("kit-catalog", source.id);
+  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run(slug, source.id);
   const log = vi.spyOn(getLogger(), "log");
   try {
     const output = await traceOptionGroups({ input: { plan_id: plan.id }, planId: plan.id, tables: OPTION_GROUP_TABLES, files: sourceFiles });
     expect(output).toMatchObject({ plan_id: plan.id, selections: {}, sources: [{ source_id: source.id }] });
-    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug: "kit-catalog" });
+    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug });
   } finally { log.mockRestore(); }
 });
 
@@ -2430,7 +2628,7 @@ it("classifies option group files by family roots and rejects every unknown path
     ["readFileSync", join(dataDir, "path-hints.yaml")],
     ["readFileSync", COMMUNITY_MANIFEST],
   ])).toEqual(["file:source-workspace", "file:path-hints", "file:community-manifests"]);
-  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(dataDir, "repos-other", "part.stl")]) {
+  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml"), join(dataDir, "repos-other", "part.stl")]) {
     expect(() => optionGroupFileResources([["readFileSync", path]])).toThrow("Unclassified option group path:");
   }
 });

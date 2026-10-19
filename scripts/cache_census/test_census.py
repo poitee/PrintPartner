@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -131,6 +132,37 @@ class InventoryTests(unittest.TestCase):
         del pages[0]["actions_caches"][0]["version"]
         with self.assertRaisesRegex(census.CensusError, "missing required"):
             capture_pages(pages)
+
+    def test_fractional_timestamps_and_raw_snapshot_round_trip(self):
+        for digits in ("1", "12", "123", "1234", "12345", "123456", "1234567", "12345678", "123456789"):
+            for suffix, offset in (("Z", 0), ("+05:30", 330), ("-04:00", -240)):
+                with self.subTest(digits=digits, suffix=suffix):
+                    raw = f"2026-10-04T11:00:00.{digits}{suffix}"
+                    expected = datetime(2026, 10, 4, 11, 0, 0, int((digits + "000000")[:6]),
+                                        tzinfo=timezone(timedelta(minutes=offset)))
+                    self.assertEqual(census.timestamp(raw, "test time"), expected)
+                    document = asdict(sample())
+                    document["collection_started_at"] = raw
+                    document["collection_finished_at"] = raw
+                    document["entries"]["11"]["created_at"] = raw
+                    document["entries"]["11"]["last_accessed_at"] = raw
+                    loaded = census.load_snapshot(document)
+                    self.assertEqual(asdict(loaded), document)
+
+    def test_invalid_timestamp_formats_remain_rejected(self):
+        for raw in ("2026-02-30T11:00:00.1Z", "2026-10-04T25:00:00.12Z",
+                    "2026-10-04T11:00:00.Z", "2026-10-04T11:00:00.1",
+                    "2026-10-04T11:00:00.1+24:00", "2026-10-04T11:00:00,1Z"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(census.CensusError):
+                    census.timestamp(raw, "test time")
+
+    def test_saved_snapshot_rejects_all_dot_repository_names(self):
+        for repository in ("owner/.", "owner/..", "owner/...", "owner/" + "." * 100):
+            with self.subTest(repository=repository):
+                document = dict(asdict(sample()), repository=repository)
+                with self.assertRaisesRegex(census.CensusError, "repository"):
+                    census.load_snapshot(document)
 
     def test_malformed_snapshots(self):
         original = asdict(sample())
@@ -282,10 +314,39 @@ class CliTests(unittest.TestCase):
             snapshot = census.capture("example/repo")
         self.assertEqual(snapshot.entries["11"]["key"], "café")
 
-    def test_capture_dot_prefixed_repository(self):
-        result = self.cli("capture", "Example/.github")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["repository"], "example/.github")
+    def test_capture_dotted_repository_names(self):
+        for name in (".github", "..repo", "repo..", "repo.name", ".a."):
+            with self.subTest(name=name):
+                result = self.cli("capture", f"Example/{name}")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["repository"], f"example/{name}")
+                command = json.loads(self.log.read_text())
+                self.assertEqual(command[5],
+                                 f"repos/example/{name}/actions/caches?per_page=100&sort=created_at&direction=asc")
+
+    def test_all_dot_repository_never_calls_gh_or_creates_output(self):
+        output = self.root / "failed.json"
+        for repository in ("owner/.", "owner/..", "owner/...", "owner/" + "." * 100):
+            for args in ((), ("--output", output)):
+                with self.subTest(repository=repository, args=args):
+                    result = self.cli("capture", repository, *args)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("repository", result.stderr)
+                    self.assertFalse(self.log.exists())
+                    self.assertFalse(output.exists())
+
+    def test_hardlink_failure_has_no_snapshot_or_temporary_file(self):
+        output = self.root / "failed.json"
+        with (patch.dict(os.environ, self.env),
+              patch.object(census.os, "link", side_effect=OSError("hardlinks unsupported")),
+              patch.object(census.sys, "stdout") as stdout,
+              patch.object(census.sys, "stderr") as stderr):
+            self.assertEqual(census.main(["capture", "example/repo", "--output", str(output)]), 1)
+        stdout.write.assert_not_called()
+        self.assertIn("hardlinks unsupported", "".join(call.args[0] for call in stderr.write.call_args_list))
+        self.assertFalse(output.exists())
+        self.assertEqual(list(self.root.glob(".cache-census-*")), [])
 
     def test_committed_evidence_comparison(self):
         evidence = ROOT / "evidence" / "2026-10-18"

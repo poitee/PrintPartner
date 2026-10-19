@@ -1,0 +1,710 @@
+{
+  "mainSha": "de5a8934974054ce46cac32c4d82d7637f161455",
+  "node": "v22.23.3",
+  "logicalCpus": 12,
+  "unitsPerRun": 10001,
+  "sourceBytesPerUnit": 12,
+  "order": "tmpfs, disk, repeated five times; fresh process and temporary fixture each run",
+  "limits": "Standalone diagnostic with unquantified observation overhead; shared VM; no runner-level CI attribution; no production optimization comparison. CPU and I/O load from unrelated work were not controlled.",
+  "scriptSha256": "b83b7d3819773002c806bfdd603aadbbae9180c0535b95112d39401d633dd0ef",
+  "runs": [
+    {
+      "sample": 1,
+      "storage": "tmpfs",
+      "filesystem": {
+        "type": 16914836,
+        "typeHex": "0x1021994",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 12298.308712,
+        "cpuUserMs": 12331.803,
+        "cpuSystemMs": 5191.076,
+        "copiesUntilFirstZipSourceMs": 3472.8370560000003,
+        "firstZipSourceUntilResultMs": 8825.471656
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 1110.201343,
+        "callbackLatencyMaxMs": 8.318793999999798
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            3.6650390625,
+            3.59716796875,
+            4.52197265625
+          ],
+          "io": "some avg10=0.26 avg60=2.19 avg300=4.28 total=2430117483\nfull avg10=0.25 avg60=2.04 avg300=4.11 total=2057082257\n"
+        },
+        "after": {
+          "load": [
+            3.955078125,
+            3.666015625,
+            4.5302734375
+          ],
+          "io": "some avg10=2.70 avg60=2.34 avg300=4.20 total=2430668317\nfull avg10=2.70 avg60=2.23 avg300=4.04 total=2057629702\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 1,
+      "storage": "disk",
+      "filesystem": {
+        "type": 61267,
+        "typeHex": "0xef53",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 28515.457802,
+        "cpuUserMs": 15373.964,
+        "cpuSystemMs": 7379.245,
+        "copiesUntilFirstZipSourceMs": 19038.970012,
+        "firstZipSourceUntilResultMs": 9476.48779
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 47290.515721000054,
+        "callbackLatencyMaxMs": 66.3644260000001
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            3.955078125,
+            3.666015625,
+            4.5302734375
+          ],
+          "io": "some avg10=2.70 avg60=2.34 avg300=4.20 total=2430668317\nfull avg10=2.70 avg60=2.23 avg300=4.04 total=2057629702\n"
+        },
+        "after": {
+          "load": [
+            4.90478515625,
+            3.92822265625,
+            4.5859375
+          ],
+          "io": "some avg10=4.62 avg60=4.40 avg300=4.57 total=2433345166\nfull avg10=4.49 avg60=4.23 avg300=4.40 total=2060220873\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 2,
+      "storage": "tmpfs",
+      "filesystem": {
+        "type": 16914836,
+        "typeHex": "0x1021994",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 12886.496841,
+        "cpuUserMs": 13318.648,
+        "cpuSystemMs": 5105.006,
+        "copiesUntilFirstZipSourceMs": 3961.569158,
+        "firstZipSourceUntilResultMs": 8924.927683
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 1268.2973360000015,
+        "callbackLatencyMaxMs": 4.053363999999988
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            4.90478515625,
+            3.92822265625,
+            4.5859375
+          ],
+          "io": "some avg10=4.62 avg60=4.40 avg300=4.57 total=2433345166\nfull avg10=4.49 avg60=4.23 avg300=4.40 total=2060220873\n"
+        },
+        "after": {
+          "load": [
+            5.00537109375,
+            3.998046875,
+            4.59814453125
+          ],
+          "io": "some avg10=4.21 avg60=4.28 avg300=4.53 total=2434095707\nfull avg10=4.00 avg60=4.12 avg300=4.37 total=2060964034\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 2,
+      "storage": "disk",
+      "filesystem": {
+        "type": 61267,
+        "typeHex": "0xef53",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 47389.331043,
+        "cpuUserMs": 16786.655,
+        "cpuSystemMs": 7786.975,
+        "copiesUntilFirstZipSourceMs": 37421.212774,
+        "firstZipSourceUntilResultMs": 9968.118268999999
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 106916.1103179999,
+        "callbackLatencyMaxMs": 82.59618499999851
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            5.00537109375,
+            3.998046875,
+            4.59814453125
+          ],
+          "io": "some avg10=4.21 avg60=4.28 avg300=4.53 total=2434095707\nfull avg10=4.00 avg60=4.12 avg300=4.37 total=2060964034\n"
+        },
+        "after": {
+          "load": [
+            4.9970703125,
+            4.16650390625,
+            4.626953125
+          ],
+          "io": "some avg10=3.91 avg60=7.17 avg300=5.45 total=2439615740\nfull avg10=3.81 avg60=6.97 avg300=5.26 total=2066342144\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 3,
+      "storage": "tmpfs",
+      "filesystem": {
+        "type": 16914836,
+        "typeHex": "0x1021994",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 12156.426346999999,
+        "cpuUserMs": 12546.845,
+        "cpuSystemMs": 4707.558,
+        "copiesUntilFirstZipSourceMs": 3829.8348970000006,
+        "firstZipSourceUntilResultMs": 8326.59145
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 1266.3617270000248,
+        "callbackLatencyMaxMs": 7.591689999999971
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            4.9970703125,
+            4.16650390625,
+            4.626953125
+          ],
+          "io": "some avg10=3.91 avg60=7.17 avg300=5.45 total=2439615740\nfull avg10=3.81 avg60=6.97 avg300=5.26 total=2066342144\n"
+        },
+        "after": {
+          "load": [
+            4.5732421875,
+            4.10986328125,
+            4.60107421875
+          ],
+          "io": "some avg10=0.96 avg60=5.68 avg300=5.19 total=2439617029\nfull avg10=0.94 avg60=5.52 avg300=5.02 total=2066343384\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 3,
+      "storage": "disk",
+      "filesystem": {
+        "type": 61267,
+        "typeHex": "0xef53",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 21299.121029,
+        "cpuUserMs": 14133.463,
+        "cpuSystemMs": 6729.584,
+        "copiesUntilFirstZipSourceMs": 12612.21984,
+        "firstZipSourceUntilResultMs": 8686.901189000002
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 27554.632831999992,
+        "callbackLatencyMaxMs": 54.885629000000336
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            4.5732421875,
+            4.10986328125,
+            4.60107421875
+          ],
+          "io": "some avg10=0.96 avg60=5.68 avg300=5.19 total=2439617029\nfull avg10=0.94 avg60=5.52 avg300=5.02 total=2066343384\n"
+        },
+        "after": {
+          "load": [
+            4.638671875,
+            4.18994140625,
+            4.61328125
+          ],
+          "io": "some avg10=1.90 avg60=4.82 avg300=5.04 total=2440580550\nfull avg10=1.84 avg60=4.67 avg300=4.87 total=2067267517\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 4,
+      "storage": "tmpfs",
+      "filesystem": {
+        "type": 16914836,
+        "typeHex": "0x1021994",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 11435.685474,
+        "cpuUserMs": 11956.287,
+        "cpuSystemMs": 4524.868,
+        "copiesUntilFirstZipSourceMs": 3513.3927809999996,
+        "firstZipSourceUntilResultMs": 7922.292693
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 1158.2071490000174,
+        "callbackLatencyMaxMs": 7.683417000000077
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            4.638671875,
+            4.18994140625,
+            4.61328125
+          ],
+          "io": "some avg10=1.90 avg60=4.82 avg300=5.04 total=2440580550\nfull avg10=1.84 avg60=4.67 avg300=4.87 total=2067267517\n"
+        },
+        "after": {
+          "load": [
+            4.36083984375,
+            4.1474609375,
+            4.59228515625
+          ],
+          "io": "some avg10=0.38 avg60=3.69 avg300=4.76 total=2440583087\nfull avg10=0.37 avg60=3.58 avg300=4.60 total=2067269911\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 4,
+      "storage": "disk",
+      "filesystem": {
+        "type": 61267,
+        "typeHex": "0xef53",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 26957.839464,
+        "cpuUserMs": 19267.089,
+        "cpuSystemMs": 8100.965,
+        "copiesUntilFirstZipSourceMs": 14156.513239,
+        "firstZipSourceUntilResultMs": 12801.326225
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 31235.507525999827,
+        "callbackLatencyMaxMs": 59.926658000000316
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            4.36083984375,
+            4.1474609375,
+            4.59228515625
+          ],
+          "io": "some avg10=0.38 avg60=3.69 avg300=4.76 total=2440583087\nfull avg10=0.37 avg60=3.58 avg300=4.60 total=2067269911\n"
+        },
+        "after": {
+          "load": [
+            4.49169921875,
+            4.19677734375,
+            4.59423828125
+          ],
+          "io": "some avg10=1.09 avg60=3.14 avg300=4.54 total=2441495922\nfull avg10=1.09 avg60=3.07 avg300=4.39 total=2068144662\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 5,
+      "storage": "tmpfs",
+      "filesystem": {
+        "type": 16914836,
+        "typeHex": "0x1021994",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 13415.579337,
+        "cpuUserMs": 13328.522,
+        "cpuSystemMs": 5404.532,
+        "copiesUntilFirstZipSourceMs": 4253.11951,
+        "firstZipSourceUntilResultMs": 9162.459826999999
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 1373.1277459999912,
+        "callbackLatencyMaxMs": 2.595456000000013
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            4.49169921875,
+            4.19677734375,
+            4.59423828125
+          ],
+          "io": "some avg10=1.09 avg60=3.14 avg300=4.54 total=2441495922\nfull avg10=1.09 avg60=3.07 avg300=4.39 total=2068144662\n"
+        },
+        "after": {
+          "load": [
+            4.3583984375,
+            4.185546875,
+            4.58447265625
+          ],
+          "io": "some avg10=0.17 avg60=2.32 avg300=4.27 total=2441506284\nfull avg10=0.17 avg60=2.27 avg300=4.13 total=2068154157\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "sample": 5,
+      "storage": "disk",
+      "filesystem": {
+        "type": 61267,
+        "typeHex": "0xef53",
+        "blockSize": 4096
+      },
+      "export": {
+        "resultKind": "materialized",
+        "elapsedMs": 22935.589302,
+        "cpuUserMs": 14669.275,
+        "cpuSystemMs": 7178.295,
+        "copiesUntilFirstZipSourceMs": 14129.926676,
+        "firstZipSourceUntilResultMs": 8805.662626
+      },
+      "flush": {
+        "calls": 10003,
+        "callbacks": 10003,
+        "errors": 0,
+        "synchronousThrows": 0,
+        "inflight": 0,
+        "maxInflight": 4,
+        "callbackLatencyTotalMs": 31371.90687400002,
+        "callbackLatencyMaxMs": 32.00939300000027
+      },
+      "zipSources": {
+        "created": 10001,
+        "opened": 10001,
+        "ended": 10001,
+        "errors": 0,
+        "bytesRead": 120012
+      },
+      "validation": {
+        "kind": "valid",
+        "looseFileCount": 10001,
+        "looseBytes": 120012,
+        "zipEntryCount": 10001,
+        "decompressedBytes": 120012,
+        "zipBytes": 1708001,
+        "zipSha256": "ac19fd178c189efa81d0d376f8b0e7e607e7a636dab6c07b48b262470a1345b8",
+        "publicationBasename": "content-580e80ee5db90aaefc15440a6557d816661dea61823110adb0f00b73e74a3d3f"
+      },
+      "cleanup": {
+        "removed": true,
+        "error": null
+      },
+      "error": null,
+      "environment": {
+        "before": {
+          "load": [
+            4.3583984375,
+            4.185546875,
+            4.58447265625
+          ],
+          "io": "some avg10=0.17 avg60=2.32 avg300=4.27 total=2441506284\nfull avg10=0.17 avg60=2.27 avg300=4.13 total=2068154157\n"
+        },
+        "after": {
+          "load": [
+            4.45556640625,
+            4.22998046875,
+            4.5869140625
+          ],
+          "io": "some avg10=1.10 avg60=2.32 avg300=4.11 total=2442311973\nfull avg10=1.05 avg60=2.22 avg300=3.96 total=2068926154\n"
+        },
+        "exitCode": 0,
+        "stderr": ""
+      }
+    }
+  ],
+  "separateSyscallTrace": {
+    "units": 1000,
+    "fsyncCalls": 1002,
+    "fsyncErrors": 0,
+    "validation": "valid",
+    "cleanupRemoved": true,
+    "excludedFromTimingComparison": true
+  }
+}

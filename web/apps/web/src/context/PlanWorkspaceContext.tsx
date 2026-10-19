@@ -10,6 +10,9 @@ import {
   type ReactNode,
 } from "react";
 import {
+  TENANT_FEATURE_TOGGLES_CAPABILITY,
+  type HealthResponse,
+  type PlanFeatures,
   parsePlanDraftWorkspace,
   parseSavePlanChoicesRequest,
   type ApplyPlanDraftReceipt,
@@ -663,8 +666,19 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
               if (!workspace && draft && edits.some(({ edit }) => edit.kind === "set_quantity" && typeof edit.value === "function")) {
                 workspace = storeWorkspace(await fetchPlanDraftWorkspace(profileId, draft.draft_id), false);
               }
-              const currentReview = queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, true)) ??
-                queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, false)) ??
+              const currentHealth = queryClient.getQueryState<HealthResponse>(queryKeys.health);
+              const currentFeatures = queryClient.getQueryState<PlanFeatures>(queryKeys.planFeatures(profileId));
+              const gated = currentHealth?.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY);
+              const queryAllowed = !gated || !currentFeatures || currentFeatures.status === "pending" ||
+                (currentHealth?.status === "success" && currentHealth.data?.ok === true &&
+                  currentFeatures.status === "success" && !currentFeatures.isInvalidated &&
+                  currentFeatures.data?.profile_id === profileId && currentFeatures.data.effective.spoolman.enabled);
+              const cachedReviews = [true, false].map((includeExcluded) =>
+                queryClient.getQueryState<PlanReview>(queryKeys.planReview(profileId, includeExcluded, queryAllowed)));
+              cachedReviews.sort((a, b) =>
+                (b?.data?.accepted_basis?.plan_version ?? 0) - (a?.data?.accepted_basis?.plan_version ?? 0) ||
+                (b?.dataUpdatedAt ?? 0) - (a?.dataUpdatedAt ?? 0));
+              const currentReview = cachedReviews.find((state) => state?.data)?.data ??
                 (profileId === selectedProfileId ? review : null);
               const expectedDraft = workspace?.draft ?? draft;
               const accepted = currentReview?.accepted_basis;

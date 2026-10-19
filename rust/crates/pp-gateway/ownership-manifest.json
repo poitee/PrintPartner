@@ -353,6 +353,14 @@
         "resources": []
       },
       {
+        "operation": "tool.propose_add_custom_filament",
+        "resources": []
+      },
+      {
+        "operation": "tool.propose_create_build",
+        "resources": []
+      },
+      {
         "operation": "tool.get_job_status",
         "resources": []
       },
@@ -1031,11 +1039,9 @@
       "tool.list_build_differences",
       "tool.list_example_builds",
       "tool.propose_add_build_checklist_items",
-      "tool.propose_add_custom_filament",
       "tool.propose_add_source",
       "tool.propose_apply_plan_draft",
       "tool.propose_assign_role_filament",
-      "tool.propose_create_build",
       "tool.propose_create_source_category",
       "tool.propose_delete_source_category",
       "tool.propose_edit_plan_draft_parts",

@@ -601,7 +601,7 @@ fn existing_validation_precedes_feature_resolution() {
             .to_string(),
         "Invalid digest"
     );
-    f.enqueue(&account, "sync", Payload::Sync { project_ids: None });
+    f.enqueue(&account, "updates", Payload::CheckSourceUpdates {});
     let claimed_attempt!(_, mut source) = worker.claim().unwrap().unwrap();
     assert_eq!(
         f.refuse(&worker, &mut source, deduction("spool"))

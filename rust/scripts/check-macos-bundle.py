@@ -551,6 +551,7 @@ class ParserTests(unittest.TestCase):
             script = (
                 'import os,sys,time\n'
                 'heartbeat=sys.argv[1]\n'
+                'time.sleep(0.75)\n'  # Startup deliberately exceeds the probe deadline.
                 'parent_pid=os.getpid()\n'
                 'pid=os.fork()\n'
                 'if pid:\n'
@@ -568,21 +569,30 @@ class ParserTests(unittest.TestCase):
                 'os.close(fd)\n'
                 'os._exit(0)\n'
             )
-            descendant_pid = None
-            cleanup_complete = False
-            process = subprocess.Popen(
-                [sys.executable, '-c', script, str(heartbeat)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-            )
-            group_pid = process.pid
-            try:
-                process.wait(timeout=10)
-                ready_deadline = time.monotonic() + 10
-                while not heartbeat.exists() or heartbeat.stat().st_size == 0:
-                    self.assertLess(time.monotonic(), ready_deadline, 'Descendant did not start')
+            popen = subprocess.Popen
+            started = None
+
+            def ready_popen(*args, **kwargs):
+                nonlocal started
+                process = popen(*args, **kwargs)
+                startup_deadline = time.monotonic() + 10
+                while not (heartbeat.exists() and heartbeat.stat().st_size):
+                    if time.monotonic() >= startup_deadline:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        stdout, stderr = process.communicate(timeout=1)
+                        self.fail(f'Heartbeat fixture did not start: {stdout!r} {stderr!r}')
                     time.sleep(0.01)
                 started = time.monotonic()
-                with patch('subprocess.Popen', return_value=process):
+                return process
+
+            group_pid = None
+            descendant_pid = None
+            cleanup_complete = False
+            try:
+                with patch.object(subprocess, 'Popen', side_effect=ready_popen):
                     capture = run_bundle_probe(
                         [sys.executable, '-c', script, str(heartbeat)],
                         cwd=pathlib.Path.cwd(),
@@ -603,13 +613,11 @@ class ParserTests(unittest.TestCase):
                 except ProcessLookupError:
                     descendant_alive = False
             finally:
-                try:
-                    os.killpg(group_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=10)
-                process.stdout.close()
-                process.stderr.close()
+                if group_pid is not None:
+                    try:
+                        os.killpg(group_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 if descendant_pid is not None:
                     cleanup_deadline = time.monotonic() + 1
                     while time.monotonic() < cleanup_deadline:
