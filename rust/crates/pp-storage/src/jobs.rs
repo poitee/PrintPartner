@@ -2614,6 +2614,18 @@ fn advance(
 ) -> Result<TransactionDecision> {
     let mut job = claimed_job(tx, &lease)?;
     #[cfg(feature = "desktop_rebuild")]
+    if job.kind == JobKind::Sync {
+        match &operation {
+            WorkerOperation::BeginEffect(_)
+            | WorkerOperation::ConfirmEffect(_)
+            | WorkerOperation::Finish(_)
+            | WorkerOperation::FinishPublic { .. } => {
+                return Err(anyhow!("Sync operation belongs to its journal owner"));
+            }
+            WorkerOperation::Heartbeat | WorkerOperation::Progress(_) | WorkerOperation::Fail => {}
+        }
+    }
+    #[cfg(feature = "desktop_rebuild")]
     if let Some(refusal) = refuse_advance(tx, &mut job, &operation, policy)? {
         return Ok(TransactionDecision::Refused(refusal));
     }
