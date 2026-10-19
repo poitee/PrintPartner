@@ -55,10 +55,10 @@ The [cross-OS macOS job at the same main revision](https://github.com/poitee/Pri
 
 ## Replay and scope
 
-The native log can be downloaded while other jobs in the workflow continue:
+After the whole workflow completes, the native job log can be downloaded with:
 
 ```sh
-gh api --allow-escape-sequences repos/poitee/PrintPartner/actions/jobs/118281771636/logs
+gh run view 39317059432 --job 118281771636 --log
 ```
 
 `python3 scripts/test_native_image_cleanup.py -v` passed on Linux with four tests passing and the native APFS case explicitly skipped. This local replay supplements the macOS evidence.
