@@ -13,8 +13,8 @@ python3 -B scripts/linear/reproduce_reference_recovery.py -v
 python3 -B -m unittest discover -s scripts/linear -p 'test_*.py' -v
 ```
 
-The four concurrency diagnostics, six recovery diagnostics, and 47 ordinary
-tests pass. Diagnostic success confirms the unsafe outcomes and the independence
+The four concurrency diagnostics, six recovery diagnostics, and ordinary tests
+pass. Diagnostic success confirms the unsafe outcomes and the independence
 control, not prevention. The diagnostics stay outside ordinary `test_*.py`
 discovery so that future regression tests do not require preserving these bugs.
 
@@ -140,6 +140,65 @@ A single global concurrency group remains excluded by the ticket. A local
 process lock cannot coordinate the hosted runners. Linear comments used as
 leases would need unverified write semantics and cannot fence delayed
 `issueUpdate` requests. None of these alternatives was applied.
+
+## Local retained-event inbox candidate
+
+`scripts/linear/event_inbox.py` is a stdlib-only SQLite candidate for local
+experiments. It is not an approved production storage backend or product
+decision. No production script imports it, and no workflow uses it.
+
+`EventInbox` stores one immutable byte payload per delivery ID and separate
+pending issue destinations. The caller supplies the complete original PR
+snapshot and event, including `changes.title.from` and `changes.body.from` when
+present, and supplies the discovered issue IDs. The inbox treats payload bytes
+as opaque. It does not validate completeness, reconstruct history, discover
+references, or invent provenance. Tests encode `{"pr": snapshot, "event": event}`
+and pass the decoded values to production `apply_event()` against the existing
+fake Linear store. Retained body removal produces the exact removal comment and
+In Progress. Another open PR and manual In Review without past provenance both
+preserve In Review. A failed fake update leaves the delivery pending for retry.
+
+All four bounds are required positive integers. They limit unique issue fanout
+per event, pending deliveries per issue, global pending deliveries, and payload
+bytes per event. Every connection verifies the same persisted bounds, even after
+the queue empties. Event IDs contain 1 to 128 ASCII letters, digits, dots,
+underscores, colons, or hyphens. Issue IDs contain 1 to 64 ASCII letters, digits,
+underscores, or hyphens. Both start with a letter or digit. These opaque token
+formats accept ticket identifiers and UUIDs without duplicating reference
+parsing. The token sizes and fanout bound also constrain retained metadata.
+Logical retained rows and bytes are bounded. SQLite file overhead and allocated
+pages are not a strict disk quota, and deletion does not promise file shrinkage.
+
+`enqueue(delivery_id, payload, issue_ids)` accepts all destinations atomically or
+raises `CapacityExceeded` without evicting accepted events. An identical replay
+returns false and does not restore acknowledged destinations. Different bytes or
+a different destination set for a retained ID raise `DeliveryConflict`. Target
+order and duplicate destinations do not change that set. Empty targets and
+invalid IDs are rejected. Payloads must be immutable `bytes`.
+
+`pending(issue_id)` returns non-destructive `(delivery_id, payload)` pairs in
+acceptance order. Callers apply them in order, then call
+`acknowledge(issue_id, delivery_id)` only after successful application. This
+deletes only the specified pending pair. Other issues can progress while that
+issue remains unacknowledged. The final destination acknowledgement deletes the
+event and its payload. Deduplication lasts only while an event remains retained.
+A replay after final deletion can be accepted anew. There is no permanent
+acknowledgement ledger, lease, claim, automatic reclaim, or worker orchestration.
+
+`BEGIN IMMEDIATE` serializes capacity checks and writes across connections to one
+local SQLite file. Each instance owns one connection for one thread. Reads do
+not reserve work, and the inbox does not serialize external application. Local
+transaction serialization is not hosted runner coordination or proof of exactly
+once Linear writes. A crash after application but before acknowledgement can
+replay the external write.
+
+Any future durable ingestion must retain the complete event **before**
+replaceable Actions pending processing. An inbox on an ephemeral runner cannot
+recover `changes.from` that Actions already dropped. Overflow rejects ingestion.
+Upstream must retain the rejected input and retry or escalate, rather than
+acknowledge success. Choosing a durable backend, permissions, failure handling,
+and rollout remains separate work. This candidate makes no production
+prevention claim and authorizes no writer rollout or drain.
 
 ## Next slice
 
