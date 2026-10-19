@@ -125,23 +125,33 @@ function redactConfig(config: IntegrationConfig): IntegrationConfig {
   return out;
 }
 
-function loadRaw(repo: AppRepository): IntegrationSummary[] {
+/** Every stored element, including corrupt ones, so writes never erase data they cannot read. */
+function loadStored(repo: AppRepository): unknown[] {
   const raw = repo.getSetting(SETTINGS_KEY);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw) as IntegrationSummary[];
+    const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-function saveRaw(repo: AppRepository, items: IntegrationSummary[]): void {
+function isIntegration(x: unknown): x is IntegrationSummary {
+  return typeof x === "object" && x !== null && typeof (x as { id?: unknown }).id === "string";
+}
+
+/** Readable integrations; a corrupt element (e.g. null) is skipped instead of crashing every lookup. */
+function loadRaw(repo: AppRepository): IntegrationSummary[] {
+  return loadStored(repo).filter(isIntegration);
+}
+
+function saveRaw(repo: AppRepository, items: unknown[]): void {
   repo.setSetting(SETTINGS_KEY, JSON.stringify(items));
 }
 
 /**
- * Read-side only. `saveRaw` is always fed from `loadRaw`, never from these
+ * Read-side only. `saveRaw` is always fed from `loadStored`, never from these
  * projections, so the derived field cannot leak into stored settings.
  */
 function withCapabilities(
@@ -182,17 +192,17 @@ export function createIntegrationPort(deps: IntegrationStoreDeps): IntegrationPo
         created_at: now,
         updated_at: now,
       };
-      const items = loadRaw(deps.repo);
+      const items = loadStored(deps.repo);
       items.push(item);
       saveRaw(deps.repo, items);
       return { ...item, config: redactConfig(item.config) };
     },
 
     update(id, patch): IntegrationSummary | null {
-      const items = loadRaw(deps.repo);
-      const idx = items.findIndex((x) => x.id === id);
-      if (idx < 0) return null;
-      const existing = items[idx]!;
+      const items = loadStored(deps.repo);
+      const idx = items.findIndex((x) => isIntegration(x) && x.id === id);
+      const existing = items[idx];
+      if (!isIntegration(existing)) return null;
       const mergedConfig = patch.config
         ? mergeIntegrationConfig(existing.config, patch.config)
         : existing.config;
@@ -208,8 +218,8 @@ export function createIntegrationPort(deps: IntegrationStoreDeps): IntegrationPo
     },
 
     delete(id): boolean {
-      const items = loadRaw(deps.repo);
-      const next = items.filter((x) => x.id !== id);
+      const items = loadStored(deps.repo);
+      const next = items.filter((x) => !isIntegration(x) || x.id !== id);
       if (next.length === items.length) return false;
       saveRaw(deps.repo, next);
       return true;
