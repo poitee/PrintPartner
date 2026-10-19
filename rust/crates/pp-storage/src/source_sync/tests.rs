@@ -670,7 +670,8 @@ fn open_and_advance_authority_refusal_halts_without_claimed_targets() {
         let sync = Fixture::new();
         let id = sync.source("Pending");
         let job_id = sync.enqueue(Some(vec![id as u64]));
-        let ClaimedAttempt { mut lease, .. } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+        let ClaimedAttempt { mut lease, .. } =
+            sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
         if opened {
             sync.worker.open_source_sync(&lease).unwrap();
         }
@@ -698,17 +699,40 @@ fn open_and_advance_authority_refusal_halts_without_claimed_targets() {
 #[test]
 fn open_and_advance_authority_refusals_preserve_claimed_target_evidence() {
     for at_open in [false, true] {
-        let sync = Fixture::new();
+        let mut sync = Fixture::new();
         let first = sync.source("Claimed");
         let second = sync.source("Pending");
         let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
         let mut lease = sync.open();
-        let target = local(sync.next(&mut lease));
+        let mut target = Some(local(sync.next(&mut lease)));
         let evidence = sync.connection().query_row(
             "SELECT parent_generation,attempt_worker,attempt_fence_digest,reservation_incarnation,reservation_token,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
             [&job_id],
             |row| (0..10).map(|index| row.get::<_, rusqlite::types::Value>(index)).collect::<rusqlite::Result<Vec<_>>>(),
         ).unwrap();
+        if at_open {
+            drop(target.take());
+            let Fixture {
+                owner, root, token, ..
+            } = sync;
+            owner.shutdown().unwrap();
+            let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+            let catalog = owner
+                .source_catalog_with_policy(
+                    catalog::Credentials::Session(auth::Secret::new(token.clone())),
+                    policy(),
+                )
+                .unwrap();
+            let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+            lease = worker.claim_kind(JobKind::Sync).unwrap().unwrap().lease;
+            sync = Fixture {
+                owner,
+                root,
+                token,
+                catalog,
+                worker,
+            };
+        }
         sync.connection()
             .execute("DELETE FROM sessions", [])
             .unwrap();
@@ -741,8 +765,10 @@ fn open_and_advance_authority_refusals_preserve_claimed_target_evidence() {
                 (second, "not_run".into(), Some("batch_halt".into())),
             ]
         );
-        let busy = sync.begin_work(first).err().unwrap();
-        assert!(busy.downcast_ref::<SourceBusy>().is_some());
+        if !at_open {
+            let busy = sync.begin_work(first).err().unwrap();
+            assert!(busy.downcast_ref::<SourceBusy>().is_some());
+        }
         drop(target);
         assert_refusal_survives_reopen(sync, &job_id);
     }
