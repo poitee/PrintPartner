@@ -1,8 +1,9 @@
 // Generate Node supplied-upload admission results. Run from the repo root, with or without --check.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -24,6 +25,15 @@ const inputs = [
   { id: "leading_slashes", files: [{ path: "//parts\\A.stl", size: 3 }] },
   { id: "canonical_duplicate", files: [{ path: "/parts\\a.stl", size: 3 }, { path: "parts/a.stl", size: 3 }] },
   { id: "canonical_case_duplicate", files: [{ path: "parts/a.stl", size: 3 }, { path: "\\Parts\\A.stl", size: 3 }] },
+  { id: "dot_prefix", files: [{ path: "./part.stl", size: 3 }] },
+  { id: "repeated_separator", files: [{ path: "parts//a.stl", size: 3 }] },
+  { id: "dot_segment", files: [{ path: "parts/./a.stl", size: 3 }] },
+  { id: "nested_parent", files: [{ path: "parts/../a.stl", size: 3 }] },
+  { id: "disguised_parent", files: [{ path: "./parts//../a.stl", size: 3 }] },
+  { id: "dot_duplicate", files: [{ path: "part.stl", size: 3 }, { path: "./part.stl", size: 3 }] },
+  { id: "separator_duplicate", files: [{ path: "parts/a.stl", size: 3 }, { path: "parts//a.stl", size: 3 }] },
+  { id: "dot_segment_duplicate", files: [{ path: "parts/a.stl", size: 3 }, { path: "parts/./a.stl", size: 3 }] },
+  { id: "alias_case_duplicate", files: [{ path: "parts/a.stl", size: 3 }, { path: "./Parts//./A.stl", size: 3 }] },
 ];
 
 if (process.argv.includes("--probe")) {
@@ -50,7 +60,14 @@ if (process.argv.includes("--probe")) {
           .filter((entry) => entry.isFile())
           .map((entry) => relative(extractDir, join(entry.parentPath, entry.name)).split(sep).join("/"))
           .sort();
-        result = { fileCount, stlCount, paths: written };
+        const requested = input.files.map((file) => ({
+          path: relative(extractDir, resolve(extractDir, file.path.replace(/\\/g, "/").replace(/^\/+/, ""))).split(sep).join("/"),
+          size: file.size,
+          sha256: "b".repeat(64),
+          kind: "input",
+        }));
+        const requested_digest = createHash("sha256").update(JSON.stringify(requested)).digest("hex");
+        result = { fileCount, stlCount, paths: written, requested_digest };
       } catch (error) {
         result = { error: error.message };
       }
