@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 import urllib.parse
 
-from webkit_diagnostics import INSTALL, save_artifacts
+from webkit_diagnostics import CAPTURE_PREVIEW, INSTALL, best_effort, save_artifacts
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -653,12 +653,14 @@ def main():
                 # Reload to populate the UI's initial cached Build list with the
                 # fixture; do not mutate React state or its query cache in the test.
                 command(f'/session/{session}/url', {'url': f'{origin}/plan?profile={seeded["plan_id"]}'})
-                execute(INSTALL)
+                best_effort(execute, INSTALL)
                 selector = f'button[aria-label="Preview 3D model of {filename}"]'
                 element = wait_for(lambda: command(f'/session/{session}/elements',
                     {'using': 'css selector', 'value': selector}), 'Plan preview button')[0]
                 element_id = element['element-6066-11e4-a52e-4f735466cecf']
+                best_effort(execute, CAPTURE_PREVIEW, 'selected', element, selector)
                 execute(OBSERVE_MESH, encoded)
+                best_effort(execute, CAPTURE_PREVIEW, 'before-click')
                 command(f'/session/{session}/element/{element_id}/click', {})
                 wait_for(lambda: execute("return !!document.querySelector('[role=dialog] canvas');"),
                          'production STL WebGL canvas')
