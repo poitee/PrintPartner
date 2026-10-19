@@ -1740,8 +1740,8 @@ the client schema prerequisite notes for GRE-707 item 6.
 `commit_source_authority_refusal` retain their tests; this schema slice adds no
 production callers for them. GRE-610 (D14 import Phase) calls the two authority
 helpers. `mark_local_failure` keeps its `dead_code` expectation until GRE-614
-(D18 source_sync) calls it. The authority helper
-reuses `AuthorityRefusalReason::of` and saves one refusal.
+(D18 source_sync) calls it. `commit_source_authority_refusal` reuses
+`AuthorityRefusalReason::of` and saves one refusal.
 
 The Node generator now also executes the local `syncProjectById` completion and
 failure paths. Rust compares four terminal document-index results and two
