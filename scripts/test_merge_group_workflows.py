@@ -54,6 +54,37 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                                     if step.get("uses", "").startswith("actions/checkout@"))
                     self.assertNotIn("ref", checkout.get("with", {}))
 
+    def test_native_macos_plan_respects_paths_and_event(self):
+        workflow = yaml.load((ROOT / ".github/workflows/desktop-native-macos.yml").read_text(),
+                             Loader=yaml.BaseLoader)
+        steps = workflow["jobs"]["changes"]["steps"]
+        plan = next(step["run"] for step in steps if step.get("id") == "plan")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory, "output")
+            for event, relevant, label, draft, macos, intel in (
+                ("pull_request", "false", "true", "false", "false", "false"),
+                ("pull_request", "true", "true", "false", "true", "false"),
+                ("pull_request", "true", "false", "false", "false", "false"),
+                ("pull_request", "true", "true", "true", "false", "false"),
+                ("merge_group", "false", "false", "true", "true", "true"),
+                ("push", "false", "false", "true", "true", "true"),
+            ):
+                with self.subTest(event=event, relevant=relevant, label=label, draft=draft):
+                    output.write_text("")
+                    subprocess.run(["bash", "-e", "-c", plan], check=True,
+                                   env={**os.environ, "EVENT_NAME": event, "RELEVANT": relevant,
+                                        "HAS_LABEL": label, "IS_DRAFT": draft,
+                                        "GITHUB_OUTPUT": str(output),
+                                        "GITHUB_STEP_SUMMARY": str(Path(directory, "summary"))})
+                    self.assertEqual(output.read_text(), f"macos={macos}\nintel={intel}\n")
+
+    def test_rust_macos_uses_the_same_selection_as_required_jobs(self):
+        workflow = yaml.load((ROOT / ".github/workflows/rust-cross-os.yml").read_text(),
+                             Loader=yaml.BaseLoader)
+        self.assertIn("(needs.changes.result != 'success' || "
+                      "needs.changes.outputs.relevant != 'false')",
+                      workflow["jobs"]["rust-macos"]["if"])
+
     def test_merge_group_runs_filters_even_for_docs_only_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
