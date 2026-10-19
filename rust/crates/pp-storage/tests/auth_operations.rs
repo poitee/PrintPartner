@@ -252,7 +252,9 @@ fn ticket_t_17_sessions() {
     let path = directory();
     let owner = open(&path);
     let client = owner.auth(FirstUserTenant::NewUser);
+    let before = time::OffsetDateTime::now_utc();
     let (user, token) = register(&client, "sessions@example.com");
+    let after = time::OffsetDateTime::now_utc();
     assert_ne!(user.user_id, "default");
     assert_eq!(user.user_id, user.tenant_id);
     assert_eq!(token.len(), 64);
@@ -269,7 +271,8 @@ fn ticket_t_17_sessions() {
     let expiry =
         time::OffsetDateTime::parse(&expires, &time::format_description::well_known::Rfc3339)
             .unwrap();
-    assert!((expiry - time::OffsetDateTime::now_utc()).whole_seconds() >= 14 * 86400 - 5);
+    assert!(expiry >= before + time::Duration::days(14) - time::Duration::milliseconds(1));
+    assert!(expiry <= after + time::Duration::days(14));
     drop(db);
     let owner = open(&path);
     let client = owner.auth(FirstUserTenant::NewUser);
