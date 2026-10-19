@@ -497,7 +497,7 @@ impl WriterOwner {
         let lease = lease::StorageLease::acquire_locked(locked)?;
         let path = lease.data_dir().join("print-partner.db");
         let version = lease.preflight()?;
-        // Keep literals on separate lines so the covers suppression cannot hide another family literal.
+        // Preserve one literal per line so the covers suppression applies only to that literal.
         #[rustfmt::skip]
         let directories = [
             "repos",
