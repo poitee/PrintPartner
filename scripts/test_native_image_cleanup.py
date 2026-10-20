@@ -9,6 +9,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/desktop-native-macos.yml'
@@ -52,6 +53,7 @@ with open(sys.argv[1]) as fixture:
             time.sleep(.01)
         else:
             raise SystemExit('holder did not open fixture')
+    (root / 'cargo-exit').write_text(os.environ['TEST_STATUS'])
     raise SystemExit(int(os.environ['TEST_STATUS']))
 if native:
     command = [json.loads(os.environ['REAL_TOOLS'])[name], *args]
@@ -60,6 +62,8 @@ if native:
         print('force requested', flush=True)
         command.insert(-1, '-verbose')
     status = subprocess.call(command)
+    if name == 'hdiutil' and args[0] in ('create', 'attach') and status:
+        print(f'hdiutil {args[0]} exited with status {status}', file=sys.stderr, flush=True)
     if name == 'hdiutil' and '-force' in args and status:
         real = json.loads(os.environ['REAL_TOOLS'])
         image_path = next(root.glob('pp-source-case.*/fixtures.sparseimage'))
@@ -94,6 +98,9 @@ if native:
             time.sleep(.01)
     raise SystemExit(status)
 if name == 'hdiutil':
+    if args[0] == os.environ.get('REFUSE_SETUP'):
+        print(f'hdiutil {args[0]}: disposable setup refused', file=sys.stderr)
+        raise SystemExit(int(os.environ['SETUP_STATUS']))
     if args[0] == 'create':
         pathlib.Path(args[-1]).write_text('disposable image\n')
     elif args[0] == 'attach':
@@ -123,11 +130,13 @@ def workflow_body():
 
 
 class CleanupTest(unittest.TestCase):
-    def run_step(self, *, status=0, succeeds=0, diagnostic=0, force=0, native=False):
+    def run_step(self, *, status=0, succeeds=0, diagnostic=0, force=0, native=False,
+                 refuse_setup='', setup_status=23):
         root = Path(tempfile.mkdtemp(prefix='pp image cleanup ')).resolve()
         self.addCleanup(self.remove_fixture, root, native)
         (root / 'unowned').mkdir()
         (root / 'unowned/rows.csv').write_text(ROWS)
+        (root / 'trace').touch()
         tools = root / 'bin'
         tools.mkdir()
         driver = tools / 'driver'
@@ -140,16 +149,52 @@ class CleanupTest(unittest.TestCase):
         env = dict(os.environ, RUNNER_TEMP=str(root), PATH=f'{tools}:{os.environ["PATH"]}',
                    TEST_STATUS=str(status), DETACH_SUCCEEDS=str(succeeds),
                    LSOF_STATUS=str(diagnostic), FORCE_STATUS=str(force),
+                   REFUSE_SETUP=refuse_setup, SETUP_STATUS=str(setup_status),
                    NATIVE=str(int(native)), REAL_TOOLS=json.dumps(real))
         script = root / 'step.sh'
         script.write_text(workflow_body())
         result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', str(script)],
                                 env=env, text=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, timeout=90)
+        cargo_exit = root / 'cargo-exit'
+        if (result.returncode != status or not cargo_exit.exists()
+                or cargo_exit.read_text() != str(status)):
+            self.fail(f'Workflow did not reach expected cargo exit {status}; '
+                      f'shell exit {result.returncode}. Combined output:\n{result.stdout}')
         mounts = list(root.glob('pp-source-case.*/mount'))
-        self.assertEqual(len(mounts), 1)
+        self.assertEqual(len(mounts), 1, result.stdout)
         trace = [json.loads(line) for line in (root / 'trace').read_text().splitlines()]
         return result, mounts[0], trace
+
+    def test_setup_refusal_reports_shell_status_and_output(self):
+        for operation in ('create', 'attach'):
+            for setup_status in (12, 23):
+                with self.subTest(operation=operation, setup_status=setup_status):
+                    with self.assertRaises(AssertionError) as failure:
+                        self.run_step(status=23, refuse_setup=operation,
+                                      setup_status=setup_status)
+                    self.assertEqual(str(failure.exception),
+                                     'Workflow did not reach expected cargo exit 23; '
+                                     f'shell exit {setup_status}. Combined output:\n'
+                                     f'hdiutil {operation}: disposable setup refused\n')
+
+    def test_native_attach_refusal_survives_device_output_pipeline(self):
+        with tempfile.TemporaryDirectory(prefix='pp setup refusal ') as directory:
+            hdiutil = Path(directory) / 'hdiutil'
+            hdiutil.write_text(f'#!{sys.executable}\n'
+                               'import sys\n'
+                               'if sys.argv[1] == "attach":\n'
+                               '    print("disposable native attach refused", file=sys.stderr)\n'
+                               '    raise SystemExit(23)\n')
+            hdiutil.chmod(0o755)
+            with patch.dict(os.environ, PATH=f'{directory}:{os.environ["PATH"]}'):
+                with self.assertRaises(AssertionError) as failure:
+                    self.run_step(status=23, native=True)
+            self.assertEqual(str(failure.exception),
+                             'Workflow did not reach expected cargo exit 23; '
+                             'shell exit 23. Combined output:\n'
+                             'disposable native attach refused\n'
+                             'hdiutil attach exited with status 23\n')
 
     def remove_fixture(self, root, native):
         if native:
