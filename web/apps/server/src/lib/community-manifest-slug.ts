@@ -1,7 +1,9 @@
 /**
  * A community manifest slug names `<slug>.yaml` in the embedded manifests
- * directory, so it must be a single path segment. `kit-catalog` and
- * `registry-index` are reserved for the embedded catalog and registry index.
+ * directory, so it must be a single path segment. The reserved slugs keep
+ * other documents in that directory from being read as community manifests:
+ * `registry-index.yaml` ships there, and `kit-catalog.ts` also looks there for
+ * a deployment-provided `kit-catalog.yaml` (the shipped one is in `src/data`).
  */
 const COMMUNITY_MANIFEST_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const RESERVED_COMMUNITY_MANIFEST_SLUGS = new Set(["kit-catalog", "registry-index"]);
