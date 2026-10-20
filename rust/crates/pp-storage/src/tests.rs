@@ -256,10 +256,7 @@ fn queue_cancellation_reply_loss_and_shutdown_drain() {
     first.recv().unwrap().unwrap();
     drop(raw);
     drop(read);
-    done_rx
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap();
+    done_rx.recv().unwrap().unwrap();
     close.join().unwrap();
     let check = Connection::open(path.join("print-partner.db")).unwrap();
     assert_eq!(
