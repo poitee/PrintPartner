@@ -221,13 +221,15 @@ fn secure_archives(directory: &File) -> std::io::Result<()> {
 /// Create with O_EXCL, then open an existing entry without O_CREAT. On macOS,
 /// racing dirfd-relative O_CREAT opens without O_EXCL can fail with ENOENT.
 ///
-/// Another process that mutates desktop.jsonl during this open makes it fail
-/// closed instead of retrying. An unlink or rename between EEXIST and the
-/// reopen returns ENOENT. An unlink after the open leaves `nlink == 0`, which
-/// `secure_log` refuses with InvalidInput. Startup then fails and
-/// `Logs::event` drops its event. That is intended: the storage lease admits
-/// one owner per data directory and rotation holds the log mutex through its
-/// reopen, so only a writer outside that owner can reach either window.
+/// Another process can remove desktop.jsonl during this open, and the open
+/// then fails closed instead of retrying. An unlink or rename between EEXIST
+/// and the reopen returns ENOENT. An unlink after the open leaves
+/// `nlink == 0`, which `secure_log` refuses with InvalidInput. A rename after
+/// the open keeps `nlink == 1`, so the open succeeds on the renamed file.
+/// After either failure, startup fails and `Logs::event` drops its event. That
+/// is intended: the storage lease admits one owner per data directory and
+/// rotation holds the log mutex through its reopen, so only a writer outside
+/// that owner can reach either window.
 fn open_log(directory: &File) -> std::io::Result<File> {
     open_log_observed(directory, |_| {})
 }
