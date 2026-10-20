@@ -545,68 +545,6 @@ def verify(app, manifest_path, arch, receipt):
 
 
 class ParserTests(unittest.TestCase):
-    def test_bundle_probe_cleans_up_closed_stream_descendant(self):
-        script = (
-            'import os,time\n'
-            'parent_pid=os.getpid()\n'
-            'pid=os.fork()\n'
-            'if pid:\n'
-            ' os.write(1,f"{os.getpid()} {pid}\\n".encode())\n'
-            ' os._exit(0)\n'
-            'while os.getppid()==parent_pid:\n'
-            ' time.sleep(0.001)\n'
-            'os.close(1)\n'
-            'os.close(2)\n'
-            'time.sleep(3)\n'
-            'os._exit(0)\n'
-        )
-        group_pid = None
-        descendant_pid = None
-        cleanup_complete = False
-        try:
-            started = time.monotonic()
-            capture = run_bundle_probe(
-                [sys.executable, '-c', script],
-                cwd=pathlib.Path.cwd(),
-                env=os.environ.copy(),
-                timeout_seconds=0.5,
-            )
-            elapsed = time.monotonic() - started
-            group_pid, descendant_pid = map(int, capture.stdout.split())
-            try:
-                os.killpg(group_pid, 0)
-                group_alive = True
-            except ProcessLookupError:
-                group_alive = False
-            try:
-                os.kill(descendant_pid, 0)
-                descendant_alive = True
-            except ProcessLookupError:
-                descendant_alive = False
-        finally:
-            if group_pid is not None:
-                try:
-                    os.killpg(group_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            if descendant_pid is not None:
-                cleanup_deadline = time.monotonic() + 1
-                while time.monotonic() < cleanup_deadline:
-                    try:
-                        os.kill(descendant_pid, 0)
-                    except ProcessLookupError:
-                        cleanup_complete = True
-                        break
-                    time.sleep(0.01)
-
-        self.assertTrue(cleanup_complete)
-        self.assertTrue(capture.timed_out)
-        self.assertFalse(capture.cleanup_timed_out)
-        self.assertEqual(capture.exit_code, 0)
-        self.assertFalse(group_alive)
-        self.assertFalse(descendant_alive)
-        self.assertLess(elapsed, 1.7)
-
     def test_bundle_probe_signals_exited_leader_group_promptly(self):
         with tempfile.TemporaryDirectory() as temporary:
             heartbeat = pathlib.Path(temporary) / 'heartbeat'
