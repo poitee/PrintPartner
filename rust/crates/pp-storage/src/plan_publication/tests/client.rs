@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::{Queue, QueueClass, auth::Secret, required_units::AdmissionFailure};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     sync::{Condvar, Mutex},
     thread,
 };
@@ -126,12 +126,148 @@ fn database(data: &Value) -> Connection {
     )
 }
 
+fn node_not_found_outcome(case: &Value) -> Value {
+    assert_eq!(
+        case["status"], 404,
+        "{}: unrecognized Node status",
+        case["id"]
+    );
+    assert_eq!(
+        case["body"],
+        json!({"detail":"Plan not found","code":"profile_not_found"}),
+        "{}: unrecognized Node not-found body",
+        case["id"]
+    );
+    json!({"kind":"not_found"})
+}
+
+fn database_rows(c: &Connection) -> BTreeMap<String, Vec<Vec<rusqlite::types::Value>>> {
+    let tables = c
+        .prepare("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    tables
+        .into_iter()
+        .map(|table| {
+            let quoted = format!("\"{}\"", table.replace('"', "\"\""));
+            let columns = c
+                .prepare(&format!("SELECT * FROM {quoted}"))
+                .unwrap()
+                .column_count();
+            let order = (1..=columns)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut statement = c
+                .prepare(&format!("SELECT * FROM {quoted} ORDER BY {order}"))
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|i| row.get(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            (table, rows)
+        })
+        .collect()
+}
+
+fn assert_client_not_found(data: &Value, case: &Value, expected_owner: Option<&str>) {
+    let id = case["id"].as_str().unwrap();
+    let expected = node_not_found_outcome(case);
+    let mut c = database(data);
+    let tenant = case["tenant"].as_str().unwrap();
+    assert_eq!(case["credential"], "session", "{id}: session credential");
+    seed_session(&c, tenant);
+    let profile = case["profile"].as_i64().unwrap();
+    assert!(profile > 0, "{id}: positive Plan id");
+    let owners = c
+        .prepare("SELECT tenant_id FROM build_profiles WHERE id=?")
+        .unwrap()
+        .query_map([profile], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        owners,
+        expected_owner
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        "{id}: Plan existence and ownership"
+    );
+    if let Some(owner) = expected_owner {
+        assert_ne!(owner, tenant, "{id}: Plan belongs to another tenant");
+    }
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM plan_drafts WHERE id=?",
+            [case["draft"].as_i64().unwrap()],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "{id}: existing draft keeps this a Plan lookup case"
+    );
+    let before = database_rows(&c);
+    assert!(
+        before.contains_key("plan_apply_admissions"),
+        "{id}: snapshot includes durable admissions"
+    );
+    assert!(
+        !before["filament_profiles"].is_empty(),
+        "{id}: snapshot includes unrelated existing rows"
+    );
+    let outcome = run(&client(1), input(case).unwrap(), &mut c, &mut Tokens(0))
+        .unwrap_or_else(|error| panic!("{id}: publication failed: {error:#}"));
+    assert_eq!(
+        serde_json::to_value(outcome).unwrap(),
+        expected,
+        "{id}: complete Rust Outcome matches normalized Node contract"
+    );
+    let after = database_rows(&c);
+    assert_eq!(
+        before.keys().collect::<Vec<_>>(),
+        after.keys().collect::<Vec<_>>(),
+        "{id}: table set unchanged"
+    );
+    for (table, rows) in before {
+        assert_eq!(after[&table], rows, "{id}: {table} rows unchanged");
+    }
+}
+
+#[test]
+fn client_matches_node_not_found_contract_for_missing_plan() {
+    let data = fixture();
+    let mut case = data["clients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "other-tenant")
+        .expect("captured foreign-Plan Node contract")
+        .clone();
+    case["id"] = json!("missing-plan");
+    case["tenant"] = json!("default");
+    case["profile"] = json!(999_999);
+    assert_client_not_found(&data, &case, None);
+}
+
 #[test]
 fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
     let data = fixture();
     let cases = data["clients"].as_array().unwrap();
     assert_eq!(cases.len(), 9);
     for case in cases {
+        if case["status"] == 404 {
+            assert_client_not_found(&data, case, Some("default"));
+            continue;
+        }
         let mut c = database(&data);
         let tenant = case["tenant"].as_str().unwrap();
         if case["credential"] == "api_key" {
@@ -168,14 +304,6 @@ fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
             continue;
         }
         let outcome = serde_json::to_value(outcome.unwrap()).unwrap();
-        if case["status"] == 404 {
-            assert_eq!(outcome["kind"], "not_found");
-            assert_eq!(
-                case["body"],
-                json!({"detail":"Plan not found","code":"profile_not_found"})
-            );
-            continue;
-        }
         let mut receipt = outcome["receipt"].clone();
         let at = receipt["applied_at"].as_str().unwrap().to_owned();
         super::transaction::replace_time(&mut receipt, &at, &data["transactionAt"]);
