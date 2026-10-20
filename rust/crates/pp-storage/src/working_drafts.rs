@@ -948,7 +948,7 @@ fn auto_select(
     profile: PositiveId,
     draft_id: PositiveId,
     digest: &Digest,
-    cancelled: &AtomicBool,
+    cancelled: &Arc<AtomicBool>,
 ) -> Result<WorkspaceOutcome> {
     let command = ReconciliationCommand::new(
         profile,
@@ -960,9 +960,8 @@ fn auto_select(
     // Node's selection is a separate transaction with its own busy wait.
     let admission = writer_admission::Deadline::at_dequeue();
     transact(connection, admission, cancelled, |tx| {
-        required_units::reconcile::run(tx, &command, policy, &|| {
-            ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
-            Ok(())
+        required_units::reconcile::run_cancellable(tx, &command, policy, cancelled, || {
+            anyhow!(Failure::Cancelled)
         })
     })
 }
@@ -1693,6 +1692,107 @@ mod tests {
             "SELECT count(*) FROM plan_draft_required_unit_assignments WHERE target_draft_part_id=4", [], |r| r.get(0),
         ).unwrap();
         assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn gre764_cancellation_interrupts_finalization_statement() {
+        let (_database, mut connection) = Database::new();
+        let mut draft = {
+            let tx = connection.transaction().unwrap();
+            storage::draft(&tx, "default", 1, 2).unwrap().unwrap()
+        };
+        draft.parts.retain(|part| part["id"] == 4);
+        draft.parts[0]["quantityOverride"] = json!(10_000);
+        draft.parts[0]["quantityEffective"] = json!(10_000);
+        let planning = model::planning(&draft.header, &draft.inputs, &draft.parts).unwrap();
+        connection.execute_batch(
+            "DELETE FROM plan_draft_parts WHERE draft_id=2 AND id<>4;
+             UPDATE plan_draft_parts SET quantity_override=10000,quantity_effective=10000 WHERE id=4;"
+        ).unwrap();
+        connection
+            .execute(
+                "UPDATE plan_drafts SET snapshot_digest=? WHERE id=2",
+                [&planning],
+            )
+            .unwrap();
+        // The last assignment insert is followed directly by the finalization
+        // UPDATE, so cancellation is pending when that statement starts.
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let inserted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let finalized = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (count, updates) = (inserted.clone(), finalized.clone());
+        connection
+            .update_hook(Some(move |action, _: &str, table: &str, _: i64| {
+                if action == rusqlite::hooks::Action::SQLITE_INSERT
+                    && table == "plan_draft_required_unit_assignments"
+                    && count.fetch_add(1, Ordering::Relaxed) + 1 == 10_000
+                {
+                    flag.store(true, Ordering::Release);
+                }
+                if action == rusqlite::hooks::Action::SQLITE_UPDATE
+                    && table == "plan_draft_required_unit_reconciliations"
+                {
+                    updates.fetch_add(1, Ordering::Relaxed);
+                }
+            }))
+            .unwrap();
+        let credential =
+            || Credential::Session(auth::Secret::new("required-unit-fixture-secret".into()));
+        let policy = auth::AuthPolicy {
+            registration: auth::RegistrationPolicy::Open,
+            session_tenant: auth::SessionTenantPolicy::AccountTenant,
+            first_user: auth::FirstUserTenant::NewUser,
+        };
+        let digest = serde_json::from_value(json!(planning)).unwrap();
+        let error = auto_select(
+            &mut connection,
+            credential(),
+            policy,
+            PositiveId::new(1).unwrap(),
+            PositiveId::new(2).unwrap(),
+            &digest,
+            &cancelled,
+        )
+        .expect_err("cancelled selection must fail");
+        assert!(
+            matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+            "{error:?}"
+        );
+        assert_eq!(inserted.load(Ordering::Relaxed), 10_000);
+        assert_eq!(
+            finalized.load(Ordering::Relaxed),
+            0,
+            "the finalization statement must stop before it updates the row"
+        );
+        for sql in [
+            "SELECT count(*) FROM plan_draft_required_unit_reconciliations WHERE draft_id=2",
+            "SELECT count(*) FROM plan_draft_required_unit_assignments WHERE target_draft_part_id=4",
+        ] {
+            let rows: i64 = connection.query_row(sql, [], |row| row.get(0)).unwrap();
+            assert_eq!(rows, 0, "{sql}");
+        }
+        // `cancelled` stays set, so a progress handler left installed would
+        // interrupt this selection too.
+        auto_select(
+            &mut connection,
+            credential(),
+            policy,
+            PositiveId::new(1).unwrap(),
+            PositiveId::new(2).unwrap(),
+            &digest,
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert_eq!(finalized.load(Ordering::Relaxed), 1);
+        let selected: Option<i64> = connection
+            .query_row(
+                "SELECT current_required_unit_reconciliation_id FROM plan_drafts WHERE id=2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(selected.is_some());
     }
 
     #[test]

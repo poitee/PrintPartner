@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = ["serde_json/raw_value", "dep:pp-domain", "pp-domain/desktop_rebuild", "dep:saphyr-parser", "dep:pp-contracts", "pp-contracts/desktop_rebuild"]
+desktop_rebuild = ["serde_json/raw_value", "dep:pp-domain", "pp-domain/desktop_rebuild", "dep:saphyr-parser", "dep:pp-contracts", "pp-contracts/desktop_rebuild", "rusqlite/hooks"]
 
 [[bin]]
 name = "required-unit-fixture"

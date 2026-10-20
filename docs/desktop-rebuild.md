@@ -1441,6 +1441,11 @@ The operation ports Node's `savePlanDraftRequiredUnitReconciliation` and the
 queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
+Inside the transaction, a SQLite progress handler interrupts the running
+statement once cancellation is set. One statement can run for seconds: the
+finalization trigger compares every assignment row. The interrupted statement
+rolls back the transaction, and the request returns `Cancelled`. The handler is
+removed before commit. The draft edit's automatic selection works the same way.
 
 - `ReconciliationRequest` has the contract's snake-case fields. It rejects
   unknown fields, a snapshot digest that is not 64 lowercase hex characters,

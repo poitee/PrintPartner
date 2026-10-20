@@ -12,8 +12,12 @@ use crate::{
     read_model::Credential,
 };
 use anyhow::{Result, anyhow, ensure};
-use rusqlite::{Transaction, params};
+use rusqlite::{ErrorCode, Transaction, params};
 use serde_json::{Value, json};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// Returns the tenant and the actor ID Node's route records: the session's
 /// user ID, or `tenant:<id>` for an API key.
@@ -301,6 +305,43 @@ impl Scope<'_> {
         )?;
         self.ready(&selected)
     }
+}
+
+/// Runs [`run`] until `cancelled` is set. `run` checks the flag between
+/// statements, and a SQLite progress handler interrupts the statement in
+/// flight: the finalization trigger compares every assignment in one UPDATE.
+/// An interrupted statement rolls back the caller's transaction.
+pub(crate) fn run_cancellable(
+    tx: &Transaction<'_>,
+    command: &ReconciliationCommand,
+    policy: auth::AuthPolicy,
+    cancelled: &Arc<AtomicBool>,
+    failure: fn() -> anyhow::Error,
+) -> Result<Outcome> {
+    struct Uninstall<'a>(&'a rusqlite::Connection);
+    impl Drop for Uninstall<'_> {
+        fn drop(&mut self) {
+            let _ = self.0.progress_handler(0, None::<fn() -> bool>);
+        }
+    }
+    let flag = cancelled.clone();
+    tx.progress_handler(1_000, Some(move || flag.load(Ordering::Acquire)))?;
+    let _uninstall = Uninstall(tx);
+    let check = || {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(failure());
+        }
+        Ok(())
+    };
+    run(tx, command, policy, &check).map_err(|error| {
+        let interrupted = error.chain().any(|cause| {
+            cause
+                .downcast_ref::<rusqlite::Error>()
+                .and_then(rusqlite::Error::sqlite_error_code)
+                == Some(ErrorCode::OperationInterrupted)
+        });
+        if interrupted { failure() } else { error }
+    })
 }
 
 /// Saves and selects a Required-unit reconciliation inside the caller's
