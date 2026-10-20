@@ -212,8 +212,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     // The line began inside a quoted scalar, so its indent is unknown here.
     let mut quoted_line = false;
     let mut quoted_end = false;
-    // A block scalar's parent indent (None at the root) and, once known, its
-    // content indent.
+    // A block scalar's parent indent (None at a root node js-yaml indents at
+    // column 0) and, once known, its content indent.
     let mut block: Option<(Option<usize>, Option<usize>)> = None;
     // js-yaml's indent for the outermost flow collection: one past its block
     // parent, or the indent of the line the root node starts on.
@@ -343,7 +343,12 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             // js-yaml skips a comment or whitespace-only line that ends a block
             // scalar, but saphyr rejects some indented comments and reads a tab
             // as indentation. A `#` at column 0 ends the scalar in saphyr too.
-            if block_end && (plain_blank || chars.get(content) == Some(&'#')) {
+            let comment = chars.get(content) == Some(&'#');
+            // js-yaml allows only comments after a root block scalar.
+            if block_end && parent.is_none() && !plain_blank && !comment {
+                return invalid();
+            }
+            if block_end && (plain_blank || comment) {
                 output.truncate(output.len() - line_indent);
                 consumed += content - i;
                 i = content;
@@ -619,20 +624,22 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 return invalid();
             }
             let end = line_end(&chars, i, budget)?;
+            // js-yaml indents a root node from the line it starts on.
+            let base = parent.or_else(|| document_indent.and_then(|n| n.checked_sub(1)));
             let mut explicit = None;
             for c in &chars[i + 1..end] {
                 if let Some(n) = c.to_digit(10)
                     && n > 0
                 {
                     // js-yaml counts the indicator from the parent's indent.
-                    explicit = Some(parent.map_or(n as usize - 1, |p| p + n as usize));
+                    explicit = Some(base.map_or(n as usize - 1, |p| p + n as usize));
                     break;
                 }
                 if *c == '#' {
                     break;
                 }
             }
-            block = Some((parent, explicit));
+            block = Some((base, explicit));
             for c in &chars[i..end] {
                 output.push(*c);
                 consumed += c.len_utf8();

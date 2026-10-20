@@ -1,6 +1,6 @@
 # YAML block scalar parity
 
-`yaml-block-scalars-node.json` records the literal outputs of js-yaml 5.4.3 for 1,116 inputs around block scalar boundaries. A null expectation means js-yaml rejects the input. 140 cases are rejections.
+`yaml-block-scalars-node.json` records the literal outputs of js-yaml 5.4.3 for 1,123 inputs around block scalar boundaries. A null expectation means js-yaml rejects the input. 144 cases are rejections.
 
 ## Lines that end an explicit-indentation block scalar
 
@@ -10,7 +10,9 @@ The matrix crosses the headers `|1`, `|2`, `>2-`, `|+2`, `>+2`, `>1` and `|3` wi
 
 ## Root block scalars
 
-js-yaml counts a root indentation indicator from column 0, so `|1` then ` x` loads as `" x\n"`. saphyr counts it from column 1. js-yaml also reads root content at column 0 that starts with a tab, as in `|` then a tab-led `# c`, which saphyr rejects. The shield indents each line of a root block scalar one column deeper. The root cases cover each header, strip and keep chomping, a leading blank line, content shallower than the indicator, a header after `---`, after a tag and before a comment, an indented header, and tab-led text, comments and blank lines.
+js-yaml counts a root indentation indicator from column 0, so `|1` then ` x` loads as `" x\n"`. saphyr counts it from column 1. js-yaml also reads root content at column 0 that starts with a tab, as in `|` then a tab-led `# c`, which saphyr rejects. The shield indents each line of such a root block scalar one column deeper.
+
+js-yaml indents a root node from the line it starts on, except on the first line of the input, where it counts no indent. So after a blank first line, `  |` then a tab-led `x` is rejected, and `  |` then ` x` is rejected because nothing but comments may follow the root node. The shield tracks such a root block scalar from that indent. The root cases cover each header, strip and keep chomping, a leading blank line, content shallower than the indicator, a header after `---`, after a tag and before a comment, an indented header on the first and on a later line, and tab-led text, comments and blank lines.
 
 ## Document markers
 
@@ -21,7 +23,7 @@ js-yaml ends a block scalar at `---` or `...` at column 0, so `|`, `x`, `---`, `
 The generator leaves out two saphyr gaps that remain in the Rust boundary:
 
 - An empty block scalar at the end of the input. js-yaml loads `a: |` as `{"a":""}`. saphyr loads it as `{"a":"\n"}`, including when only lines of spaces no deeper than the content indent follow the header.
-- A root block scalar with an indentation indicator that ends before its first content line. js-yaml loads `|2` then `# c` as `""`. saphyr rejects it with "wrongly indented line in block scalar".
+- A root block scalar that ends before its first content line. js-yaml loads `|2` then `# c` as `""`, which saphyr rejects with "wrongly indented line in block scalar". js-yaml rejects `|`, `--- |`, `a: |` as two documents, but saphyr reads the marker line as the first scalar's content.
 
 From the repository root, install the locked web dependencies, then regenerate and check the fixture:
 
