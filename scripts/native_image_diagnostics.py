@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 
@@ -76,8 +77,10 @@ def after_workflow(root, real):
         # A corrupt receipt must not skip the probes for devices named elsewhere.
         try:
             found = parse(json.loads(data))
-            if not all(isinstance(device, str) for device in found):
-                raise TypeError(f'non-string device in {sorted(map(repr, found))}')
+            # Devices become probe arguments, so accept only BSD disk paths.
+            if not all(isinstance(device, str) and re.fullmatch(r'/dev/disk[0-9]+(s[0-9]+)*', device)
+                       for device in found):
+                raise ValueError(f'invalid device in {sorted(map(repr, found))}')
             return found
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
             unreadable.append(f'{path.name}: {type(error).__name__}: {error}')
@@ -89,7 +92,10 @@ def after_workflow(root, real):
         devices |= receipt(before, before.read_bytes(), dev_entries)
     forces = root / 'diagnostics' / 'force-status.jsonl'
     if forces.exists():
-        for line in forces.read_bytes().splitlines():
+        lines = forces.read_bytes().splitlines()
+        if not lines:
+            unreadable.append(f'{forces.name}: empty')
+        for line in lines:
             devices |= receipt(forces, line, lambda force: {force['command'][-1]})
     devices = sorted(devices)
     (directory / 'devices.json').write_text(json.dumps({

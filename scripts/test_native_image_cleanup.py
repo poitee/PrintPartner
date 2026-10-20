@@ -526,7 +526,11 @@ class NativeDiagnosticTest(unittest.TestCase):
              [], ['owned.json: UnicodeDecodeError', 'force-status.jsonl: UnicodeDecodeError']),
             ('non-string target', '[{"system-entities": [{"dev-entry": 7}]}]',
              force + '\n{"command": [null]}\n',
-             ['/dev/disk42'], ['owned.json: TypeError', 'force-status.jsonl: TypeError']),
+             ['/dev/disk42'], ['owned.json: ValueError', 'force-status.jsonl: ValueError']),
+            ('unencodable target', '[{"system-entities": [{"dev-entry": "/dev/disk\\u0000"}]}]',
+             force + '\n{"command": ["\\ud800"]}\n',
+             ['/dev/disk42'], ['owned.json: ValueError', 'force-status.jsonl: ValueError']),
+            ('empty force receipt', '[]', '', [], ['force-status.jsonl: empty']),
         ):
             with self.subTest(name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
