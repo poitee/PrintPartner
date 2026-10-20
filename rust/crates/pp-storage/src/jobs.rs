@@ -1329,6 +1329,46 @@ fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
     }
     Ok(())
 }
+fn recover_attempt(tx: &Transaction<'_>, mut job: JobRecord) -> Result<()> {
+    let owner_cleanup = job.awaits_owner_cleanup();
+    let detail =if job.effects.iter().any(|effect| !effect.confirmed) {
+        job.state = PersistentState::ReconciliationRequired;
+        Some("Inspect effect receipts and reconcile explicitly")
+    } else if !job.effects.is_empty() {
+        job.state = PersistentState::ReconciliationRequired;
+        Some("Resume from confirmed receipts requires handler reconciliation")
+    } else if job.cancel_requested && !owner_cleanup {
+        job.state = PersistentState::Cancelled;
+        None
+    } else if job.attempt >= 100 && !owner_cleanup {
+        job.state = PersistentState::Failed;
+        Some("Attempt limit reached")
+    } else {
+        job.state = PersistentState::Queued;
+        None
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    if job.kind == JobKind::Sync {
+        let halt = if job.state == PersistentState::Cancelled {
+            Some(("cancelled", "Sync was cancelled"))
+        } else {
+            detail.map(|detail| ("fatal", detail))
+        };
+        if let Some((code, detail)) = halt {
+            crate::source_sync::halt_job(tx, job, code, detail)?;
+            return Ok(());
+        }
+    }
+    job.generation += 1;
+    job.fence = None;
+    job.worker = None;
+    job.lease_until = None;
+    if let Some(detail) = detail {
+        job.recovery = Some(detail.into());
+    }
+    save(tx, &mut job, "attempt_recovered")
+}
+
 fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
     let mut diagnostics = DocumentDiagnostics::default();
     let rows=tx.prepare("SELECT id,lease_until,state FROM durable_jobs WHERE state IN ('running','effect_admitted') OR (?1 AND state!='quarantined')")?.query_map([all],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1338,7 +1378,7 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             [&id],
             |row| row.get(0),
         )?;
-        let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
+        let Some(job) = decode_row(&id, &document, &mut diagnostics) else {
             quarantine(tx, &id)?;
             continue;
         };
@@ -1348,28 +1388,7 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
         if !all && !lease_until.is_some_and(|until| until <= now()) {
             continue;
         }
-        // A cancelled import goes back to its owner, as `Cancel` does.
-        let owner_cleanup = job.awaits_owner_cleanup();
-        job.generation += 1;
-        job.fence = None;
-        job.worker = None;
-        job.lease_until = None;
-        if job.effects.iter().any(|effect| !effect.confirmed) {
-            job.state = PersistentState::ReconciliationRequired;
-            job.recovery = Some("Inspect effect receipts and reconcile explicitly".into());
-        } else if !job.effects.is_empty() {
-            job.state = PersistentState::ReconciliationRequired;
-            job.recovery =
-                Some("Resume from confirmed receipts requires handler reconciliation".into());
-        } else if job.cancel_requested && !owner_cleanup {
-            job.state = PersistentState::Cancelled;
-        } else if job.attempt >= 100 && !owner_cleanup {
-            job.state = PersistentState::Failed;
-            job.recovery = Some("Attempt limit reached".into());
-        } else {
-            job.state = PersistentState::Queued;
-        }
-        if let Err(error) = save(tx, &mut job, "attempt_recovered") {
+        if let Err(error) = recover_attempt(tx, job) {
             if !matches!(
                 error.downcast_ref::<JobFailure>(),
                 Some(JobFailure::JobDocTooLarge { .. })

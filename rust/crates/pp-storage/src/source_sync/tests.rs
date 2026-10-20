@@ -814,7 +814,10 @@ fn terminal_recovery_closes_sync_batch(reason: &str, effect_confirmed: bool) {
             let mut lease = sync.open();
             assert_eq!(lease.job_id(), later);
             assert_eq!(local(sync.next(&mut lease)).claim_generation, 1);
-            assert_eq!(sync.targets(&later), [(later_source, "claimed".into(), None)]);
+            assert_eq!(
+                sync.targets(&later),
+                [(later_source, "claimed".into(), None)]
+            );
         }
     }
 }
