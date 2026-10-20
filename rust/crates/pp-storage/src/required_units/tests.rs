@@ -495,36 +495,71 @@ fn gre764_cancellation_during_result_json_and_digest() {
 
 #[test]
 fn gre764_checked_result_bytes_and_digests_match_existing_order() {
-    use super::model::{Reconciled, digest};
-    for result in [
-        json!({"kind":"ready","assignments":[{"kind":"create","draftPartId":4,"unitIndex":0},{"kind":"reuse","draftPartId":4,"unitIndex":1,"token":"ppu_00000000000000000000000000000001"}],"surplus":["ppu_00000000000000000000000000000002"]}),
-        json!({"kind":"unresolved","conflicts":[{"kind":"unsafe_predecessor","targetDraftPartId":4,"predecessorRevisionPartId":1}]}),
+    use super::model::{Assignment, BasisRow, Conflict, Reconciled, ReconciledResult, digest};
+    let token = |n: u32| format!("ppu_{n:032x}");
+    let basis = json!([{"revisionPartId":1,"token":token(1),"priorIndex":0,"createdAt":"2026-08-20T09:00:00.000Z","completed":true,"assembled":false}]);
+    for (result, expected) in [
+        (
+            ReconciledResult::Ready {
+                assignments: vec![
+                    Assignment::Create {
+                        draft_part_id: 4,
+                        unit_index: 0,
+                    },
+                    Assignment::Reuse {
+                        draft_part_id: 4,
+                        unit_index: 1,
+                        token: token(1),
+                    },
+                ],
+                surplus: vec![token(2)],
+            },
+            json!({"kind":"ready","assignments":[{"kind":"create","draftPartId":4,"unitIndex":0},{"kind":"reuse","draftPartId":4,"unitIndex":1,"token":token(1)}],"surplus":[token(2)]}),
+        ),
+        (
+            ReconciledResult::Unresolved {
+                conflicts: vec![Conflict::UnsafePredecessor {
+                    target_draft_part_id: 4,
+                    predecessor_revision_part_id: 1,
+                }],
+            },
+            json!({"kind":"unresolved","conflicts":[{"kind":"unsafe_predecessor","targetDraftPartId":4,"predecessorRevisionPartId":1}]}),
+        ),
     ] {
         let reconciled = Reconciled {
             result,
-            basis: json!([{"revisionPartId":1,"token":"ppu_00000000000000000000000000000001","priorIndex":0,"createdAt":"2026-08-20T09:00:00.000Z","completed":true,"assembled":false}]),
+            basis: vec![BasisRow {
+                revision_part_id: 1,
+                token: token(1),
+                prior_index: 0,
+                created_at: "2026-08-20T09:00:00.000Z".into(),
+                completed: true,
+                assembled: false,
+            }],
         };
+        let mut full = expected.clone();
+        full["selectionBasis"] = basis.clone();
         let check = || Ok(());
         assert_eq!(
             storage::checked_string(&reconciled.result, &check).unwrap(),
-            reconciled.result.to_string()
+            expected.to_string()
         );
         assert_eq!(
             storage::checked_string(&reconciled.basis, &check).unwrap(),
-            reconciled.basis.to_string()
+            basis.to_string()
         );
         assert_eq!(
             storage::checked_string(&reconciled.full_borrowed(), &check).unwrap(),
-            reconciled.full().to_string()
+            full.to_string()
         );
         assert_eq!(
             storage::checked_digest(&reconciled.full_borrowed(), &check).unwrap(),
-            digest(&reconciled.full())
+            digest(&full)
         );
         let mapping = json!(MAPPING);
         assert_eq!(
             storage::selection_basis_digest_checked(&mapping, &reconciled.basis, &check).unwrap(),
-            storage::selection_basis_digest(&mapping, &reconciled.basis)
+            storage::selection_basis_digest(&mapping, &basis)
         );
     }
 }

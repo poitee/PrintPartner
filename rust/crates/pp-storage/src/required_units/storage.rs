@@ -332,14 +332,14 @@ pub(crate) fn selection_basis_digest(mapping: &Value, basis: &Value) -> String {
 
 pub(super) fn selection_basis_digest_checked(
     mapping: &Value,
-    basis: &Value,
+    basis: &[model::BasisRow],
     check: Check<'_>,
 ) -> Result<String> {
     #[derive(Serialize)]
     struct SelectionBasis<'a> {
         format: &'static str,
         base_mapping_digest: &'a Value,
-        rows: &'a Value,
+        rows: &'a [model::BasisRow],
     }
     json::digest(
         &SelectionBasis {

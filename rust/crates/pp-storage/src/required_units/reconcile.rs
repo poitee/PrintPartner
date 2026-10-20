@@ -196,7 +196,7 @@ impl Scope<'_> {
             "planningDigest":d.planning,
             "selectionBasisDigest":basis_digest,
             "decisionDigest":decision_digest,
-            "resultKind":result.result["kind"],
+            "resultKind":result.result.kind(),
             "resultDigest":result_digest
         }));
         let expected_count = d
@@ -218,7 +218,7 @@ impl Scope<'_> {
                 basis_digest,
                 storage::checked_string(&result.basis, self.check)?,
                 decision_digest,
-                text(&result.result, "kind")?,
+                result.result.kind(),
                 result_digest,
                 storage::checked_string(&result.result, self.check)?,
                 reconciliation_digest,
@@ -260,18 +260,29 @@ impl Scope<'_> {
                 ],
             )?;
         }
-        if let Some(assignments) = result.result["assignments"].as_array() {
+        if let model::ReconciledResult::Ready { assignments, .. } = &result.result {
             for a in assignments {
                 (self.check)()?;
+                let (part, index, kind, token) = match a {
+                    model::Assignment::Reuse {
+                        draft_part_id,
+                        unit_index,
+                        token,
+                    } => (draft_part_id, unit_index, "reuse", Some(token)),
+                    model::Assignment::Create {
+                        draft_part_id,
+                        unit_index,
+                    } => (draft_part_id, unit_index, "create", None),
+                };
                 self.tx.execute(
                     "INSERT INTO plan_draft_required_unit_assignments (tenant_id,reconciliation_id,target_draft_part_id,unit_index,kind,required_unit_token) VALUES (?,?,?,?,?,?)",
                     params![
                         self.tenant,
                         reconciliation,
-                        num(a, "draftPartId")?,
-                        num(a, "unitIndex")?,
-                        text(a, "kind")?,
-                        a["token"].as_str()
+                        part,
+                        i64::try_from(*index)?,
+                        kind,
+                        token
                     ],
                 )?;
             }

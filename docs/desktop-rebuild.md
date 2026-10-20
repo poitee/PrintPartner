@@ -1447,6 +1447,16 @@ finalization trigger compares every assignment row. The interrupted statement
 rolls back the transaction, and the request returns `Cancelled`. The handler is
 removed before commit. The draft edit's automatic selection works the same way.
 
+The selection result stays typed until it is serialized, so a cancelled
+request frees a few vectors instead of a JSON tree with 200,000 objects. The
+handler cannot stop SQLite while it parses `result_json`: at 200,000
+assignments one parse takes about 75 ms, and the finalization trigger parses it
+more than once. A cancel that arrives during a parse waits for that parse, so
+release cancellation during finalization takes from 3 ms to about 75 ms.
+Run the ignored `gre764_release_cancellation_during_finalization_returns_promptly`
+test in an exclusive landing slot with `--release -- --ignored --nocapture` to
+check rollback and print the times.
+
 - `ReconciliationRequest` has the contract's snake-case fields. It rejects
   unknown fields, a snapshot digest that is not 64 lowercase hex characters,
   more than 10,000 decisions, and two decisions for the same draft Part.

@@ -1795,6 +1795,195 @@ mod tests {
         assert!(selected.is_some());
     }
 
+    /// 20 Parts of 10,000 units each: the 200,000-assignment cap.
+    fn gre764_capped_draft(connection: &mut Connection) -> Digest {
+        let mut draft = {
+            let tx = connection.transaction().unwrap();
+            storage::draft(&tx, "default", 1, 2).unwrap().unwrap()
+        };
+        draft.parts.retain(|part| part["id"] == 4);
+        draft.parts[0]["quantityOverride"] = json!(10_000);
+        draft.parts[0]["quantityEffective"] = json!(10_000);
+        connection
+            .execute_batch(
+                "DELETE FROM plan_draft_parts WHERE draft_id=2 AND id<>4;
+                 UPDATE plan_draft_parts SET quantity_override=10000,quantity_effective=10000 WHERE id=4;
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<19)
+                 INSERT INTO plan_draft_parts (tenant_id,draft_id,base_revision_part_id,part_key,relative_path,filename,source_layer,status,role_inferred,role_override,filament_color_id,filament_custom_hex,spoolman_spool_id,quantity_inferred,quantity_override,quantity_effective,included,notes,github_blob_url,geometry_same,requirement,option_group_id,manifest_source,artifact_digest)
+                 SELECT tenant_id,draft_id,NULL,part_key||'-'||i,relative_path,filename,source_layer,'added',role_inferred,role_override,filament_color_id,filament_custom_hex,spoolman_spool_id,quantity_inferred,quantity_override,quantity_effective,included,notes,github_blob_url,geometry_same,requirement,option_group_id,manifest_source,NULL FROM plan_draft_parts, n WHERE id=4 ORDER BY i;",
+            )
+            .unwrap();
+        let added: Vec<(i64, String)> = connection
+            .prepare(
+                "SELECT id,part_key FROM plan_draft_parts WHERE draft_id=2 AND id<>4 ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for (id, key) in added {
+            let mut part = draft.parts[0].clone();
+            part["id"] = json!(id);
+            part["partKey"] = json!(key);
+            part["status"] = json!("added");
+            part["baseRevisionPartId"] = Value::Null;
+            part["artifactDigest"] = Value::Null;
+            draft.parts.push(part);
+        }
+        assert_eq!(draft.parts.len(), 20);
+        let planning = model::planning(&draft.header, &draft.inputs, &draft.parts).unwrap();
+        connection
+            .execute(
+                "UPDATE plan_drafts SET snapshot_digest=? WHERE id=2",
+                [&planning],
+            )
+            .unwrap();
+        serde_json::from_value(json!(planning)).unwrap()
+    }
+
+    /// Cancels 100 ms after the finalization UPDATE is prepared, while its
+    /// trigger compares 200,000 assignments, and prints cancel-to-return
+    /// times. The last run skips the progress handler as a control: the
+    /// statement then finishes its update.
+    #[test]
+    #[ignore = "run in release in an exclusive landing slot for timing"]
+    fn gre764_release_cancellation_during_finalization_returns_promptly() {
+        let policy = auth::AuthPolicy {
+            registration: auth::RegistrationPolicy::Open,
+            session_tenant: auth::SessionTenantPolicy::AccountTenant,
+            first_user: auth::FirstUserTenant::NewUser,
+        };
+        let credential =
+            || Credential::Session(auth::Secret::new("required-unit-fixture-secret".into()));
+        let counts = "SELECT (SELECT count(*) FROM plan_draft_required_unit_assignments), (SELECT count(*) FROM plan_draft_required_unit_reconciliations)";
+        let mut timings = Vec::new();
+        for interruptible in [true, true, true, true, true, false] {
+            let (_database, mut connection) = Database::new();
+            let digest = gre764_capped_draft(&mut connection);
+            let before: (i64, i64) = connection
+                .query_row(counts, [], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap();
+            let inserted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let finalized = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (count, updates) = (inserted.clone(), finalized.clone());
+            connection
+                .update_hook(Some(move |action, _: &str, table: &str, _: i64| {
+                    if action == rusqlite::hooks::Action::SQLITE_INSERT
+                        && table == "plan_draft_required_unit_assignments"
+                    {
+                        count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if action == rusqlite::hooks::Action::SQLITE_UPDATE
+                        && table == "plan_draft_required_unit_reconciliations"
+                    {
+                        updates.fetch_add(1, Ordering::Relaxed);
+                    }
+                }))
+                .unwrap();
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let cancelled_at = Arc::new(std::sync::Mutex::new(None));
+            let (flag, mark) = (cancelled.clone(), cancelled_at.clone());
+            let started = Arc::new(AtomicBool::new(false));
+            let start = started.clone();
+            connection
+                .authorizer(Some(move |context: rusqlite::hooks::AuthContext<'_>| {
+                    if matches!(
+                        context.action,
+                        rusqlite::hooks::AuthAction::Update {
+                            table_name: "plan_draft_required_unit_reconciliations",
+                            column_name: "finalized_at",
+                        }
+                    ) && !start.swap(true, Ordering::AcqRel)
+                    {
+                        let (flag, mark) = (flag.clone(), mark.clone());
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_millis(100));
+                            *mark.lock().unwrap() = Some(Instant::now());
+                            flag.store(true, Ordering::Release);
+                        });
+                    }
+                    rusqlite::hooks::Authorization::Allow
+                }))
+                .unwrap();
+            let error = if interruptible {
+                auto_select(
+                    &mut connection,
+                    credential(),
+                    policy,
+                    PositiveId::new(1).unwrap(),
+                    PositiveId::new(2).unwrap(),
+                    &digest,
+                    &cancelled,
+                )
+            } else {
+                let command = ReconciliationCommand::new(
+                    PositiveId::new(1).unwrap(),
+                    PositiveId::new(2).unwrap(),
+                    serde_json::from_value(
+                        json!({"expected_snapshot_digest":digest, "decisions":[]}),
+                    )
+                    .unwrap(),
+                    "control",
+                    credential(),
+                )
+                .unwrap();
+                transact(
+                    &mut connection,
+                    writer_admission::Deadline::at_dequeue(),
+                    &AtomicBool::new(false),
+                    |tx| {
+                        required_units::reconcile::run(tx, &command, policy, &|| {
+                            ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+                            Ok(())
+                        })
+                    },
+                )
+                .map(|_| unreachable!())
+            }
+            .expect_err("cancelled selection must fail");
+            let returned = Instant::now();
+            let elapsed = returned - cancelled_at.lock().unwrap().unwrap();
+            assert!(
+                matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+                "{error:?}"
+            );
+            assert!(started.load(Ordering::Acquire));
+            assert_eq!(inserted.load(Ordering::Relaxed), 200_000);
+            assert_eq!(
+                finalized.load(Ordering::Relaxed),
+                usize::from(!interruptible)
+            );
+            let after: (i64, i64) = connection
+                .query_row(counts, [], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap();
+            assert_eq!(after, before);
+            assert!(connection.is_autocommit());
+            // `cancelled` is still set, so a handler left installed would
+            // interrupt this 100,000-step query.
+            let sum: i64 = connection
+                .query_row(
+                    "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<100000) SELECT sum(i) FROM n",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(sum, 5_000_050_000);
+            eprintln!(
+                "interruptible={interruptible} cancel_to_return={elapsed:?} assignments=200000 finalized={} before={before:?} after={after:?}",
+                finalized.load(Ordering::Relaxed)
+            );
+            if interruptible {
+                timings.push(elapsed);
+            }
+        }
+        timings.sort();
+        eprintln!(
+            "median={:?}, range={:?}..={:?}",
+            timings[2], timings[0], timings[4]
+        );
+    }
+
     #[test]
     fn gre764_cancellation_during_persisted_verification_rolls_back_selection() {
         for selected_draft in [false, true] {

@@ -150,18 +150,39 @@ pub(crate) struct BasePart {
     pub role: String,
     pub units: Vec<Unit>,
 }
+/// Stays typed until it is serialized: freeing a `Value` tree of 200,000
+/// assignments delays a cancelled request by tens of milliseconds.
 pub(crate) struct Reconciled {
-    pub result: Value,
-    pub basis: Value,
+    pub result: ReconciledResult,
+    pub basis: Vec<BasisRow>,
+}
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ReconciledResult {
+    Ready {
+        assignments: Vec<Assignment>,
+        surplus: Vec<String>,
+    },
+    Unresolved {
+        conflicts: Vec<Conflict>,
+    },
+}
+impl ReconciledResult {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Ready { .. } => "ready",
+            Self::Unresolved { .. } => "unresolved",
+        }
+    }
 }
 impl Reconciled {
     pub fn full_borrowed(&self) -> impl serde::Serialize + '_ {
         #[derive(serde::Serialize)]
         struct FullResult<'a> {
             #[serde(flatten)]
-            result: &'a Value,
+            result: &'a ReconciledResult,
             #[serde(rename = "selectionBasis")]
-            basis: &'a Value,
+            basis: &'a [BasisRow],
         }
         FullResult {
             result: &self.result,
@@ -170,9 +191,7 @@ impl Reconciled {
     }
     #[cfg(test)]
     pub fn full(&self) -> Value {
-        let mut result = self.result.clone();
-        result["selectionBasis"] = self.basis.clone();
-        result
+        serde_json::to_value(self.full_borrowed()).unwrap()
     }
 }
 #[derive(serde::Deserialize)]
@@ -194,7 +213,7 @@ struct Input {
 }
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum Assignment {
+pub(crate) enum Assignment {
     Reuse {
         #[serde(rename = "draftPartId")]
         draft_part_id: i64,
@@ -211,7 +230,7 @@ enum Assignment {
 }
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum Conflict {
+pub(crate) enum Conflict {
     UnsafePredecessor {
         #[serde(rename = "targetDraftPartId")]
         target_draft_part_id: i64,
@@ -233,13 +252,13 @@ enum Conflict {
 }
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BasisRow {
-    revision_part_id: i64,
-    token: String,
-    prior_index: i64,
-    created_at: String,
-    completed: bool,
-    assembled: bool,
+pub(crate) struct BasisRow {
+    pub revision_part_id: i64,
+    pub token: String,
+    pub prior_index: i64,
+    pub created_at: String,
+    pub completed: bool,
+    pub assembled: bool,
 }
 enum Selection {
     Normal(usize),
@@ -276,18 +295,6 @@ fn basis(part: &BasePart) -> Vec<BasisRow> {
         })
         .collect()
 }
-fn checked_values(
-    values: impl IntoIterator<Item = impl serde::Serialize>,
-    check: &dyn Fn() -> Result<()>,
-) -> Result<Value> {
-    let mut out = Vec::new();
-    for value in values {
-        check()?;
-        out.push(serde_json::to_value(value)?);
-    }
-    Ok(Value::Array(out))
-}
-
 pub(super) fn reconcile(
     parts: &[DraftPart],
     inputs: &[Value],
@@ -480,8 +487,8 @@ pub(super) fn reconcile(
     }
     if !conflicts.is_empty() {
         return Ok(Reconciled {
-            result: json!({"kind":"unresolved","conflicts":conflicts}),
-            basis: json!([]),
+            result: ReconciledResult::Unresolved { conflicts },
+            basis: Vec::new(),
         });
     }
     let mut assignments = Vec::new();
@@ -547,16 +554,11 @@ pub(super) fn reconcile(
     surplus.sort();
     rows.sort_by_key(|r| (r.revision_part_id, r.prior_index));
     Ok(Reconciled {
-        result: Value::Object(
-            [
-                ("kind".into(), json!("ready")),
-                ("assignments".into(), checked_values(assignments, check)?),
-                ("surplus".into(), checked_values(surplus, check)?),
-            ]
-            .into_iter()
-            .collect(),
-        ),
-        basis: checked_values(rows, check)?,
+        result: ReconciledResult::Ready {
+            assignments,
+            surplus,
+        },
+        basis: rows,
     })
 }
 pub(crate) fn validate_token(t: &str) -> Result<()> {
@@ -585,31 +587,6 @@ mod tests {
         decisions: &[Decision],
     ) -> Result<Reconciled> {
         reconcile_checked(parts, inputs, base, decisions, &|| Ok(()))
-    }
-
-    #[test]
-    fn gre764_cancellation_during_result_tree_construction() {
-        let visited = std::cell::Cell::new(0);
-        let values = (0..200_000).map(|index| {
-            visited.set(visited.get() + 1);
-            Assignment::Create {
-                draft_part_id: 4,
-                unit_index: index,
-            }
-        });
-        let error = checked_values(values, &|| {
-            if visited.get() == 64 {
-                return Err(anyhow::anyhow!(crate::working_drafts::Failure::Cancelled));
-            }
-            Ok(())
-        })
-        .map(|_| ())
-        .expect_err("result construction must stop when cancelled");
-        assert!(matches!(
-            error.downcast_ref(),
-            Some(crate::working_drafts::Failure::Cancelled)
-        ));
-        assert_eq!(visited.get(), 64);
     }
 
     #[test]
@@ -658,13 +635,12 @@ mod tests {
         assert_eq!(error.to_string(), "Reconciliation row limit exceeded");
         assert_eq!(checks.get(), 0, "oversized drafts must not start expansion");
         let allowed = reconcile_checked(&parts[..20], &[input()], &[], &[], &check).unwrap();
-        assert_eq!(allowed.result["kind"], "ready");
+        let ReconciledResult::Ready { assignments, .. } = &allowed.result else {
+            panic!("200000 assignments must be ready");
+        };
+        assert_eq!(assignments.len(), 200_000);
         assert_eq!(
-            allowed.result["assignments"].as_array().unwrap().len(),
-            200_000
-        );
-        assert_eq!(
-            allowed.result["assignments"][199_999],
+            serde_json::to_value(&assignments[199_999]).unwrap(),
             json!({"kind":"create", "draftPartId":20, "unitIndex":9999})
         );
     }
