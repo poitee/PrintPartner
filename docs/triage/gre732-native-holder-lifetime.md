@@ -45,3 +45,20 @@ two seconds apart. This is the retry pattern tools such as create-dmg use for
 The native test also requires that `hdiutil info` no longer lists the image.
 The diagnostic driver now releases the holder after any completed `lsof` attempt,
 not only a successful one.
+
+Main [run 39380292418](https://github.com/poitee/PrintPartner/actions/runs/39380292418/job/118488000027)
+failed repetition 7 while the test read a missing `trace` file. The driver created
+that file only when detach, `lsof`, or sleep ran. A create or attach failure before
+the workflow registered its cleanup trap could therefore raise `FileNotFoundError`
+and hide the shell's original status and output. The historical traceback does
+not establish which macOS operation failed or why.
+
+The test now creates its empty trace before running the shell and requires the
+disposable cargo executable to record its exit status. An early failure remains
+a test failure with the shell status and combined output, even if its status
+equals the expected cargo status. The native driver also names a failed create
+or attach operation on stderr, so the attach device-selection pipeline cannot
+discard it. Portable executable cases refuse each setup operation with two
+statuses and assert the exact failure report. A forwarded native attach refusal
+also exercises that pipeline. Production cleanup, retries and the repeated
+native assertions are unchanged.
