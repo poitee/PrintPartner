@@ -185,7 +185,12 @@ fn project_naming(
             .unwrap_or_else(|| json!({}));
         crate::catalog::naming::merge_override(override_value, global)
     }
-    .map_err(|error| error.context(crate::catalog::CatalogFailure::InvalidStoredNaming))?;
+    .map_err(|error| {
+        let detail = error.to_string();
+        error
+            .context(crate::catalog::CatalogFailure::InvalidStoredNaming)
+            .context(detail)
+    })?;
     let bytes = serde_json::to_vec(&projected["effective"])?;
     budget.expansion(bytes.len())?;
     Ok(NamingSnapshot {
@@ -628,7 +633,7 @@ pub(super) fn prepare(
                     &[&tenant, &profile, &id]
                 )?
                 .is_some(),
-                "Missing accepted base"
+                "Accepted Plan revision is missing"
             );
             part_rows(
                 tx,

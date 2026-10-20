@@ -290,6 +290,8 @@ pub(crate) fn project(m: Map<String, Value>, global: NamingProfile) -> Result<Va
         .filter(|v| !v.is_null())
         .cloned()
         .unwrap_or(json!({}));
+    #[cfg(feature = "desktop_rebuild")]
+    validate_stored_override(&override_value)?;
     if let Some(full) = serde_json::from_value::<NamingProfile>(override_value.clone())
         .ok()
         .and_then(|p| p.validate().ok())
@@ -299,6 +301,8 @@ pub(crate) fn project(m: Map<String, Value>, global: NamingProfile) -> Result<Va
     merge_override(override_value, global)
 }
 pub(crate) fn merge_override(override_value: Value, global: NamingProfile) -> Result<Value> {
+    #[cfg(feature = "desktop_rebuild")]
+    validate_stored_override(&override_value)?;
     let mut effective = serde_json::to_value(global)?;
     let object = override_value
         .as_object()
@@ -391,6 +395,40 @@ pub(crate) fn merge_override(override_value: Value, global: NamingProfile) -> Re
         }
     }
     response(effective, false, override_value)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn validate_stored_override(value: &Value) -> Result<()> {
+    let nonblank = |value: &Value, field: String| -> Result<()> {
+        if let Some(text) = value.as_str() {
+            ensure!(!trim(text).is_empty(), "{field}: must not be blank");
+        }
+        Ok(())
+    };
+    if let Some(roles) = value["roles"].as_array() {
+        for (index, role) in roles.iter().enumerate() {
+            nonblank(&role["label"], format!("override.roles.{index}.label"))?;
+        }
+    }
+    nonblank(
+        &value["quantity"]["regex"],
+        "override.quantity.regex".into(),
+    )?;
+    if let Some(rules) = value["folder_rules"].as_array() {
+        for (index, rule) in rules.iter().enumerate() {
+            nonblank(
+                &rule["path_contains"],
+                format!("override.folder_rules.{index}.path_contains"),
+            )?;
+            if let Some(class) = rule.get("functional_class") {
+                ensure!(
+                    matches!(class.as_str(), Some("functional" | "cosmetic")),
+                    "override.folder_rules.{index}.functional_class: Invalid option: expected one of \"functional\"|\"cosmetic\""
+                );
+            }
+        }
+    }
+    Ok(())
 }
 pub(super) fn save(
     tx: &Transaction<'_>,
