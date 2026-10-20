@@ -314,6 +314,14 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 quoted_end = false;
                 continue;
             }
+            // A comment line ends a plain scalar in js-yaml, but saphyr continues
+            // the scalar across one led by a tab. Without its indent, saphyr
+            // ends the scalar there too.
+            if content > i && chars.get(content) == Some(&'#') {
+                output.truncate(output.len() - line_indent);
+                consumed += content - i;
+                i = content;
+            }
             if (chars[i] == '%' && line_indent == 0 && !plain) || chars[i] == '#' {
                 let end = line_end(&chars, i, budget)?;
                 for c in &chars[i..end] {
@@ -346,6 +354,13 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                         budget.check()?;
                     }
                     end += 1;
+                }
+                if end > i && chars.get(end).is_none_or(|c| matches!(c, '\r' | '\n')) {
+                    // js-yaml folds a whitespace-only line as blank; saphyr
+                    // rejects one that contains a tab.
+                    consumed += end - i;
+                    i = end;
+                    continue;
                 }
                 let deficient = if flow.is_empty() {
                     parent.is_some_and(|p| indent <= p)
@@ -1395,18 +1410,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn yaml_flow_collections_match_js_yaml() {
+    fn assert_js_yaml_cases(fixture: &str) {
         #[derive(serde::Deserialize)]
         struct Case {
             name: String,
             source: String,
             expected: Option<serde_json::Value>,
         }
-        let cases: Vec<Case> = serde_json::from_str(include_str!(
-            "../../tests/fixtures/yaml-flow-collections-node.json"
-        ))
-        .unwrap();
+        let cases: Vec<Case> = serde_json::from_str(fixture).unwrap();
+        assert!(!cases.is_empty());
         let cancel = AtomicBool::new(false);
         let mut mismatches = Vec::new();
         for case in cases {
@@ -1421,6 +1433,20 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn yaml_flow_collections_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-collections-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_tab_lines_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-tab-lines-node.json"
+        ));
     }
 
     #[test]
