@@ -73,30 +73,37 @@ def after_workflow(root, real):
     directory = root / 'diagnostics' / 'after'
     unreadable = []
 
-    def receipt(path, data, parse):
+    def reject(path, error):
+        unreadable.append(f'{path.name}: {type(error).__name__}: {error}')
+
+    def receipt(path, load):
         # A corrupt receipt must not skip the probes for devices named elsewhere.
         try:
-            found = parse(json.loads(data))
+            found = load()
             # Devices become probe arguments, so accept only BSD disk paths.
             if not all(isinstance(device, str) and re.fullmatch(r'/dev/disk[0-9]+(s[0-9]+)*', device)
                        for device in found):
                 raise ValueError(f'invalid device in {sorted(map(repr, found))}')
             return found
-        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
-            unreadable.append(f'{path.name}: {type(error).__name__}: {error}')
+        except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
+            reject(path, error)
             return set()
 
     before = root / 'diagnostics' / 'before' / 'owned.json'
     devices = dev_entries(owned)
     if before.exists():
-        devices |= receipt(before, before.read_bytes(), dev_entries)
+        devices |= receipt(before, lambda: dev_entries(json.loads(before.read_bytes())))
     forces = root / 'diagnostics' / 'force-status.jsonl'
     if forces.exists():
-        lines = forces.read_bytes().splitlines()
-        if not lines:
+        lines = None
+        try:
+            lines = forces.read_bytes().splitlines()
+        except OSError as error:
+            reject(forces, error)
+        if lines == []:
             unreadable.append(f'{forces.name}: empty')
-        for line in lines:
-            devices |= receipt(forces, line, lambda force: {force['command'][-1]})
+        for line in lines or []:
+            devices |= receipt(forces, lambda: {json.loads(line)['command'][-1]})
     devices = sorted(devices)
     (directory / 'devices.json').write_text(json.dumps({
         'devices': devices, 'note': '' if devices else 'No owned devices identified; device probes skipped',
