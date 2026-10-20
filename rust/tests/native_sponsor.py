@@ -115,7 +115,7 @@ def verify(binary, stage, output, enabled):
                     outcome = execute("""
 const done = arguments[arguments.length - 1];
 window.__TAURI_INTERNALS__.invoke(arguments[0], {}).then(
-  () => done({allowed:true}), error => done({allowed:false, error:String(error)}));
+  () => done({allowed:true}), error => done({allowed:false, reason:String(error)}));
 """, name, asynchronous=True)
                     assert outcome.get("allowed") is False, (name, outcome)
                     denied.append(name)
