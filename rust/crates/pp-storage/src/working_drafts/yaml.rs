@@ -249,6 +249,13 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             separation_tab = false;
             node_tab = false;
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
+            // js-yaml rejects a tab in the indentation of a block scalar line
+            // before its first content line sets the indent.
+            if chars.get(i) == Some(&'\t')
+                && matches!(block, Some((base, None)) if line_indent <= base)
+            {
+                return invalid();
+            }
             if let Some((base, required)) = block {
                 let required = required.or_else(|| (!blank).then_some(line_indent));
                 if blank || required.is_some_and(|n| line_indent >= n && line_indent > base) {
