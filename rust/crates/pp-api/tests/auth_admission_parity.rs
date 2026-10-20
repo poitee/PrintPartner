@@ -552,7 +552,7 @@ fn extra_header(suffix: &str) -> Option<(&'static str, &'static str)> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct Snapshot(BTreeMap<String, Vec<Vec<Value>>>);
+struct Snapshot(BTreeMap<String, Vec<Value>>);
 impl Snapshot {
     fn read(db: &Connection) -> Result<Self> {
         let mut tables = TABLES.to_vec();
@@ -567,20 +567,30 @@ impl Snapshot {
         let mut result = BTreeMap::new();
         for table in tables {
             let mut statement = db.prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))?;
-            let columns = statement.column_count();
+            let columns: Vec<String> = statement
+                .column_names()
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
             let rows = statement
                 .query_map([], |row| {
-                    (0..columns)
-                        .map(|i| {
-                            Ok(match row.get_ref(i)? {
-                                ValueRef::Null => Value::Null,
-                                ValueRef::Integer(n) => json!(n),
-                                ValueRef::Real(n) => json!(n),
-                                ValueRef::Text(bytes) => json!(String::from_utf8_lossy(bytes)),
-                                ValueRef::Blob(bytes) => json!({"blob":hex::encode(bytes)}),
-                            })
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(i, column)| {
+                            Ok((
+                                column.clone(),
+                                match row.get_ref(i)? {
+                                    ValueRef::Null => Value::Null,
+                                    ValueRef::Integer(n) => json!(n),
+                                    ValueRef::Real(n) => json!(n),
+                                    ValueRef::Text(bytes) => json!(String::from_utf8_lossy(bytes)),
+                                    ValueRef::Blob(bytes) => json!({"blob":hex::encode(bytes)}),
+                                },
+                            ))
                         })
-                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .collect::<rusqlite::Result<serde_json::Map<_, _>>>()
+                        .map(Value::Object)
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             result.insert(table.to_owned(), rows);
@@ -967,9 +977,7 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
                     .as_str()
                     .context("response user id")?;
                 ensure!(
-                    evidence.after.0["users"]
-                        .iter()
-                        .any(|row| row.iter().any(|v| v == id)),
+                    evidence.after.0["users"].iter().any(|row| row["id"] == id),
                     "response user persisted"
                 );
             }
@@ -980,8 +988,9 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
         }
         if case.route == Route::Change {
             ensure!(
-                evidence.after.0["users"] != evidence.before.0["users"],
-                "password change must rewrite the user row"
+                evidence.after.0["users"][0]["password_hash"]
+                    != evidence.before.0["users"][0]["password_hash"],
+                "password change must rewrite the password hash"
             );
         }
     }
@@ -1128,7 +1137,7 @@ fn comparator_rejects_response_and_work_changes() {
                     .0
                     .get_mut("users")
                     .unwrap()
-                    .push(vec![json!("changed")]);
+                    .push(json!({"id":"changed"}));
             }
             10 => evidence.observation.state_changed = true,
             _ => unreachable!(),
