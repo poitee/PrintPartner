@@ -45,12 +45,15 @@ impl Fixture {
     fn sql(&self) -> Connection {
         Connection::open(self.0.join("print-partner.db")).unwrap()
     }
-    fn naming(&self, raw: &Value) {
+    fn naming(&self, case: &Value) {
+        let stored = match case["override_json"].as_str() {
+            Some(raw) => format!(r#"{{"naming":{{"use_defaults":false,"override":{raw}}}}}"#),
+            None => {
+                json!({"naming":{"use_defaults":false,"override":case["override"]}}).to_string()
+            }
+        };
         self.sql()
-            .execute(
-                "UPDATE projects SET metadata_json=? WHERE id=1",
-                [json!({"naming":{"use_defaults":false,"override":raw}}).to_string()],
-            )
+            .execute("UPDATE projects SET metadata_json=? WHERE id=1", [stored])
             .unwrap();
     }
     fn snapshot(&self) -> Snapshot {
@@ -124,7 +127,7 @@ fn cases() -> Vec<Value> {
         .collect();
     assert_eq!(
         cases.len(),
-        31,
+        35,
         "the feature-off test must exercise the capture"
     );
     cases
@@ -137,7 +140,7 @@ fn catalog_refusals_retain_exact_details_in_both_feature_modes() {
     let client = owner.local_source_catalog();
     for case in cases() {
         let name = case["name"].as_str().unwrap();
-        fixture.naming(&case["override"]);
+        fixture.naming(&case);
         let before = fixture.snapshot();
         let result = client.execute(Request::GetNaming { id: 1 });
         assert_eq!(
@@ -244,7 +247,7 @@ mod preparation {
             .unwrap();
         for case in cases() {
             let name = case["name"].as_str().unwrap();
-            fixture.naming(&case["override"]);
+            fixture.naming(&case);
             let before = fixture.snapshot();
             let result = client.recompute(
                 Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),

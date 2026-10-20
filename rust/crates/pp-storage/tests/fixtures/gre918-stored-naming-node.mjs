@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const { createSelfHostPorts } = await import(join(resolve(process.argv[2]), 'src/adapters/self-host/index.ts'));
+// Stored verbatim, so key order JavaScript objects would normalize survives.
+class Raw { constructor(text) { this.text = text; } }
 // Rust strings are independent expectations, never translated from Node errors.
 const cases = [
   ['unknown-top', { surprise: true }, "Unknown naming field", "override: Unrecognized key: \"surprise\""],
@@ -40,6 +42,10 @@ const cases = [
   ['export-order-short', { export_role_order: ['primary'] }, "Invalid export role order", "override.export_role_order: Too small: expected array to have exactly 4 items"],
   ['export-order-duplicate', { export_role_order: ['primary', 'primary', 'clear', 'opaque'] }, "Duplicate export role", "override.export_role_order: must list each role id exactly once"],
   ['mixed-label-type-unknown-quantity', { roles: [{ id: 'primary', label: 7 }], quantity: { surprise: true } }, "invalid type: integer `7`, expected a string", "override.roles.0.label: Invalid input: expected string, received number"],
+  ['mixed-export-long-invalid', { export_role_order: ['primary', 'accent', 'clear', 'opaque', null] }, "invalid type: null, expected string or map", "override.export_role_order: Too big: expected array to have exactly 4 items"],
+  ['unknown-keys-index-order', new Raw('{"surprise":true,"2":true,"1":true}'), "Unknown naming field", "override: Unrecognized keys: \"1\", \"2\", \"surprise\""],
+  ['unknown-key-quote', { 'a"b\\c': true }, "Unknown naming field", "override: Unrecognized key: \"a\"b\\c\""],
+  ['regex-over-group-limit', { quantity: { regex: '(a)'.repeat(65) } }, "Quantity regex exceeds group complexity limits", "override.quantity.regex: Quantity regex exceeds group complexity limits"],
 ];
 
 function files(directory, relative = '') {
@@ -66,8 +72,10 @@ for (const [name, override, rust_off, rust_on = rust_off] of cases) {
     for (const [file, body] of [['frame.stl', 'disposable STL'], ['manifest.yaml', 'parts: []\n'], ['catalog.yaml', 'parts: []\n']]) {
       writeFileSync(join(root, file), body);
     }
-    raw.prepare('UPDATE projects SET local_path=?, metadata_json=? WHERE id=1')
-      .run(root, JSON.stringify({ naming: { use_defaults: false, override } }));
+    const stored = override instanceof Raw
+      ? `{"naming":{"use_defaults":false,"override":${override.text}}}`
+      : JSON.stringify({ naming: { use_defaults: false, override } });
+    raw.prepare('UPDATE projects SET local_path=?, metadata_json=? WHERE id=1').run(root, stored);
     const rows = () => raw.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()
       .map(({ name }) => [name, raw.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}" ORDER BY rowid`).all()]);
     const before = { rows: rows(), files: files(directory) };
@@ -81,7 +89,10 @@ for (const [name, override, rust_off, rust_on = rust_off] of cases) {
     } catch (error) { node_preparation = error.message; }
     unchanged();
     assert.equal(typeof node_preparation, 'string', name);
-    output.push({ name, override, node_catalog, node_preparation, rust_off, rust_on,
+    const recorded = override instanceof Raw
+      ? { override: JSON.parse(override.text), override_json: override.text }
+      : { override };
+    output.push({ name, ...recorded, node_catalog, node_preparation, rust_off, rust_on,
       known_mismatch: { feature_off: rust_off !== node_preparation, feature_on: rust_on !== node_preparation } });
   } finally {
     raw.close();

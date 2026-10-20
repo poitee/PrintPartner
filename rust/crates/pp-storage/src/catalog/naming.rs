@@ -135,7 +135,8 @@ impl NamingProfile {
             self.quantity.default > 0 && self.quantity.default <= 9_007_199_254_740_991,
             "Invalid quantity default"
         );
-        validate_regex_structure(&self.quantity.regex)?;
+        validate_regex_structure(&self.quantity.regex)
+            .map_err(|refusal| anyhow!(refusal.message))?;
         regress::Regex::with_flags(&self.quantity.regex, "i")
             .map_err(|_| anyhow!("Invalid quantity regex"))?;
         let regex = regress::Regex::new(&format!("(?:{})|", self.quantity.regex))
@@ -151,10 +152,25 @@ impl NamingProfile {
         Ok(self)
     }
 }
-fn validate_regex_structure(pattern: &str) -> Result<()> {
+struct RegexRefusal {
+    message: &'static str,
+    /// A Rust-only bound on a pattern JavaScript would accept.
+    #[cfg(feature = "desktop_rebuild")]
+    limit: bool,
+}
+fn validate_regex_structure(pattern: &str) -> Result<(), RegexRefusal> {
     const MAX_GROUP_DEPTH: usize = 16;
     const MAX_GROUPS: usize = 64;
-    ensure!(pattern.len() <= 4096, "Quantity regex too long");
+    let refuse = |message, _limit: bool| {
+        Err(RegexRefusal {
+            message,
+            #[cfg(feature = "desktop_rebuild")]
+            limit: _limit,
+        })
+    };
+    if pattern.len() > 4096 {
+        return refuse("Quantity regex too long", true);
+    }
     let mut escaped = false;
     let mut in_class = false;
     let mut depth = 0usize;
@@ -179,22 +195,22 @@ fn validate_regex_structure(pattern: &str) -> Result<()> {
             b'(' => {
                 depth += 1;
                 groups += 1;
-                ensure!(
-                    depth <= MAX_GROUP_DEPTH && groups <= MAX_GROUPS,
-                    "Quantity regex exceeds group complexity limits"
-                );
+                if depth > MAX_GROUP_DEPTH || groups > MAX_GROUPS {
+                    return refuse("Quantity regex exceeds group complexity limits", true);
+                }
             }
             b')' => {
-                ensure!(depth > 0, "Invalid quantity regex groups");
+                if depth == 0 {
+                    return refuse("Invalid quantity regex groups", false);
+                }
                 depth -= 1;
             }
             _ => {}
         }
     }
-    ensure!(
-        !escaped && !in_class && depth == 0,
-        "Invalid quantity regex structure"
-    );
+    if escaped || in_class || depth != 0 {
+        return refuse("Invalid quantity regex structure", false);
+    }
     Ok(())
 }
 
@@ -460,10 +476,20 @@ fn validate_stored_override(value: &Value) -> Result<()> {
         fail(path, format!("Invalid option: expected one of {options}"))
     }
     fn strict(object: &Map<String, Value>, path: &str, known: &[&str]) -> Result<()> {
-        let unknown = object
+        // JavaScript enumerates array-index keys first, ascending, then the rest in order.
+        let index = |key: &str| {
+            key.parse::<u32>()
+                .ok()
+                .filter(|index| *index != u32::MAX && index.to_string() == key)
+        };
+        let mut unknown = object
             .keys()
             .filter(|key| !known.contains(&key.as_str()))
-            .map(|key| Value::from(key.as_str()).to_string())
+            .collect::<Vec<_>>();
+        unknown.sort_by_key(|key| index(key).map_or((1, 0), |index| (0, index)));
+        let unknown = unknown
+            .into_iter()
+            .map(|key| format!("\"{key}\""))
             .collect::<Vec<_>>();
         match unknown.len() {
             0 => Ok(()),
@@ -479,9 +505,15 @@ fn validate_stored_override(value: &Value) -> Result<()> {
     }
     fn quantity_regex(value: Option<&Value>, path: &str) -> Result<()> {
         let pattern = nonblank(value, path)?;
-        if validate_regex_structure(pattern).is_err()
-            || regress::Regex::with_flags(pattern, "i").is_err()
-        {
+        if let Err(refusal) = validate_regex_structure(pattern) {
+            let message = if refusal.limit {
+                refusal.message
+            } else {
+                "is an invalid regular expression"
+            };
+            return fail(path, message);
+        }
+        if regress::Regex::with_flags(pattern, "i").is_err() {
             return fail(path, "is an invalid regular expression");
         }
         let groups = regress::Regex::new(&format!("(?:{pattern})|"))
@@ -588,14 +620,15 @@ fn validate_stored_override(value: &Value) -> Result<()> {
     if let Some(order) = root.get("export_role_order") {
         let path = "override.export_role_order";
         let order = array(Some(order), path)?;
+        // zod checks an array's upper size bound before its elements.
+        if order.len() > 4 {
+            return fail(path, "Too big: expected array to have exactly 4 items");
+        }
         for (index, id) in order.iter().enumerate() {
             option(Some(id), &format!("{path}.{index}"), ROLE_IDS)?;
         }
         if order.len() < 4 {
             return fail(path, "Too small: expected array to have exactly 4 items");
-        }
-        if order.len() > 4 {
-            return fail(path, "Too big: expected array to have exactly 4 items");
         }
         if !unique(order) {
             return fail(path, "must list each role id exactly once");
