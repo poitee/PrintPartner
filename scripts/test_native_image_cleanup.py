@@ -513,6 +513,64 @@ class NativeDiagnosticTest(unittest.TestCase):
                     self.assertIn('device probes skipped',
                                   json.loads((after / 'devices.json').read_text())['note'])
 
+    def test_corrupt_receipts_do_not_skip_device_probes(self):
+        force = json.dumps({'command': ['hdiutil', 'detach', '-force', '/dev/disk42'], 'status': 16})
+        for name, owned, forces, devices, unreadable in (
+            ('truncated owned', '[{"system-entities": [{"dev-entry": "/dev/di', force + '\n',
+             ['/dev/disk42'], ['owned.json: JSONDecodeError']),
+            ('truncated force line', '[]', force + '\n{"command": ["hdiu',
+             ['/dev/disk42'], ['force-status.jsonl: JSONDecodeError']),
+            ('wrong shape', '{"images": []}', '{"status": 16}\n',
+             [], ['owned.json: AttributeError', 'force-status.jsonl: KeyError']),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / 'pp-source-case.fixture/fixtures.sparseimage'
+                image.parent.mkdir()
+                image.touch()
+                (root / 'diagnostics/before').mkdir(parents=True)
+                (root / 'diagnostics/before/owned.json').write_text(owned)
+                (root / 'diagnostics/force-status.jsonl').write_text(forces)
+                tools = root / 'bin'
+                tools.mkdir()
+                for tool, body in (
+                    ('real-hdiutil', f'import sys; sys.stdout.buffer.write({plistlib.dumps({"images": []})!r})'),
+                    ('real-lsof', 'print("holders")'),
+                    ('diskutil', 'print("diskutil")'),
+                    ('ioreg', 'print("ioreg")'),
+                    ('sudo', 'print("privileged")'),
+                ):
+                    (tools / tool).write_text(f'#!{sys.executable}\n{body}\n')
+                    (tools / tool).chmod(0o755)
+                real = {'hdiutil': str(tools / 'real-hdiutil'), 'lsof': str(tools / 'real-lsof')}
+                with patch.dict(os.environ, PATH=f'{tools}:{os.environ["PATH"]}'):
+                    after_workflow(root, real)
+                after = root / 'diagnostics/after'
+                receipt = json.loads((after / 'devices.json').read_text())
+                self.assertEqual(receipt['devices'], devices)
+                self.assertEqual([': '.join(entry.split(': ', 2)[:2])
+                                  for entry in receipt['unreadable']], unreadable)
+                self.assertEqual((after / 'holders.out').read_text(), 'holders\n')
+                for probe_name in ('disk42-diskutil', 'system-log'):
+                    self.assertEqual((after / f'{probe_name}.json').is_file(), bool(devices))
+                if devices:
+                    self.assertEqual(json.loads((after / 'holders.json').read_text())['command'][-2:],
+                                     ['/dev/disk42', '/dev/rdisk42'])
+                    self.assertEqual((after / 'disk42-diskutil.out').read_text(), 'diskutil\n')
+
+    def test_retention_keeps_workflow_output_after_early_failure(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as evidence:
+            root = Path(directory) / 'pp image cleanup early'
+            root.mkdir()
+            destination = retain(root, evidence, 'hdiutil attach exited with status 23\n')
+            self.assertEqual(destination, Path(evidence) / root.name)
+            self.assertEqual((destination / 'workflow.txt').read_text(),
+                             'hdiutil attach exited with status 23\n')
+            errors = (destination / 'retention-errors.txt').read_text().splitlines()
+            self.assertEqual([error.split(':', 1)[0] for error in errors], ['diagnostics', 'trace'])
+            self.assertEqual(sorted(path.name for path in destination.iterdir()),
+                             ['retention-errors.txt', 'workflow.txt'])
+
 
 if __name__ == '__main__':
     unittest.main()

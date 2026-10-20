@@ -62,20 +62,36 @@ def force_status(root, command, status):
         print(f'Native force receipt failed: {error}', flush=True)
 
 
+def dev_entries(images):
+    return {entity['dev-entry'] for image in images
+            for entity in image.get('system-entities', []) if 'dev-entry' in entity}
+
+
 def after_workflow(root, real):
     owned = census(root, real, 'after')
     directory = root / 'diagnostics' / 'after'
+    unreadable = []
+
+    def receipt(path, text, parse):
+        # A corrupt receipt must not skip the probes for devices named elsewhere.
+        try:
+            return parse(text)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
+            unreadable.append(f'{path.name}: {type(error).__name__}: {error}')
+            return set()
+
     before = root / 'diagnostics' / 'before' / 'owned.json'
+    devices = dev_entries(owned)
     if before.exists():
-        owned += json.loads(before.read_text())
-    devices = {entity['dev-entry'] for image in owned
-               for entity in image.get('system-entities', []) if 'dev-entry' in entity}
+        devices |= receipt(before, before.read_text(), lambda text: dev_entries(json.loads(text)))
     forces = root / 'diagnostics' / 'force-status.jsonl'
     if forces.exists():
-        devices.update(json.loads(line)['command'][-1] for line in forces.read_text().splitlines())
+        for line in forces.read_text().splitlines():
+            devices |= receipt(forces, line, lambda text: {json.loads(text)['command'][-1]})
     devices = sorted(devices)
     (directory / 'devices.json').write_text(json.dumps({
-        'devices': devices, 'note': '' if devices else 'No owned devices identified; device probes skipped'
+        'devices': devices, 'note': '' if devices else 'No owned devices identified; device probes skipped',
+        'unreadable': unreadable,
     }, indent=2) + '\n')
     nodes = sorted(set(devices + [device.replace('/dev/disk', '/dev/rdisk', 1)
                                   for device in devices if device.startswith('/dev/disk')]))
@@ -99,7 +115,17 @@ def after_workflow(root, real):
 def retain(root, destination, output):
     """Copy receipts before assertions or disposable-fixture cleanup can fail."""
     destination = Path(destination) / root.name
-    shutil.copytree(root / 'diagnostics', destination, dirs_exist_ok=True)
+    destination.mkdir(parents=True, exist_ok=True)
     (destination / 'workflow.txt').write_text(output)
-    shutil.copy2(root / 'trace', destination / 'trace')
+    errors = []
+    try:
+        shutil.copytree(root / 'diagnostics', destination, dirs_exist_ok=True)
+    except OSError as error:
+        errors.append(f'diagnostics: {error}')
+    try:
+        shutil.copy2(root / 'trace', destination / 'trace')
+    except OSError as error:
+        errors.append(f'trace: {error}')
+    if errors:
+        (destination / 'retention-errors.txt').write_text('\n'.join(errors) + '\n')
     return destination

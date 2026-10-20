@@ -91,7 +91,12 @@ assertions remain unchanged.
 
 Device probes use the union of before/after image identities and recorded force
 command targets. An empty device list gets an explicit receipt. A failed early
-image query therefore cannot suppress the later raw-device census. The baseline
+image query therefore cannot suppress the later raw-device census. A corrupt or
+truncated `owned.json` or `force-status.jsonl` line is listed under `unreadable`
+in `devices.json`; devices named by the other receipts are still probed.
+Retention writes `workflow.txt` first, so the workflow output survives a run that
+fails before any receipt or trace exists; copy failures go to
+`retention-errors.txt`. The baseline
 can delay the first force by up to four 3-second probes, so a passing repetition
 alone cannot establish that the eject race is fixed.
 
