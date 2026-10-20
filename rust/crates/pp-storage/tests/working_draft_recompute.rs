@@ -1352,3 +1352,159 @@ fn large_quantity_public_json_matches_node_for_integer_and_float_values() {
         br#"{"quantityOverride":null,"id":1000000000000000128}"#
     );
 }
+
+fn quantity_case(files: Value, setup: &[String]) -> Value {
+    let mut case = node("created-then-replayed");
+    case["files"] = files;
+    case["setup"] = json!(setup);
+    case
+}
+fn naming(regex: &str) -> String {
+    json!({"naming":{"use_defaults":false,"override":{"quantity":{"regex":regex,"default":1}}}})
+        .to_string()
+        .replace('\'', "''")
+}
+fn quantity_parts(outcome: &Value) -> Vec<(String, String, String, Value)> {
+    outcome["draft"]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            (
+                p["partKey"].as_str().unwrap().into(),
+                p["sourceLayer"].as_str().unwrap().into(),
+                p["status"].as_str().unwrap().into(),
+                p["quantityInferred"].clone(),
+            )
+        })
+        .collect()
+}
+
+/// Each layer parses quantities and strips slugs with its own naming profile:
+/// the base layer keeps the default `x` regex while the kit layer overrides it
+/// with `q`, so the same filename shapes resolve differently per layer.
+#[test]
+fn preparation_quantity_regexes_are_profile_scoped() {
+    let files = json!([
+        "base_x2.stl",
+        "base.stl",
+        "base_q3.stl",
+        "kit_q5.stl",
+        "kit.stl",
+        "kit_x4.stl"
+    ]);
+    let case = quantity_case(
+        files.clone(),
+        &[
+            r#"UPDATE projects SET imported_paths='["base_x2.stl","base.stl","base_q3.stl"]' WHERE id=1"#.into(),
+            format!(
+                r#"INSERT INTO projects(id,tenant_id,name,url,local_path,imported_paths,metadata_json) VALUES(2,'default','Kit','https://example.invalid/kit','/kit','["kit_q5.stl","kit.stl","kit_x4.stl"]','{}')"#,
+                naming(r"[ _]q([0-9]+)\.stl$")
+            ),
+            "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',1,1,'overlay',2)".into(),
+        ],
+    );
+    let f = Fixture::new(&case);
+    let owner = f.open();
+    let outcome = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "profile-scoped",
+        true,
+        1,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    owner.shutdown().unwrap();
+    let part = |key: &str, layer: &str, status: &str, quantity: Value| {
+        (key.into(), layer.into(), status.into(), quantity)
+    };
+    assert_eq!(
+        quantity_parts(&outcome),
+        vec![
+            part("base_q3.stl", "base:Fixture Source", "base", json!(1)),
+            part("base_x2.stl", "base:Fixture Source", "conflict", json!(2)),
+            part("base.stl", "base:Fixture Source", "conflict", json!(1)),
+            part("kit_q5.stl", "overlay:Kit", "conflict", json!(5)),
+            part("kit_x4.stl", "overlay:Kit", "added", json!(1)),
+            part("kit.stl", "overlay:Kit", "conflict", json!(1)),
+        ]
+    );
+}
+
+/// Pins the quantity and slug results the parser produced before its regexes
+/// moved onto the captured profile, then checks a refusal leaves rows and files
+/// untouched.
+#[test]
+fn preparation_quantity_output_is_unchanged() {
+    let regex = naming(r"_n([-+]?[0-9]*[a-z ]*)\.stl$");
+    let setup = [format!(
+        "UPDATE projects SET metadata_json='{regex}' WHERE id=1"
+    )];
+    let files = json!([
+        "a_n0.stl",
+        "b_n-2.stl",
+        "c_n+7.stl",
+        "d_n12x.stl",
+        "e.STL",
+        "d.stl",
+        "f_n 9 .stl",
+        "g_n3.stl",
+        "g.stl"
+    ]);
+    let f = Fixture::new(&quantity_case(files.clone(), &setup));
+    let owner = f.open();
+    let outcome = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "unchanged",
+        true,
+        1,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    owner.shutdown().unwrap();
+    let expected: Vec<_> = [
+        ("a_n0.stl", "base", 1),
+        ("b_n-2.stl", "base", 1),
+        ("c_n+7.stl", "base", 7),
+        ("d_n12x.stl", "base", 12),
+        ("d.stl", "base", 1),
+        ("e.stl", "base", 1),
+        ("f_n 9 .stl", "base", 1),
+        ("g_n3.stl", "conflict", 3),
+        ("g.stl", "conflict", 1),
+    ]
+    .into_iter()
+    .map(|(key, status, quantity)| {
+        let layer = "base:Fixture Source";
+        (key.into(), layer.into(), status.into(), json!(quantity))
+    })
+    .collect();
+    assert_eq!(quantity_parts(&outcome), expected);
+
+    let files = json!(["a_n2.stl", "h_nabc.stl"]);
+    let f = Fixture::new(&quantity_case(files.clone(), &setup));
+    let before = f.recorded_rows();
+    let file = f.path.join("repos/1/revisions/fixture/h_nabc.stl");
+    let owner = f.open();
+    let error = recompute(
+        &owner,
+        f.reads(&files, &Value::Null, None),
+        PreparationLimits::default(),
+        "refused",
+        true,
+        1,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap_err();
+    owner.shutdown().unwrap();
+    assert_eq!(
+        error.to_string(),
+        "NOT NULL constraint failed: plan_draft_parts.quantity_inferred"
+    );
+    assert_eq!(f.recorded_rows(), before);
+    assert_eq!(std::fs::read(file).unwrap(), b"h_nabc.stl");
+}
