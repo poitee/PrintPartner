@@ -321,7 +321,7 @@ fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
     assert_eq!(cases.len(), 11);
     for case in cases {
         // The missing-draft and mismatched-draft tests replay the draft cases.
-        if case["body"]["code"] == "draft_not_found" {
+        if ["missing-draft", "mismatched-draft"].contains(&case["id"].as_str().unwrap()) {
             continue;
         }
         if case["status"] == 404 {
