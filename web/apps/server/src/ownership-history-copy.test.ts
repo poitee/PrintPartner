@@ -1426,3 +1426,67 @@ it.each(["nonempty-publication", "file", "directory", "symlink", "leaf-symlink",
     expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
     expect(stlTreeState(paths.sourceDir)).toEqual(before);
   });
+
+it.each([
+  { profile: 1, tenant: "account-a", segment: "revision-1" },
+  { profile: 3, tenant: "account-a", segment: "empty" },
+] as const)("leaves crash-left $segment accepted STL stages behind and copies the published tree", async ({ profile, tenant, segment }) => {
+  const paths = fixture();
+  if (profile === 3) edit(paths.sourceDir, raw => raw.exec("INSERT INTO build_profiles (id,name) VALUES (3,'Empty Plan')"));
+  const source = await materializeStls(paths.sourceDir, "default", profile);
+  if (source.kind !== "materialized") throw new Error(`Missing STL publication ${source.kind}`);
+  edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); });
+  const published = manifest(paths.sourceDir);
+  const stage = mkdtempSync(join(source.rootPath, "..", ".tmp-"));
+  cpSync(source.rootPath, stage, { recursive: true });
+  writeFileSync(join(stage, ".part-1.source"), "partial");
+  expect(stage).toMatch(new RegExp(`/accepted-stl/profile-${profile}/${segment}/all/color/\\.tmp-[A-Za-z0-9]{6}$`));
+  const input = manifest(paths.sourceDir);
+  expect(input).toEqual(published);
+  expect(input.exports.some(file => file.path.includes("/.tmp-"))).toBe(false);
+  const before = stlTreeState(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  const relative = source.rootPath.slice(tenantExportDirectory(join(paths.sourceDir, "exports"), "default").length + 1);
+  const target = join(tenantExportDirectory(join(paths.destinationDir, "exports"), tenant), relative);
+  expect(existsSync(join(target, ".."))).toBe(segment !== "empty");
+  if (segment !== "empty") expect(readdirSync(join(target, ".."))).toEqual([relative.split("/").at(-1)]);
+  for (let restart = 0; restart < 2; restart++) {
+    const reopened = await materializeStls(paths.destinationDir, tenant, profile);
+    if (reopened.kind !== "materialized") throw new Error(`Copied STL unavailable ${reopened.kind}`);
+    expect(reopened.rootPath).toBe(target);
+    expect(readdirSync(join(target, "..")).filter(name => name.startsWith(".tmp-"))).toEqual([]);
+  }
+  expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports.map(file => file.path.replace(`${tenantExportDirectory("", tenant)}/`, "")))
+    .toEqual(input.exports.map(file => file.path.replace("tenant-default/", "")));
+});
+
+it.each(["stage-file", "stage-symlink", "short-name", "long-name", "unknown-revision", "wrong-scope", "unknown-profile", "selection", "grouping"])(
+  "refuses %s crash-left accepted STL stages without publishing", async kind => {
+    const paths = fixture();
+    const publication = await materializeStls(paths.sourceDir, "default", 1);
+    if (publication.kind !== "materialized") throw new Error("Missing STL publication");
+    const input = manifest(paths.sourceDir);
+    const parent = join(publication.rootPath, "..");
+    const stage = mkdtempSync(join(parent, ".tmp-"));
+    cpSync(publication.rootPath, stage, { recursive: true });
+    const moved = kind === "unknown-revision" ? stage.replace("revision-1", "revision-999")
+      : kind === "wrong-scope" ? stage.replace("tenant-default", "tenant-account-a")
+      : kind === "unknown-profile" ? stage.replace("profile-1", "profile-999")
+      : kind === "selection" ? stage.replace("/all/", "/other/")
+      : kind === "grouping" ? stage.replace("/color/", "/other/")
+      : kind === "short-name" ? join(parent, ".tmp-abc")
+      : kind === "long-name" ? join(parent, ".tmp-abcdefg") : null;
+    if (moved) {
+      cpSync(stage, moved, { recursive: true });
+      rmSync(stage, { recursive: true });
+    }
+    if (kind === "stage-file") { rmSync(stage, { recursive: true }); writeFileSync(stage, "partial"); }
+    if (kind === "stage-symlink") { rmSync(stage, { recursive: true }); symlinkSync(publication.rootPath, stage); }
+    const before = stlTreeState(paths.sourceDir);
+    expect(() => inspectOwnershipCopy(paths)).toThrow();
+    await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow();
+    expect(existsSync(paths.destinationDir)).toBe(false);
+    expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+    expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  });
