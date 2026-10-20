@@ -26,6 +26,24 @@ fn wait_child(child: &mut Child, deadline: Instant) -> std::io::Result<Option<Ex
     }
 }
 
+// Arm before exec, then check for death between fork and prctl. These children
+// have their own groups; killing the reexec's group cannot contain them.
+fn die_with_parent(command: &mut Command) -> &mut Command {
+    let parent = std::process::id() as libc::pid_t;
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                libc::_exit(1);
+            }
+            Ok(())
+        });
+    }
+    command
+}
+
 struct CapturedReexec {
     child: Child,
     scratch: Scratch,
@@ -220,6 +238,151 @@ fn built_startup_cleanup_failure_preserves_unwinding_panic() {
     );
     for pid in [owner, peer] {
         assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    }
+}
+
+const LIFETIME_MODE: &str = "PP_COMPAT_BUILT_STARTUP_LIFETIME_MODE";
+const LIFETIME_ROOT: &str = "PP_COMPAT_BUILT_STARTUP_LIFETIME_ROOT";
+const LIFETIME_TEST: &str = "ticket_t_2::built_startup::built_startup_reexec_contains_descendants";
+
+fn lifetime_command(mode: &str, root: &Path) -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", LIFETIME_TEST, "--format=pretty", "--color=never"])
+        .env(LIFETIME_MODE, mode)
+        .env(LIFETIME_ROOT, root);
+    command
+}
+
+// The isolated observer reaps the killed fixture's orphans. Never set
+// subreaper state in the shared test runner, where other tests spawn children.
+#[test]
+fn built_startup_reexec_contains_descendants() {
+    use std::os::fd::AsRawFd;
+
+    let Some(mode) = std::env::var_os(LIFETIME_MODE) else {
+        let scratch = Scratch::new("built-lifetime");
+        let before = subreaper_state();
+        let output = reexec_output(&mut lifetime_command("observer", &scratch.root));
+        assert_reexec_passed(&output, LIFETIME_TEST);
+        assert_eq!(subreaper_state(), before);
+        return;
+    };
+    let root = PathBuf::from(std::env::var_os(LIFETIME_ROOT).unwrap());
+    match mode.to_str().unwrap() {
+        "owner" => {
+            let storage = File::open("/dev/null").unwrap();
+            let mut backend = tokio::process::Command::new("/bin/sleep");
+            backend.arg("600");
+            let (_read, _guard) =
+                crate::parent_death::configure_child(&mut backend, storage.as_raw_fd()).unwrap();
+            let backend = backend.as_std_mut().spawn().unwrap();
+            std::fs::write(root.join("backend.tmp"), backend.id().to_string()).unwrap();
+            std::fs::rename(root.join("backend.tmp"), root.join("backend")).unwrap();
+            loop {
+                std::thread::park();
+            }
+        }
+        "fixture" => {
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+                0
+            );
+            let owner = die_with_parent(&mut lifetime_command("owner", &root))
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            startup_wait(CLEANUP_LIMIT, "disposable backend never started", || {
+                root.join("backend").exists()
+            });
+            let backend: u32 = std::fs::read_to_string(root.join("backend"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let peer = die_with_parent(Command::new("/bin/sleep").arg("600"))
+                .process_group(backend as i32)
+                .spawn()
+                .unwrap();
+            unsafe {
+                assert_eq!(libc::getpgid(owner.id() as i32), owner.id() as i32);
+                assert_eq!(libc::getpgid(backend as i32), backend as i32);
+                assert_eq!(libc::getpgid(peer.id() as i32), backend as i32);
+                assert_eq!(libc::kill(backend as i32, libc::SIGSTOP), 0);
+            }
+            assert_ne!(owner.id(), backend);
+            let mut pids = children_of(owner.id());
+            pids.extend([owner.id(), peer.id()]);
+            write_json(&root.join("ready.tmp"), &json!(pids));
+            std::fs::rename(root.join("ready.tmp"), root.join("ready")).unwrap();
+            loop {
+                std::thread::park();
+            }
+        }
+        "observer" => {
+            assert_eq!(
+                unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
+                0
+            );
+            let mut survivors = Vec::new();
+            for external_sigkill in [false, true] {
+                let scratch = Scratch::new("built-lifetime-cycle");
+                let mut fixture =
+                    CapturedReexec::spawn(&mut lifetime_command("fixture", &scratch.root));
+                startup_wait(CLEANUP_LIMIT, "disposable fixture never armed", || {
+                    scratch.root.join("ready").exists()
+                });
+                let pids: Vec<u32> =
+                    serde_json::from_slice(&std::fs::read(scratch.root.join("ready")).unwrap())
+                        .unwrap();
+                // Owner, backend, production watcher, and peer must all exist.
+                assert_eq!(pids.len(), 4);
+                let started = Instant::now();
+                if external_sigkill {
+                    fixture.child.kill().unwrap();
+                }
+                let output = fixture.output(Duration::from_millis(50));
+                assert!(started.elapsed() < CLEANUP_LIMIT);
+                assert_eq!(output.status.signal(), Some(libc::SIGKILL));
+                let deadline = Instant::now() + CLEANUP_LIMIT;
+                let absent = loop {
+                    for pid in &pids {
+                        unsafe {
+                            libc::waitpid(*pid as i32, std::ptr::null_mut(), libc::WNOHANG);
+                        }
+                    }
+                    if pids.iter().all(|pid| startup_process_state(*pid).is_none()) {
+                        break true;
+                    }
+                    if Instant::now() >= deadline {
+                        break false;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                };
+                // Also clean up the deliberately broken version used to prove
+                // this regression: every child belongs to this observer alone.
+                if !absent {
+                    survivors.push(external_sigkill);
+                    for pid in &pids {
+                        unsafe {
+                            libc::kill(*pid as i32, libc::SIGKILL);
+                        }
+                    }
+                }
+                startup_wait(CLEANUP_LIMIT, "disposable cleanup left children", || {
+                    for pid in &pids {
+                        unsafe {
+                            libc::waitpid(*pid as i32, std::ptr::null_mut(), libc::WNOHANG);
+                        }
+                    }
+                    pids.iter().all(|pid| startup_process_state(*pid).is_none())
+                });
+            }
+            assert!(
+                survivors.is_empty(),
+                "reexec death left descendants; external SIGKILL cases: {survivors:?}"
+            );
+        }
+        mode => panic!("unknown lifetime mode: {mode}"),
     }
 }
 
@@ -450,15 +613,17 @@ impl BuiltStartupFixture {
             std::thread::sleep(Duration::from_millis(10));
         };
         let groups_absent = self.backend.is_none_or(crate::drain::process_group_absent);
-        write_json(
-            &self.evidence.join("guard-cleanup.json"),
+        let evidence = File::create(self.evidence.join("guard-cleanup.json")).unwrap();
+        serde_json::to_writer_pretty(
+            evidence,
             &json!({
                 "external_sigkill": external, "positive_verified_before_cleanup": self.verified,
                 "owner_absent": !Path::new(&format!("/proc/{}", self.owner.id())).exists(),
                 "adopted_pids_absent": self.adopted,
                 "backend_group_absent": groups_absent, "events": events(),
             }),
-        );
+        )
+        .unwrap();
         assert!(reaped, "cleanup failed to reap fixture children");
         assert!(groups_absent, "cleanup left built backend group");
     }
@@ -566,14 +731,16 @@ fn ticket_t_3_drain_built_release_startup_parent_death() {
         let _ = std::fs::remove_file(bundle.web_root.join("startup-events.jsonl"));
         let scratch = Scratch::new("built-startup");
         let stdout = std::fs::File::create(output.join("owner.log")).unwrap();
-        let owner = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", OWNER_TEST, "--nocapture"])
-            .env(OWNER_ROOT, &scratch.root)
-            .process_group(0)
-            .stdout(stdout.try_clone().unwrap())
-            .stderr(stdout)
-            .spawn()
-            .unwrap();
+        let owner = die_with_parent(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", OWNER_TEST, "--nocapture"])
+                .env(OWNER_ROOT, &scratch.root),
+        )
+        .process_group(0)
+        .stdout(stdout.try_clone().unwrap())
+        .stderr(stdout)
+        .spawn()
+        .unwrap();
         let mut fixture = BuiltStartupFixture {
             owner,
             peer: None,
@@ -613,8 +780,7 @@ fn ticket_t_3_drain_built_release_startup_parent_death() {
             std::fs::canonicalize(&bundle.node).unwrap()
         );
         fixture.peer = Some(
-            Command::new("/bin/sleep")
-                .arg("600")
+            die_with_parent(Command::new("/bin/sleep").arg("600"))
                 .process_group(pid as i32)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
