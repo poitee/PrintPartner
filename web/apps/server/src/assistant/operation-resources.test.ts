@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative, isAbsolute, sep } from "node:path";
+import { dirname, join, relative, isAbsolute, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -2085,6 +2085,17 @@ function resourcesForSnapshotSelect(statement: unknown, tenantId: string, planId
   return resourcesForPlanSelect(sql, tenantId);
 }
 
+function resourcesForSnapshotFiles(files: [string, ...unknown[]][], workspaceRoots: string[], catalogCandidates: string[]): string[] {
+  const resources = new Set<string>();
+  for (const [api, candidate] of files) {
+    const path = z.string().parse(candidate);
+    if (catalogCandidates.includes(path)) resources.add("file:kit-catalog");
+    else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
+    else throw new Error(`Unclassified plan snapshot path: ${api} ${path}`);
+  }
+  return [...resources];
+}
+
 async function tracePlanSnapshot({ input = {}, expected, files = [], tenantId = "default", activePlanId, planId, repository = repo, catalogDir = dataDir }: {
   input?: Record<string, unknown>; expected: string[]; files?: [string, ...unknown[]][]; tenantId?: string; activePlanId?: number; planId?: number; repository?: AppRepository; catalogDir?: string | null;
 }) {
@@ -2096,11 +2107,13 @@ async function tracePlanSnapshot({ input = {}, expected, files = [], tenantId = 
   finally { observer.state.active = false; }
   const observed = [...new Set(statements.flatMap((sql) => resourcesForSnapshotSelect(sql, tenantId, planId)))].sort();
   expect(observed).toEqual(expected);
-  expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+  const observedFiles = observer.state.files.map(({ api, args }): [string, ...unknown[]] => [api, ...args]);
+  expect(observedFiles).toEqual(files);
   const union = unions.get("get_plan_snapshot") ?? new Set<string>();
   for (const resource of observed) union.add(resource);
-  if (files.some(([api]) => api === "readFileSync")) union.add("file:kit-catalog");
-  if (files.some(([api]) => api !== "readFileSync")) union.add("file:source-workspace");
+  const catalogRoot = catalogDir ?? process.env.PRINT_PARTNER_DATA_DIR;
+  const candidates = [...(catalogRoot ? deploymentCatalogCandidates(resolve(catalogRoot)) : []), ...SHIPPED_CATALOG_CANDIDATES];
+  for (const resource of resourcesForSnapshotFiles(observedFiles, [join(dataDir, "repos"), root, userRoot], candidates)) union.add(resource);
   unions.set("get_plan_snapshot", union);
   return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
 }
@@ -2178,6 +2191,12 @@ it("traces get_plan_snapshot workspace probes and exact catalog candidates inclu
     fs.rmSync(path);
   }
   const read = (paths: string[]): [string, ...unknown[]][] => paths.map((path) => ["readFileSync", path, "utf8"]);
+  const relativeDataDir = relative(process.cwd(), dataDir);
+  expect(isAbsolute(relativeDataDir)).toBe(false);
+  fs.writeFileSync(candidates[1]!, "version: 1\n");
+  expect(await tracePlanSnapshot({ ...options, catalogDir: relativeDataDir, files: [...probes, ...read(candidates.slice(0, 2))] })).toEqual(snapshot);
+  fs.rmSync(candidates[1]!);
+  expect(await tracePlanSnapshot({ ...options, catalogDir: relativeDataDir, files: [...probes, ...read([...candidates, ...shipped.slice(0, 2)])] })).toEqual(snapshot);
   for (const [index, path] of candidates.entries()) fs.writeFileSync(path, ["[]", "[invalid", "null", "version: 1\n"][index]!);
   expect(await tracePlanSnapshot({ ...options, files: [...probes, ...read(candidates)] })).toEqual(snapshot);
   for (const path of candidates) fs.rmSync(path);
@@ -2205,6 +2224,36 @@ it("traces get_plan_snapshot workspace probes and exact catalog candidates inclu
   if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_snapshot declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(SNAPSHOT_UNION);
   expect(() => resourcesForSnapshotSelect('select * from "source_docs"', "default", plan.id)).toThrow("Unsupported SQL:");
+});
+
+it("classifies plan snapshot file reads by path and rejects unknown reads and probes", () => {
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const catalog = candidates[0]!;
+  fs.writeFileSync(catalog, '{"version":1}');
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    fs.readFileSync(join(root, "README.md"), "utf8");
+    fs.readFileSync(catalog, "utf8");
+    fs.statSync(catalog);
+  } finally { observer.state.active = false; }
+  const files = observer.state.files.map(({ api, args }): [string, ...unknown[]] => [api, ...args]);
+  expect(files).toEqual([["readFileSync", join(root, "README.md"), "utf8"], ["readFileSync", catalog, "utf8"], ["statSync", catalog]]);
+  expect(resourcesForSnapshotFiles(files.slice(0, 1), [root], candidates)).toEqual(["file:source-workspace"]);
+  expect(resourcesForSnapshotFiles(files.slice(2), [root], candidates)).toEqual(["file:kit-catalog"]);
+  expect(resourcesForSnapshotFiles(files, [root], candidates)).toEqual(["file:source-workspace", "file:kit-catalog"]);
+  for (const path of [join(dataDir, "unclassified.txt"), join(`${root}-sibling`, "README.md"), join(dirname(SHIPPED_CATALOG_CANDIDATES[0]!), "unclassified.json")]) {
+    observer.state.files = [];
+    observer.state.active = true;
+    try {
+      expect(() => fs.readFileSync(path, "utf8")).toThrow("ENOENT");
+      fs.existsSync(path);
+    } finally { observer.state.active = false; }
+    for (const { api, args } of observer.state.files) {
+      expect(() => resourcesForSnapshotFiles([[api, ...args]], [root], [...candidates, ...SHIPPED_CATALOG_CANDIDATES])).toThrow(`Unclassified plan snapshot path: ${api} ${path}`);
+    }
+    expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync", "existsSync"]);
+  }
 });
 
 
@@ -2282,6 +2331,12 @@ it("traces get_kit_catalog real catalogs, fallbacks and tenant independence with
     fs.rmSync(path);
   }
   const shippedSummary = ["## Kit catalog (summarized)", "### Bases", "### Addon categories", ...["toolhead", "extruder", "hotend", "toolhead_electronics", "probe", "controller", "cable_routing", "z_drives"].map((id) => `- ${id} [pick_one]: —`), "- skirts_panels [pick_any]: —", "- accent [pick_any]: —", "### Stack presets"].join("\n");
+  const relativeDataDir = relative(process.cwd(), dataDir);
+  expect(isAbsolute(relativeDataDir)).toBe(false);
+  fs.writeFileSync(candidates[1]!, JSON.stringify(catalog));
+  await trace(summary, candidates.slice(0, 2), relativeDataDir);
+  fs.rmSync(candidates[1]!);
+  await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)], relativeDataDir);
   await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)]);
   for (const [index, path] of candidates.entries()) fs.writeFileSync(path, ["[]", "[invalid", "null", "[invalid"][index]!);
   await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)]);
