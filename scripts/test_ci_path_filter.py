@@ -34,6 +34,7 @@ class CiPathFilterTests(unittest.TestCase):
     def test_native_inputs(self):
         for path in ["rust/crates/pp-desktop/src/main.rs", "web/apps/web/src/App.tsx",
                      ".github/workflows/desktop-native-macos.yml",
+                     "scripts/native_image_diagnostics.py",
                      "scripts/test_native_image_cleanup.py", "scripts/ci-path-filter.py",
                      ".cursor/skills/verify-print-partner-rust/helpers/test_launch.py",
                      ".cursor/skills/verify-print-partner-rust/helpers/verify.py",
@@ -94,6 +95,10 @@ class CiPathFilterTests(unittest.TestCase):
             helper = commit(".cursor/skills/verify-print-partner-rust/helpers/verify.py")
             self.assertEqual(select(base, helper, "native")[0], "relevant=true\n")
             self.assertEqual(select(base, helper, "rust")[0], "relevant=false\n")
+            git("checkout", "-q", "--detach", base)
+            diagnostics = commit("scripts/native_image_diagnostics.py")
+            self.assertEqual(select(base, diagnostics, "native")[0], "relevant=true\n")
+            self.assertEqual(select(base, diagnostics, "rust")[0], "relevant=false\n")
             git("checkout", "-q", "--detach", base)
             fixture = commit("fixtures/parity/jobs-model/jobs-model.json")
             self.assertEqual(select(base, fixture, "rust")[0], "relevant=true\n")

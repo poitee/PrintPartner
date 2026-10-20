@@ -454,12 +454,22 @@ jobs:
         with:
           tool: nextest@0.9.148
       - name: Test owned image cleanup and native holder reporting
+        env:
+          PP_NATIVE_IMAGE_EVIDENCE: ${{ runner.temp }}/native-image-evidence
         run: |
           python3 scripts/test_native_image_cleanup.py -v
           for attempt in {1..10}; do
             echo "Native holder cleanup repetition $attempt/10"
             python3 scripts/test_native_image_cleanup.py CleanupTest.test_native_busy_image_reports_real_holder_before_force -v
           done
+      - name: Preserve native image diagnostic receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-image-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-image-evidence/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify source Unicode and case regressions on macOS
         shell: bash
         run: |
