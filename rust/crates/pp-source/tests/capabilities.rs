@@ -314,6 +314,57 @@ fn max_flat_snapshot_publishes_and_retries_cleanly() {
 }
 
 #[test]
+fn published_paths_stop_one_byte_short_of_path_max() {
+    let path_max = if cfg!(target_os = "macos") {
+        1024
+    } else {
+        4096
+    };
+    let fixture = Fixture::new();
+    // Revision keys "fits" and "fits2" give the same file stored paths one
+    // byte apart.
+    let prefix = fixture.0.join("repos/42/revisions/fits/");
+    let mut label = String::new();
+    while path_max - 1 - prefix.as_os_str().len() - label.len() > 250 {
+        label.push_str(&"d".repeat(99));
+        label.push('/');
+    }
+    let file = path_max - 1 - prefix.as_os_str().len() - label.len();
+    label.push_str(&format!("{}.stl", "f".repeat(file - 4)));
+    assert_eq!(prefix.as_os_str().len() + label.len(), path_max - 1);
+    let input = fixture.0.join("input").join(&label);
+    fs::create_dir_all(input.parent().unwrap()).unwrap();
+    fs::write(&input, b"solid long").unwrap();
+    let mut req = request();
+    req.files[0].path = SourcePath::try_from(label.clone()).unwrap();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = fixture.repos().source(42).unwrap();
+
+    req.upstream_revision_key = "fits2".into();
+    let error = source
+        .materialize(req.clone(), &input, budget())
+        .unwrap_err();
+    assert_eq!(error.category(), "stored-path-too-long");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "stored-path-too-long: {label} would be stored at an absolute path of {} bytes; \
+             this system opens paths of at most {} bytes",
+            path_max,
+            path_max - 1
+        )
+    );
+    let revisions = fixture.0.join("repos/42/revisions");
+    assert!(!revisions.join("fits2").exists());
+    assert!(!revisions.join(".pp-source-candidate").exists());
+
+    req.upstream_revision_key = "fits".into();
+    let published = source.materialize(req, &input, budget()).unwrap();
+    assert_eq!(published.publication, Publication::Created);
+    assert_eq!(fs::read(prefix.join(&label)).unwrap(), b"solid long");
+}
+
+#[test]
 fn cli_retry_reuses_revision_after_inputs_are_deleted() {
     use std::io::Write;
     use std::process::Stdio;
