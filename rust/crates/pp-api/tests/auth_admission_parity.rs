@@ -1057,6 +1057,8 @@ fn node_auth_admission_snapshot_is_current() {
             "--conditions=development",
             "fixtures/parity/auth-admission/generate.mjs",
             "--check",
+            // The auth-admission-freshness workflow owns the canonical Node 22.23.3 gate.
+            "--additional-runtime",
         ])
         .output()
         .unwrap();
@@ -1066,7 +1068,7 @@ fn node_auth_admission_snapshot_is_current() {
         "Node freshness failed:\n{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("auth admission: 32 real-listener cases passed"));
+    assert!(stdout.contains("auth admission: 32 real-listener cases passed on "));
 }
 #[test]
 fn comparator_rejects_response_and_work_changes() {

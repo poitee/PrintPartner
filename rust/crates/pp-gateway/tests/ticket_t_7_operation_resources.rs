@@ -27,17 +27,39 @@ fn malformed(detail: &str) -> AdmissionError {
 
 #[test]
 fn ticket_t_7_ownership_plan_decisions_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.get_plan_decisions",
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_create_source_category_proposal_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_create_source_category",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_create_source_category_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_create_source_category");
+}
+
+fn assert_sqlite_tool_resources(id: &str, expected: Value) {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
-    let id = "tool.get_plan_decisions";
     let index = admit_bundled_manifest().unwrap();
     let resources = index
         .resources_for(id)
-        .expect("plan decision resources must be reviewed");
-    let expected: ResourceSet = serde_json::from_value(json!([
-        {"kind": "table", "name": "build_profiles"},
-        {"kind": "table", "name": "plan_decisions"}
-    ]))
-    .unwrap();
+        .expect("SQLite tool resources must be reviewed");
+    let expected: ResourceSet = serde_json::from_value(expected).unwrap();
     assert_eq!(resources, &expected);
     assert_eq!(
         index.lookup(id).unwrap().disposition,
@@ -271,6 +293,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.check_hardware_interfaces",
         "tool.propose_add_custom_filament",
         "tool.propose_create_build",
+        "tool.propose_create_source_category",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -294,8 +317,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 28);
-    assert_eq!(unresolved.len(), 415);
+    assert_eq!(reviewed.len(), 29);
+    assert_eq!(unresolved.len(), 414);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -561,6 +584,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.check_hardware_interfaces",
         "tool.propose_add_custom_filament",
         "tool.propose_create_build",
+        "tool.propose_create_source_category",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -620,7 +644,15 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.propose_add_custom_filament",
             "tool.propose_create_build",
         ),
+        (
+            "tool.propose_create_build",
+            "tool.propose_create_source_category",
+        ),
         ("tool.get_workflow_help", "tool.get_plan_decisions"),
+        (
+            "tool.propose_create_source_category",
+            "tool.get_plan_decisions",
+        ),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_job_status", "tool.ui_highlight_part"),

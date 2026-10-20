@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "../../..");
+const canonicalNode = "v22.23.3";
 const email = "admission@example.test";
 const registration = { email, password: "fixture-admission-password", display_name: "Admission" };
 const tables = { users: "users", sessions: "sessions", reset_tokens: "password_reset_tokens", identities: "auth_identities" };
@@ -201,6 +202,11 @@ if (process.argv.includes("--probe")) {
   }
   writeFileSync(process.argv.at(-1), JSON.stringify(observations));
 } else {
+  const check = process.argv.includes("--check");
+  if (process.version !== canonicalNode && !(check && process.argv.includes("--additional-runtime"))) {
+    console.error(`auth admission: Node ${process.version} cannot ${check ? "check" : "capture"} the golden. Use Node ${canonicalNode} with native modules installed by it, or pass --check --additional-runtime to compare this runtime against the canonical golden.`);
+    process.exit(2);
+  }
   const env = { NODE_ENV: "test" };
   for (const key of ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SystemRoot", "USERPROFILE"]) if (process.env[key] !== undefined) env[key] = process.env[key];
   const directory = mkdtempSync(join(tmpdir(), "pp-admission-output-"));
@@ -212,7 +218,7 @@ if (process.argv.includes("--probe")) {
     observations = JSON.parse(readFileSync(result, "utf8"));
   } finally { rmSync(directory, { recursive: true, force: true }); }
   const text = `{"version":1,"cors_origin":true,"cases":[\n${observations.map((row) => JSON.stringify(row)).join(",\n")}\n]}\n`;
-  if (process.argv.includes("--check")) assert.equal(readFileSync(join(here, "node.json"), "utf8"), text, "Node fixture is stale");
+  if (check) assert.equal(readFileSync(join(here, "node.json"), "utf8"), text, "Node fixture is stale");
   else writeFileSync(join(here, "node.json"), text);
-  console.log(`auth admission: ${observations.length} real-listener cases passed`);
+  console.log(`auth admission: ${observations.length} real-listener cases passed on ${process.version === canonicalNode ? "canonical" : "additional runtime"} Node ${process.version}`);
 }

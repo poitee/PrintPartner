@@ -307,16 +307,14 @@ pub(crate) fn mark_local_failure(
         params![tenant, source_id],
         |row| row.get(0),
     )?;
-    let mut metadata = raw
-        .map(|raw| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw))
-        .transpose()?
-        .unwrap_or_default();
-    metadata.insert("sync_error".into(), detail.into());
-    metadata.insert("sync_required".into(), true.into());
     ensure!(
         tx.execute(
             "UPDATE projects SET metadata_json=?3 WHERE tenant_id=?1 AND id=?2",
-            params![tenant, source_id, serde_json::to_string(&metadata)?],
+            params![
+                tenant,
+                source_id,
+                node_json::failure_metadata(raw.as_deref(), detail)
+            ],
         )? == 1,
         "Local Source disappeared while recording failure"
     );
@@ -914,5 +912,6 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     Ok(())
 }
 
+mod node_json;
 #[cfg(test)]
 mod tests;

@@ -673,8 +673,11 @@ pub(super) fn execute(
         }
     }
 }
+fn js_space(c: char) -> bool {
+    matches!(c,'\u{0009}'..='\u{000d}'|' '|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}')
+}
 fn trim(s: &str) -> &str {
-    s.trim_matches(|c:char|matches!(c,'\u{0009}'..='\u{000d}'|' '|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}'))
+    s.trim_matches(js_space)
 }
 fn metadata(raw: Option<String>) -> Option<Map<String, Value>> {
     raw.filter(|s| !s.is_empty())
@@ -682,6 +685,28 @@ fn metadata(raw: Option<String>) -> Option<Map<String, Value>> {
             Ok(Value::Object(m)) => m,
             _ => Map::from_iter([("raw".into(), Value::String(s))]),
         })
+}
+/// `categories::normalize` over WTF-8. Lone surrogates are not whitespace, so trimming stops at them.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn normalize_category_path(category: &[u8]) -> Vec<u8> {
+    category
+        .split(|byte| *byte == b'/')
+        .map(|segment| {
+            let head = segment
+                .utf8_chunks()
+                .next()
+                .map_or("", |chunk| chunk.valid());
+            let segment = &segment[head.len() - head.trim_start_matches(js_space).len()..];
+            let tail = segment
+                .utf8_chunks()
+                .last()
+                .filter(|chunk| chunk.invalid().is_empty())
+                .map_or("", |chunk| chunk.valid());
+            &segment[..segment.len() - (tail.len() - tail.trim_end_matches(js_space).len())]
+        })
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(&b'/')
 }
 fn read_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceSummary> {
     let metadata = metadata(row.get(15)?);
