@@ -73,6 +73,8 @@ enum ReviewedEntry {
     ProposeAddCustomFilament { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_create_build")]
     ProposeCreateBuild { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_create_source_category")]
+    ProposeCreateSourceCategory { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -170,6 +172,15 @@ impl ReviewedEntry {
             Self::ProposeCreateBuild { resources } => {
                 ("tool.propose_create_build", resources, BTreeSet::new())
             }
+            Self::ProposeCreateSourceCategory { resources } => (
+                "tool.propose_create_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -414,6 +425,7 @@ impl Declarations {
             "tool.check_hardware_interfaces",
             "tool.propose_add_custom_filament",
             "tool.propose_create_build",
+            "tool.propose_create_source_category",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
