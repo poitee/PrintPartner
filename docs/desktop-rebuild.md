@@ -1752,10 +1752,11 @@ raw UNIQUE error with `LocalScanFailure::AlreadyObserved`. D17 (c) addresses
 GRE-703 item 1 by moving the test harness onto the real migration. It also removes
 the client schema prerequisite notes for GRE-707 item 6.
 `mark_local_failure`, `revalidate_source_authority` and
-`commit_source_authority_refusal` retain their tests and integration annotations;
-this schema slice adds no production callers for them. Their callers are the
-D18 (b) Sync target failure (GRE-614) and the D14 import Phase path (GRE-610). The authority helper
-reuses `AuthorityRefusalReason::of` and saves one refusal.
+`commit_source_authority_refusal` retain their tests; this schema slice adds no
+production callers for them. GRE-610 (D14 import Phase) calls the two authority
+helpers. `mark_local_failure` keeps its `dead_code` expectation until GRE-614
+(D18 source_sync) calls it. `commit_source_authority_refusal` reuses
+`AuthorityRefusalReason::of` and saves one refusal.
 
 The Node generator now also executes the local `syncProjectById` completion and
 failure paths. Rust compares four terminal document-index results and two
