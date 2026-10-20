@@ -1,6 +1,6 @@
 use pp_storage::{
     Limits, WriterOwner,
-    catalog::{NamingCommand, NamingProfile, Request},
+    catalog::{NamingCommand, NamingProfile, Outcome, Request},
 };
 use rusqlite::{Connection, types::Value as SqlValue};
 use serde_json::{Value, json};
@@ -130,7 +130,7 @@ fn cases() -> Vec<Value> {
         .collect();
     assert_eq!(
         cases.len(),
-        39,
+        54,
         "the feature-off test must exercise the capture"
     );
     cases
@@ -189,6 +189,29 @@ fn catalog_refusals_retain_exact_details_in_both_feature_modes() {
             json!(expected != case["node_preparation"].as_str().unwrap()),
             "{name}: mismatch classification"
         );
+    }
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn saving_valid_unicode_group_names_preserves_the_pattern() {
+    let fixture = Fixture::new();
+    let owner = WriterOwner::open(&fixture.0, Limits::default()).unwrap().0;
+    let client = owner.local_source_catalog();
+    for name in [r"\u0078", r"\u{78}", r"\uD835\uDC9C", r"\u{1D49C}"] {
+        let pattern = format!("(?<{name}>a)");
+        let mut profile = NamingProfile::default();
+        profile.quantity.regex = pattern.clone();
+        let Outcome::Data(saved) = client
+            .execute(Request::SaveNaming {
+                id: 1,
+                settings: NamingCommand::Override { profile },
+            })
+            .unwrap()
+        else {
+            panic!("expected saved naming data for {name}");
+        };
+        assert_eq!(saved["effective"]["quantity"]["regex"], pattern, "{name}");
     }
     owner.shutdown().unwrap();
 }

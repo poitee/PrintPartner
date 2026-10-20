@@ -247,7 +247,12 @@ fn node_regex_syntax(pattern: &str) -> bool {
                 Some(b':' | b'=' | b'!') => {}
                 Some(b'<') if group[1..].starts_with(['=', '!']) => {}
                 Some(b'<') => {
-                    let name = group[1..].split('>').next().unwrap_or_default();
+                    let Some((name, _)) = group[1..].split_once('>') else {
+                        return false;
+                    };
+                    let Some(name) = decode_group_name(name) else {
+                        return false;
+                    };
                     if names.contains(&name) {
                         return false;
                     }
@@ -258,6 +263,43 @@ fn node_regex_syntax(pattern: &str) -> bool {
         }
     }
     true
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn decode_group_name(name: &str) -> Option<Vec<u16>> {
+    let mut units = Vec::new();
+    let mut chars = name.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            units.extend_from_slice(character.encode_utf16(&mut [0; 2]));
+            continue;
+        }
+        if chars.next() != Some('u') {
+            return None;
+        }
+        let mut code = 0u32;
+        if chars.next_if_eq(&'{').is_some() {
+            let mut digits = 0;
+            loop {
+                let digit = chars.next()?;
+                if digit == '}' {
+                    break;
+                }
+                code = code.checked_mul(16)?.checked_add(digit.to_digit(16)?)?;
+                digits += 1;
+            }
+            if digits == 0 {
+                return None;
+            }
+            units.extend_from_slice(char::from_u32(code)?.encode_utf16(&mut [0; 2]));
+        } else {
+            for _ in 0..4 {
+                code = code * 16 + chars.next()?.to_digit(16)?;
+            }
+            units.push(code as u16);
+        }
+    }
+    Some(units)
 }
 
 pub(crate) fn uses_defaults(m: &Map<String, Value>) -> bool {
@@ -549,15 +591,14 @@ fn validate_stored_override(value: &Value) -> Result<()> {
             .enumerate()
             .all(|(index, item)| !items[..index].contains(item))
     }
-    fn quantity_regex(value: Option<&Value>, path: &str) -> Result<()> {
+    fn quantity_regex(value: Option<&Value>, path: &str) -> Result<Option<&'static str>> {
         let pattern = nonblank(value, path)?;
         if let Err(refusal) = validate_regex_structure(pattern) {
-            let message = if refusal.limit {
-                refusal.message
+            return if refusal.limit {
+                Ok(Some(refusal.message))
             } else {
-                "is an invalid regular expression"
+                fail(path, "is an invalid regular expression")
             };
-            return fail(path, message);
         }
         if !node_regex_syntax(pattern) || regress::Regex::with_flags(pattern, "i").is_err() {
             return fail(path, "is an invalid regular expression");
@@ -568,7 +609,7 @@ fn validate_stored_override(value: &Value) -> Result<()> {
         if groups != Some(1) {
             return fail(path, "must contain exactly one capture group");
         }
-        Ok(())
+        Ok(None)
     }
     fn quantity_default(value: Option<&Value>, path: &str) -> Result<()> {
         const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
@@ -623,10 +664,11 @@ fn validate_stored_override(value: &Value) -> Result<()> {
             return fail("override.roles", "role ids must be unique");
         }
     }
+    let mut regex_limit = None;
     if let Some(quantity) = root.get("quantity") {
         let quantity = object(Some(quantity), "override.quantity")?;
         if let Some(regex) = quantity.get("regex") {
-            quantity_regex(Some(regex), "override.quantity.regex")?;
+            regex_limit = quantity_regex(Some(regex), "override.quantity.regex")?;
         }
         if let Some(default) = quantity.get("default") {
             quantity_default(Some(default), "override.quantity.default")?;
@@ -690,7 +732,11 @@ fn validate_stored_override(value: &Value) -> Result<()> {
             "folder_rules",
             "export_role_order",
         ],
-    )
+    )?;
+    match regex_limit {
+        Some(message) => fail("override.quantity.regex", message),
+        None => Ok(()),
+    }
 }
 pub(super) fn save(
     tx: &Transaction<'_>,

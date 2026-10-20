@@ -50,6 +50,21 @@ const cases = [
   ['mixed-regex-modifier-default-zero', { quantity: { regex: '(?i:(a))', default: 0 } }, "Invalid quantity default", "override.quantity.regex: is an invalid regular expression"],
   ['regex-duplicate-group-name', { quantity: { regex: '(?<x>a)|(?<x>b)' } }, "Quantity regex must have one capture group", "override.quantity.regex: is an invalid regular expression"],
   ['mixed-regex-non-ascii-default-zero', { quantity: { regex: 'é(?<é>a)', default: 0 } }, "Invalid quantity default", "override.quantity.default: Too small: expected number to be >=1"],
+  ['regex-duplicate-group-name-unicode', { quantity: { regex: String.raw`(?<\u0078>a)|(?<x>b)` } }, "Quantity regex must have one capture group", "override.quantity.regex: is an invalid regular expression"],
+  ['regex-duplicate-group-name-code-point', { quantity: { regex: String.raw`(?<\u{78}>a)|(?<x>b)` } }, "Quantity regex must have one capture group", "override.quantity.regex: is an invalid regular expression"],
+  ['regex-duplicate-group-name-both-escaped', { quantity: { regex: String.raw`(?<\u0078>a)|(?<\u{78}>b)` } }, "Quantity regex must have one capture group", "override.quantity.regex: is an invalid regular expression"],
+  ['regex-duplicate-group-name-surrogates', { quantity: { regex: String.raw`(?<\uD835\uDC9C>a)|(?<𝒜>b)` } }, "Quantity regex must have one capture group", "override.quantity.regex: is an invalid regular expression"],
+  ['regex-duplicate-group-name-astral', { quantity: { regex: String.raw`(?<\u{1D49C}>a)|(?<𝒜>b)` } }, "Quantity regex must have one capture group", "override.quantity.regex: is an invalid regular expression"],
+  ['mixed-regex-group-name-hex-default-zero', { quantity: { regex: String.raw`(?<\x78>a)|(?<x>b)`, default: 0 } }, "Invalid quantity default", "override.quantity.regex: is an invalid regular expression"],
+  ['regex-distinct-escaped-group-names', { quantity: { regex: String.raw`(?<\u0078>a)|(?<\u{79}>b)` } }, "Quantity regex must have one capture group", "override.quantity.regex: must contain exactly one capture group"],
+  ['mixed-regex-depth-limit-default-zero', { quantity: { regex: '(?:'.repeat(17) + '(a)' + ')'.repeat(17), default: 0 } }, "Invalid quantity default", "override.quantity.default: Too small: expected number to be >=1"],
+  ['mixed-regex-length-limit-default-zero', { quantity: { regex: 'a'.repeat(4097) + '(a)', default: 0 } }, "Invalid quantity default", "override.quantity.default: Too small: expected number to be >=1"],
+  ['mixed-regex-count-limit-default-zero', { quantity: { regex: '(?:a)'.repeat(65) + '(a)', default: 0 } }, "Invalid quantity default", "override.quantity.default: Too small: expected number to be >=1"],
+  ['mixed-regex-depth-limit-slug-type', { quantity: { regex: '(?:'.repeat(17) + '(a)' + ')'.repeat(17) }, slug: { strip_quantity: 'true' } }, "invalid type: string \"true\", expected a boolean", "override.slug.strip_quantity: Invalid input: expected boolean, received string"],
+  ['mixed-regex-count-limit-blank-folder', { quantity: { regex: '(?:a)'.repeat(65) + '(a)' }, folder_rules: [{ path_contains: ' ', role_id: 'primary' }] }, "Quantity regex exceeds group complexity limits", "override.folder_rules.0.path_contains: must not be blank"],
+  ['mixed-regex-depth-limit-export-short', { quantity: { regex: '(?:'.repeat(17) + '(a)' + ')'.repeat(17) }, export_role_order: ['primary'] }, "Invalid export role order", "override.export_role_order: Too small: expected array to have exactly 4 items"],
+  ['mixed-regex-depth-limit-unknown-top', { quantity: { regex: '(?:'.repeat(17) + '(a)' + ')'.repeat(17) }, surprise: true }, "Unknown naming field", "override: Unrecognized key: \"surprise\""],
+  ['mixed-regex-depth-limit-unknown-quantity', { quantity: { regex: '(?:'.repeat(17) + '(a)' + ')'.repeat(17), surprise: true } }, "unknown field `surprise`, expected `regex` or `default`", "override.quantity: Unrecognized key: \"surprise\""],
 ];
 
 function files(directory, relative = '') {
