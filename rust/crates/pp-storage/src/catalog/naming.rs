@@ -397,38 +397,221 @@ pub(crate) fn merge_override(override_value: Value, global: NamingProfile) -> Re
     response(effective, false, override_value)
 }
 
+/// Mirrors the first issue Node's `StlNamingProfileOverrideSchema` reports:
+/// fields in schema order, then array length and uniqueness, then unknown keys.
 #[cfg(feature = "desktop_rebuild")]
 fn validate_stored_override(value: &Value) -> Result<()> {
-    let nonblank = |value: &Value, field: String| -> Result<()> {
-        if let Some(text) = value.as_str() {
-            ensure!(!trim(text).is_empty(), "{field}: must not be blank");
+    const ROLE_IDS: &[&str] = &["primary", "accent", "clear", "opaque"];
+    fn fail<T>(path: &str, message: impl std::fmt::Display) -> Result<T> {
+        Err(anyhow!("{path}: {message}"))
+    }
+    fn received(value: Option<&Value>) -> &'static str {
+        match value {
+            None => "undefined",
+            Some(Value::Null) => "null",
+            Some(Value::Bool(_)) => "boolean",
+            Some(Value::Number(_)) => "number",
+            Some(Value::String(_)) => "string",
+            Some(Value::Array(_)) => "array",
+            Some(Value::Object(_)) => "object",
+        }
+    }
+    fn invalid_type<T>(path: &str, expected: &str, value: Option<&Value>) -> Result<T> {
+        let received = received(value);
+        fail(
+            path,
+            format!("Invalid input: expected {expected}, received {received}"),
+        )
+    }
+    fn object<'a>(value: Option<&'a Value>, path: &str) -> Result<&'a Map<String, Value>> {
+        match value {
+            Some(Value::Object(object)) => Ok(object),
+            other => invalid_type(path, "object", other),
+        }
+    }
+    fn array<'a>(value: Option<&'a Value>, path: &str) -> Result<&'a [Value]> {
+        match value {
+            Some(Value::Array(items)) => Ok(items),
+            other => invalid_type(path, "array", other),
+        }
+    }
+    fn nonblank<'a>(value: Option<&'a Value>, path: &str) -> Result<&'a str> {
+        let Some(Value::String(text)) = value else {
+            return invalid_type(path, "string", value);
+        };
+        let text = trim(text);
+        if text.is_empty() {
+            return fail(path, "must not be blank");
+        }
+        Ok(text)
+    }
+    fn option(value: Option<&Value>, path: &str, options: &[&str]) -> Result<()> {
+        if value
+            .and_then(Value::as_str)
+            .is_some_and(|text| options.contains(&text))
+        {
+            return Ok(());
+        }
+        let options = options
+            .iter()
+            .map(|option| format!("\"{option}\""))
+            .collect::<Vec<_>>()
+            .join("|");
+        fail(path, format!("Invalid option: expected one of {options}"))
+    }
+    fn strict(object: &Map<String, Value>, path: &str, known: &[&str]) -> Result<()> {
+        let unknown = object
+            .keys()
+            .filter(|key| !known.contains(&key.as_str()))
+            .map(|key| Value::from(key.as_str()).to_string())
+            .collect::<Vec<_>>();
+        match unknown.len() {
+            0 => Ok(()),
+            1 => fail(path, format!("Unrecognized key: {}", unknown[0])),
+            _ => fail(path, format!("Unrecognized keys: {}", unknown.join(", "))),
+        }
+    }
+    fn unique(items: &[Value]) -> bool {
+        items
+            .iter()
+            .enumerate()
+            .all(|(index, item)| !items[..index].contains(item))
+    }
+    fn quantity_regex(value: Option<&Value>, path: &str) -> Result<()> {
+        let pattern = nonblank(value, path)?;
+        if validate_regex_structure(pattern).is_err()
+            || regress::Regex::with_flags(pattern, "i").is_err()
+        {
+            return fail(path, "is an invalid regular expression");
+        }
+        let groups = regress::Regex::new(&format!("(?:{pattern})|"))
+            .ok()
+            .and_then(|regex| regex.find("").map(|found| found.captures.len()));
+        if groups != Some(1) {
+            return fail(path, "must contain exactly one capture group");
         }
         Ok(())
-    };
-    if let Some(roles) = value["roles"].as_array() {
-        for (index, role) in roles.iter().enumerate() {
-            nonblank(&role["label"], format!("override.roles.{index}.label"))?;
+    }
+    fn quantity_default(value: Option<&Value>, path: &str) -> Result<()> {
+        const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
+        let Some(number) = value.and_then(Value::as_f64) else {
+            return invalid_type(path, "number", value);
+        };
+        if number.fract() != 0.0 {
+            invalid_type(path, "int", value)
+        } else if number > MAX_SAFE {
+            fail(path, "Too big: expected int to be <=9007199254740991")
+        } else if number < -MAX_SAFE {
+            fail(path, "Too small: expected int to be >=-9007199254740991")
+        } else if number < 1.0 {
+            fail(path, "Too small: expected number to be >=1")
+        } else {
+            Ok(())
         }
     }
-    nonblank(
-        &value["quantity"]["regex"],
-        "override.quantity.regex".into(),
-    )?;
-    if let Some(rules) = value["folder_rules"].as_array() {
-        for (index, rule) in rules.iter().enumerate() {
-            nonblank(
-                &rule["path_contains"],
-                format!("override.folder_rules.{index}.path_contains"),
-            )?;
-            if let Some(class) = rule.get("functional_class") {
-                ensure!(
-                    matches!(class.as_str(), Some("functional" | "cosmetic")),
-                    "override.folder_rules.{index}.functional_class: Invalid option: expected one of \"functional\"|\"cosmetic\""
-                );
+
+    let root = object(Some(value), "override")?;
+    if let Some(roles) = root.get("roles") {
+        let roles = array(Some(roles), "override.roles")?;
+        for (index, role) in roles.iter().enumerate() {
+            let path = format!("override.roles.{index}");
+            let role = object(Some(role), &path)?;
+            option(role.get("id"), &format!("{path}.id"), ROLE_IDS)?;
+            if let Some(label) = role.get("label") {
+                nonblank(Some(label), &format!("{path}.label"))?;
+            }
+            if let Some(markers) = role.get("markers") {
+                let markers = array(Some(markers), &format!("{path}.markers"))?;
+                for (marker_index, marker) in markers.iter().enumerate() {
+                    if !marker.is_string() {
+                        return invalid_type(
+                            &format!("{path}.markers.{marker_index}"),
+                            "string",
+                            Some(marker),
+                        );
+                    }
+                }
+            }
+            strict(role, &path, &["id", "label", "markers"])?;
+        }
+        if roles.is_empty() {
+            return fail("override.roles", "must contain at least one role override");
+        }
+        let ids = roles
+            .iter()
+            .map(|role| role["id"].clone())
+            .collect::<Vec<_>>();
+        if !unique(&ids) {
+            return fail("override.roles", "role ids must be unique");
+        }
+    }
+    if let Some(quantity) = root.get("quantity") {
+        let quantity = object(Some(quantity), "override.quantity")?;
+        if let Some(regex) = quantity.get("regex") {
+            quantity_regex(Some(regex), "override.quantity.regex")?;
+        }
+        if let Some(default) = quantity.get("default") {
+            quantity_default(Some(default), "override.quantity.default")?;
+        }
+        strict(quantity, "override.quantity", &["regex", "default"])?;
+    }
+    if let Some(slug) = root.get("slug") {
+        let slug = object(Some(slug), "override.slug")?;
+        for field in ["strip_markers", "strip_quantity"] {
+            if let Some(flag) = slug.get(field).filter(|flag| !flag.is_boolean()) {
+                return invalid_type(&format!("override.slug.{field}"), "boolean", Some(flag));
             }
         }
+        strict(slug, "override.slug", &["strip_markers", "strip_quantity"])?;
     }
-    Ok(())
+    if let Some(rules) = root.get("folder_rules") {
+        let rules = array(Some(rules), "override.folder_rules")?;
+        for (index, rule) in rules.iter().enumerate() {
+            let path = format!("override.folder_rules.{index}");
+            let rule = object(Some(rule), &path)?;
+            nonblank(rule.get("path_contains"), &format!("{path}.path_contains"))?;
+            option(rule.get("role_id"), &format!("{path}.role_id"), ROLE_IDS)?;
+            if let Some(class) = rule.get("functional_class") {
+                option(
+                    Some(class),
+                    &format!("{path}.functional_class"),
+                    &["functional", "cosmetic"],
+                )?;
+            }
+            strict(
+                rule,
+                &path,
+                &["path_contains", "role_id", "functional_class"],
+            )?;
+        }
+    }
+    if let Some(order) = root.get("export_role_order") {
+        let path = "override.export_role_order";
+        let order = array(Some(order), path)?;
+        for (index, id) in order.iter().enumerate() {
+            option(Some(id), &format!("{path}.{index}"), ROLE_IDS)?;
+        }
+        if order.len() < 4 {
+            return fail(path, "Too small: expected array to have exactly 4 items");
+        }
+        if order.len() > 4 {
+            return fail(path, "Too big: expected array to have exactly 4 items");
+        }
+        if !unique(order) {
+            return fail(path, "must list each role id exactly once");
+        }
+    }
+    strict(
+        root,
+        "override",
+        &[
+            "roles",
+            "quantity",
+            "slug",
+            "folder_rules",
+            "export_role_order",
+        ],
+    )
 }
 pub(super) fn save(
     tx: &Transaction<'_>,

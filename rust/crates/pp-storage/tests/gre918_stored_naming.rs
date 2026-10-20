@@ -124,7 +124,7 @@ fn cases() -> Vec<Value> {
         .collect();
     assert_eq!(
         cases.len(),
-        21,
+        31,
         "the feature-off test must exercise the capture"
     );
     cases
