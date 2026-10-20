@@ -1091,18 +1091,33 @@ input version, a settled entry against a terminal job, and its quota row against
 reservation and retained bytes.
 
 Node writes supplied files with `writeUploadedFiles` and has no journal, quota or
-idempotency. `fixtures/parity/uploads/generate.mjs` records its limits, and for each
-of thirteen file sets either its refusal or the paths it wrote. The journal matches
-Node's 256 MiB and 10,000-file limits and its refusal of empty, oversized, escaping
-and duplicate inputs. Since D14 (d), admission also rewrites a backslash as `/` and
-drops leading slashes before it validates and hashes the request, and refuses names
-that differ only in case, so it admits the paths Node writes and refuses the
-duplicates Node refuses. The quota, idempotency, startup and codec cases port the
-reference `source_import_codec.rs` and its serializer fixture:
+idempotency. `fixtures/parity/uploads/generate.mjs` records its limits and, for each
+of 22 file sets, either its refusal or the paths it wrote. The journal matches
+Node's 256 MiB and 10,000-file limits and acceptance of those path cases.
+Admission rewrites backslashes as `/`, drops leading slashes, and collapses empty
+and `.` segments before validation and hashing. It preserves `..` segments for
+rejection, even when resolving them would leave a path inside the upload root.
+Duplicate detection uses the normalized path without regard to case. Its error
+matches Node's `Duplicate uploaded file path: <original spelling>` for the second
+file. Earlier parity coverage omitted empty and dot segments and mapped duplicate
+diagnostics to the generic `Duplicate file` error.
+
+Successful fixtures also record a SHA-256 digest of the input-order file metadata
+using Node's resolved paths, declared sizes, the test hash `b` repeated 64 times,
+and kind `input`. Rust compares its admitted paths and requested digest with these
+literal values. The hash is synthetic metadata, not the sparse probe file's
+content hash. Other refusal diagnostics, quota, idempotency, startup, and codec
+cases follow the reference `source_import_codec.rs` and its serializer fixture.
+These admission changes remain behind default-off `desktop_rebuild`. User-visible
+rebuild behavior also requires `PP_DESKTOP_REBUILD`.
 
 ```sh
 node fixtures/parity/uploads/generate.mjs --check
+umask 022
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test upload_journal
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test import_phases
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
 
 ### D14 uploads: import phases

@@ -1330,25 +1330,35 @@ fn admit(
             && !request.key.chars().any(char::is_control),
         "Invalid operation key"
     );
-    // As Node's `writeUploadedFiles` does, a backslash becomes `/`, leading
-    // slashes are dropped, and names that differ only in case are duplicates.
-    let canonical =
-        |path: &mut String| *path = path.replace('\\', "/").trim_start_matches('/').into();
-    match &mut request.input {
-        Input::Files { paths } => paths.iter_mut().for_each(canonical),
-        Input::Zip { path } => canonical(path),
-    }
+    let canonical = |path: &str| {
+        path.replace('\\', "/")
+            .trim_start_matches('/')
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect::<Vec<_>>()
+            .join("/")
+    };
+    ensure!(
+        !expected_files.is_empty() && expected_files.len() <= 10000,
+        "Invalid files"
+    );
+    let mut folded = HashSet::new();
     for file in &mut expected_files {
-        canonical(&mut file.path);
+        let normalized = canonical(&file.path);
+        path(&normalized)?;
+        digest(&file.sha256)?;
+        ensure!(
+            folded.insert(normalized.to_lowercase()),
+            "Duplicate uploaded file path: {}",
+            file.path
+        );
+        file.path = normalized;
+    }
+    match &mut request.input {
+        Input::Files { paths } => paths.iter_mut().for_each(|path| *path = canonical(path)),
+        Input::Zip { path } => *path = canonical(path),
     }
     files(&expected_files, request.max_input_bytes)?;
-    let mut folded = HashSet::new();
-    ensure!(
-        expected_files
-            .iter()
-            .all(|file| folded.insert(file.path.to_lowercase())),
-        "Duplicate file"
-    );
     let requested_digest = serialized_digest(&expected_files)?;
     let intent_digest = serialized_digest(&(&request, &expected_files))?;
     if let Some(prior) = load(tx, &tenant, &request.key)? {
