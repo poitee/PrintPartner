@@ -755,7 +755,7 @@ async fn ticket_t_12_origin_cleanup_removes_only_owned_regular_temporary_files()
         let preserved = [
             "desktop.toml-0123456789abcde.new",
             "desktop.toml-0123456789abcdef0.new",
-            "desktop.toml-0123456789abcdeF.new",
+            "desktop.toml-1123456789abcdeF.new",
             "desktop.toml-0123456789abcdeg.new",
             "desktop.toml-0123456789abcdef.new.bak",
             "other.toml-0123456789abcdef.new",
