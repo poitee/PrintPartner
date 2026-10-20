@@ -212,8 +212,8 @@ it.each([
     : fetch(input, init)));
   client.setQueryData(queryKeys.roleFilaments(1, false), roles);
   render(<PartColorDialog part={{ ...part, ...assignment }} profileId={1} onClose={vi.fn()} />, { wrapper });
-  expect(screen.queryByRole("option", { name: /^primary:/ })).toBeNull();
   await waitFor(() => expect(screen.getByRole("option", { name: "accent: Catalog Red" })).toBeDefined());
+  expect(screen.queryByRole("option", { name: /^primary:/ })).toBeNull();
   expect(screen.getByText(`Current color: ${assignment.filament_color_id?.trim() || "Unassigned"}`)).toBeDefined();
   expect(screen.queryByText("Current color: Blue")).toBeNull();
 });
@@ -250,6 +250,7 @@ it.each([false, true])("preserves attached-spool catalog role display with acces
   client.setQueryData(queryKeys.roleFilaments(1, allowed), roles);
   render(<><ObservedRoleColors /><PartColorDialog part={part} profileId={1} onClose={vi.fn()} /></>, { wrapper });
   await waitFor(() => expect(screen.getByLabelText("primary").textContent).toBe("Catalog Red #ff0000"));
+  await waitFor(() => expect(screen.queryByText("Loading colors…")).toBeNull());
   expect(screen.queryByRole("option", { name: "primary: Catalog Red" }) !== null).toBe(allowed);
   expect(screen.getByLabelText("accent").textContent).toBe(allowed ? "Spoolman Blue #0000ff" : "spoolman:int-1:filament:2 ");
 });
