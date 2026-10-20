@@ -1,4 +1,9 @@
-"""Check preparation prerequisite mutants against the Node parity tests."""
+"""Run preparation prerequisite mutants against the Node parity tests.
+
+Use --check-anchors to validate source anchors without Cargo or target setup.
+The default run requires rust/target and cargo-nextest.
+"""
+import argparse
 import os
 from pathlib import Path
 import shutil
@@ -28,38 +33,67 @@ mutants = [
     ('matcher steps uncounted', manifest, '        *work += 1;', ''),
     ('comparisons charged to document bytes', manifest, '    b.comparison(work)?;', '    b.comparison(work)?;\n    b.expansion(work.saturating_mul(2))?;'),
 ]
-with tempfile.TemporaryDirectory(prefix='pp-preparation-mutants-', dir=rust / 'target') as directory:
-    scratch = Path(directory) / 'rust'
-    shutil.copytree(rust, scratch, ignore=shutil.ignore_patterns('target'))
-    for sibling in rust.parent.iterdir():
-        if sibling.name not in ('rust', '.git'):
-            (scratch.parent / sibling.name).symlink_to(sibling)
-    env = {**os.environ, 'CARGO_TARGET_DIR': str(rust / 'target/preparation-mutants-target')}
-    command = ['cargo', 'nextest', 'run', '--locked', '--manifest-path', str(scratch / 'Cargo.toml'), '-p', 'pp-storage', '--features', 'desktop_rebuild', '--lib', '-E', 'test(preparation_tests)', '--test-threads=2']
-    def run():
-        return subprocess.run(command, env=env, capture_output=True, text=True)
-    baseline = run()
-    if baseline.returncode:
-        raise SystemExit(baseline.stdout + baseline.stderr)
-    killed = 0
-    for name, path, before, after in mutants:
-        target = scratch / path
-        original = target.read_text()
-        if original.count(before) != 1:
-            raise SystemExit(f'Mutation target is not unique: {name}')
+
+
+def validate_anchors(root):
+    errors = []
+    for name, path, before, _ in mutants:
         try:
-            target.write_text(original.replace(before, after))
-            result = run()
-            output = result.stdout + result.stderr
-            if result.returncode == 100 and 'FAIL [' in output:
-                killed += 1
-                print(f'KILLED {name}', flush=True)
-            elif result.returncode == 0:
-                print(f'SURVIVED {name}', flush=True)
-            else:
-                raise SystemExit(output)
-        finally:
-            target.write_text(original)
-    print(f'{killed}/{len(mutants)} mutants killed')
-    if killed != len(mutants):
-        raise SystemExit(1)
+            count = (root / path).read_text().count(before)
+            detail = ''
+        except FileNotFoundError:
+            count = 0
+            detail = ' (missing file)'
+        if count != 1:
+            errors.append(f'{name}: {path}: expected 1 anchor occurrence, found {count}{detail}')
+    if errors:
+        raise SystemExit('\n'.join(errors))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check-anchors', action='store_true', help='validate anchors without running mutants')
+    args = parser.parse_args()
+    validate_anchors(rust)
+    if args.check_anchors:
+        print(f'Validated {len(mutants)} mutation anchors')
+        return
+    with tempfile.TemporaryDirectory(prefix='pp-preparation-mutants-', dir=rust / 'target') as directory:
+        scratch = Path(directory) / 'rust'
+        shutil.copytree(rust, scratch, ignore=shutil.ignore_patterns('target'))
+        for sibling in rust.parent.iterdir():
+            if sibling.name not in ('rust', '.git'):
+                (scratch.parent / sibling.name).symlink_to(sibling)
+        env = {**os.environ, 'CARGO_TARGET_DIR': str(rust / 'target/preparation-mutants-target')}
+        command = ['cargo', 'nextest', 'run', '--locked', '--manifest-path', str(scratch / 'Cargo.toml'), '-p', 'pp-storage', '--features', 'desktop_rebuild', '--lib', '-E', 'test(preparation_tests)', '--test-threads=2']
+        def run():
+            return subprocess.run(command, env=env, capture_output=True, text=True)
+        baseline = run()
+        if baseline.returncode:
+            raise SystemExit(baseline.stdout + baseline.stderr)
+        killed = 0
+        for name, path, before, after in mutants:
+            target = scratch / path
+            original = target.read_text()
+            if original.count(before) != 1:
+                raise SystemExit(f'Mutation target is not unique: {name}')
+            try:
+                target.write_text(original.replace(before, after))
+                result = run()
+                output = result.stdout + result.stderr
+                if result.returncode == 100 and 'FAIL [' in output:
+                    killed += 1
+                    print(f'KILLED {name}', flush=True)
+                elif result.returncode == 0:
+                    print(f'SURVIVED {name}', flush=True)
+                else:
+                    raise SystemExit(output)
+            finally:
+                target.write_text(original)
+        print(f'{killed}/{len(mutants)} mutants killed')
+        if killed != len(mutants):
+            raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()
