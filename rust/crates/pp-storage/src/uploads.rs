@@ -1342,6 +1342,13 @@ fn admit(
         !expected_files.is_empty() && expected_files.len() <= 10000,
         "Invalid files"
     );
+    let mut total = 0u64;
+    for file in &expected_files {
+        total = total
+            .checked_add(file.size)
+            .ok_or_else(|| anyhow!("Input size overflow"))?;
+    }
+    ensure!(total <= request.max_input_bytes, "Input limit");
     let mut folded = HashSet::new();
     for file in &mut expected_files {
         let normalized = canonical(&file.path);
@@ -1358,7 +1365,6 @@ fn admit(
         Input::Files { paths } => paths.iter_mut().for_each(|path| *path = canonical(path)),
         Input::Zip { path } => *path = canonical(path),
     }
-    files(&expected_files, request.max_input_bytes)?;
     let requested_digest = serialized_digest(&expected_files)?;
     let intent_digest = serialized_digest(&(&request, &expected_files))?;
     if let Some(prior) = load(tx, &tenant, &request.key)? {
