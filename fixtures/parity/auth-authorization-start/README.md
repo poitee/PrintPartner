@@ -4,9 +4,11 @@
 
 The Rust consumer drives the public `auth_router` over a loopback listener with a disposable `WriterOwner`. Credentials are fake. The configured callback origins are fixed loopback addresses so callback URI drift remains visible without port normalization. The listeners bind ephemeral ports. Rust requests supply the configured Host. Secure rows exercise HTTPS callback configuration and the Secure cookie attribute through a local HTTP test connection. They do not test TLS or browser cookie delivery. Node drives Fastify injection after opening its loopback listener.
 
-Redirects remain HTTPS URLs for the public provider authorization endpoints. Neither client follows redirects. The suite never requests a provider, exchanges tokens, signs in, or calls a callback. GRE-867 owns callback consumption and refusal coverage.
+Redirects remain HTTPS URLs for the public provider authorization endpoints. Neither client follows redirects. The suite never requests a provider, exchanges tokens, signs in, or calls a callback. GRE-867 owns callback consumption and callback refusal coverage.
 
 Each row retains the exact status, redirect origin and path, complete decoded query multimap, complete cookie attribute map, and response body. Values for repeated query keys retain their order. Unknown keys, duplicate values, omitted values, changed callback URIs, changed cookie attributes, and disabled-provider redirects fail the comparison.
+
+`contract_comparator_detects_mutated_authorization_start_observations` changes captured responses to check comparator sensitivity. It does not send invalid requests or exercise callback refusal. `enabled_authorization_start_rejects_invalid_host` sends real HTTP requests with an invalid Host for enabled GitHub and Discord in both transport configurations. Each refusal must return exactly 403, no Location or Set-Cookie header, and JSON `{"detail":"Invalid request host"}`. A subsequent request with the valid Host must return the complete expected 302 redirect and browser binding cookie from the same server. This control distinguishes host refusal from disabled-provider behavior. These Rust refusal assertions are separate from the Node fixture comparison.
 
 Node state must be fresh lowercase hexadecimal with 16 bytes. Before replacing it with `<state>`, the generator asserts that exactly one redirect state equals the only `oauth_state` cookie. It checks this binding on both requests. Raw generated values never enter the golden or success logs. Rust response comparisons suppress response payloads in assertion failures.
 
@@ -29,3 +31,5 @@ PP_SCHEMA_PARITY_NODE=/path/to/node22 cargo test --manifest-path rust/Cargo.toml
 ```
 
 The Rust tests are entirely behind default-off `desktop_rebuild`. The freshness test invokes Node 22 and `--check`. An explicit `PP_SCHEMA_PARITY_NODE` is authoritative. An invalid explicit executable fails without fallback. Without that variable, the test invokes `node` from PATH and still requires version 22. This slice changes no runtime routing, environment gates, or user behavior.
+
+Windows does not currently run this suite. `.github/workflows/rust-cross-os.yml` excludes both `pp-api` and `pp-storage` from the Windows `CARGO_SCOPE`, so a green Windows job provides no coverage for these tests. `pp-api` depends on `pp-storage`, whose `src/lib.rs` includes `lease` and `schema` unconditionally. Those modules import `std::os::unix::fs` APIs without a Windows alternative. Windows enablement requires porting those dependencies and changing the CI scope. The suite adds no Unix configuration gate and claims no Windows coverage.
