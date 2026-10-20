@@ -670,3 +670,209 @@ fn invalid_stored_community_slugs_make_no_community_read() {
         );
     }
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum HintAttempt {
+    Match,
+    Cancel,
+    Budget,
+}
+struct HintClientReads {
+    inner: Reads,
+    visits: Arc<std::sync::atomic::AtomicUsize>,
+    attempt: HintAttempt,
+}
+impl DraftReads for HintClientReads {
+    fn resolve_stl_root(
+        &self,
+        request: &OwnedStlReadRequest,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<Box<dyn StlRootRead>> {
+        self.inner.resolve_stl_root(request, b)
+    }
+    fn read_checkout_manifest(
+        &self,
+        request: &OwnedCheckoutReadRequest,
+        occurrence: CheckoutManifestUse,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        self.inner.read_checkout_manifest(request, occurrence, b)
+    }
+    fn read_catalog_document(
+        &self,
+        request: &OwnedCatalogReadRequest,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        b.check()?;
+        match request.purpose() {
+            CatalogPurpose::ShippedHintsFirst => {
+                let mut hints = self.inner.case["hints"].clone();
+                if self.attempt != HintAttempt::Match {
+                    for rule in hints["rules"].as_array_mut().unwrap().iter_mut().take(2) {
+                        rule["path"] = json!("new.stl");
+                    }
+                }
+                Ok(DocumentRead::Bytes(serde_json::to_vec(&hints).unwrap()))
+            }
+            CatalogPurpose::CustomHints => {
+                HINT_PATH_VISITS.with(|counter| *counter.borrow_mut() = Some(self.visits.clone()));
+                match self.attempt {
+                    HintAttempt::Cancel => b.cancel_after_checks(3),
+                    HintAttempt::Budget => b.limit_visits_after(1),
+                    HintAttempt::Match => {}
+                }
+                Ok(DocumentRead::Missing)
+            }
+            _ => Ok(DocumentRead::Missing),
+        }
+    }
+}
+
+fn hint_client_attempt(attempt: HintAttempt) {
+    use crate::{Limits, WriterOwner, auth, read_model::Credential};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    let case: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/preparation-hints-node.json"
+    ))
+    .unwrap();
+    let root =
+        FixtureRoot(std::env::temp_dir().join(format!("pp-hint-client-{}", rand::random::<u64>())));
+    std::fs::create_dir_all(root.path()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let database = root.path().join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../../tests/fixtures/required-units/unchanged.db"),
+    )
+    .unwrap();
+    let connection = Connection::open(&database).unwrap();
+    let files: Vec<Value> = case["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| {
+            let file = root
+                .path()
+                .join("repos/1/revisions/fixture")
+                .join(path.as_str().unwrap());
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, path.as_str().unwrap()).unwrap();
+            json!({"source":1,"path":path,"content":path})
+        })
+        .collect();
+    let snapshot = || {
+        [
+            "plan_drafts",
+            "plan_draft_inputs",
+            "plan_draft_parts",
+            "plan_draft_required_unit_reconciliations",
+            "plan_draft_required_unit_assignments",
+        ]
+        .map(|table| {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    Ok((0..columns)
+                        .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                        .collect::<Vec<_>>())
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        })
+    };
+    let before = snapshot();
+    let owner = WriterOwner::open(root.path(), Limits::default()).unwrap().0;
+    let visits = Arc::new(AtomicUsize::new(0));
+    let reads = Arc::new(HintClientReads {
+        inner: Reads {
+            case: json!({"files":files,"hints":case["hints"]}),
+            hashes: Default::default(),
+        },
+        visits: visits.clone(),
+        attempt,
+    });
+    let client = owner
+        .working_drafts_with_observations(
+            auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+            reads,
+            PreparationLimits::default(),
+        )
+        .unwrap();
+    let result = client.recompute(
+        Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+        super::PositiveId::new(1).unwrap(),
+        super::RecomputeRequest::new("first", true).unwrap(),
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_secs(60),
+    );
+    if attempt != HintAttempt::Match {
+        let error = result.unwrap_err();
+        if attempt == HintAttempt::Cancel {
+            assert!(
+                matches!(
+                    error.downcast_ref::<ReadFailure>(),
+                    Some(ReadFailure::Cancelled)
+                ),
+                "{error:?}"
+            );
+            assert_eq!(error.to_string(), "Cancelled");
+        } else {
+            assert_eq!(error.to_string(), "LimitExceeded(Visits)");
+        }
+        assert_eq!(visits.load(Ordering::Relaxed), 2);
+        assert_eq!(snapshot(), before);
+    } else {
+        let mut actual: Value =
+            serde_json::from_slice(&result.unwrap().into_json_body().into_bytes()).unwrap();
+        assert!(
+            actual["draft"]["createdAt"]
+                .as_str()
+                .unwrap()
+                .ends_with('Z')
+        );
+        actual["draft"]["createdAt"] = json!(true);
+        assert_eq!(actual, case["result"]);
+        // Two rules match the first path. The missing rule examines all four.
+        assert_eq!(visits.load(Ordering::Relaxed), 6);
+    }
+    for file in &files {
+        assert_eq!(
+            std::fs::read(
+                root.path()
+                    .join("repos/1/revisions/fixture")
+                    .join(file["path"].as_str().unwrap())
+            )
+            .unwrap(),
+            file["content"].as_str().unwrap().as_bytes()
+        );
+    }
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn preparation_hint_stops_after_first_match() {
+    hint_client_attempt(HintAttempt::Match);
+}
+#[test]
+fn preparation_hint_search_honors_cancellation() {
+    hint_client_attempt(HintAttempt::Cancel);
+}
+#[test]
+fn preparation_hint_refusals_preserve_rows_and_files() {
+    hint_client_attempt(HintAttempt::Budget);
+}

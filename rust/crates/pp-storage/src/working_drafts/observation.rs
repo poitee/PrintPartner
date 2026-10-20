@@ -158,6 +158,10 @@ impl<'a> PreparationBudget<'a> {
     pub(crate) fn cancel_after_checks(&mut self, checks: usize) {
         *self.checks_until_cancel.get_mut() = checks + 1;
     }
+    #[cfg(test)]
+    pub(crate) fn limit_visits_after(&mut self, visits: usize) {
+        self.limits.visits = self.visits.saturating_add(visits);
+    }
     pub fn check(&self) -> ReadResult<()> {
         #[cfg(test)]
         match self.checks_until_cancel.load(Ordering::Relaxed) {

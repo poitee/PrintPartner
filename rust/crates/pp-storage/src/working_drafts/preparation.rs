@@ -18,6 +18,7 @@ use std::{
 thread_local! {
     pub(super) static GLOBAL_NAMING_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static SOURCE_LAYER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static HINT_PATH_VISITS: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> = const { std::cell::RefCell::new(None) };
 }
 
 pub(super) struct Capture {
@@ -584,9 +585,20 @@ fn inferred(
     }
     let mut groups = Vec::new();
     for (path, group, id, label) in rules {
-        if paths.iter().try_fold(false, |found, p| -> Result<bool> {
-            Ok(found || manifest::path_matches(&path, p, b)?)
-        })? {
+        let mut matched = false;
+        for p in paths {
+            #[cfg(test)]
+            HINT_PATH_VISITS.with(|counter| {
+                if let Some(counter) = counter.borrow().as_ref() {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+            if manifest::path_matches(&path, p, b)? {
+                matched = true;
+                break;
+            }
+        }
+        if matched {
             manifest::merge(
                 &mut groups,
                 vec![(
