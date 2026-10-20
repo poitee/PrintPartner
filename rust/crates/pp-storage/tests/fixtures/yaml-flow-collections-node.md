@@ -1,6 +1,6 @@
 # YAML flow-collection parity
 
-`yaml-flow-collections-node.json` records the literal outputs of js-yaml 5.4.3 for 446 inputs. A null expectation means js-yaml rejects the input.
+`yaml-flow-collections-node.json` records the literal outputs of js-yaml 5.4.3 for 686 inputs. A null expectation means js-yaml rejects the input.
 
 92 refusals cover four forms that saphyr-parser accepts and js-yaml rejects:
 
@@ -13,9 +13,11 @@
 
 144 refusals cover a shallow quoted continuation followed by a line-broken empty key and a colon, including `- - {a: "a\n  b", !!str\n  :x}`. The matrix varies compact and block parents, nested flow collections, quote styles, line endings, tags, anchors, and colon indentation. The 96 adjacent controls indent the quoted continuation to the collection's required depth. The pre-pass checks that depth before colon normalization can hide saphyr's later refusal.
 
+132 refusals pin an ordinary quoted continuation one column short of the depth js-yaml requires, with no property or colon after it, as in `outer:\n  k: ["a\n  b"]`. The matrix covers a block mapping, a nested block mapping, a compact sequence, and a nested flow mapping, with both quote styles and LF, CR, and CRLF endings. Each continuation is a plain line, a line after a blank line, a line after a tab-only line, spaces followed by a tab, a closing quote, or, for double quotes, the line after an escaped line break. The 108 adjacent controls move the continuation to the required depth. A control after a tab-only line is left out because saphyr rejects a column-0 tab in a quoted scalar; GRE-765 owns that accept.
+
 Every refusal that uses a `!!` tag appears again with the verbatim spelling `!<tag:yaml.org,2002:*>`.
 
-The 172 accepted near misses sit next to those forms. They include indicators inside plain or quoted scalars, tabs inside scalars or before a line break, and a tab in a collection that opens on a deeper line. They also include an escaped CR or CRLF inside a double-quoted entry before a tab, and a tag line break followed by deeper content, a comma, a closing bracket, or a mapping colon.
+The other 172 accepted near misses sit next to those forms. They include indicators inside plain or quoted scalars, tabs inside scalars or before a line break, and a tab in a collection that opens on a deeper line. They also include an escaped CR or CRLF inside a double-quoted entry before a tab, and a tag line break followed by deeper content, a comma, a closing bracket, or a mapping colon.
 
 The generator fails if js-yaml accepts a refusal or rejects a near miss. From the repository root, install the locked web dependencies, then regenerate and check the fixture:
 

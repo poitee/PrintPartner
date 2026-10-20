@@ -182,6 +182,33 @@ for (const [context, prefix, suffix] of [
     }
   }
 }
+// Ordinary quoted continuations: one column short of js-yaml's depth, then at it.
+for (const [context, prefix, suffix, depth] of [
+  ['block-map-seq', 'k: [', ']', 1],
+  ['nested-map-seq', 'outer:\n  k: [', ']', 3],
+  ['compact-seq', '- - [', ']', 3],
+  ['nested-map-map', 'outer:\n  k: {a: ', '}', 3],
+]) {
+  for (const [style, quote] of [['double', '"'], ['single', "'"]]) {
+    for (const [ending, br] of [['lf', '\n'], ['cr', '\r'], ['crlf', '\r\n']]) {
+      const forms = [
+        ['plain', (pad) => `a${br}${pad}b`],
+        ['blank', (pad) => `a${br}${br}${pad}b`],
+        ['tab-blank', (pad) => `a${br}\t${br}${pad}b`],
+        ['spaces-tab', (pad) => `a${br}${pad}\tb`],
+        ['closing', (pad) => `a${br}${pad}`],
+      ];
+      if (style === 'double') forms.push(['escaped-break', (pad) => `a\\${br}${pad}b`]);
+      for (const [form, body] of forms) {
+        const name = `quoted-continuation-${context}-${style}-${ending}-${form}`;
+        const source = (indent) => `${prefix}${quote}${body(' '.repeat(indent))}${quote}${suffix}`;
+        refusals.push([name, source(depth - 1)]);
+        // saphyr rejects a column-0 tab-only line in a quoted scalar; GRE-765 owns that accept.
+        if (form !== 'tab-blank') accepted.push([name, source(depth)]);
+      }
+    }
+  }
+}
 const verbatim = (source) => source.replace(/!!(\w+)/g, '!<tag:yaml.org,2002:$1>');
 const cases = [];
 function add(name, source, refused) {
