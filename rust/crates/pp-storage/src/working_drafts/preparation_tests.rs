@@ -672,22 +672,40 @@ fn invalid_stored_community_slugs_make_no_community_read() {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum HintAttempt {
+enum ClientAttempt {
     Match,
     Cancel,
     Budget,
+    SortBudget(usize),
+    SortCancel(usize),
+    SortMatch,
 }
-struct HintClientReads {
+struct ClientReads {
     inner: Reads,
     visits: Arc<std::sync::atomic::AtomicUsize>,
-    attempt: HintAttempt,
+    attempt: ClientAttempt,
 }
-impl DraftReads for HintClientReads {
+impl DraftReads for ClientReads {
     fn resolve_stl_root(
         &self,
         request: &OwnedStlReadRequest,
         b: &mut PreparationBudget<'_>,
     ) -> ReadResult<Box<dyn StlRootRead>> {
+        if request.purpose() == StlPurpose::Revision {
+            let target = match self.attempt {
+                ClientAttempt::SortBudget(sort) | ClientAttempt::SortCancel(sort) => Some(sort),
+                _ => None,
+            };
+            if let Some(sort) = target {
+                PATH_SORT_TEST.with(|probe| {
+                    *probe.borrow_mut() = Some(PathSortProbe {
+                        remaining: sort,
+                        cancel: matches!(self.attempt, ClientAttempt::SortCancel(_)),
+                        comparisons: self.visits.clone(),
+                    })
+                });
+            }
+        }
         self.inner.resolve_stl_root(request, b)
     }
     fn read_checkout_manifest(
@@ -707,7 +725,7 @@ impl DraftReads for HintClientReads {
         match request.purpose() {
             CatalogPurpose::ShippedHintsFirst => {
                 let mut hints = self.inner.case["hints"].clone();
-                if self.attempt != HintAttempt::Match {
+                if matches!(self.attempt, ClientAttempt::Cancel | ClientAttempt::Budget) {
                     for rule in hints["rules"].as_array_mut().unwrap().iter_mut().take(2) {
                         rule["path"] = json!("new.stl");
                     }
@@ -717,9 +735,9 @@ impl DraftReads for HintClientReads {
             CatalogPurpose::CustomHints => {
                 HINT_PATH_VISITS.with(|counter| *counter.borrow_mut() = Some(self.visits.clone()));
                 match self.attempt {
-                    HintAttempt::Cancel => b.cancel_after_checks(3),
-                    HintAttempt::Budget => b.limit_visits_after(1),
-                    HintAttempt::Match => {}
+                    ClientAttempt::Cancel => b.cancel_after_checks(3),
+                    ClientAttempt::Budget => b.limit_visits_after(1),
+                    _ => {}
                 }
                 Ok(DocumentRead::Missing)
             }
@@ -728,18 +746,22 @@ impl DraftReads for HintClientReads {
     }
 }
 
-fn hint_client_attempt(attempt: HintAttempt) {
+fn client_attempt(attempt: ClientAttempt) {
     use crate::{Limits, WriterOwner, auth, read_model::Credential};
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
-    let case: Value = serde_json::from_str(include_str!(
-        "../../tests/fixtures/preparation-hints-node.json"
-    ))
+    let case: Value = serde_json::from_str(match attempt {
+        ClientAttempt::SortBudget(_) | ClientAttempt::SortCancel(_) | ClientAttempt::SortMatch => {
+            include_str!("../../tests/fixtures/preparation-path-sort-node.json")
+        }
+        _ => include_str!("../../tests/fixtures/preparation-hints-node.json"),
+    })
     .unwrap();
-    let root =
-        FixtureRoot(std::env::temp_dir().join(format!("pp-hint-client-{}", rand::random::<u64>())));
+    let root = FixtureRoot(
+        std::env::temp_dir().join(format!("pp-preparation-client-{}", rand::random::<u64>())),
+    );
     std::fs::create_dir_all(root.path()).unwrap();
     #[cfg(unix)]
     {
@@ -794,7 +816,7 @@ fn hint_client_attempt(attempt: HintAttempt) {
     let before = snapshot();
     let owner = WriterOwner::open(root.path(), Limits::default()).unwrap().0;
     let visits = Arc::new(AtomicUsize::new(0));
-    let reads = Arc::new(HintClientReads {
+    let reads = Arc::new(ClientReads {
         inner: Reads {
             case: json!({"files":files,"hints":case["hints"]}),
             hashes: Default::default(),
@@ -820,9 +842,12 @@ fn hint_client_attempt(attempt: HintAttempt) {
         Arc::new(AtomicBool::new(false)),
         Duration::from_secs(60),
     );
-    if attempt != HintAttempt::Match {
+    if !matches!(attempt, ClientAttempt::Match | ClientAttempt::SortMatch) {
         let error = result.unwrap_err();
-        if attempt == HintAttempt::Cancel {
+        if matches!(
+            attempt,
+            ClientAttempt::Cancel | ClientAttempt::SortCancel(_)
+        ) {
             assert!(
                 matches!(
                     error.downcast_ref::<ReadFailure>(),
@@ -832,9 +857,26 @@ fn hint_client_attempt(attempt: HintAttempt) {
             );
             assert_eq!(error.to_string(), "Cancelled");
         } else {
-            assert_eq!(error.to_string(), "LimitExceeded(Visits)");
+            assert_eq!(
+                error.to_string(),
+                if matches!(attempt, ClientAttempt::SortBudget(_)) {
+                    "LimitExceeded(ComparisonWork)"
+                } else {
+                    "LimitExceeded(Visits)"
+                }
+            );
         }
-        assert_eq!(visits.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            visits.load(Ordering::Relaxed),
+            if matches!(
+                attempt,
+                ClientAttempt::SortBudget(_) | ClientAttempt::SortCancel(_)
+            ) {
+                1
+            } else {
+                2
+            }
+        );
         assert_eq!(snapshot(), before);
     } else {
         let mut actual: Value =
@@ -848,7 +890,9 @@ fn hint_client_attempt(attempt: HintAttempt) {
         actual["draft"]["createdAt"] = json!(true);
         assert_eq!(actual, case["result"]);
         // Two rules match the first path. The missing rule examines all four.
-        assert_eq!(visits.load(Ordering::Relaxed), 6);
+        if attempt == ClientAttempt::Match {
+            assert_eq!(visits.load(Ordering::Relaxed), 6);
+        }
     }
     for file in &files {
         assert_eq!(
@@ -866,13 +910,30 @@ fn hint_client_attempt(attempt: HintAttempt) {
 
 #[test]
 fn preparation_hint_stops_after_first_match() {
-    hint_client_attempt(HintAttempt::Match);
+    client_attempt(ClientAttempt::Match);
 }
 #[test]
 fn preparation_hint_search_honors_cancellation() {
-    hint_client_attempt(HintAttempt::Cancel);
+    client_attempt(ClientAttempt::Cancel);
 }
 #[test]
 fn preparation_hint_refusals_preserve_rows_and_files() {
-    hint_client_attempt(HintAttempt::Budget);
+    client_attempt(ClientAttempt::Budget);
+}
+
+#[test]
+fn preparation_path_sort_exhausts_comparison_budget() {
+    for sort in [1, 2] {
+        client_attempt(ClientAttempt::SortBudget(sort));
+    }
+}
+#[test]
+fn preparation_path_sort_honors_cancellation() {
+    for sort in [1, 2] {
+        client_attempt(ClientAttempt::SortCancel(sort));
+    }
+}
+#[test]
+fn preparation_path_sort_preserves_node_order() {
+    client_attempt(ClientAttempt::SortMatch);
 }

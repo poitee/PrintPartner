@@ -18,7 +18,102 @@ use std::{
 thread_local! {
     pub(super) static GLOBAL_NAMING_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static SOURCE_LAYER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static PATH_SORT_TEST: std::cell::RefCell<Option<PathSortProbe>> = const { std::cell::RefCell::new(None) };
     pub(super) static HINT_PATH_VISITS: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) struct PathSortProbe {
+    pub remaining: usize,
+    pub cancel: bool,
+    pub comparisons: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+fn sort_paths<T>(
+    values: &mut [T],
+    key: impl Fn(&T) -> &str,
+    b: &mut PreparationBudget<'_>,
+) -> Result<()> {
+    fn merge_sort(
+        indices: &mut [usize],
+        scratch: &mut [usize],
+        compare: &mut impl FnMut(usize, usize) -> Result<std::cmp::Ordering>,
+    ) -> Result<()> {
+        if indices.len() < 2 {
+            return Ok(());
+        }
+        let middle = indices.len() / 2;
+        let (left, right) = indices.split_at_mut(middle);
+        let (left_scratch, right_scratch) = scratch.split_at_mut(middle);
+        merge_sort(left, left_scratch, compare)?;
+        merge_sort(right, right_scratch, compare)?;
+        let (mut l, mut r) = (0, 0);
+        for next in scratch.iter_mut() {
+            if r == right.len() || (l < left.len() && !compare(left[l], right[r])?.is_gt()) {
+                *next = left[l];
+                l += 1;
+            } else {
+                *next = right[r];
+                r += 1;
+            }
+        }
+        indices.copy_from_slice(scratch);
+        Ok(())
+    }
+    if values.len() < 2 {
+        return Ok(());
+    }
+    b.check()?;
+    #[cfg(test)]
+    PATH_SORT_TEST.with(|probe| {
+        if let Some(probe) = probe.borrow_mut().as_mut() {
+            probe.remaining = probe.remaining.saturating_sub(1);
+        }
+    });
+    let mut indices: Vec<usize> = (0..values.len()).collect();
+    let mut scratch = vec![0; values.len()];
+    merge_sort(&mut indices, &mut scratch, &mut |left, right| {
+        let (left, right) = (key(&values[left]), key(&values[right]));
+        let work = left.len().saturating_add(right.len());
+        #[cfg(test)]
+        PATH_SORT_TEST.with(|probe| {
+            if let Some(probe) = probe.borrow().as_ref()
+                && probe.remaining == 0
+                && probe.comparisons.load(std::sync::atomic::Ordering::Relaxed) == 0
+            {
+                if probe.cancel {
+                    b.cancel_after_checks(1);
+                } else {
+                    b.limit_comparisons_after(work);
+                }
+            }
+        });
+        b.comparison(work)?;
+        #[cfg(test)]
+        PATH_SORT_TEST.with(|probe| {
+            if let Some(probe) = probe.borrow().as_ref()
+                && probe.remaining == 0
+            {
+                probe
+                    .comparisons
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        Ok(crate::read_model::views::folder_compare(left, right))
+    })?;
+    for (destination, &source) in indices.iter().enumerate() {
+        scratch[source] = destination;
+    }
+    for i in 0..values.len() {
+        b.check()?;
+        while scratch[i] != i {
+            b.check()?;
+            let destination = scratch[i];
+            values.swap(i, destination);
+            scratch.swap(i, destination);
+        }
+    }
+    Ok(())
 }
 
 pub(super) struct Capture {
@@ -755,7 +850,7 @@ pub(super) fn prepare(
                 status: String::new(),
             });
         }
-        scan.sort_by(|a, z| crate::read_model::views::folder_compare(&a.key, &z.key));
+        sort_paths(&mut scan, |p| &p.key, b)?;
         let mut imported_scan = Vec::new();
         for p in &scan {
             if imported(&p.path, &layer.rules, b)? {
@@ -854,12 +949,12 @@ pub(super) fn prepare(
             b.visit(0)?;
             let path = entry.physical_relative_path.replace('\\', "/");
             if imported(&path, &rules, b)? {
-                paths.push(path);
+                b.comparison(path.len())?;
+                paths.push((path.to_lowercase(), path));
             }
         }
-        paths.sort_by(|a, z| {
-            crate::read_model::views::folder_compare(&a.to_lowercase(), &z.to_lowercase())
-        });
+        sort_paths(&mut paths, |p| &p.0, b)?;
+        let paths: Vec<_> = paths.into_iter().map(|(_, path)| path).collect();
         let declared = doc.groups;
         let resolved = if declared.is_empty() {
             inferred(&paths, reads, b)?
