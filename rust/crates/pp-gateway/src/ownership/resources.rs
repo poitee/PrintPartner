@@ -75,6 +75,12 @@ enum ReviewedEntry {
     ProposeCreateBuild { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_create_source_category")]
     ProposeCreateSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_rename_source_category")]
+    ProposeRenameSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_delete_source_category")]
+    ProposeDeleteSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_source_category")]
+    ProposeSetSourceCategory { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -179,6 +185,42 @@ impl ReviewedEntry {
                     Table(AppSettings),
                     Table(BuildProfiles),
                     Table(PlanDecisions),
+                ]),
+            ),
+            Self::ProposeRenameSourceCategory { resources } => (
+                "tool.propose_rename_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeDeleteSourceCategory { resources } => (
+                "tool.propose_delete_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeSetSourceCategory { resources } => (
+                "tool.propose_set_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
                 ]),
             ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
@@ -426,6 +468,9 @@ impl Declarations {
             "tool.propose_add_custom_filament",
             "tool.propose_create_build",
             "tool.propose_create_source_category",
+            "tool.propose_rename_source_category",
+            "tool.propose_delete_source_category",
+            "tool.propose_set_source_category",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

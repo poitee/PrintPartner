@@ -53,6 +53,66 @@ fn ticket_t_7_ownership_create_source_category_proposal_refuses_invalid_admissio
     assert_tool_invalid_admission("tool.propose_create_source_category");
 }
 
+#[test]
+fn ticket_t_7_ownership_rename_source_category_proposal_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_rename_source_category",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_rename_source_category_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_rename_source_category");
+}
+
+#[test]
+fn ticket_t_7_ownership_delete_source_category_proposal_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_delete_source_category",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_delete_source_category_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_delete_source_category");
+}
+
+#[test]
+fn ticket_t_7_ownership_set_source_category_proposal_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_set_source_category",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_set_source_category_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_set_source_category");
+}
+
 fn assert_sqlite_tool_resources(id: &str, expected: Value) {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
     let index = admit_bundled_manifest().unwrap();
@@ -80,6 +140,29 @@ fn assert_sqlite_tool_resources(id: &str, expected: Value) {
         admit(&compatible).unwrap().admit_rollback(id),
         Ok(&expected)
     );
+    if expected.contains(&File(FileFamily::SourceWorkspace)) {
+        for rust_writes in [None, Some(2)] {
+            compatible["live_formats"]["source-revision-workspace"]["rust_writes"] =
+                json!(rust_writes);
+            let mut effect = false;
+            let result = admit(&compatible).and_then(|index| {
+                index.admit_rollback(id)?;
+                effect = true;
+                Ok(())
+            });
+            assert_eq!(
+                result,
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: "source-revision-workspace".into(),
+                    node_reads: 1,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+        compatible["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(1);
+    }
     compatible["live_formats"]["sqlite-schema"]["rust_writes"] = Value::Null;
     assert_eq!(
         admit(&compatible).unwrap().admit_rollback(id),
@@ -294,6 +377,9 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.propose_add_custom_filament",
         "tool.propose_create_build",
         "tool.propose_create_source_category",
+        "tool.propose_rename_source_category",
+        "tool.propose_delete_source_category",
+        "tool.propose_set_source_category",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -317,8 +403,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 29);
-    assert_eq!(unresolved.len(), 414);
+    assert_eq!(reviewed.len(), 32);
+    assert_eq!(unresolved.len(), 411);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -585,6 +671,9 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.propose_add_custom_filament",
         "tool.propose_create_build",
         "tool.propose_create_source_category",
+        "tool.propose_rename_source_category",
+        "tool.propose_delete_source_category",
+        "tool.propose_set_source_category",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -652,6 +741,18 @@ fn reviewed_participants_cannot_swap_operations() {
         (
             "tool.propose_create_source_category",
             "tool.get_plan_decisions",
+        ),
+        (
+            "tool.propose_create_source_category",
+            "tool.propose_rename_source_category",
+        ),
+        (
+            "tool.propose_rename_source_category",
+            "tool.propose_delete_source_category",
+        ),
+        (
+            "tool.propose_delete_source_category",
+            "tool.propose_set_source_category",
         ),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),

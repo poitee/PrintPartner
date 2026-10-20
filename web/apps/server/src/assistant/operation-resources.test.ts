@@ -67,7 +67,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -853,6 +853,228 @@ it("traces propose_create_source_category paths, plan dismissals and tenants aga
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_create_source_category");
   if (!entry || entry.operation === "source.sync") throw new Error("Missing create source category declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(tables);
+});
+
+type CategoryTool = "propose_rename_source_category" | "propose_delete_source_category" | "propose_set_source_category";
+type CategoryProbe = [string, ...unknown[]];
+const CATEGORY_TABLES = ["table:app_settings", "table:build_profiles", "table:plan_decisions", "table:projects", "table:source_docs"];
+const CATEGORY_UNION = ["file:source-workspace", ...CATEGORY_TABLES];
+const CATEGORY_SAVED = ["Printers", "Printers/Core", "Tools"];
+
+function sourceCategoryProposal(type: CategoryTool, planId: number, label: string, summary: string, params: Record<string, unknown>, resulting?: string[]) {
+  return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: { type, plan_id: planId, label, summary, params },
+    ...(resulting ? { resulting_categories: resulting } : {}),
+  };
+}
+
+async function traceCategory(tool: CategoryTool, input: Record<string, unknown>, tables: string[], options: {
+  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
+} = {}) {
+  const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+  expect(observed).toEqual(tables);
+  expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+  const union = unions.get(tool) ?? new Set<string>();
+  for (const resource of [...observed, ...(files.length ? ["file:source-workspace"] : [])]) union.add(resource);
+  unions.set(tool, union);
+  const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  if (content.status !== "proposed") {
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+  expect(output.proposedAction).toEqual(action);
+  const { id: _id, ...proposal } = action;
+  return { ...content, action: proposal };
+}
+
+async function assertCategoryDatabaseErrors(tool: CategoryTool, input: Record<string, unknown>, repository: AppRepository, files: CategoryProbe[]) {
+  const order = tool === "propose_set_source_category"
+    ? ["build_profiles", "projects", "source_docs", "app_settings", "plan_decisions"]
+    : ["build_profiles", "app_settings", "projects", "source_docs", "plan_decisions"];
+  for (const [index, table] of order.entries()) {
+    const completed = order.slice(0, index);
+    sqlite.exec(`ALTER TABLE ${table} RENAME TO unavailable_table`);
+    try {
+      expect(await traceCategory(tool, input, completed.map((name) => `table:${name}`).sort(), { repository, files: completed.includes("source_docs") ? files : [] })).toEqual({ error: `no such table: ${table}` });
+    } finally { sqlite.exec(`ALTER TABLE unavailable_table RENAME TO ${table}`); }
+  }
+}
+
+function categoryTraceFixture(isolated: boolean) {
+  repo.saveSourceCategories(CATEGORY_SAVED);
+  sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(unsyncedId);
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  const sourceFiles: CategoryProbe[] = isolated ? [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", workspace], ["statSync", workspace]] : [];
+  const files: CategoryProbe[] = isolated ? [...sourceFiles, ["realpathSync", repos]] : [];
+  return { repository, files, sourceFiles, workspace, repos };
+}
+
+function assertCategoryDeclaration(tool: CategoryTool, isolated: boolean) {
+  expect([...unions.get(tool) ?? []].sort()).toEqual(isolated ? CATEGORY_UNION : CATEGORY_TABLES);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+  if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(CATEGORY_UNION);
+}
+
+for (const isolated of [false, true]) {
+  it(`traces propose_rename_source_category edits, validation and dismissals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const fixture = categoryTraceFixture(isolated);
+    const { repository, files } = fixture;
+    const tool = "propose_rename_source_category";
+    const plan = repo.createProfile("Rename");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    const settings = ["table:app_settings"];
+    const reads = ["table:app_settings", "table:projects", "table:source_docs"];
+    const rename = (planId = 0) => sourceCategoryProposal(tool, planId, "Rename category Printers → Machines", "Rename “Printers” to “Machines”, moving 2 category path(s) and 1 Source(s).", { path: "Printers", new_name: " Machines " }, ["Machines", "Machines/Core", "Tools"]);
+    for (const input of [{}, { path: 42 }, { path: " / " }]) expect(await traceCategory(tool, input, settings, { repository })).toEqual({ error: "path required" });
+    expect(await traceCategory(tool, { plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], { repository })).toEqual({ error: "path required" });
+    for (const [input, error] of [
+      [{ path: "missing" }, "Unknown category: missing"],
+      [{ path: "Printers", new_name: " " }, "Category names cannot be empty"],
+      [{ path: "Printers", new_name: "a/b" }, "new_name is a single name — use new_parent to move a category"],
+      [{ path: "Printers", new_parent: "Missing" }, "Unknown parent category: Missing"],
+      [{ path: "Printers", new_parent: "Printers/Core" }, "Cannot move “Printers” inside itself"],
+      [{ path: "Printers", new_name: "Tools" }, "Category already exists: Tools"],
+    ] as const) expect(await traceCategory(tool, input, settings, { repository })).toEqual({ error, categories: CATEGORY_SAVED });
+    for (const input of [{ path: " printers " }, { path: "Printers", new_name: "PRINTERS", new_parent: "" }, { path: "Printers", new_name: 7, new_parent: null }]) {
+      expect(await traceCategory(tool, input, settings, { repository, activePlanId: plan.id })).toEqual({ status: "unchanged", category: "Printers" });
+    }
+    const input = { path: " printers ", new_name: " Machines " };
+    expect(await traceCategory(tool, input, reads, { repository, files })).toEqual(rename());
+    expect(await traceCategory(tool, { path: "Printers/Core", new_parent: " tools " }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Rename category Printers/Core → Tools/Core", "Rename “Printers/Core” to “Tools/Core”, moving 1 category path(s) and 1 Source(s).", { path: "Printers/Core", new_parent: " tools " }, ["Printers", "Tools/Core", "Tools"]));
+    expect(await traceCategory(tool, { path: "Printers/Core", new_parent: "" }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Rename category Printers/Core → Core", "Rename “Printers/Core” to “Core”, moving 1 category path(s) and 1 Source(s).", { path: "Printers/Core", new_parent: "" }, ["Printers", "Core", "Tools"]));
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.9`]) expect(await traceCategory(tool, { ...input, plan_id, profile_id: foreign.id }, CATEGORY_TABLES, { repository, files, activePlanId: foreign.id })).toEqual(rename(plan.id));
+    for (const plan_id of [foreign.id, 999999, 0, -1]) {
+      expect(await traceCategory(tool, { ...input, plan_id }, ["table:app_settings", "table:build_profiles", "table:projects", "table:source_docs"], { repository, files })).toEqual(rename());
+    }
+    expect(await traceCategory(tool, { ...input, plan_id: "bad" }, [...settings, "table:plan_decisions", "table:projects", "table:source_docs"], { repository, files, activePlanId: plan.id })).toEqual(rename(plan.id));
+    expect(await traceCategory(tool, { path: "Printers", new_name: "Machines", plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Unknown category: Printers", categories: ["Printer kits", "Toolheads", "Probes & sensors", "Mods", "Hardware", "Other"] });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { path: "Elsewhere", new_name: "Ignored" } });
+    expect(await traceCategory(tool, { ...input, plan_id: plan.id }, CATEGORY_TABLES, { repository, files })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_rename_source_category|", action_type: tool });
+    await assertCategoryDatabaseErrors(tool, { ...input, plan_id: plan.id }, repository, files);
+    assertCategoryDeclaration(tool, isolated);
+    expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
+    expect(repo.getSource(sourceId)?.category).toBe("Printers/Core");
+    expect(repo.listPlanDecisions(plan.id).map((d) => d.kind)).toEqual(["dismissed_action"]);
+  });
+
+  it(`traces propose_delete_source_category destinations, errors and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files } = categoryTraceFixture(isolated);
+    const tool = "propose_delete_source_category";
+    const plan = repo.createProfile("Delete");
+    const reads = ["table:app_settings", "table:projects", "table:source_docs"];
+    for (const input of [{}, { path: null }, { path: " / " }]) expect(await traceCategory(tool, input, ["table:app_settings"], { repository })).toEqual({ error: "path required" });
+    expect(await traceCategory(tool, { plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], { repository })).toEqual({ error: "path required" });
+    for (const reassign_to of ["Missing", "Printers/Core", "Printers"]) expect(await traceCategory(tool, { path: "Printers", reassign_to }, ["table:app_settings"], { repository })).toEqual({ error: `Cannot reassign to a category that is being deleted or does not exist: ${reassign_to}`, categories: CATEGORY_SAVED });
+    expect(await traceCategory(tool, { path: "Missing" }, ["table:app_settings"], { repository })).toEqual({ error: "Unknown category: Missing", categories: CATEGORY_SAVED });
+    const input = { path: " printers / core " };
+    const deletion = (planId = 0) => sourceCategoryProposal(tool, planId, "Delete category Printers/Core", "Delete “Printers/Core” and its subcategories; 1 Source(s) move to “Printers”.", { path: "Printers/Core" }, ["Printers", "Tools"]);
+    expect(await traceCategory(tool, input, reads, { repository, files })).toEqual(deletion());
+    for (const reassign_to of [" tools ", "", null, 42]) {
+      const explicit = typeof reassign_to === "string";
+      expect(await traceCategory(tool, { ...input, reassign_to }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Delete category Printers/Core", `Delete “Printers/Core” and its subcategories; 1 Source(s) move to ${reassign_to === " tools " ? "“Tools”" : "“Printers”"}.`, { path: "Printers/Core", ...(explicit ? { reassign_to } : {}) }, ["Printers", "Tools"]));
+    }
+    expect(await traceCategory(tool, { path: "Printers" }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Delete category Printers", "Delete “Printers” and its subcategories; 1 Source(s) move to Uncategorised.", { path: "Printers" }, ["Tools"]));
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.5`]) expect(await traceCategory(tool, { ...input, plan_id }, CATEGORY_TABLES, { repository, files })).toEqual(deletion(plan.id));
+    for (const plan_id of [999999, -1, 0]) expect(await traceCategory(tool, { ...input, plan_id }, ["table:app_settings", "table:build_profiles", "table:projects", "table:source_docs"], { repository, files })).toEqual(deletion());
+    expect(await traceCategory(tool, input, ["table:app_settings", "table:plan_decisions", "table:projects", "table:source_docs"], { repository, files, activePlanId: plan.id })).toEqual(deletion(plan.id));
+    tenantStorage.run("other", () => repo.saveSourceCategories(["Printers", "Printers/Core", "Other"]));
+    expect(await traceCategory(tool, { path: "Printers", plan_id: plan.id }, ["table:app_settings", "table:build_profiles", "table:projects", "table:source_docs"], { repository, tenantId: "other" })).toEqual(sourceCategoryProposal(tool, 0, "Delete category Printers", "Delete “Printers” and its subcategories; 0 Source(s) move to Uncategorised.", { path: "Printers" }, ["Other"]));
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { path: "Tools" } });
+    expect(await traceCategory(tool, { ...input, plan_id: plan.id }, CATEGORY_TABLES, { repository, files })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_delete_source_category|", action_type: tool });
+    repo.saveSourceCategories(["Printers", "Printers/Core"]);
+    expect(await traceCategory(tool, { path: "Printers" }, ["table:app_settings"], { repository })).toEqual({ error: "Keep at least one category", categories: ["Printers", "Printers/Core"] });
+    repo.saveSourceCategories(CATEGORY_SAVED);
+    await assertCategoryDatabaseErrors(tool, { ...input, plan_id: plan.id }, repository, files);
+    assertCategoryDeclaration(tool, isolated);
+    expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
+    expect(repo.getSource(sourceId)?.category).toBe("Printers/Core");
+    expect(repo.listPlanDecisions(plan.id).map((d) => d.kind)).toEqual(["dismissed_action"]);
+  });
+
+  it(`traces propose_set_source_category selectors, unchanged and clearing under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files, sourceFiles } = categoryTraceFixture(isolated);
+    const tool = "propose_set_source_category";
+    const plan = repo.createProfile("Set");
+    const sources = ["table:projects", "table:source_docs"];
+    const reads = ["table:app_settings", ...sources];
+    const setting = (planId = 0, category = "Tools") => sourceCategoryProposal(tool, planId, category ? "File Fixture under Tools" : "Uncategorise Fixture", category ? "Move Library Source “Fixture” from Printers/Core to “Tools”. Organizational only." : "Clear the Library category on “Fixture” (currently Printers/Core).", { source_id: sourceId, source_name: "Fixture", category });
+    for (const input of [{}, { source_name: " " }, { source_id: "bad" }, { source_id: 999999 }, { source_id: 0 }]) expect(await traceCategory(tool, input, typeof input.source_id === "number" ? ["table:projects"] : [], { repository })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { plan_id: plan.id }, ["table:build_profiles"], { repository })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { source_name: "absent" }, sources, { repository, files: [...files, ...files] })).toEqual({ error: 'Source not found: "absent". Call list_sources first.' });
+    for (const selector of [{ source_id: sourceId }, { source_id: String(sourceId), source_name: "UserLocal" }, { source_id: `${sourceId}.8` }]) expect(await traceCategory(tool, { ...selector, category: " tools " }, reads, { repository, files: sourceFiles })).toEqual(setting());
+    for (const source_name of [" Fixture ", "FIXTURE", "Fixture R2-0"]) expect(await traceCategory(tool, { source_name, category: "Tools" }, reads, { repository, files })).toEqual(setting());
+    expect(await traceCategory(tool, { source_id: 999999, source_name: "Fixture", category: "Tools" }, sources, { repository, files })).toEqual({ error: 'Source not found: "Fixture". Did you mean: "Fixture"? Call list_sources first.' });
+    expect(await traceCategory(tool, { source_id: sourceId, category: "printers / core" }, reads, { repository, files: sourceFiles, activePlanId: plan.id })).toEqual({ status: "unchanged", source: { id: sourceId, name: "Fixture" }, category: "Printers/Core" });
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Unknown" }, reads, { repository, files: sourceFiles })).toEqual({ error: 'Unknown library category: "Unknown". Call list_source_categories, or create it with propose_create_source_category.', categories: CATEGORY_SAVED });
+    for (const category of [undefined, null, 42, " / "]) expect(await traceCategory(tool, { source_id: sourceId, category }, sources, { repository, files: sourceFiles })).toEqual(setting(0, ""));
+    expect(await traceCategory(tool, { source_id: userId }, sources, { repository, files: isolated ? [["realpathSync", join(dataDir, "repos")]] : [] })).toEqual({ status: "unchanged", source: { id: userId, name: "UserLocal" }, category: null });
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.9`]) expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id }, CATEGORY_TABLES, { repository, files: sourceFiles })).toEqual(setting(plan.id));
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id: foreign.id }, ["table:app_settings", "table:build_profiles", ...sources], { repository, files: sourceFiles })).toEqual(setting());
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id: foreign.id }, CATEGORY_TABLES, { repository, files: sourceFiles, activePlanId: plan.id })).toEqual(setting(plan.id));
+    expect(await traceCategory(tool, { source_id: sourceId }, ["table:projects"], { repository, tenantId: "other" })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { source_name: "Fixture" }, sources, { repository, tenantId: "other" })).toEqual({ error: 'Source not found: "Fixture". Call list_sources first.' });
+    const foreignSource = tenantStorage.run("other", () => {
+      repo.saveSourceCategories(["Other", "Tools"]);
+      return repo.createSource({ name: "Fixture", source_kind: "local", metadata: { category: "Other" } });
+    });
+    sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(foreignSource.id);
+    expect(await traceCategory(tool, { source_id: foreignSource.id, category: "Tools" }, ["table:projects"], { repository })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { source_name: "Fixture", category: "Tools", plan_id: foreign.id }, CATEGORY_TABLES, { repository, tenantId: "other" })).toEqual(sourceCategoryProposal(tool, foreign.id, "File Fixture under Tools", "Move Library Source “Fixture” from Other to “Tools”. Organizational only.", { source_id: foreignSource.id, source_name: "Fixture", category: "Tools" }));
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { source_name: "Fixture", category: "Elsewhere" } });
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id: plan.id }, CATEGORY_TABLES, { repository, files: sourceFiles })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_set_source_category|source_name=Fixture", action_type: tool });
+    expect(await traceCategory(tool, { source_id: sourceId, plan_id: plan.id }, ["table:build_profiles", "table:plan_decisions", ...sources], { repository, files: sourceFiles })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_set_source_category|source_name=Fixture", action_type: tool });
+    await assertCategoryDatabaseErrors(tool, { source_id: sourceId, category: "Tools", plan_id: plan.id }, repository, sourceFiles);
+    assertCategoryDeclaration(tool, isolated);
+    expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
+    expect(repo.getSource(sourceId)?.category).toBe("Printers/Core");
+    expect(repo.listPlanDecisions(plan.id).map((d) => d.kind)).toEqual(["dismissed_action"]);
+  });
+}
+
+it.each<CategoryTool>(["propose_rename_source_category", "propose_delete_source_category", "propose_set_source_category"])("traces %s isolated missing, escaping and symlink roots without applying", async (tool) => {
+  const { repository, workspace, repos } = categoryTraceFixture(true);
+  const isSet = tool === "propose_set_source_category";
+  const input = isSet ? { source_id: sourceId, category: "Tools" } : tool === "propose_rename_source_category" ? { path: "Printers", new_name: "Machines" } : { path: "Printers" };
+  const output = isSet
+    ? sourceCategoryProposal(tool, 0, "File Fixture under Tools", "Move Library Source “Fixture” from Printers/Core to “Tools”. Organizational only.", { source_id: sourceId, source_name: "Fixture", category: "Tools" })
+    : tool === "propose_rename_source_category"
+      ? sourceCategoryProposal(tool, 0, "Rename category Printers → Machines", "Rename “Printers” to “Machines”, moving 2 category path(s) and 1 Source(s).", { path: "Printers", new_name: "Machines" }, ["Machines", "Machines/Core", "Tools"])
+      : sourceCategoryProposal(tool, 0, "Delete category Printers", "Delete “Printers” and its subcategories; 1 Source(s) move to Uncategorised.", { path: "Printers" }, ["Tools"]);
+  const probe: CategoryProbe[] = [["realpathSync", repos]];
+  const prefix: CategoryProbe[] = [...probe, ["lstatSync", workspace], ["realpathSync", workspace]];
+  const escape = join(workspace, "escape");
+  fs.symlinkSync(userRoot, escape);
+  for (const [path, calls] of [
+    [null, []], [userRoot, probe], [join(workspace, "missing"), [...prefix, ["realpathSync", join(workspace, "missing")]]],
+    [escape, [...prefix, ["realpathSync", escape]]],
+  ] satisfies [string | null, CategoryProbe[]][]) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    expect(await traceCategory(tool, input, ["table:app_settings", "table:projects", "table:source_docs"], { repository, files: [...calls, ...(isSet ? [] : probe)] })).toEqual(output);
+  }
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  fs.renameSync(workspace, `${workspace}-saved`);
+  const missing: CategoryProbe[] = [...probe, ["lstatSync", workspace]];
+  expect(await traceCategory(tool, input, ["table:app_settings", "table:projects", "table:source_docs"], { repository, files: [...missing, ...(isSet ? [] : probe)] })).toEqual(output);
+  fs.symlinkSync(userRoot, workspace);
+  expect(await traceCategory(tool, input, ["table:app_settings", "table:projects", "table:source_docs"], { repository, files: [...missing, ...(isSet ? [] : probe)] })).toEqual(output);
+  fs.unlinkSync(workspace);
+  fs.renameSync(`${workspace}-saved`, workspace);
 });
 
 it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation against its declaration", async () => {
