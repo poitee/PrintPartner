@@ -34,4 +34,14 @@ describe("source artifact endpoints", () => {
       importSourceArchive(7, new File(["bad"], "bad.zip")),
     ).rejects.toThrow("Bad zip");
   });
+
+  it.each(["archive", "files"])("preserves stored-path recovery guidance for %s imports", async (kind) => {
+    const detail = "stored-path-too-long: parts/part.stl would be stored at an absolute path of 1024 bytes; this system opens paths of at most 1023 bytes; use a shorter repository or folder path and retry the import";
+    http.respond(jsonResponse({ detail }, 400));
+    const file = new File(["content"], kind === "archive" ? "models.zip" : "part.stl");
+    const upload = kind === "archive"
+      ? importSourceArchive(7, file)
+      : importSourceFiles(7, [file]);
+    await expect(upload).rejects.toThrow(detail);
+  });
 });

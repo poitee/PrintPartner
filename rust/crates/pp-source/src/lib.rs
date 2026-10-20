@@ -88,7 +88,8 @@ impl fmt::Display for Error {
             Self::StoredPathTooLong { path, bytes } => write!(
                 f,
                 "stored-path-too-long: {path} would be stored at an absolute path of {bytes} \
-                 bytes; this system opens paths of at most {} bytes",
+                 bytes; this system opens paths of at most {} bytes; \
+                 use a shorter repository or folder path and retry the import",
                 PATH_MAX - 1
             ),
             _ => write!(f, "{}", self.category()),
@@ -445,6 +446,10 @@ impl TenantRepos {
     pub fn open(tenant_id: String, configured_repos: &Path) -> Result<Self> {
         if tenant_id.trim().is_empty() || tenant_id.len() > 200 {
             return Err(Error::InvalidIdentity);
+        }
+        let normalized: std::path::PathBuf = configured_repos.components().collect();
+        if configured_repos.as_os_str() != normalized.as_os_str() {
+            return Err(Error::UnsafePath);
         }
         let root = Directory::open_root(configured_repos)?;
         Ok(Self {
