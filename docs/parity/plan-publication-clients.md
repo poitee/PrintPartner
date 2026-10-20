@@ -1,4 +1,4 @@
-# Plan publication client parity cases (GRE-858, GRE-860)
+# Plan publication client parity cases (GRE-858, GRE-860, GRE-964)
 
 `fixtures/parity/plan-publication/clients.mjs` runs Node's real Plan Apply route
 against a temporary copy of the fixture database. Each case records the HTTP
@@ -60,6 +60,30 @@ draft and use the same captured Node not-found contract. The missing-Plan input
 is a Rust test case derived from the foreign-Plan fixture, not another captured
 Node response.
 
+### Draft not found under an owned Plan (GRE-964)
+
+Two captured cases reach the later `plan_drafts` lookup in
+`plan_publication::publish_in_transaction` after the requested Plan passes the
+tenant-scoped `build_profiles` lookup. Node returns HTTP 404 with the complete
+body `{"detail":"Plan draft not found","code":"draft_not_found"}` for both:
+
+- `missing-draft` requests owned Plan 1 with draft ID `999999`. The generator
+  asserts that no draft has that ID.
+- `mismatched-draft` requests a second owned Plan with draft 1, which belongs
+  to Plan 1. The generator creates the second Plan with Node's
+  `repo.createProfile` in the temporary database and records every row it adds
+  in the case's `seed` field. It asserts that the existing rows are unchanged
+  and that the second Plan has no drafts. The Rust test inserts the same `seed`
+  rows before it calls `run`.
+
+`node_not_found_outcome` accepts this body as well and normalizes it to the same
+`{"kind":"not_found"}`. The tests
+`client_matches_node_not_found_contract_for_missing_draft` and
+`client_matches_node_not_found_contract_for_mismatched_draft` prove that the
+requested Plan belongs to the caller's tenant and that the requested draft is
+absent or belongs to another Plan. The existing client matrix skips these two
+cases.
+
 Each case snapshots every SQLite table before and after `run`, including
 `plan_apply_admissions`, `sqlite_sequence`, and unrelated existing rows.
 The test reads rows directly through rusqlite and retains owned SQLite values,
@@ -68,8 +92,9 @@ compares each table's complete rows with a case-specific assertion message.
 Existing successful publication and replay assertions remain in place.
 GRE-868 policy behavior is outside this test's scope.
 
-Run both client comparisons with this focused command from the repository root.
-The prefix selects the existing client matrix and the missing-Plan test.
+Run the client comparisons with this focused command from the repository root.
+The prefix selects the existing client matrix, the missing-Plan test, and both
+draft tests.
 
 ```sh
 umask 022
@@ -87,9 +112,15 @@ let outcome = match outcome {
 };
 ```
 
-Run the focused command again. Both tests must fail at the complete Rust Outcome
-assertion, identifying `other-tenant` and `missing-plan` respectively. The actual
+Run the focused command again. All four tests must fail at the complete Rust
+Outcome assertion. The messages identify `other-tenant`, `missing-plan`,
+`missing-draft`, and `mismatched-draft`. The actual
 value becomes `{"kind":"build_archived"}` while the expected value stays
-`{"kind":"not_found"}`. Remove the mutation and rerun the command to confirm both
-tests pass. A fixture-only edit or an assertion that compares two expected
+`{"kind":"not_found"}`. Remove the mutation and rerun the command to confirm all
+four tests pass. A fixture-only edit or an assertion that compares two expected
 literals does not prove that the actual Rust result reaches the assertion.
+
+To verify that the draft cases reach the `plan_drafts` lookup, temporarily
+return `Outcome::DraftChanged` instead of `Outcome::NotFound` from that lookup
+in `plan_publication.rs`. Only the two draft tests must fail, with actual value
+`{"kind":"draft_changed"}`. The Plan lookup tests must still pass.
