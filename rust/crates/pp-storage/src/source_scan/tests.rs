@@ -21,6 +21,8 @@ struct Scan {
     worker: ServerWorkerClient,
     lease: AttemptLease,
     source_work: SourceWorkLease,
+    policy: AuthPolicy,
+    token: String,
 }
 
 impl Scan {
@@ -159,7 +161,31 @@ impl Scan {
             worker,
             lease,
             source_work: source_work.unwrap(),
+            policy,
+            token: token.expose().to_owned(),
         }
+    }
+
+    fn cancel(&self) -> JobRecord {
+        let jobs::Outcome::Job(job, _) = self
+            .owner
+            .jobs(self.policy)
+            .unwrap()
+            .submit(
+                Credential::Session(auth::Secret::new(self.token.clone())),
+                UserOperation::Cancel {
+                    job_id: self.lease.job_id().into(),
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .unwrap()
+        else {
+            panic!("job expected")
+        };
+        job
     }
 
     fn connection(&self) -> Connection {
@@ -520,11 +546,15 @@ fn settlement_binds_to_the_observed_reservation() {
 
 #[test]
 fn server_rejects_retired_proofs_and_cancel_after_observe() {
-    for cancel in [false, true] {
+    for (cancel, real) in [(false, false), (true, false), (true, true)] {
         let mut scan = Scan::new();
         let observation = scan.observation();
         let mut proof = catalog::lease(scan.owner.client(), scan.source_work.proof().unwrap());
-        if cancel {
+        if real {
+            let job = scan.cancel();
+            assert_eq!(job.state, PersistentState::Cancelled);
+            assert_eq!(job.generation, scan.lease.generation() + 1);
+        } else if cancel {
             scan.connection().execute("UPDATE durable_jobs SET document=json_set(document,'$.cancel_requested',json('true'))", []).unwrap();
         } else {
             scan.source_work.release().unwrap();
@@ -545,7 +575,9 @@ fn server_rejects_retired_proofs_and_cancel_after_observe() {
                     .unwrap_err()
             };
             assert!(
-                error.to_string().contains(if cancel {
+                error.to_string().contains(if real {
+                    "Stale attempt fence"
+                } else if cancel {
                     "ImportScan was cancelled"
                 } else {
                     "Source reservation already retired"
@@ -833,6 +865,111 @@ fn held_scan_inspection_recovers_a_lost_settlement_reply_and_reconciles() {
             "completion reply lost".into()
         )
     );
+    let mut next = scan
+        .catalog
+        .begin_work(
+            scan.source_id,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    next.release().unwrap();
+}
+
+#[test]
+fn cancelled_settled_scan_records_job_and_journal_reconciliation() {
+    let mut scan = Scan::new();
+    let observation = scan.observation();
+    let unsettled = LocalScanApplied {
+        source_id: scan.source_id,
+        receipt: ResultArtifact {
+            receipt_id: "unsettled".into(),
+            content_hash: "0".repeat(64),
+            target: String::new(),
+        },
+        inventory_digest: String::new(),
+        index_digest: String::new(),
+        doc_count: 0,
+    };
+    let before = scan.snapshot();
+    let error = scan
+        .worker
+        .record_local_scan_reconciliation(
+            &scan.lease,
+            &mut scan.source_work,
+            unsettled,
+            "early".into(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<LocalScanFailure>(),
+        Some(&LocalScanFailure::NotSettled)
+    );
+    assert_eq!(scan.snapshot(), before);
+    let old_lease = scan.lease.clone();
+    let applied = scan
+        .settle(observation.settlement(vec![document("new.md")]))
+        .unwrap();
+    scan.lease = old_lease;
+    let cancelled = scan.cancel();
+    assert_eq!(cancelled.state, PersistentState::ReconciliationRequired);
+    assert_eq!(cancelled.generation, scan.lease.generation() + 1);
+    assert!(cancelled.worker.is_none() && cancelled.fence.is_none());
+    let mut retry = catalog::lease(scan.owner.client(), scan.source_work.proof().unwrap());
+    let job = scan
+        .worker
+        .record_local_scan_reconciliation(
+            &scan.lease,
+            &mut scan.source_work,
+            applied.clone(),
+            "cancelled after settle".into(),
+        )
+        .unwrap();
+    assert_eq!(job.state, PersistentState::ReconciliationRequired);
+    assert_eq!(job.generation, cancelled.generation);
+    assert_eq!(
+        job.recovery.as_deref(),
+        Some("Cancellation cannot undo an admitted effect")
+    );
+    assert!(scan.source_work.proof().is_err());
+    let journal: (String, String, String) = scan
+        .connection()
+        .query_row(
+            "SELECT phase,primary_failure,reconciliation_reason FROM source_scan_executions",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        journal,
+        (
+            "reconciliation_required".into(),
+            "cancelled after settle".into(),
+            "cancelled after settle".into()
+        )
+    );
+    let before = scan.snapshot();
+    let error = scan
+        .worker
+        .record_local_scan_reconciliation(&scan.lease, &mut retry, applied.clone(), "other".into())
+        .unwrap_err();
+    assert!(error.to_string().contains("reason mismatch"), "{error}");
+    assert_eq!(scan.snapshot(), before);
+    let again = scan
+        .worker
+        .record_local_scan_reconciliation(
+            &scan.lease,
+            &mut retry,
+            applied,
+            "cancelled after settle".into(),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&again).unwrap(),
+        serde_json::to_value(&job).unwrap()
+    );
+    assert!(retry.proof().is_err());
+    assert_eq!(scan.snapshot(), before);
     let mut next = scan
         .catalog
         .begin_work(

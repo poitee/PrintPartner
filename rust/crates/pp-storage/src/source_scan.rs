@@ -98,12 +98,14 @@ impl LocalScanApplied {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalScanFailure {
     AlreadyObserved,
+    NotSettled,
 }
 
 impl std::fmt::Display for LocalScanFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::AlreadyObserved => formatter.write_str("Local scan already observed"),
+            Self::NotSettled => formatter.write_str("Local scan is not settled"),
         }
     }
 }
@@ -843,27 +845,30 @@ pub(crate) fn reconcile(
     let original_attempt = job.generation == lease.generation()
         && job.worker.as_deref() == Some(lease.worker())
         && job.fence.as_deref() == Some(lease.fence());
-    let already_reconciled_attempt = job.generation == lease.generation() + 1
+    // A Cancel or recovery bumps the generation; a recorded reconciliation
+    // keeps it. Either way the attempt no longer holds the Job.
+    let released_attempt = (job.generation == lease.generation()
+        || job.generation == lease.generation() + 1)
         && job.state == PersistentState::ReconciliationRequired
         && job.worker.is_none()
         && job.fence.is_none();
     ensure!(
-        job.tenant == lease.tenant() && (original_attempt || already_reconciled_attempt),
+        job.tenant == lease.tenant() && (original_attempt || released_attempt),
         "Local scan reconciliation attempt mismatch"
     );
     let binding = expected_binding(&job)?;
-    require_live_reservation(state, &proof, &binding)?;
-    let row: (String, String, String, String, String) = tx.query_row(
-        "SELECT phase,reservation_incarnation,reservation_token,inventory_digest,receipt_id FROM source_scan_executions WHERE tenant=?1 AND job_id=?2 AND generation=?3 AND attempt_worker=?4 AND attempt_fence_digest=?5",
+    let row: (String, String, String, Option<String>, Option<String>, Option<String>) = tx.query_row(
+        "SELECT phase,reservation_incarnation,reservation_token,inventory_digest,receipt_id,reconciliation_reason FROM source_scan_executions WHERE tenant=?1 AND job_id=?2 AND generation=?3 AND attempt_worker=?4 AND attempt_fence_digest=?5",
         params![lease.tenant(), lease.job_id(), lease.generation(), lease.worker(), digest_bytes(lease.fence())],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
     )?;
+    ensure!(row.0 != "observed", LocalScanFailure::NotSettled);
     ensure!(
-        row.0 == "local_settled"
+        (row.0 == "local_settled" || row.0 == "reconciliation_required")
             && row.1 == proof.incarnation
             && token_value(&row.2)? == proof.token
-            && row.3 == applied.inventory_digest
-            && row.4 == applied.receipt.receipt_id,
+            && row.3.as_deref() == Some(applied.inventory_digest.as_str())
+            && row.4.as_deref() == Some(applied.receipt.receipt_id.as_str()),
         "Local scan reconciliation settlement mismatch"
     );
     ensure!(
@@ -872,8 +877,25 @@ pub(crate) fn reconcile(
             && effect.receipt.as_ref() == Some(&applied.receipt)),
         "Local scan reconciliation receipt is not confirmed"
     );
+    // A retry after a lost reply returns the recorded Job; its reservation
+    // is already retired.
+    if row.0 == "reconciliation_required" {
+        ensure!(
+            released_attempt && row.5.as_deref() == Some(reason),
+            "Local scan reconciliation reason mismatch"
+        );
+        return Ok(PendingLocalReconciliation {
+            job,
+            proof,
+            binding,
+        });
+    }
+    require_live_reservation(state, &proof, &binding)?;
+    // Keep the text a Cancel or recovery left for the user.
+    if original_attempt || job.recovery.is_none() {
+        job.recovery = Some("Local scan completion requires reconciliation".into());
+    }
     job.state = PersistentState::ReconciliationRequired;
-    job.recovery = Some("Local scan completion requires reconciliation".into());
     job.fence = None;
     job.worker = None;
     job.lease_until = None;
