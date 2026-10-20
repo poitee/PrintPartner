@@ -3,10 +3,225 @@ use crate::{Bundle, Status, Supervisor};
 use serde_json::{Value, json};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus, Output, Stdio},
     time::{Duration, Instant},
 };
+
+const CLEANUP_LIMIT: Duration = Duration::from_secs(5);
+const REEXEC_LIMIT: Duration = Duration::from_secs(180);
+const OUTPUT_LIMIT: u64 = 64 * 1024;
+
+fn wait_child(child: &mut Child, deadline: Instant) -> std::io::Result<Option<ExitStatus>> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+struct CapturedReexec {
+    child: Child,
+    scratch: Scratch,
+}
+
+impl CapturedReexec {
+    fn spawn(command: &mut Command) -> Self {
+        let scratch = Scratch::new("built-reexec");
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(File::create(scratch.root.join("stdout")).unwrap())
+            .stderr(File::create(scratch.root.join("stderr")).unwrap())
+            .spawn()
+            .unwrap();
+        Self { child, scratch }
+    }
+
+    fn output(&mut self, limit: Duration) -> Output {
+        let status = wait_child(&mut self.child, Instant::now() + limit)
+            .unwrap()
+            .unwrap_or_else(|| {
+                let _ = self.child.kill();
+                wait_child(&mut self.child, Instant::now() + CLEANUP_LIMIT)
+                    .unwrap()
+                    .expect("built startup reexec did not exit after SIGKILL")
+            });
+        let read = |name| {
+            let mut file = File::open(self.scratch.root.join(name)).unwrap();
+            let len = file.metadata().unwrap().len();
+            file.seek(SeekFrom::Start(len.saturating_sub(OUTPUT_LIMIT)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            file.take(len.min(OUTPUT_LIMIT))
+                .read_to_end(&mut bytes)
+                .unwrap();
+            bytes
+        };
+        Output {
+            status,
+            stdout: read("stdout"),
+            stderr: read("stderr"),
+        }
+    }
+}
+
+impl Drop for CapturedReexec {
+    fn drop(&mut self) {
+        if !matches!(self.child.try_wait(), Ok(Some(_))) {
+            let _ = self.child.kill();
+            if !matches!(
+                wait_child(&mut self.child, Instant::now() + CLEANUP_LIMIT),
+                Ok(Some(_))
+            ) {
+                eprintln!(
+                    "built startup reexec cleanup could not reap child {}",
+                    self.child.id()
+                );
+            }
+        }
+    }
+}
+
+fn reexec_output(command: &mut Command) -> Output {
+    CapturedReexec::spawn(command).output(REEXEC_LIMIT)
+}
+
+fn reexec_failure(output: &Output, test: &str) -> Option<String> {
+    crate::tests::validate_subreaper_fixture(output, test)
+        .err()
+        .map(|reason| {
+            format!(
+                "{reason}; status: {}\nstdout:\n{}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+}
+
+fn assert_reexec_passed(output: &Output, test: &str) {
+    if let Some(message) = reexec_failure(output, test) {
+        panic!("{message}");
+    }
+}
+
+#[test]
+fn built_startup_reexec_sigkill_returns_with_live_output_peer() {
+    let mut fixture = CapturedReexec::spawn(Command::new("/bin/sh").args([
+        "-c",
+        "printf '%s\\n' 'built startup group outlived force-killed owner' >&2; exec /bin/sleep 600",
+    ]));
+    let mut peer = CapturedReexec::spawn(
+        Command::new("/bin/sh")
+            .args([
+                "-c",
+                "exec >>\"$1/stdout\" 2>>\"$1/stderr\"; : >\"$1/peer-ready\"; exec /bin/sleep 600",
+                "peer",
+            ])
+            .arg(&fixture.scratch.root),
+    );
+    startup_wait(
+        CLEANUP_LIMIT,
+        "disposable output peer never became ready",
+        || {
+            fixture.scratch.root.join("peer-ready").exists()
+                && std::fs::metadata(fixture.scratch.root.join("stderr"))
+                    .unwrap()
+                    .len()
+                    > 0
+        },
+    );
+    fixture.child.kill().unwrap();
+    let started = Instant::now();
+    let output = fixture.output(Duration::from_secs(1));
+    assert!(started.elapsed() < CLEANUP_LIMIT);
+    assert_eq!(output.status.signal(), Some(libc::SIGKILL));
+    assert!(peer.child.try_wait().unwrap().is_none());
+    let message = reexec_failure(&output, BUILT_TEST).unwrap();
+    assert_eq!(
+        message
+            .matches("built startup group outlived force-killed owner")
+            .count(),
+        1
+    );
+    assert!(message.contains("isolated subreaper fixture failed"));
+    peer.child.kill().unwrap();
+    assert_eq!(
+        wait_child(&mut peer.child, Instant::now() + CLEANUP_LIMIT)
+            .unwrap()
+            .unwrap()
+            .signal(),
+        Some(libc::SIGKILL)
+    );
+}
+
+#[test]
+fn built_startup_reexec_timeout_kills_and_reaps_child() {
+    let mut fixture = CapturedReexec::spawn(Command::new("/bin/sleep").arg("600"));
+    let started = Instant::now();
+    let output = fixture.output(Duration::from_millis(50));
+    assert!(started.elapsed() < CLEANUP_LIMIT);
+    assert_eq!(output.status.signal(), Some(libc::SIGKILL));
+    assert!(!Path::new(&format!("/proc/{}", fixture.child.id())).exists());
+}
+
+#[test]
+fn built_startup_reexec_bounds_diagnostics_and_preserves_failure_tail() {
+    let mut fixture = CapturedReexec::spawn(Command::new("/bin/sh").args([
+        "-c",
+        "i=0; while [ \"$i\" -lt 2000 ]; do printf '%064d\\n' 0 >&2; i=$((i+1)); done; printf '%s\\n' 'built startup group outlived force-killed owner' >&2; exit 1",
+    ]));
+    let output = fixture.output(CLEANUP_LIMIT);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stderr.len(), OUTPUT_LIMIT as usize);
+    let message = reexec_failure(&output, BUILT_TEST).unwrap();
+    assert_eq!(
+        message
+            .matches("built startup group outlived force-killed owner")
+            .count(),
+        1
+    );
+    assert!(!message.contains("Output {"));
+}
+
+#[test]
+fn built_startup_cleanup_failure_preserves_unwinding_panic() {
+    let scratch = Scratch::new("built-cleanup-unwind");
+    let evidence = scratch.root.join("missing-evidence-directory");
+    let owner = Command::new("/bin/sleep").arg("600").spawn().unwrap();
+    let mut fixture = BuiltStartupFixture {
+        owner,
+        peer: None,
+        backend: None,
+        adopted: Vec::new(),
+        scratch,
+        evidence,
+        verified: false,
+    };
+    fixture.peer = Some(Command::new("/bin/sleep").arg("600").spawn().unwrap());
+    let owner = fixture.owner.id();
+    let peer = fixture.peer.as_ref().unwrap().id();
+    let started = Instant::now();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _fixture = fixture;
+        panic!("built startup group outlived force-killed owner");
+    }))
+    .unwrap_err();
+    assert!(started.elapsed() < CLEANUP_LIMIT + Duration::from_secs(1));
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"built startup group outlived force-killed owner")
+    );
+    for pid in [owner, peer] {
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    }
+}
 
 const STAGE: &str = "PP_COMPAT_BUILT_STARTUP_STAGE";
 const OWNER_ROOT: &str = "PP_COMPAT_BUILT_STARTUP_OWNER";
@@ -190,20 +405,17 @@ impl BuiltStartupFixture {
             }
         }
     }
-}
 
-impl Drop for BuiltStartupFixture {
-    fn drop(&mut self) {
+    fn cleanup(&mut self) {
         let mut external = false;
         self.adopted.extend(children_of(self.owner.id()));
         self.adopted.extend(recorded_pids(&self.scratch.pidfile()));
         self.adopted.sort_unstable();
         self.adopted.dedup();
-        if self.owner.try_wait().unwrap().is_none() {
+        if !matches!(self.owner.try_wait(), Ok(Some(_))) {
             external = true;
             let _ = self.owner.kill();
         }
-        let _ = self.owner.wait();
         for pid in recorded_pids(&self.scratch.pidfile()) {
             if !crate::drain::process_group_absent(pid) {
                 external = true;
@@ -214,24 +426,29 @@ impl Drop for BuiltStartupFixture {
         }
         if let Some(peer) = &mut self.peer {
             let _ = peer.kill();
-            let _ = peer.wait();
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
+        let deadline = Instant::now() + CLEANUP_LIMIT;
+        let reaped = loop {
             self.reap_adopted();
-            if self
-                .adopted
-                .iter()
-                .all(|pid| !Path::new(&format!("/proc/{pid}")).exists())
+            let owner_reaped = matches!(self.owner.try_wait(), Ok(Some(_)));
+            let peer_reaped = self
+                .peer
+                .as_mut()
+                .is_none_or(|peer| matches!(peer.try_wait(), Ok(Some(_))));
+            if owner_reaped
+                && peer_reaped
+                && self
+                    .adopted
+                    .iter()
+                    .all(|pid| !Path::new(&format!("/proc/{pid}")).exists())
             {
-                break;
+                break true;
             }
-            assert!(
-                Instant::now() < deadline,
-                "cleanup failed to reap adopted children"
-            );
+            if Instant::now() >= deadline {
+                break false;
+            }
             std::thread::sleep(Duration::from_millis(10));
-        }
+        };
         let groups_absent = self.backend.is_none_or(crate::drain::process_group_absent);
         write_json(
             &self.evidence.join("guard-cleanup.json"),
@@ -242,7 +459,23 @@ impl Drop for BuiltStartupFixture {
                 "backend_group_absent": groups_absent, "events": events(),
             }),
         );
+        assert!(reaped, "cleanup failed to reap fixture children");
         assert!(groups_absent, "cleanup left built backend group");
+    }
+}
+
+impl Drop for BuiltStartupFixture {
+    fn drop(&mut self) {
+        let unwinding = std::thread::panicking();
+        if let Err(error) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.cleanup()))
+        {
+            if unwinding {
+                eprintln!("built startup fixture cleanup failed during unwinding");
+            } else {
+                std::panic::resume_unwind(error);
+            }
+        }
     }
 }
 
@@ -268,18 +501,14 @@ fn built_startup_reexec_keeps_parent_subreaper_unchanged() {
     let Some(state) = std::env::var_os(PARENT_STATE) else {
         for state in ["0", "1"] {
             let scratch = Scratch::new("built-subreaper");
-            let output = Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", STATE_TEST, "--format=pretty", "--color=never"])
-                .env(PARENT_STATE, state)
-                .env_remove(REEXEC)
-                .env(PROBE, scratch.root.join("probe.json"))
-                .output()
-                .unwrap();
-            assert_eq!(
-                crate::tests::validate_subreaper_fixture(&output, STATE_TEST),
-                Ok(()),
-                "state {state}: {output:?}"
+            let output = reexec_output(
+                Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", STATE_TEST, "--format=pretty", "--color=never"])
+                    .env(PARENT_STATE, state)
+                    .env_remove(REEXEC)
+                    .env(PROBE, scratch.root.join("probe.json")),
             );
+            assert_reexec_passed(&output, STATE_TEST);
         }
         return;
     };
@@ -290,7 +519,7 @@ fn built_startup_reexec_keeps_parent_subreaper_unchanged() {
     );
     assert_eq!(subreaper_state(), state);
     let probe = PathBuf::from(std::env::var_os(PROBE).unwrap());
-    let skipped = built_startup_command().output().unwrap();
+    let skipped = reexec_output(&mut built_startup_command());
     assert!(skipped.status.success());
     assert_eq!(
         crate::tests::validate_subreaper_fixture(&skipped, BUILT_TEST),
@@ -312,19 +541,8 @@ fn built_startup_reexec_keeps_parent_subreaper_unchanged() {
 #[ignore = "requires full built desktop assets and proof driver manifest"]
 fn ticket_t_3_drain_built_release_startup_parent_death() {
     if std::env::var_os(REEXEC).is_none() {
-        let output = built_startup_command()
-            .arg("--include-ignored")
-            .output()
-            .unwrap();
-        if !output.status.success() {
-            print!("{}", String::from_utf8_lossy(&output.stdout));
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
-        }
-        assert_eq!(
-            crate::tests::validate_subreaper_fixture(&output, BUILT_TEST),
-            Ok(()),
-            "{output:?}"
-        );
+        let output = reexec_output(built_startup_command().arg("--include-ignored"));
+        assert_reexec_passed(&output, BUILT_TEST);
         return;
     }
     assert_eq!(
@@ -398,6 +616,8 @@ fn ticket_t_3_drain_built_release_startup_parent_death() {
             Command::new("/bin/sleep")
                 .arg("600")
                 .process_group(pid as i32)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .spawn()
                 .unwrap(),
         );
