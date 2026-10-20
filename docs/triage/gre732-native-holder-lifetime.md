@@ -88,3 +88,13 @@ the hosted runner's implementation. These changes repair the diagnostic status
 boundary and collect missing evidence; they do not establish or fix the eject
 cause. Production cleanup and the native no-warning and detached-image
 assertions remain unchanged.
+
+Device probes use the union of before/after image identities and recorded force
+command targets. An empty device list gets an explicit receipt. A failed early
+image query therefore cannot suppress the later raw-device census. The baseline
+can delay the first force by up to four 3-second probes, so a passing repetition
+alone cannot establish that the eject race is fixed.
+
+Same-repository PR storage gates run on `pp-local-mac`; manual workflow dispatch
+uses hosted `macos-latest`. Dispatch the native workflow at the reviewed branch
+head to validate hosted behavior before landing this slice.

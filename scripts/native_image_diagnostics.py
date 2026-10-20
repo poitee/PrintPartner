@@ -63,12 +63,20 @@ def force_status(root, command, status):
 
 
 def after_workflow(root, real):
-    census(root, real, 'after')
+    owned = census(root, real, 'after')
     directory = root / 'diagnostics' / 'after'
     before = root / 'diagnostics' / 'before' / 'owned.json'
-    owned = json.loads(before.read_text()) if before.exists() else []
-    devices = sorted({entity['dev-entry'] for image in owned
-                      for entity in image.get('system-entities', []) if 'dev-entry' in entity})
+    if before.exists():
+        owned += json.loads(before.read_text())
+    devices = {entity['dev-entry'] for image in owned
+               for entity in image.get('system-entities', []) if 'dev-entry' in entity}
+    forces = root / 'diagnostics' / 'force-status.jsonl'
+    if forces.exists():
+        devices.update(json.loads(line)['command'][-1] for line in forces.read_text().splitlines())
+    devices = sorted(devices)
+    (directory / 'devices.json').write_text(json.dumps({
+        'devices': devices, 'note': '' if devices else 'No owned devices identified; device probes skipped'
+    }, indent=2) + '\n')
     nodes = sorted(set(devices + [device.replace('/dev/disk', '/dev/rdisk', 1)
                                   for device in devices if device.startswith('/dev/disk')]))
     paths = [str(path) for path in root.glob('pp-source-case.*/fixtures.sparseimage')]

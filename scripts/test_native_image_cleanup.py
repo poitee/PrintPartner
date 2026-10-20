@@ -493,6 +493,25 @@ class NativeDiagnosticTest(unittest.TestCase):
                                      ['hdiutil', 'detach', '-force', '/dev/disk42'])
                     self.assertTrue((destination / 'before/owned.json').is_file())
                     self.assertTrue((destination / 'after/system-log.json').is_file())
+                (root / 'diagnostics/before').mkdir(parents=True)
+                if status:
+                    (root / 'diagnostics/force-status.jsonl').unlink(missing_ok=True)
+                else:
+                    (root / 'diagnostics/force-status.jsonl').write_text(json.dumps({
+                        'command': [str(hdiutil), 'detach', '-force', '/dev/disk42'], 'status': 0
+                    }) + '\n')
+                with patch.dict(os.environ, PATH=env['PATH']):
+                    after_workflow(root, real)
+                self.assertEqual(json.loads((after / 'devices.json').read_text())['devices'],
+                                 ['/dev/disk42'])
+                self.assertEqual(json.loads((after / 'holders.json').read_text())['command'][-1],
+                                 '/dev/rdisk42')
+                if status == 0:
+                    (root / 'diagnostics/force-status.jsonl').unlink()
+                    with patch.dict(os.environ, PATH=env['PATH']):
+                        after_workflow(root, real)
+                    self.assertIn('device probes skipped',
+                                  json.loads((after / 'devices.json').read_text())['note'])
 
 
 if __name__ == '__main__':
