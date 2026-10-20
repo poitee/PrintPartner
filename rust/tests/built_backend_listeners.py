@@ -39,7 +39,7 @@ CONTROLS = {
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 const waiting = setInterval(() => {
-  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET)) return;
+  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET + ".ready")) return;
   clearInterval(waiting);
   setTimeout(() => createServer().listen(process.env.PP_LISTENER_CONTROL_SOCKET + ".extra").unref(), 1000).unref();
 }, 50);
@@ -65,7 +65,7 @@ spawnSync(process.execPath, ["-e", `require("node:child_process").spawn(process.
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 const waiting = setInterval(() => {
-  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET)) return;
+  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET + ".ready")) return;
   clearInterval(waiting);
   setTimeout(() => createServer().listen(0, "127.0.0.1").unref(), 1000).unref();
 }, 50);
@@ -426,6 +426,7 @@ def _run_backend(node, evidence, control, excluded_endpoints):
             watch.poll()
             receipt["ready_unix_listeners"] = [listener._asdict() for listener in watch.last_unix]
             require(ready["authenticated"] is True and ready["data_dir"] == str(data), f"unexpected health: {ready}")
+            (runtime / "backend.sock.ready").touch()
             receipt.update(assert_private_socket(socket_path))
             receipt["exercised"] = {"/health": health(socket_path, generation, key)["authenticated"],
                                     "/api/v1/sources": signed_get(socket_path, generation, key, "/api/v1/sources")}
