@@ -224,7 +224,6 @@ jobs:
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
-    # Enable only after the full Windows Rust smoke passes.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.PP_LOCAL_WIN == 'true') && fromJSON('["self-hosted","windows","x64","pp-local-win"]') || 'windows-latest' }}
     env:
       RUST_OS: windows
