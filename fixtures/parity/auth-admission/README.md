@@ -6,8 +6,11 @@ Rust replays the same closed recipes through the public auth router, using poole
 The Rust test owns eleven literal response differences and checks both complete public error objects.
 Seven are security corrections. Four are HTTP error mappings, including guard-before-body ordering.
 
-Generate with Node 22.23.3 as the canonical capture runtime, after installing web dependencies and building contracts/domain.
-The freshness test defaults to `node`; set `PP_TEST_NODE` to the binary matching the installed native modules.
+Node 22.23.3 is the canonical runtime, with web dependencies installed by it and contracts/domain built.
+Capture and plain `--check` exit 2 on any other Node version. `--check --additional-runtime` compares another runtime
+against the canonical golden and labels the result, but never writes it.
+The `Auth admission freshness` workflow runs the canonical check when the fixture, server, authority packages, lockfile, or `.nvmrc` change.
+The Rust freshness test uses `PP_TEST_NODE` or `node` in additional-runtime mode, so Rust CI on Node 24 keeps that coverage.
 
 ```sh
 node --conditions=development fixtures/parity/auth-admission/generate.mjs
@@ -27,4 +30,4 @@ Each case owns disposable storage and ephemeral listeners. Cleanup runs before c
 mail drain to twenty-five seconds, and a forty-five second case budget. Body recipes retain byte length and SHA-256 rather than padding.
 Host and Origin are symbolic, so no ephemeral ports, generated IDs, tokens, cookies, or large bodies enter the golden.
 
-Additional endpoints, duplicate and forwarded headers, and CI workflow wiring remain a follow-up slice.
+Additional endpoints and duplicate and forwarded headers remain a follow-up slice.
