@@ -67,7 +67,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1448,6 +1448,163 @@ it.each(["ui_open_source", "ui_open_docs"] as const)("traces %s isolated workspa
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
   if (!entry || entry.operation === "source.sync") throw new Error("Missing open source declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+});
+
+function kitFocusProposal(planId: number, params: { group_id?: string; stl_filter?: string; source_name?: string; source_id?: number }) {
+  const parts = [
+    ...(params.group_id ? [`kit option “${params.group_id}”`] : []),
+    ...(params.stl_filter ? [`STL filter “${params.stl_filter}”`] : []),
+  ];
+  return {
+    status: "proposed",
+    note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: {
+      type: "ui_focus_kit_option", plan_id: planId,
+      label: `Focus ${parts.join(" · ")}`,
+      summary: `Open Build and focus ${parts.join(" and ")}.`,
+      params: { ...params, ...(planId > 0 ? { plan_id: planId } : {}) },
+    },
+  };
+}
+
+it("traces ui_focus_kit_option selectors, proposals and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Kit focus");
+  const fallback = repo.createProfile("Fallback");
+  const foreign = tenantStorage.run("other", () => ({
+    source: repo.createSource({ name: "Fixture", source_kind: "local", local_path: userRoot }),
+    plan: repo.createProfile("Other"),
+  }));
+  const sources = ["table:projects", "table:source_docs"];
+  const tables = ["table:build_profiles", ...sources];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("ui_focus_kit_option", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    if (content.status === "proposed") {
+      const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+      expect(output.proposedAction).toEqual(action);
+      const { id: _id, ...proposal } = action;
+      return { ...content, action: proposal };
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  const required = { error: "group_id or stl_filter required" };
+  for (const input of [{}, { group_id: "  ", stl_filter: "\n" }, { group_id: 42, stl_filter: {} }, { source_name: "Fixture", source_id: sourceId }]) {
+    expect(await trace(input, [])).toEqual(required);
+  }
+  expect(await trace({ plan_id: plan.id, source_name: "zqxwv" }, ["table:build_profiles"])).toEqual(required);
+  expect(await trace({ group_id: " hotend " }, [])).toEqual(kitFocusProposal(0, { group_id: "hotend" }));
+  expect(await trace({ stl_filter: " bracket\nplate " }, [])).toEqual(kitFocusProposal(0, { stl_filter: "bracket\nplate" }));
+  expect(await trace({ group_id: "hotend", stl_filter: "duct" }, [])).toEqual(kitFocusProposal(0, { group_id: "hotend", stl_filter: "duct" }));
+  for (const name of [" Fixture ", "fixture", "Fix-ture", "Fixture @ v2.1", "Fixtur"]) {
+    expect(await trace({ group_id: "hotend", source_name: name }, sources)).toEqual(kitFocusProposal(0, { group_id: "hotend", source_name: name.trim() }));
+  }
+  expect(await trace({ group_id: "hotend", source_name: "Fixture", source_id: 999999 }, sources)).toEqual(kitFocusProposal(0, { group_id: "hotend", source_name: "Fixture", source_id: 999999 }));
+  expect(await trace({ group_id: "hotend", source_name: "zqxwv", source_id: sourceId }, sources)).toEqual({ error: 'Source not found: "zqxwv". Use list_sources.' });
+  expect(await trace({ group_id: "hotend", source_name: "Fixtxre" }, sources)).toEqual({ error: 'Source not found: "Fixtxre". Did you mean: "Fixture"? Use list_sources.' });
+  for (const id of [sourceId, String(sourceId), ` ${sourceId}.9 `]) {
+    expect(await trace({ group_id: "hotend", source_id: id, source_name: "  " }, sources)).toEqual(kitFocusProposal(0, { group_id: "hotend", source_id: sourceId }));
+  }
+  for (const id of [999999, foreign.source.id, 0, -1]) {
+    expect(await trace({ group_id: "hotend", source_id: id }, ["table:projects"])).toEqual({ error: "Source not found" });
+  }
+  expect(await trace({ group_id: "hotend", source_id: "invalid" }, [])).toEqual(kitFocusProposal(0, { group_id: "hotend" }));
+  for (const planId of [plan.id, String(plan.id)]) {
+    expect(await trace({ group_id: "hotend", plan_id: planId, profile_id: foreign.plan.id }, ["table:build_profiles"], "default", fallback.id)).toEqual(kitFocusProposal(plan.id, { group_id: "hotend" }));
+  }
+  expect(await trace({ group_id: "hotend", source_id: sourceId, plan_id: plan.id }, tables)).toEqual(kitFocusProposal(plan.id, { group_id: "hotend", source_id: sourceId }));
+  for (const planId of [foreign.plan.id, 999999]) {
+    expect(await trace({ group_id: "hotend", plan_id: planId }, ["table:build_profiles"])).toEqual(kitFocusProposal(0, { group_id: "hotend" }));
+    expect(await trace({ group_id: "hotend", plan_id: planId }, ["table:build_profiles"], "default", fallback.id)).toEqual(kitFocusProposal(fallback.id, { group_id: "hotend" }));
+  }
+  expect(await trace({ group_id: "hotend", plan_id: "invalid" }, [], "default", fallback.id)).toEqual(kitFocusProposal(fallback.id, { group_id: "hotend" }));
+  expect(await trace({ group_id: "hotend" }, [], "default", foreign.plan.id)).toEqual(kitFocusProposal(foreign.plan.id, { group_id: "hotend" }));
+  expect(await trace({ group_id: "hotend", source_id: foreign.source.id, plan_id: foreign.plan.id }, tables, "other")).toEqual(kitFocusProposal(foreign.plan.id, { group_id: "hotend", source_id: foreign.source.id }));
+  expect(await trace({ group_id: "hotend", source_name: "UserLocal" }, sources, "other")).toEqual({ error: 'Source not found: "UserLocal". Use list_sources.' });
+  expect(await trace({ group_id: "hotend", source_id: sourceId }, ["table:projects"], "other")).toEqual({ error: "Source not found" });
+  for (const table of ["projects", "source_docs", "build_profiles"]) {
+    sqlite.prepare(`ALTER TABLE ${table} RENAME TO unavailable_table`).run();
+    try {
+      const expected = table === "build_profiles" ? [] : ["table:build_profiles", ...(table === "source_docs" ? ["table:projects"] : [])];
+      expect(await trace({ group_id: "hotend", source_id: sourceId, plan_id: plan.id }, expected)).toEqual({ error: `no such table: ${table}` });
+    } finally {
+      sqlite.prepare(`ALTER TABLE unavailable_table RENAME TO ${table}`).run();
+    }
+  }
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_focus_kit_option");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing kit option focus declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+});
+
+it("traces ui_focus_kit_option isolated workspace probes for source lookups", async () => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const escape = join(workspace, "escape");
+  fs.symlinkSync(userRoot, escape, "dir");
+  const isolatedRepo = new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM });
+  const plan = repo.createProfile("Isolated");
+  const tables = ["table:build_profiles", "table:projects", "table:source_docs"];
+  const union = new Set<string>();
+  const prefix: [string, string][] = [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace]];
+  async function trace(path: string | null, calls: [string, string][], byName = false) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      output = await invokeAssistantTool("ui_focus_kit_option", {
+        ...(byName ? { source_name: "Fixture" } : { source_id: sourceId }),
+        plan_id: plan.id, group_id: "hotend", stl_filter: "../outside.stl",
+      }, { repo: isolatedRepo });
+    } finally { observer.state.active = false; }
+    const content = z.object({ status: z.literal("proposed"), action: z.object({ id: z.uuid() }).passthrough() }).passthrough().parse(JSON.parse(output.content));
+    expect(output.proposedAction).toEqual(content.action);
+    const { id: _id, ...action } = content.action;
+    expect({ ...content, action }).toEqual(kitFocusProposal(plan.id, {
+      group_id: "hotend", stl_filter: "../outside.stl",
+      ...(byName ? { source_name: "Fixture" } : { source_id: sourceId }),
+    }));
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(calls);
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql)))].sort();
+    expect(observed).toEqual(tables);
+    for (const sql of statements) expect(() => tableForObservedSelect(sql, "other")).toThrow("Unsupported SQL:");
+    for (const resource of [...observed, ...fileResources([repos], true)]) union.add(resource);
+  }
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]]);
+  await trace(join(workspace, "missing"), [...prefix, ["realpathSync", join(workspace, "missing")]]);
+  await trace(escape, [...prefix, ["realpathSync", escape]]);
+  await trace(userRoot, [["realpathSync", repos]]);
+  await trace(null, []);
+  sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id != ?").run(sourceId);
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]], true);
+  fs.rmSync(workspace, { recursive: true });
+  fs.symlinkSync(userRoot, workspace, "dir");
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]]);
+  fs.rmSync(workspace);
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]]);
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let other: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { other = await tenantStorage.run("other", () => invokeAssistantTool("ui_focus_kit_option", { group_id: "hotend", source_id: sourceId }, { repo: isolatedRepo })); }
+  finally { observer.state.active = false; }
+  expect(JSON.parse(other.content)).toEqual({ error: "Source not found" });
+  expect(statements.map((sql) => tableForObservedSelect(sql, "other"))).toEqual(["table:projects"]);
+  expect(observer.state.files).toEqual([]);
+  expect([...union].sort()).toEqual(["file:source-workspace", ...tables]);
 });
 
 it.each(["trusted", "isolated"])("traces get_source_docs %s SQL, markdown, notes and revision PDF caches", async (policy) => {

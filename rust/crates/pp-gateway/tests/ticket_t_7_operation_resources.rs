@@ -282,6 +282,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.ui_navigate",
         "tool.ui_open_source",
         "tool.ui_open_docs",
+        "tool.ui_focus_kit_option",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -293,8 +294,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 27);
-    assert_eq!(unresolved.len(), 416);
+    assert_eq!(reviewed.len(), 28);
+    assert_eq!(unresolved.len(), 415);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -571,6 +572,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.ui_navigate",
         "tool.ui_open_source",
         "tool.ui_open_docs",
+        "tool.ui_focus_kit_option",
         "tool.read_source_file",
         "tool.list_sources",
         "tool.list_source_categories",
@@ -626,6 +628,8 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.ui_focus_stl_search", "tool.ui_navigate"),
         ("tool.ui_navigate", "tool.ui_open_source"),
         ("tool.ui_open_source", "tool.ui_open_docs"),
+        ("tool.ui_open_docs", "tool.ui_focus_kit_option"),
+        ("tool.ui_focus_stl_search", "tool.ui_focus_kit_option"),
         ("tool.ui_open_docs", "tool.get_source_docs"),
         ("tool.get_source_docs", "tool.get_source_inventory"),
         ("tool.get_source_inventory", "tool.compare_source_revisions"),
@@ -1204,6 +1208,11 @@ fn ticket_t_7_ownership_ui_open_docs_has_complete_node_owned_resources() {
     assert_workspace_tool_resources("tool.ui_open_docs");
 }
 
+#[test]
+fn ticket_t_7_ownership_ui_focus_kit_option_has_complete_node_owned_resources() {
+    assert_workspace_tool_resources("tool.ui_focus_kit_option");
+}
+
 fn assert_workspace_tool_resources(id: &str) {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
     let index = admit_bundled_manifest().unwrap();
@@ -1341,6 +1350,11 @@ fn ticket_t_7_ownership_ui_open_source_refuses_invalid_admission_before_effects(
 #[test]
 fn ticket_t_7_ownership_ui_open_docs_refuses_invalid_admission_before_effects() {
     assert_tool_invalid_admission("tool.ui_open_docs");
+}
+
+#[test]
+fn ticket_t_7_ownership_ui_focus_kit_option_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.ui_focus_kit_option");
 }
 
 #[test]
