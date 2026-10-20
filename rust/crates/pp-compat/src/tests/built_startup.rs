@@ -326,8 +326,10 @@ fn built_startup_reexec_contains_descendants() {
             let mut survivors = Vec::new();
             for external_sigkill in [false, true] {
                 let scratch = Scratch::new("built-lifetime-cycle");
-                let mut fixture =
-                    CapturedReexec::spawn(&mut lifetime_command("fixture", &scratch.root));
+                let mut fixture = CapturedReexec::spawn(die_with_parent(&mut lifetime_command(
+                    "fixture",
+                    &scratch.root,
+                )));
                 startup_wait(CLEANUP_LIMIT, "disposable fixture never armed", || {
                     scratch.root.join("ready").exists()
                 });
@@ -358,8 +360,7 @@ fn built_startup_reexec_contains_descendants() {
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 };
-                // Also clean up the deliberately broken version used to prove
-                // this regression: every child belongs to this observer alone.
+                // A containment failure must not leak this observer's children.
                 if !absent {
                     survivors.push(external_sigkill);
                     for pid in &pids {
