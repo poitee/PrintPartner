@@ -212,7 +212,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     // The line began inside a quoted scalar, so its indent is unknown here.
     let mut quoted_line = false;
     let mut quoted_end = false;
-    let mut block: Option<(usize, Option<usize>)> = None;
+    // A block scalar's parent indent (None at the root) and, once known, its
+    // content indent.
+    let mut block: Option<(Option<usize>, Option<usize>)> = None;
     // js-yaml's indent for the outermost flow collection: one past its block
     // parent, or the indent of the line the root node starts on.
     let mut flow_indent = 0usize;
@@ -249,9 +251,19 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             separation_tab = false;
             node_tab = false;
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
+            // Before a block scalar's first content line sets its indent, js-yaml
+            // rejects a tab that sits no deeper than the scalar's parent node.
+            if chars.get(i) == Some(&'\t')
+                && matches!(block, Some((Some(base), None)) if line_indent <= base)
+            {
+                return invalid();
+            }
             if let Some((base, required)) = block {
                 let required = required.or_else(|| (!blank).then_some(line_indent));
-                if blank || required.is_some_and(|n| line_indent >= n && line_indent > base) {
+                if blank
+                    || required
+                        .is_some_and(|n| line_indent >= n && base.is_none_or(|b| line_indent > b))
+                {
                     block = Some((base, required));
                     let end = line_end(&chars, i, budget)?;
                     for c in &chars[start..end] {
@@ -314,6 +326,14 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 quoted_end = false;
                 continue;
             }
+            // A comment line ends a plain scalar in js-yaml, but saphyr continues
+            // the scalar across one led by a tab. Without its indent, saphyr
+            // ends the scalar there too.
+            if content > i && chars.get(content) == Some(&'#') {
+                output.truncate(output.len() - line_indent);
+                consumed += content - i;
+                i = content;
+            }
             if (chars[i] == '%' && line_indent == 0 && !plain) || chars[i] == '#' {
                 let end = line_end(&chars, i, budget)?;
                 for c in &chars[i..end] {
@@ -346,6 +366,13 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                         budget.check()?;
                     }
                     end += 1;
+                }
+                if end > i && chars.get(end).is_none_or(|c| matches!(c, '\r' | '\n')) {
+                    // js-yaml folds a whitespace-only line as blank; saphyr
+                    // rejects one that contains a tab.
+                    consumed += end - i;
+                    i = end;
+                    continue;
                 }
                 let deficient = if flow.is_empty() {
                     parent.is_some_and(|p| indent <= p)
@@ -571,14 +598,15 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 if let Some(n) = c.to_digit(10)
                     && n > 0
                 {
-                    explicit = Some(line_indent + n as usize);
+                    // js-yaml counts the indicator from the parent's indent.
+                    explicit = Some(parent.map_or(n as usize - 1, |p| p + n as usize));
                     break;
                 }
                 if *c == '#' {
                     break;
                 }
             }
-            block = Some((line_indent, explicit));
+            block = Some((parent, explicit));
             for c in &chars[i..end] {
                 output.push(*c);
                 consumed += c.len_utf8();
@@ -1395,18 +1423,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn yaml_flow_collections_match_js_yaml() {
+    fn assert_js_yaml_cases(fixture: &str) {
         #[derive(serde::Deserialize)]
         struct Case {
             name: String,
             source: String,
             expected: Option<serde_json::Value>,
         }
-        let cases: Vec<Case> = serde_json::from_str(include_str!(
-            "../../tests/fixtures/yaml-flow-collections-node.json"
-        ))
-        .unwrap();
+        let cases: Vec<Case> = serde_json::from_str(fixture).unwrap();
+        assert!(!cases.is_empty());
         let cancel = AtomicBool::new(false);
         let mut mismatches = Vec::new();
         for case in cases {
@@ -1421,6 +1446,20 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn yaml_flow_collections_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-collections-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_tab_lines_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-tab-lines-node.json"
+        ));
     }
 
     #[test]
