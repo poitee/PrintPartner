@@ -2,7 +2,9 @@ use super::{
     observation::{DocumentRead, PreparationBudget, ReadFailure, ReadResult},
     yaml::{Document, Node},
 };
-use crate::manifest_text::{DraftPart, JsText, ManifestText, OptionGroupId, VariantId};
+use crate::manifest_text::{
+    DraftPart, JsText, ManifestText, OptionGroupId, VariantId, is_ecmascript_whitespace,
+};
 
 #[cfg(test)]
 #[path = "manifest_glob_tests.rs"]
@@ -224,7 +226,9 @@ fn rules(
 }
 pub(crate) fn parse(bytes: &[u8], b: &mut PreparationBudget<'_>) -> ReadResult<Manifest> {
     b.document(bytes.len(), 0)?;
-    if JsText::scalar(&String::from_utf8_lossy(bytes)).is_ecmascript_blank() {
+    if std::str::from_utf8(bytes)
+        .is_ok_and(|text| text.encode_utf16().all(is_ecmascript_whitespace))
+    {
         return Ok(Manifest::default());
     }
     let d = Document::parse(bytes, b)?;

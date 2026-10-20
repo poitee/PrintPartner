@@ -328,7 +328,7 @@ pub fn digest_json_bytes(bytes: &[u8]) -> String {
     hex::encode(sha2::Sha256::digest(bytes))
 }
 
-fn is_ecmascript_whitespace(unit: u16) -> bool {
+pub(crate) fn is_ecmascript_whitespace(unit: u16) -> bool {
     matches!(
         unit,
         0x0009..=0x000d

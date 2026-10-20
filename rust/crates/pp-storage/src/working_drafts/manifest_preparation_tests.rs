@@ -6,6 +6,88 @@ use crate::manifest_text::PartManifestMetadata;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[test]
+fn manifest_blank_scan_accepts_ecmascript_whitespace() {
+    let whitespace = "\u{0009}\u{000a}\u{000b}\u{000c}\u{000d}\u{0020}\u{00a0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}";
+    let mut inputs = vec![
+        String::new(),
+        whitespace.to_owned(),
+        " ".repeat(1024 * 1024),
+    ];
+    inputs.extend(whitespace.chars().map(|c| c.to_string()));
+    for input in inputs {
+        let cancelled = AtomicBool::new(false);
+        let mut b = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                nodes: 0,
+                visits: 0,
+                total_document_bytes: 0,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        let manifest = parse(input.as_bytes(), &mut b).unwrap();
+        assert_eq!(manifest.project, None, "{input:?}");
+        assert!(manifest.rules.is_empty());
+        assert!(manifest.groups.is_empty());
+        assert!(manifest.selections.is_empty());
+        assert!(manifest.selection_shapes.is_empty());
+    }
+}
+
+#[test]
+fn manifest_blank_scan_rejects_non_ecmascript_whitespace() {
+    for input in ["\u{0085}", "\u{180e}", "\u{200b}", "\u{10009}", "\u{1f600}"] {
+        let cancelled = AtomicBool::new(false);
+        let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        assert!(
+            matches!(
+                parse(input.as_bytes(), &mut b),
+                Err(ReadFailure::InvalidDocument)
+            ),
+            "{input:?}"
+        );
+    }
+}
+
+#[test]
+fn manifest_blank_scan_preserves_lossy_utf8_parsing() {
+    let cancelled = AtomicBool::new(false);
+    let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    let manifest = parse(b"project: \xff\n", &mut b).unwrap();
+    assert_eq!(
+        manifest.project.unwrap().as_scalar().as_deref(),
+        Some("\u{fffd}")
+    );
+    for input in [b" \xff ".as_slice(), b"\xc2", b"\xed\xa0\x80", b"\xf0\x9f"] {
+        let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        assert!(matches!(
+            parse(input, &mut b),
+            Err(ReadFailure::InvalidDocument)
+        ));
+    }
+}
+
+#[test]
+fn manifest_blank_scan_checks_document_budget_and_cancellation_first() {
+    for input in [b"  ".as_slice(), b"\xff\xff"] {
+        let cancelled = AtomicBool::new(false);
+        let limits = PreparationLimits {
+            document_bytes: 1,
+            ..PreparationLimits::default()
+        };
+        let mut b = PreparationBudget::new(&cancelled, limits).unwrap();
+        assert!(matches!(
+            parse(input, &mut b),
+            Err(ReadFailure::LimitExceeded(Resource::DocumentBytes))
+        ));
+        let mut b = PreparationBudget::new(&cancelled, limits).unwrap();
+        b.cancel_after_checks(0);
+        assert!(matches!(parse(input, &mut b), Err(ReadFailure::Cancelled)));
+    }
+}
+
 fn cases() -> impl Iterator<Item = Value> {
     include_str!("../../tests/fixtures/preparation-prereqs-node.jsonl")
         .lines()
