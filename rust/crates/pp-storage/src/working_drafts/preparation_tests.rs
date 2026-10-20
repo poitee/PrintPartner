@@ -671,10 +671,16 @@ fn invalid_stored_community_slugs_make_no_community_read() {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum HintAttempt {
+    Match,
+    Cancel,
+    Budget,
+}
 struct HintClientReads {
     inner: Reads,
     visits: Arc<std::sync::atomic::AtomicUsize>,
-    cancel_search: bool,
+    attempt: HintAttempt,
 }
 impl DraftReads for HintClientReads {
     fn resolve_stl_root(
@@ -700,22 +706,20 @@ impl DraftReads for HintClientReads {
         b.check()?;
         match request.purpose() {
             CatalogPurpose::ShippedHintsFirst => {
-                let path = if self.cancel_search {
-                    "new.stl"
-                } else {
-                    "bracket.stl"
-                };
-                Ok(DocumentRead::Bytes(serde_json::to_vec(&json!({"version":1,"rules":[
-                    {"path":path,"option_group":"tool","variant_id":"bracket"},
-                    {"path":path,"option_group":"tool","variant_id":"bracket","label":"Later label"},
-                    {"path":"absent.stl","option_group":"missing","variant_id":"none"}
-                ]})).unwrap()))
+                let mut hints = self.inner.case["hints"].clone();
+                if self.attempt != HintAttempt::Match {
+                    for rule in hints["rules"].as_array_mut().unwrap().iter_mut().take(2) {
+                        rule["path"] = json!("new.stl");
+                    }
+                }
+                Ok(DocumentRead::Bytes(serde_json::to_vec(&hints).unwrap()))
             }
             CatalogPurpose::CustomHints => {
                 HINT_PATH_VISITS.with(|counter| *counter.borrow_mut() = Some(self.visits.clone()));
-                if self.cancel_search {
-                    // One candidate uses check + path_matches' visit and two comparisons.
-                    b.cancel_after_checks(4);
+                match self.attempt {
+                    HintAttempt::Cancel => b.cancel_after_checks(3),
+                    HintAttempt::Budget => b.limit_visits_after(1),
+                    HintAttempt::Match => {}
                 }
                 Ok(DocumentRead::Missing)
             }
@@ -724,17 +728,16 @@ impl DraftReads for HintClientReads {
     }
 }
 
-fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
+fn hint_client_attempt(attempt: HintAttempt) {
     use crate::{Limits, WriterOwner, auth, read_model::Credential};
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
-    let case: Value = include_str!("../../tests/fixtures/working-draft-recompute-node.jsonl")
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .find(|case| case["name"] == "created-then-replayed")
-        .unwrap();
+    let case: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/preparation-hints-node.json"
+    ))
+    .unwrap();
     let root =
         FixtureRoot(std::env::temp_dir().join(format!("pp-hint-client-{}", rand::random::<u64>())));
     std::fs::create_dir_all(root.path()).unwrap();
@@ -750,10 +753,6 @@ fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
     )
     .unwrap();
     let connection = Connection::open(&database).unwrap();
-    for sql in case["setup"].as_array().unwrap() {
-        connection.execute_batch(sql.as_str().unwrap()).unwrap();
-    }
-    connection.execute_batch(r#"INSERT OR REPLACE INTO app_settings(tenant_id,key,value) VALUES('default','kit_manifest_1','{"selections":{"tool":"bracket"}}')"#).unwrap();
     let files: Vec<Value> = case["files"]
         .as_array()
         .unwrap()
@@ -797,11 +796,11 @@ fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
     let visits = Arc::new(AtomicUsize::new(0));
     let reads = Arc::new(HintClientReads {
         inner: Reads {
-            case: json!({"files":files}),
+            case: json!({"files":files,"hints":case["hints"]}),
             hashes: Default::default(),
         },
         visits: visits.clone(),
-        cancel_search,
+        attempt,
     });
     let client = owner
         .working_drafts_with_observations(
@@ -811,7 +810,7 @@ fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
                 first_user: auth::FirstUserTenant::NewUser,
             },
             reads,
-            limits,
+            PreparationLimits::default(),
         )
         .unwrap();
     let result = client.recompute(
@@ -821,9 +820,9 @@ fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
         Arc::new(AtomicBool::new(false)),
         Duration::from_secs(60),
     );
-    if cancel_search || limits.visits == 0 {
+    if attempt != HintAttempt::Match {
         let error = result.unwrap_err();
-        if cancel_search {
+        if attempt == HintAttempt::Cancel {
             assert!(
                 matches!(
                     error.downcast_ref::<ReadFailure>(),
@@ -832,10 +831,10 @@ fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
                 "{error:?}"
             );
             assert_eq!(error.to_string(), "Cancelled");
-            assert_eq!(visits.load(Ordering::Relaxed), 2);
         } else {
             assert_eq!(error.to_string(), "LimitExceeded(Visits)");
         }
+        assert_eq!(visits.load(Ordering::Relaxed), 2);
         assert_eq!(snapshot(), before);
     } else {
         let mut actual: Value =
@@ -847,7 +846,7 @@ fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
                 .ends_with('Z')
         );
         actual["draft"]["createdAt"] = json!(true);
-        assert_eq!(actual, case["results"][0]);
+        assert_eq!(actual, case["result"]);
         // Two rules match the first path. The missing rule examines all four.
         assert_eq!(visits.load(Ordering::Relaxed), 6);
     }
@@ -867,19 +866,13 @@ fn hint_client_attempt(cancel_search: bool, limits: PreparationLimits) {
 
 #[test]
 fn preparation_hint_stops_after_first_match() {
-    hint_client_attempt(false, PreparationLimits::default());
+    hint_client_attempt(HintAttempt::Match);
 }
 #[test]
 fn preparation_hint_search_honors_cancellation() {
-    hint_client_attempt(true, PreparationLimits::default());
+    hint_client_attempt(HintAttempt::Cancel);
 }
 #[test]
 fn preparation_hint_refusals_preserve_rows_and_files() {
-    hint_client_attempt(
-        false,
-        PreparationLimits {
-            visits: 0,
-            ..Default::default()
-        },
-    );
+    hint_client_attempt(HintAttempt::Budget);
 }

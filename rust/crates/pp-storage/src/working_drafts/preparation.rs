@@ -593,7 +593,6 @@ fn inferred(
                     counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             });
-            b.check()?;
             if manifest::path_matches(&path, p, b)? {
                 matched = true;
                 break;

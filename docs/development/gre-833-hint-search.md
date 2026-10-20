@@ -4,8 +4,8 @@ Preparation checks hint rules in shipped-then-custom order. Each rule searches
 scanned paths in their existing order and stops at its first match, like Node's
 `scannedPaths.some(...)` in `web/apps/server/src/services/path-hints.ts`.
 Later rules still run, so group and variant merge precedence stays unchanged.
-Each visited candidate checks the preparation cancellation flag. Matching also
-charges the existing visit and comparison budgets. A refusal aborts preparation
+Each visited candidate uses `path_matches`, whose existing visit and comparison
+budget checks also observe cancellation. A refusal aborts preparation
 before a draft is persisted.
 
 The change is compiled only with the default-off `desktop_rebuild` feature.
@@ -17,12 +17,15 @@ The public-client tests use a disposable copy of `required-units/unchanged.db`
 and synthetic filesystem observations. A test-only counter on the writer thread
 counts iteration entries, including entries that the old fold skipped matching.
 Two rules match the first of four paths; a missing rule visits all four.
-The expected count is six, and the complete response matches the existing Node
-`created-then-replayed` fixture, including its digest, with its timestamp normalized.
-An explicit kit selection keeps the bracket hint selected, as in that fixture.
-Cancellation is armed after hint loading and fires on the second search candidate.
-Cancellation and visit-budget refusals preserve all five draft tables and source
-file bytes. No elapsed-time assertion is used.
+The expected count is six. The complete response matches `preparation-hints-node.json`,
+including its digest, with its timestamp normalized. The hints exclude the bracket;
+removing the hints changes both inclusion and the digest. Existing manifest merge
+tests cover group and variant precedence; this change leaves that merge untouched.
+Cancellation and visit-budget refusal are armed after hint loading and fire on the
+second search candidate. Both preserve all five draft tables and source file bytes.
+Cancellation already worked on unmatched candidates in the original fold; that
+test preserves existing behavior. The iteration counter proves the regression fix.
+No elapsed-time assertion is used.
 
 The focused run passes all three `preparation_hint` tests. Against the original
 fold, the first-match test observes 12 iteration entries instead of six.
@@ -56,4 +59,10 @@ rustc --edition 2024 --test "$gate_dir/gate.rs" -o "$gate_dir/default"
 "$gate_dir/default"
 rustc --edition 2024 --cfg 'feature="desktop_rebuild"' --test "$gate_dir/gate.rs" -o "$gate_dir/enabled"
 "$gate_dir/enabled"
+```
+
+Regenerate the hint response with Node 22 and the installed web dependencies:
+
+```sh
+node --conditions=development --import ./web/node_modules/tsx/dist/loader.mjs rust/crates/pp-storage/tests/fixtures/preparation-hints-node.mjs web/apps/server > rust/crates/pp-storage/tests/fixtures/preparation-hints-node.json
 ```
