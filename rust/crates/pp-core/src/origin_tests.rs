@@ -320,10 +320,9 @@ async fn occupied_origin_recovers_with_disclosure_and_preserves_portable_data() 
         0o600
     );
     assert!(TcpListener::bind(address).await.is_err());
-    drop(listener);
     drop(owner);
     let owner = StorageLease::acquire(&fixture.0).unwrap();
-    let (listener, change) = bind_origin(&owner).await.unwrap();
+    let (listener, change) = rebind_reserved(&owner, listener).await;
     assert_eq!(listener.local_addr().unwrap(), address);
     assert_eq!(change, None);
     assert_eq!(
@@ -526,17 +525,7 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             (old, new)
         };
         let address = reserved.local_addr().unwrap();
-        let mut reserved = Some(reserved);
-        let (listener, change) = crate::origin::bind_origin_using(
-            &owner,
-            |_| Ok(()),
-            |requested| {
-                assert_eq!(std::net::SocketAddr::V4(requested), address);
-                std::future::ready(Ok(reserved.take().unwrap()))
-            },
-        )
-        .await
-        .unwrap();
+        let (listener, change) = rebind_reserved(&owner, reserved).await;
         assert_eq!(listener.local_addr().unwrap(), address);
         assert_eq!(change, None);
         assert!(TcpListener::bind(address).await.is_err());
@@ -545,6 +534,26 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             assert_eq!(std::fs::read(fixture.path(name)).unwrap(), bytes);
         }
     }
+}
+
+/// Runs `bind_origin` with the saved port's listener still held. Dropping it
+/// first would let a parallel test bind the freed port before relaunch does.
+async fn rebind_reserved(
+    owner: &StorageLease,
+    reserved: TcpListener,
+) -> (TcpListener, Option<OriginChange>) {
+    let address = reserved.local_addr().unwrap();
+    let mut reserved = Some(reserved);
+    crate::origin::bind_origin_using(
+        owner,
+        |_| Ok(()),
+        |requested| {
+            assert_eq!(std::net::SocketAddr::V4(requested), address);
+            std::future::ready(Ok(reserved.take().unwrap()))
+        },
+    )
+    .await
+    .unwrap()
 }
 
 /// SIGKILLs this process without running any more of its code. `kill` may
@@ -670,11 +679,15 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
                 "unlinked publication became visible"
             );
         }
+        let owner = StorageLease::acquire(&fixture.0).unwrap();
         // Hold the crashed port when nothing was published so relaunch must
         // choose and publish a fresh one.
-        let _held = (!published).then_some(crashed);
-        let owner = StorageLease::acquire(&fixture.0).unwrap();
-        let (listener, change) = bind_origin(&owner).await.unwrap();
+        let (listener, change) = if published {
+            rebind_reserved(&owner, crashed).await
+        } else {
+            let _held = crashed;
+            bind_origin(&owner).await.unwrap()
+        };
         let address = listener.local_addr().unwrap();
         assert_eq!(change, None);
         assert_eq!(address == crashed_address, published);
@@ -684,8 +697,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
             std::fs::read(fixture.config()).unwrap(),
             expected.as_bytes()
         );
-        drop(listener);
-        let (listener, change) = bind_origin(&owner).await.unwrap();
+        let (listener, change) = rebind_reserved(&owner, listener).await;
         assert_eq!(listener.local_addr().unwrap(), address);
         assert_eq!(change, None);
         assert_eq!(
@@ -701,6 +713,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
 #[tokio::test]
 async fn failed_recovery_closes_selected_listener_before_returning() {
     use crate::state_file::Boundary;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let fixture = Fixture::new();
     let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
     std::fs::write(
@@ -709,25 +722,55 @@ async fn failed_recovery_closes_selected_listener_before_returning() {
     )
     .unwrap();
     let owner = StorageLease::acquire(&fixture.0).unwrap();
-    let mut selected = None;
-    let result = crate::origin::bind_origin_with(&owner, |boundary| {
-        if boundary == Boundary::DirectorySync {
-            let bytes = std::fs::read_to_string(fixture.config())?;
-            let port: u16 = bytes.trim().strip_prefix("port = ").unwrap().parse()?;
-            let address = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-            assert!(std::net::TcpListener::bind(address).is_err());
-            selected = Some(address);
-            anyhow::bail!("injected directory sync failure");
-        }
-        Ok(())
-    })
+    // A duplicate keeps the selected port bound after recovery closes its
+    // listener, so no parallel test can take it before the check below.
+    let selected = std::cell::RefCell::new(None);
+    let result = crate::origin::bind_origin_using(
+        &owner,
+        |boundary| {
+            anyhow::ensure!(
+                boundary != Boundary::DirectorySync,
+                "injected directory sync failure"
+            );
+            Ok(())
+        },
+        |address| {
+            let selected = &selected;
+            async move {
+                let listener = TcpListener::bind(address).await?;
+                if address.port() == 0 {
+                    let fd = listener.as_raw_fd();
+                    let held = unsafe { libc::dup(fd) };
+                    assert!(held >= 0, "dup failed");
+                    *selected.borrow_mut() = Some((fd, unsafe { OwnedFd::from_raw_fd(held) }));
+                }
+                Ok(listener)
+            }
+        },
+    )
     .await;
     assert!(result.is_err());
-    let listener = TcpListener::bind(selected.unwrap()).await.unwrap();
+    let (fd, held) = selected.into_inner().unwrap();
+    let held = std::net::TcpListener::from(held);
+    let address = held.local_addr().unwrap();
     assert_eq!(
-        listener.local_addr().unwrap().port(),
-        selected.unwrap().port()
+        std::fs::read(fixture.config()).unwrap(),
+        format!("port = {}\n", address.port()).as_bytes()
     );
+    // The selected descriptor is closed, or was reused by something that
+    // cannot be bound to the held address.
+    let name = |fd| {
+        let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of_val(&storage) as libc::socklen_t;
+        let status = unsafe { libc::getsockname(fd, (&raw mut storage).cast(), &mut len) };
+        (status == 0).then(|| {
+            unsafe { std::slice::from_raw_parts((&raw const storage).cast::<u8>(), len as usize) }
+                .to_vec()
+        })
+    };
+    let held_name = name(held.as_raw_fd());
+    assert!(held_name.is_some());
+    assert_ne!(name(fd), held_name);
     assert_no_temporary(&fixture);
 }
 
@@ -808,8 +851,12 @@ async fn ticket_t_12_origin_cleanup_removes_only_owned_regular_temporary_files()
         let fifo_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
         let owner = StorageLease::acquire(&fixture.0).unwrap();
-        drop(reserved);
-        let result = bind_origin(&owner).await;
+        let result = if config == "valid" {
+            Ok(rebind_reserved(&owner, reserved).await)
+        } else {
+            drop(reserved);
+            bind_origin(&owner).await
+        };
         if config == "corrupt" {
             assert!(result.is_err());
         } else {
