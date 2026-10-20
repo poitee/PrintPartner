@@ -18,6 +18,7 @@ use std::{
 thread_local! {
     pub(super) static GLOBAL_NAMING_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static SOURCE_LAYER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static LAYER_NAMING_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static PATH_SORT_TEST: std::cell::RefCell<Option<PathSortProbe>> = const { std::cell::RefCell::new(None) };
     pub(super) static HINT_PATH_VISITS: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> = const { std::cell::RefCell::new(None) };
 }
@@ -139,7 +140,7 @@ impl Capture {
 struct Layer {
     source_id: i64,
     source_layer: String,
-    naming: Arc<NamingProfile>,
+    naming: LayerNaming,
     rules: Option<Vec<String>>,
     root: Box<dyn StlRootRead>,
 }
@@ -429,7 +430,7 @@ pub(super) fn capture(
         layers.push(Layer {
             source_id: id,
             source_layer: layer,
-            naming: effective,
+            naming: LayerNaming::new(effective),
             rules,
             root,
         });
@@ -451,10 +452,53 @@ fn role_name(role: crate::catalog::naming::RoleId) -> String {
     }
     .into()
 }
+/// A captured layer's naming profile with its quantity regexes compiled once,
+/// so every path the layer scans reuses them.
+pub(super) struct LayerNaming {
+    profile: Arc<NamingProfile>,
+    /// A compile error is reported when a path is parsed, as before.
+    quantity: Result<regress::Regex, regress::Error>,
+    /// `None` when `strip_quantity` is off or the derived pattern does not
+    /// compile; an invalid pattern leaves the slug unchanged.
+    strip: Option<regress::Regex>,
+}
+impl LayerNaming {
+    pub(super) fn new(profile: Arc<NamingProfile>) -> Self {
+        #[cfg(test)]
+        LAYER_NAMING_COMPILES.with(|count| count.set(count.get() + 1));
+        let regex = &profile.quantity.regex;
+        let strip = profile
+            .slug
+            .strip_quantity
+            .then(|| strip_pattern(regex).ok())
+            .flatten()
+            .and_then(|pattern| regress::Regex::with_flags(&pattern, "i").ok());
+        Self {
+            quantity: regress::Regex::with_flags(regex, "i"),
+            strip,
+            profile,
+        }
+    }
+}
+/// Turns the quantity regex into one that matches the quantity suffix of a
+/// slug, which has no `.stl` extension.
+fn strip_pattern(regex: &str) -> Result<String, regress::Error> {
+    let mut strip = trim_js(regex).to_owned();
+    strip = regress::Regex::new(r"\(\?P<\w+>")?.replace_all(&strip, "(");
+    strip = regress::Regex::new(r"\(\?:")?.replace_all(&strip, "(");
+    strip = regress::Regex::new(r"\([^?][^)]*\)")?.replace(&strip, "[0-9]+");
+    strip = regress::Regex::new(r"\\\.stl\$")?.replace(&strip, "$");
+    strip = regress::Regex::with_flags(r"\.stl$", "i")?.replace(&strip, "$");
+    Ok(strip)
+}
 fn replace_first(input: &str, pattern: &str, replacement: &str) -> String {
-    if let Ok(re) = regress::Regex::with_flags(pattern, "i")
-        && let Some(m) = re.find(input)
-    {
+    match regress::Regex::with_flags(pattern, "i") {
+        Ok(re) => replace_match(input, &re, replacement),
+        Err(_) => input.into(),
+    }
+}
+fn replace_match(input: &str, re: &regress::Regex, replacement: &str) -> String {
+    if let Some(m) = re.find(input) {
         return format!(
             "{}{}{}",
             &input[..m.range.start],
@@ -466,9 +510,10 @@ fn replace_first(input: &str, pattern: &str, replacement: &str) -> String {
 }
 pub(super) fn parse(
     path: &str,
-    profile: &NamingProfile,
+    naming: &LayerNaming,
     b: &mut PreparationBudget<'_>,
 ) -> Result<(String, String, String, f64)> {
+    let profile = &*naming.profile;
     let filename = path.rsplit('/').next().unwrap_or(path).to_owned();
     b.comparison(path.len())?;
     let lower = path.to_lowercase();
@@ -512,7 +557,10 @@ pub(super) fn parse(
         }
     }
     b.comparison(filename.len().saturating_add(profile.quantity.regex.len()))?;
-    let quantity = regress::Regex::with_flags(&profile.quantity.regex, "i")?
+    let quantity = naming
+        .quantity
+        .as_ref()
+        .map_err(|error| anyhow!(error.clone()))?
         .find(&filename)
         .and_then(|m| m.captures.first().cloned().flatten())
         .map(|r| filename[r].to_owned())
@@ -566,13 +614,9 @@ pub(super) fn parse(
             slug.len()
                 .saturating_add(profile.quantity.regex.len().saturating_mul(8)),
         )?;
-        let mut strip = trim_js(&profile.quantity.regex).to_owned();
-        strip = regress::Regex::new(r"\(\?P<\w+>")?.replace_all(&strip, "(");
-        strip = regress::Regex::new(r"\(\?:")?.replace_all(&strip, "(");
-        strip = regress::Regex::new(r"\([^?][^)]*\)")?.replace(&strip, "[0-9]+");
-        strip = regress::Regex::new(r"\\\.stl\$")?.replace(&strip, "$");
-        strip = regress::Regex::with_flags(r"\.stl$", "i")?.replace(&strip, "$");
-        slug = replace_first(&slug, &strip, "");
+        if let Some(strip) = &naming.strip {
+            slug = replace_match(&slug, strip, "");
+        }
     }
     if slug.is_empty() {
         slug = name

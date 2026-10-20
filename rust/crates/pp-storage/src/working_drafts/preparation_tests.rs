@@ -292,6 +292,7 @@ fn preparation_matches_cases(cases: impl IntoIterator<Item = Value>) {
         };
         let cancelled = AtomicBool::new(false);
         let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        LAYER_NAMING_COMPILES.with(|count| count.set(0));
         let result = if case["capture"] == true {
             let tx = connection.transaction().unwrap();
             capture(&tx, "default", 1, &reads, &mut b)
@@ -333,6 +334,8 @@ fn preparation_matches_cases(cases: impl IntoIterator<Item = Value>) {
             assert_eq!(*reads.hashes.lock().unwrap(), Vec::<String>::new());
         }
         if case["name"] == "layer-winners-and-conflicts" {
+            // Seven paths across two layers compile each layer's regexes once.
+            assert_eq!(LAYER_NAMING_COMPILES.with(|count| count.get()), 2);
             assert_eq!(
                 *reads.hashes.lock().unwrap(),
                 vec![
@@ -475,10 +478,9 @@ fn naming_comparisons_are_cumulative_and_cancellable() {
         ..NamingProfile::default()
     };
     let deep = format!("{}gear.stl", "folder/".repeat(40));
-    for (path, profile, cap) in [
-        ("gear.stl", &profile, 600),
-        (deep.as_str(), &NamingProfile::default(), 700),
-    ] {
+    let profile = LayerNaming::new(Arc::new(profile));
+    let default = LayerNaming::new(Arc::new(NamingProfile::default()));
+    for (path, profile, cap) in [("gear.stl", &profile, 600), (deep.as_str(), &default, 700)] {
         let cancelled = AtomicBool::new(false);
         let mut b = PreparationBudget::new(
             &cancelled,
