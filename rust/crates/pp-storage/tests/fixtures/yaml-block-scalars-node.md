@@ -1,6 +1,6 @@
 # YAML block scalar parity
 
-`yaml-block-scalars-node.json` records the literal outputs of js-yaml 5.4.3 for 1,123 inputs around block scalar boundaries. A null expectation means js-yaml rejects the input. 144 cases are rejections.
+`yaml-block-scalars-node.json` records the literal outputs of js-yaml 5.4.3 for 1,151 inputs around block scalar boundaries. A null expectation means js-yaml rejects the input. 163 cases are rejections.
 
 ## Lines that end an explicit-indentation block scalar
 
@@ -12,11 +12,15 @@ The matrix crosses the headers `|1`, `|2`, `>2-`, `|+2`, `>+2`, `>1` and `|3` wi
 
 js-yaml counts a root indentation indicator from column 0, so `|1` then ` x` loads as `" x\n"`. saphyr counts it from column 1. js-yaml also reads root content at column 0 that starts with a tab, as in `|` then a tab-led `# c`, which saphyr rejects. The shield indents each line of such a root block scalar one column deeper.
 
-js-yaml indents a root node from the line it starts on, except on the first line of the input, where it counts no indent. So after a blank first line, `  |` then a tab-led `x` is rejected, and `  |` then ` x` is rejected because nothing but comments may follow the root node. The shield tracks such a root block scalar from that indent. The root cases cover each header, strip and keep chomping, a leading blank line, content shallower than the indicator, a header after `---`, after a tag and before a comment, an indented header on the first and on a later line, and tab-led text, comments and blank lines.
+js-yaml indents a root node from the line it starts on, except on the first line of the input, where it counts no indent. So after a blank first line, `  |` then a tab-led `x` is rejected, and `  |` then ` x` is rejected because nothing but comments may follow the root node. The shield tracks such a root block scalar from that indent. saphyr reads a comment or `---` that ends a root block scalar with no indicator and no content yet as that content, so the shield rejects those inputs, as in a blank line, `  |`, ` # c`, then `x`. The root cases cover each header, strip and keep chomping, a leading blank line, content shallower than the indicator, a header after `---`, after a tag and before a comment, an indented header on the first and on a later line, and tab-led text, comments and blank lines.
 
 ## Document markers
 
 js-yaml ends a block scalar at `---` or `...` at column 0, so `|`, `x`, `---`, `y` holds two documents and is rejected, while `|`, `x`, `...` loads as `"x\n"`. saphyr reads those lines as root block content. The shield ends the block scalar at the marker. Controls cover `---x`, `...x`, indented markers, a marker followed by a tab, a value or a comment, folded and explicit headers, a header after `---`, and markers after a mapping value. A CRLF variant covers each marker case.
+
+## Byte order marks and non-printable characters
+
+js-yaml reads a line that starts with a BOM as a document boundary when the separation space after the BOM reaches `%` or `---` at the start of a line, so `|1` then a BOM and `---` is rejected as two documents. A BOM line that reaches anything else is content. The shield ends a block scalar at such a boundary. js-yaml also rejects C0 and C1 control characters other than tab, line breaks and NEL, and U+FFFE and U+FFFF, inside a scalar, and rejects any input that contains NUL. The shield checks the same characters in block scalar content and rejects NUL anywhere. The cases cover each BOM form, control characters, a noncharacter and NUL.
 
 ## Out of scope
 
