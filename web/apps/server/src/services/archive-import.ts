@@ -29,7 +29,7 @@ const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
   return value >>> 0;
 });
 
-const crc32 = zlib.crc32 ?? ((bytes: Uint8Array, previous = 0): number => {
+export const crc32 = zlib.crc32 ?? ((bytes: Uint8Array, previous = 0): number => {
   let checksum = previous ^ 0xffffffff;
   for (const byte of bytes) {
     checksum = (checksum >>> 8) ^ CRC32_TABLE[(checksum ^ byte) & 0xff]!;
