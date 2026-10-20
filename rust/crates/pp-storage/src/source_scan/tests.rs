@@ -872,21 +872,22 @@ fn failure_metadata_matches_node_and_rolls_back() {
     let scan = Scan::new();
     for case in golden["failures"].as_array().unwrap() {
         let mut connection = scan.connection();
+        let raw = case["metadata"].as_str();
+        connection
+            .execute(
+                "UPDATE projects SET metadata_json=?1 WHERE id=?2",
+                params![raw, scan.source_id],
+            )
+            .unwrap();
         let tx = connection.transaction().unwrap();
-        tx.execute(
-            "UPDATE projects SET metadata_json=?1",
-            [case["metadata"]
-                .as_object()
-                .map(|_| case["metadata"].to_string())],
-        )
-        .unwrap();
         mark_local_failure(
             &tx,
             scan.lease.tenant(),
             scan.source_id,
             case["detail"].as_str().unwrap(),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{}: {error}", case["id"]));
+        assert!(mark_local_failure(&tx, "wrong-tenant", scan.source_id, "failure").is_err());
         let actual: String = tx
             .query_row(
                 "SELECT metadata_json FROM projects WHERE id=?1",
@@ -894,13 +895,35 @@ fn failure_metadata_matches_node_and_rolls_back() {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&actual).unwrap(),
-            case["result"]
-        );
+        assert_eq!(actual, case["stored"], "{}", case["id"]);
         assert_eq!(case["error"], case["detail"]);
-        assert!(mark_local_failure(&tx, "wrong-tenant", scan.source_id, "failure").is_err());
         tx.rollback().unwrap();
+        let restored: Option<String> = connection
+            .query_row(
+                "SELECT metadata_json FROM projects WHERE id=?1",
+                [scan.source_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(restored.as_deref(), raw, "{}", case["id"]);
+
+        let tx = connection.transaction().unwrap();
+        mark_local_failure(
+            &tx,
+            scan.lease.tenant(),
+            scan.source_id,
+            case["detail"].as_str().unwrap(),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        let persisted: String = connection
+            .query_row(
+                "SELECT metadata_json FROM projects WHERE id=?1",
+                [scan.source_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted, case["stored"], "{}", case["id"]);
     }
 }
 

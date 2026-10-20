@@ -59,19 +59,52 @@ if (process.argv.includes("--probe")) {
       rmSync(directory, { recursive: true, force: true });
     }
   }
+  const { SqliteDatabase, getDb } = await import(pathToFileURL(join(root, "web/apps/server/src/db/client.ts")).href);
+  const { AppRepository } = await import(pathToFileURL(join(root, "web/apps/server/src/db/repository.ts")).href);
+  const { default: Database } = await import(pathToFileURL(join(root, "web/node_modules/better-sqlite3/lib/index.js")).href);
   const failures = [];
-  for (const metadata of [null, { keep: 7, sync_error: "old", sync_required: false }]) {
-    let actual = metadata;
-    let error;
-    try {
-      await syncProjectById({
-        getProjectRow: () => ({ sourceKind: "local", localPath: null, lastCommitSha: null }),
-        getSourceActivationObservation: () => ({ id: 7 }), getSetting: () => null,
-        markSourceSynced: () => { throw new Error("disk read failed"); },
-        updateSource: (_id, patch) => { actual = { ...actual, ...patch.metadata }; },
-      }, "/unused", 7, "/unused", { beforePublish: () => {}, maxDocsBytes: 1024 });
-    } catch (caught) { error = caught.message; }
-    failures.push({ metadata, detail: "disk read failed", result: actual, error });
+  const directory = mkdtempSync(join(tmpdir(), "pp-source-scan-failure-"));
+  const database = new SqliteDatabase(directory);
+  let raw;
+  try {
+    database.connect();
+    raw = new Database(database.dbPath);
+    const repo = new AppRepository(getDb(database), "default", database.reposDir);
+    const source = repo.createSource({ name: "Failure", source_kind: "local", source_type: "local" });
+    repo.markSourceSynced = () => { throw new Error("disk read failed"); };
+    for (const [id, metadata] of [
+      ["sql-null", null],
+      ["object", '{"keep":7,"sync_error":"old","sync_required":false}'],
+      ["empty-string", ""],
+      ["malformed", "{broken"],
+      ["array", '[1,"two",null]'],
+      ["json-string", '"hello"'],
+      ["number", "42"],
+      ["boolean", "false"],
+      ["json-null", "null"],
+      ["whitespace", "  "],
+      ["overflow-object", '{"keep":7,"x":1e400,"nested":[-1e400,{"x":1e400}]}'],
+      ["rounded-integer", '{"x":9007199254740993}'],
+      ["category", '{"category":" Printers / Frame "}'],
+      ["empty-category", '{"category":" / / "}'],
+      ["nonstring-category", '{"category":7}'],
+      ["lone-high-surrogate", String.raw`{"keep":7,"x":"\ud800"}`],
+      ["lone-low-surrogate", String.raw`{"x":"\udc00","\udc00":"key"}`],
+      ["surrogate-pairs", String.raw`{"reversed":"\ude00\ud83d","pair":"\ud83d\ude00","category":" a / \ud800 / "}`],
+      ["key-order", '{"b":1,"10":2,"2":3,"b":4,"sync_error":"old","01":5,"4294967295":6}'],
+    ]) {
+      raw.prepare("UPDATE projects SET metadata_json=? WHERE id=?").run(metadata, source.id);
+      let error;
+      try {
+        await syncProjectById(repo, directory, source.id, directory, { beforePublish: () => {}, maxDocsBytes: 1024 });
+      } catch (caught) { error = caught.message; }
+      const stored = raw.prepare("SELECT metadata_json FROM projects WHERE id=?").get(source.id).metadata_json;
+      failures.push({ id, metadata, detail: "disk read failed", stored, error });
+    }
+  } finally {
+    raw?.close();
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
   process.stdout.write(JSON.stringify({ cases, failures }));
 } else {
