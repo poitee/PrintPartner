@@ -33,13 +33,14 @@ WINDOW_SECONDS = 4
 POLL_SECONDS = .1
 RUN_TOKEN = "PP_LISTENER_PROOF_RUN"
 
-# Each control is preloaded into the built backend with --import.
+# Each control is preloaded into the built backend with --import. The late controls arm their 1s timer once the
+# harness writes the readiness marker after recording ready_at, so their listeners open at least 1s after readiness.
 CONTROLS = {
     "extra_backend_unix_listener": """
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 const waiting = setInterval(() => {
-  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET)) return;
+  if (!existsSync(process.env.PP_LISTENER_CONTROL_READY)) return;
   clearInterval(waiting);
   setTimeout(() => createServer().listen(process.env.PP_LISTENER_CONTROL_SOCKET + ".extra").unref(), 1000).unref();
 }, 50);
@@ -65,7 +66,7 @@ spawnSync(process.execPath, ["-e", `require("node:child_process").spawn(process.
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 const waiting = setInterval(() => {
-  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET)) return;
+  if (!existsSync(process.env.PP_LISTENER_CONTROL_READY)) return;
   clearInterval(waiting);
   setTimeout(() => createServer().listen(0, "127.0.0.1").unref(), 1000).unref();
 }, 50);
@@ -386,7 +387,8 @@ def _run_backend(node, evidence, control, excluded_endpoints):
         script = evidence / f"{control}.mjs"
         script.write_text(CONTROLS[control])
         preload = ["--import", script.as_uri()]
-        env.update(PP_LISTENER_CONTROL_SOCKET=str(socket_path), PP_LISTENER_CONTROL_PYTHON=sys.executable)
+        env.update(PP_LISTENER_CONTROL_SOCKET=str(socket_path), PP_LISTENER_CONTROL_PYTHON=sys.executable,
+                   PP_LISTENER_CONTROL_READY=str(evidence / "ready"))
     # The control loads before the package-boundary hook, which would reject a script outside the repository.
     command = [str(node), "--no-global-search-paths", *preload,
                "--import", str(ROOT / "web/apps/server/dist/current/desktop-resolution.js"),
@@ -421,6 +423,8 @@ def _run_backend(node, evidence, control, excluded_endpoints):
                     require(time.monotonic() < deadline, f"backend readiness timed out; see {evidence}")
                     time.sleep(.05)
             ready_at = time.monotonic()
+            if control:
+                (evidence / "ready").touch()
             receipt["ready"] = {"polls": watch.polls}
             watch.ready = True
             watch.poll()
