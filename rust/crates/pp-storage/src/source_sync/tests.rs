@@ -686,6 +686,10 @@ fn durable_claim_blocks_a_second_sync(restart: bool) {
     let target = local(worker.claim_next_source_sync_target(&mut second).unwrap());
     assert_eq!(target.claim_generation, 1);
     assert_eq!(sync.targets(&second_job), [(id, "claimed".into(), None)]);
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -818,6 +822,9 @@ fn terminal_recovery_closes_sync_batch(reason: &str, effect_confirmed: bool) {
                 sync.targets(&later),
                 [(later_source, "claimed".into(), None)]
             );
+            let Fixture { owner, root, .. } = sync;
+            owner.shutdown().unwrap();
+            std::fs::remove_dir_all(root).unwrap();
         }
     }
 }
