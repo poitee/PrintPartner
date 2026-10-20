@@ -39,7 +39,9 @@ describe("Sponsor action", () => {
     });
     const popup = vi.spyOn(window, "open").mockReturnValue(null);
     openSponsor();
-    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("github.com/sponsors/poitee")));
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledExactlyOnceWith(
+      "Could not confirm your browser opened. Visit github.com/sponsors/poitee to sponsor Print Partner.",
+    ));
     expect(popup).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,7 @@ export function openSponsor(): void {
   const nativeSponsor = window.__PRINT_PARTNER_NATIVE_SPONSOR__;
   if (nativeSponsor) {
     void Promise.resolve().then(() => nativeSponsor()).catch(() => {
-      toast.error("Could not open your browser. Visit github.com/sponsors/poitee to sponsor Print Partner.");
+      toast.error("Could not confirm your browser opened. Visit github.com/sponsors/poitee to sponsor Print Partner.");
     });
     return;
   }

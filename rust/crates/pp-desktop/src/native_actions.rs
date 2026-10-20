@@ -1,8 +1,11 @@
 use crate::AllowedOrigin;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{process::Stdio, time::Duration};
 use tauri::{Url, ipc::CapabilityBuilder};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tokio::process::Command;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const SPONSOR_URL: &str = "https://github.com/sponsors/poitee";
 const DENIED: &str = "Sponsor action is unavailable for this page";
 
@@ -13,7 +16,10 @@ pub enum SponsorAction {
 
 impl SponsorAction {
     pub fn from_startup(gate: pp_core::DesktopRebuild, origin: AllowedOrigin) -> Self {
-        Self::new(gate.enabled(), origin)
+        Self::new(
+            gate.enabled() && cfg!(any(target_os = "linux", target_os = "macos")),
+            origin,
+        )
     }
 
     fn new(enabled: bool, origin: AllowedOrigin) -> Self {
@@ -82,17 +88,22 @@ pub async fn open_sponsor(
     open_fixed_sponsor().await.map_err(str::to_owned)
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn open_fixed_sponsor() -> Result<(), &'static str> {
     #[cfg(target_os = "linux")]
     let mut command = Command::new("xdg-open");
     #[cfg(target_os = "macos")]
     let mut command = Command::new("/usr/bin/open");
-    #[cfg(target_os = "windows")]
-    let mut command = Command::new("explorer.exe");
     command.arg(SPONSOR_URL);
     run_browser(command, Duration::from_secs(5)).await
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+async fn open_fixed_sponsor() -> Result<(), &'static str> {
+    Err("Sponsor action is unavailable on this platform")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 async fn run_browser(mut command: Command, timeout: Duration) -> Result<(), &'static str> {
     let mut child = command
         .stdin(Stdio::null())
@@ -106,7 +117,7 @@ async fn run_browser(mut command: Command, timeout: Duration) -> Result<(), &'st
         Ok(Ok(_)) => Err("Could not open the browser"),
         _ => {
             let _ = child.kill().await;
-            Err("Browser launch did not complete")
+            Err("Could not confirm the browser opened")
         }
     }
 }
@@ -230,7 +241,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn ticket_t_68_browser_process_reports_failure_and_times_out() {
         assert!(
@@ -242,7 +253,7 @@ mod tests {
         command.arg("5");
         assert_eq!(
             run_browser(command, Duration::from_millis(50)).await,
-            Err("Browser launch did not complete")
+            Err("Could not confirm the browser opened")
         );
         assert!(
             run_browser(Command::new("/usr/bin/true"), Duration::from_secs(1))
