@@ -194,7 +194,14 @@ it("discards an ambiguous command without replaying it before the next different
   vi.mocked(fetchPlanReview).mockResolvedValue(review(false, 7, 2));
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  act(() => {
+    for (const allowed of [true, false]) {
+      client.setQueryData<PlanReview>(queryKeys.planReview(7, true, allowed), (data) => data, { updatedAt: 1 });
+      client.setQueryData<PlanReview>(queryKeys.planReview(7, false, allowed), (data) => data, { updatedAt: 2 });
+    }
+  });
   fireEvent.click(screen.getByRole("button", { name: "Set quantity" }));
+  await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(3));
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
   expect(savePlanChoices).toHaveBeenCalledTimes(3);
   const calls = vi.mocked(savePlanChoices).mock.calls;
