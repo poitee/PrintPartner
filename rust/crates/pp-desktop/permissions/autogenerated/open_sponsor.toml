@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-sponsor"
+description = "Enables the open_sponsor command without any pre-configured scope."
+commands.allow = ["open_sponsor"]
+
+[[permission]]
+identifier = "deny-open-sponsor"
+description = "Denies the open_sponsor command without any pre-configured scope."
+commands.deny = ["open_sponsor"]
