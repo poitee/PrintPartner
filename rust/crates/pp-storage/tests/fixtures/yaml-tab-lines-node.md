@@ -1,6 +1,6 @@
 # YAML tab-line parity
 
-`yaml-tab-lines-node.json` records the literal outputs of js-yaml 5.4.3 for 215 inputs that put a tab in an otherwise blank line or at the start of a comment line. A null expectation means js-yaml rejects the input.
+`yaml-tab-lines-node.json` records the literal outputs of js-yaml 5.4.3 for 233 inputs that put a tab in an otherwise blank line or at the start of a comment line. A null expectation means js-yaml rejects the input.
 
 ## Whitespace-only lines in quoted scalars
 
@@ -12,9 +12,11 @@ The quoted cases cover both quote styles with `\t`, `\t\t`, ` \t ` and `  \t` li
 
 js-yaml ends a plain scalar at a comment line, so `a: x`, a comment line, then a deeper `  y` fails with "bad indentation of a mapping entry". saphyr ends the scalar at a comment led by spaces, but continues the scalar across one led by a tab. The shield pre-pass removes the indentation of each comment line outside quoted and block scalars, so saphyr ends the plain scalar there too.
 
-A block scalar with no indentation indicator takes its indent from its first content line. Until that line, js-yaml rejects a line whose leading spaces end in a tab at a column no deeper than the block's parent indent, as in `a: |`, a blank line, then a tab-led comment. saphyr accepts some of these, so the shield rejects them before it touches the comment. A tab deeper than the parent is block content, and an explicit indicator such as `|2` makes the line a comment that loads.
+js-yaml measures a block scalar from the indent of its parent node, the key, `-` or `?` it belongs to, not from the line the `|` or `>` header sits on. It ends the scalar at the first non-blank line that is no deeper than the parent, and an explicit indicator such as `|2` counts from the parent's indent. The shield tracks the block scalar the same way, so a header on its own line, as in `a:` then `  |`, keeps its content.
 
-The comment cases use `\t`, ` \t` and `\t\t` before `# c`. They cover deeper and sibling lines after plain values in mappings, nested mappings, sequences and flow collections, a `\uE000` escape in a deeper quoted line, a comment after a value comment, a comment after a quoted value, a comment inside a quoted scalar, a comment before a nested mapping, comments at the end of and inside a literal block, comments before the first content line of literal, folded, keep-chomped, explicit-indent, nested, and sequence block scalars, and a comment before the root node.
+Before the first content line sets the indent of a block scalar with no indicator, js-yaml rejects a tab that sits no deeper than the parent, as in `a: |`, a blank line, then a tab-led comment. saphyr accepts some of these, so the shield rejects them before it touches the comment. A deeper tab is block content. At the document root, no tab is rejected this way.
+
+The comment cases use `\t`, ` \t` and `\t\t` before `# c`. They cover deeper and sibling lines after plain values in mappings, nested mappings, sequences and flow collections, a `\uE000` escape in a deeper quoted line, a comment after a value comment, a comment after a quoted value, a comment inside a quoted scalar, a comment before a nested mapping, comments at the end of and inside a literal block, comments before the first content line of literal, folded, keep-chomped, explicit-indent, nested, sequence, root, and next-line block scalars, and a comment before the root node.
 
 From the repository root, install the locked web dependencies, then regenerate and check the fixture:
 

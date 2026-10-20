@@ -212,7 +212,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     // The line began inside a quoted scalar, so its indent is unknown here.
     let mut quoted_line = false;
     let mut quoted_end = false;
-    let mut block: Option<(usize, Option<usize>)> = None;
+    // A block scalar's parent indent (None at the root) and, once known, its
+    // content indent.
+    let mut block: Option<(Option<usize>, Option<usize>)> = None;
     // js-yaml's indent for the outermost flow collection: one past its block
     // parent, or the indent of the line the root node starts on.
     let mut flow_indent = 0usize;
@@ -249,16 +251,19 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             separation_tab = false;
             node_tab = false;
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
-            // js-yaml rejects a tab in the indentation of a block scalar line
-            // before its first content line sets the indent.
+            // Before a block scalar's first content line sets its indent, js-yaml
+            // rejects a tab that sits no deeper than the scalar's parent node.
             if chars.get(i) == Some(&'\t')
-                && matches!(block, Some((base, None)) if line_indent <= base)
+                && matches!(block, Some((Some(base), None)) if line_indent <= base)
             {
                 return invalid();
             }
             if let Some((base, required)) = block {
                 let required = required.or_else(|| (!blank).then_some(line_indent));
-                if blank || required.is_some_and(|n| line_indent >= n && line_indent > base) {
+                if blank
+                    || required
+                        .is_some_and(|n| line_indent >= n && base.is_none_or(|b| line_indent > b))
+                {
                     block = Some((base, required));
                     let end = line_end(&chars, i, budget)?;
                     for c in &chars[start..end] {
@@ -593,14 +598,15 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 if let Some(n) = c.to_digit(10)
                     && n > 0
                 {
-                    explicit = Some(line_indent + n as usize);
+                    // js-yaml counts the indicator from the parent's indent.
+                    explicit = Some(parent.map_or(n as usize - 1, |p| p + n as usize));
                     break;
                 }
                 if *c == '#' {
                     break;
                 }
             }
-            block = Some((line_indent, explicit));
+            block = Some((parent, explicit));
             for c in &chars[i..end] {
                 output.push(*c);
                 consumed += c.len_utf8();
