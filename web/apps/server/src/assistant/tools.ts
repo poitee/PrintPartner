@@ -899,10 +899,6 @@ export async function invokeAssistantTool(
             content: JSON.stringify({ error: "name and request required" }),
           };
         analyzeBuildRequest(request, urls);
-        const access = readFeatureAccess(() => ctx.repo, "orders");
-        if (access.kind !== "allowed") {
-          return { content: JSON.stringify({ error: access.error, code: access.code }) };
-        }
         return proposeAssistantAction({
           type: "propose_create_build",
           planId: 0,

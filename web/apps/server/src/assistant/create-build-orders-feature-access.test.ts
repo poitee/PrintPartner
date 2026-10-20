@@ -91,12 +91,12 @@ describe("assistant Create Build Orders admission", () => {
     return { body: JSON.parse(text.text), isError: result.isError === true };
   }
 
-  it.each([undefined, "{}", '{"orders":false}'])("rejects proposal and forged apply for tenant settings %j", async (stored) => {
+  it.each([undefined, "{}", '{"orders":false}'])("keeps proposals storage-free and rejects forged apply for tenant settings %j", async (stored) => {
     if (stored !== undefined) repo.setSetting("feature_toggles", stored);
     const ordinary = repo.createProfile("Ordinary Plan");
     expect(repo.getProfileHeader(ordinary.id)?.special_request).toBe(null);
     const before = repo.listProfileHeaders();
-    expect(await propose()).toEqual({ content: JSON.stringify(denied) });
+    expect((await propose()).proposedAction).toMatchObject({ type: "propose_create_build", plan_id: 0 });
     expect(await apply()).toEqual(deniedApply);
     expect(repo.listProfileHeaders()).toEqual(before);
     expect(repo.getSetting("build_planning.create.customer-build")).toBe(null);
@@ -105,11 +105,19 @@ describe("assistant Create Build Orders admission", () => {
 
   it.each(["broken", "null", "[]", '{"orders":"true"}'])("fails closed for corrupt tenant settings %j", async (stored) => {
     repo.setSetting("feature_toggles", stored);
-    expect(await propose()).toEqual({ content: JSON.stringify(invalid) });
+    expect((await propose()).proposedAction).toMatchObject({ type: "propose_create_build", plan_id: 0 });
     expect(await apply()).toEqual(invalidApply);
     expect(repo.listProfileHeaders()).toEqual([]);
     expect(repo.getSetting("feature_toggles")).toBe(stored);
     expect(repo.getSetting("build_planning.create.customer-build")).toBe(null);
+  });
+
+  it("keeps opted-in proposals storage-free with invalid settings", async () => {
+    repo.setSetting("feature_toggles", "broken");
+    const reads = vi.spyOn(repo, "getSettingSnapshot");
+    expect((await propose()).proposedAction).toMatchObject({ type: "propose_create_build", plan_id: 0 });
+    expect(reads).not.toHaveBeenCalled();
+    expect(repo.listProfileHeaders()).toEqual([]);
   });
 
   it.each(["1", "true"])("creates the request and brief once under exact opt-in %j", async (flag) => {
@@ -165,7 +173,7 @@ describe("assistant Create Build Orders admission", () => {
     const before = repo.listProfileHeaders();
     const brief = readBuildPlanningBrief(repo, existing.id);
     repo.setSetting(`feature_toggles:plan:${existing.id}`, '{"orders":true}');
-    expect(await propose({ plan_id: existing.id, profile_id: existing.id }, existing.id)).toEqual({ content: JSON.stringify(denied) });
+    expect((await propose({ plan_id: existing.id, profile_id: existing.id }, existing.id)).proposedAction).toMatchObject({ type: "propose_create_build", plan_id: 0 });
     expect(await apply(forgedAction(existing.id))).toEqual(deniedApply);
     expect(repo.listProfileHeaders()).toEqual(before);
     expect(readBuildPlanningBrief(repo, existing.id)).toEqual(brief);
@@ -186,7 +194,7 @@ describe("assistant Create Build Orders admission", () => {
       expect(await apply(action)).toMatchObject({ ok: true, result: { name: "Customer Build" } });
       return Number(repo.getSetting("build_planning.create.customer-build"));
     });
-    expect(await propose()).toEqual({ content: JSON.stringify(denied) });
+    expect((await propose()).proposedAction).toMatchObject({ type: "propose_create_build", plan_id: 0 });
     expect(await apply(forgedAction(otherId))).toEqual(deniedApply);
     expect(repo.getSetting("build_planning.create.customer-build")).toBe(null);
     expect(repo.getProfileHeader(otherId)).toBe(null);
@@ -211,15 +219,11 @@ describe("assistant Create Build Orders admission", () => {
       expect(readBuildPlanningBrief(repo, id)).toMatchObject({ special_request: request });
     });
 
-  it("rejects disabled MCP proposals and rechecks pending confirmations in the same session", async () => {
+  it("rejects disabled MCP confirmations and retries pending confirmations in the same session", async () => {
     const client = await mcp();
-    expect(await mcpCall(client, "propose_create_build", input)).toEqual({ body: denied, isError: true });
-    expect(await mcpCall(client, "list_pending_actions", {})).toEqual({ body: { actions: [] }, isError: false });
-    repo.setSetting("feature_toggles", '{"orders":true}');
     await mcpCall(client, "propose_create_build", input);
     const pending = await mcpCall(client, "list_pending_actions", {});
     const id: string = pending.body.actions[0].id;
-    repo.setSetting("feature_toggles", '{"orders":false}');
     expect(await mcpCall(client, "confirm_apply", { action_id: id })).toEqual({ body: deniedApply, isError: true });
     expect(repo.listProfileHeaders()).toEqual([]);
     repo.setSetting("feature_toggles", '{"orders":true}');
