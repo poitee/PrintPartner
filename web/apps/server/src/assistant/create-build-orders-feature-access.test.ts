@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config.js";
 import { getDb, SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
+import { StatusExecution } from "../integrations/status-execution.js";
 import { createProductMcpServer } from "../mcp/product-mcp.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import { registerAssistantRoutes } from "../routes/assistant.js";
@@ -33,6 +34,7 @@ describe("assistant Create Build Orders admission", () => {
   let database: SqliteDatabase;
   let repo: AppRepository;
   let jobs: InProcessJobRunner;
+  let execution: StatusExecution;
   let clients: Client[];
   let apps: ReturnType<typeof Fastify>[];
 
@@ -46,6 +48,7 @@ describe("assistant Create Build Orders admission", () => {
     repo = new AppRepository(getDb(database), undefined, database.reposDir);
     jobs = new InProcessJobRunner({ getRepo: () => repo, reposDir: database.reposDir,
       exportsDir: join(root, "exports"), dataDir: root });
+    execution = new StatusExecution();
     clients = [];
     apps = [];
   });
@@ -53,6 +56,7 @@ describe("assistant Create Build Orders admission", () => {
   afterEach(async () => {
     for (const client of clients) await client.close();
     for (const app of apps) await app.close();
+    await execution.stop();
     database.close();
     rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
@@ -74,7 +78,7 @@ describe("assistant Create Build Orders admission", () => {
   }
 
   async function mcp() {
-    const server = createProductMcpServer({ getRepo: () => repo, jobs, config: loadConfig(), pending: new Map() });
+    const server = createProductMcpServer({ getRepo: () => repo, jobs, statusExecution: execution, config: loadConfig(), pending: new Map() });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "create-build-orders-test", version: "1" });
     clients.push(client);
