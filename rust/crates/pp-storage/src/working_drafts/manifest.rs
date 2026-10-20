@@ -766,38 +766,301 @@ fn dot_matches(unit: u16) -> bool {
     !matches!(unit, 0x000a | 0x000d | 0x2028 | 0x2029)
 }
 
+fn unit_matches(pattern: u16, key: u16) -> bool {
+    if pattern == 0x3f {
+        dot_matches(key)
+    } else {
+        pattern == key
+    }
+}
+
+fn fits(segment: &[u16], key: &[u16], work: &mut usize) -> bool {
+    *work += segment.len();
+    segment.len() == key.len() && segment.iter().zip(key).all(|(p, k)| unit_matches(*p, *k))
+}
+
+/// Matches `^pattern$` with `*` as `.*` and `?` as `.`. The work is
+/// O(key + pattern) unless a segment between stars is longer than 64 units and
+/// contains `?`; such a segment costs O((key + segment) log segment).
+///
+/// Placing each middle segment at its leftmost reachable start is optimal: a
+/// `*` cannot cross a line terminator, and two starts before the same
+/// terminator can only both match if neither covers it.
 fn wildcard_matches(pattern: &[u16], key: &[u16], work: &mut usize) -> bool {
-    let (mut pat, mut path) = (0, 0);
-    let mut star = None;
-    while path < key.len() {
+    let mut segments: Vec<_> = pattern.split(|unit| *unit == 0x2a).collect();
+    let tail = segments.pop().unwrap_or_default();
+    if segments.is_empty() {
+        return fits(tail, key, work);
+    }
+    let head = segments[0];
+    let Some(end) = key.len().checked_sub(tail.len()) else {
+        return false;
+    };
+    if head.len() > end || !fits(head, &key[..head.len()], work) || !fits(tail, &key[end..], work) {
+        return false;
+    }
+    let mut cursor = head.len();
+    let mut terminator = cursor;
+    for segment in segments[1..].iter().filter(|segment| !segment.is_empty()) {
+        if terminator < cursor {
+            terminator = cursor;
+        }
+        while terminator < key.len() && dot_matches(key[terminator]) {
+            *work += 1;
+            terminator += 1;
+        }
+        let Some(last) = end.checked_sub(segment.len()) else {
+            return false;
+        };
+        let last = last.min(terminator);
+        if last < cursor {
+            return false;
+        }
+        let window = &key[cursor..last + segment.len()];
+        let found = if !segment.contains(&0x3f) {
+            find_literal(segment, window, work)
+        } else if segment.len() <= 64 {
+            find_short_masked(segment, window, work)
+        } else {
+            find_masked(segment, window, work)
+        };
+        let Some(start) = found else {
+            return false;
+        };
+        cursor += start + segment.len();
+    }
+    *work += end - cursor;
+    key[cursor..end].iter().copied().all(dot_matches)
+}
+
+/// Knuth-Morris-Pratt search for a segment without `?`.
+fn find_literal(needle: &[u16], haystack: &[u16], work: &mut usize) -> Option<usize> {
+    let mut border = vec![0; needle.len()];
+    let mut matched = 0;
+    for index in 1..needle.len() {
+        while matched > 0 && needle[index] != needle[matched] {
+            *work += 1;
+            matched = border[matched - 1];
+        }
         *work += 1;
-        match pattern.get(pat).copied() {
-            Some(0x2a) => {
-                pat += 1;
-                star = Some((pat, path));
-            }
-            Some(unit)
-                if (unit == 0x3f && dot_matches(key[path]))
-                    || (unit != 0x3f && unit == key[path]) =>
-            {
-                pat += 1;
-                path += 1;
-            }
-            _ => {
-                let Some((after_star, consumed)) = star else {
-                    return false;
-                };
-                if !key.get(consumed).copied().is_some_and(dot_matches) {
-                    return false;
-                }
-                path = consumed + 1;
-                pat = after_star;
-                star = Some((after_star, path));
+        if needle[index] == needle[matched] {
+            matched += 1;
+        }
+        border[index] = matched;
+    }
+    matched = 0;
+    for (index, unit) in haystack.iter().enumerate() {
+        while matched > 0 && *unit != needle[matched] {
+            *work += 1;
+            matched = border[matched - 1];
+        }
+        *work += 1;
+        if *unit == needle[matched] {
+            matched += 1;
+            if matched == needle.len() {
+                return Some(index + 1 - matched);
             }
         }
     }
-    *work += pattern.len() - pat;
-    pattern[pat..].iter().all(|unit| *unit == 0x2a)
+    None
+}
+
+/// Shift-And search for a segment of at most 64 units that contains `?`.
+fn find_short_masked(needle: &[u16], haystack: &[u16], work: &mut usize) -> Option<usize> {
+    let mut literals: Vec<(u16, u64)> = Vec::new();
+    let mut any = 0;
+    for (offset, unit) in needle.iter().enumerate() {
+        if *unit == 0x3f {
+            any |= 1 << offset;
+        } else {
+            match literals.binary_search_by_key(unit, |(literal, _)| *literal) {
+                Ok(at) => literals[at].1 |= 1 << offset,
+                Err(at) => literals.insert(at, (*unit, 1 << offset)),
+            }
+        }
+    }
+    let done = 1 << (needle.len() - 1);
+    let mut state = 0_u64;
+    for (index, unit) in haystack.iter().enumerate() {
+        *work += 1;
+        let literal = literals
+            .binary_search_by_key(unit, |(literal, _)| *literal)
+            .map_or(0, |at| literals[at].1);
+        let allowed = if dot_matches(*unit) {
+            literal | any
+        } else {
+            literal
+        };
+        state = (state << 1 | 1) & allowed;
+        if state & done != 0 {
+            return Some(index + 1 - needle.len());
+        }
+    }
+    None
+}
+
+const NTT_PRIME: u64 = 29 << 57 | 1;
+const NTT_ROOT: u64 = 3;
+/// `-NTT_PRIME⁻¹ mod 2^64` by Newton iteration, for Montgomery reduction.
+const NEG_INVERSE: u64 = {
+    let mut inverse = 1_u64;
+    let mut round = 0;
+    while round < 6 {
+        inverse = inverse.wrapping_mul(2_u64.wrapping_sub(NTT_PRIME.wrapping_mul(inverse)));
+        round += 1;
+    }
+    inverse.wrapping_neg()
+};
+/// `2^128 mod NTT_PRIME`; multiplying by it moves a value into Montgomery form.
+const MONTGOMERY_SQUARE: u64 = ((u128::MAX % NTT_PRIME as u128 + 1) % NTT_PRIME as u128) as u64;
+
+/// `a · b · 2^-64 mod NTT_PRIME` for `a, b < NTT_PRIME`.
+fn mont_mul(a: u64, b: u64) -> u64 {
+    let product = u128::from(a) * u128::from(b);
+    let m = (product as u64).wrapping_mul(NEG_INVERSE);
+    let reduced = ((product + u128::from(m) * u128::from(NTT_PRIME)) >> 64) as u64;
+    reduced.checked_sub(NTT_PRIME).unwrap_or(reduced)
+}
+
+fn mont(value: u64) -> u64 {
+    mont_mul(value, MONTGOMERY_SQUARE)
+}
+
+fn add_mod(a: u64, b: u64) -> u64 {
+    let sum = a + b;
+    sum.checked_sub(NTT_PRIME).unwrap_or(sum)
+}
+
+fn pow_mod(base: u64, mut exponent: u64) -> u64 {
+    let (mut base, mut result) = (mont(base), mont(1));
+    while exponent > 0 {
+        if exponent & 1 == 1 {
+            result = mont_mul(result, base);
+        }
+        base = mont_mul(base, base);
+        exponent >>= 1;
+    }
+    mont_mul(result, 1)
+}
+
+/// In-place number-theoretic transform of plain residues.
+fn ntt(values: &mut [u64], inverse: bool, work: &mut usize) {
+    let n = values.len();
+    *work += n * n.trailing_zeros() as usize;
+    let mut j = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            values.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let mut step = pow_mod(NTT_ROOT, (NTT_PRIME - 1) / len as u64);
+        if inverse {
+            step = pow_mod(step, NTT_PRIME - 2);
+        }
+        let step = mont(step);
+        for chunk in values.chunks_mut(len) {
+            let (low, high) = chunk.split_at_mut(len / 2);
+            let mut twiddle = mont(1);
+            for (a, b) in low.iter_mut().zip(high) {
+                let t = mont_mul(*b, twiddle);
+                *b = add_mod(*a, NTT_PRIME - t);
+                *a = add_mod(*a, t);
+                twiddle = mont_mul(twiddle, step);
+            }
+        }
+        len <<= 1;
+    }
+    if inverse {
+        let scale = mont(pow_mod(n as u64, NTT_PRIME - 2));
+        values
+            .iter_mut()
+            .for_each(|value| *value = mont_mul(*value, scale));
+    }
+}
+
+/// Finds the first start where every literal unit of `needle` equals the key
+/// and every `?` covers a non-terminator, by testing
+/// `Σ literal (p - k)² + Σ ? · terminator(k) = 0` with NTT correlations over
+/// blocks of `2^⌈log₂ 2m⌉` units. Units are ranked within the needle (at most
+/// 2^16 ranks), so each sum stays below `m · 2^32 + m`, far under the prime.
+fn find_masked(needle: &[u16], haystack: &[u16], work: &mut usize) -> Option<usize> {
+    let m = needle.len();
+    let size = (2 * m).next_power_of_two();
+    let mut ranks: Vec<u16> = needle
+        .iter()
+        .copied()
+        .filter(|unit| *unit != 0x3f)
+        .collect();
+    ranks.sort_unstable();
+    ranks.dedup();
+    let rank = |unit: u16| {
+        ranks
+            .binary_search(&unit)
+            .map_or(0, |index| index as u64 + 1)
+    };
+    let mut weighted = vec![0; size];
+    let mut literal = vec![0; size];
+    let mut any = vec![0; size];
+    let mut constant = 0;
+    for (offset, unit) in needle.iter().rev().enumerate() {
+        if *unit == 0x3f {
+            any[offset] = 1;
+        } else {
+            let r = rank(*unit);
+            weighted[offset] = NTT_PRIME - 2 * r;
+            literal[offset] = 1;
+            constant += r * r;
+        }
+    }
+    // Montgomery-form spectra make each pointwise product a plain residue.
+    for pattern in [&mut weighted, &mut literal, &mut any] {
+        ntt(pattern, false, work);
+        pattern.iter_mut().for_each(|value| *value = mont(*value));
+    }
+    let constant = constant % NTT_PRIME;
+    let (mut ranked, mut squared, mut terminators) = (vec![0; size], vec![0; size], vec![0; size]);
+    let mut block = 0;
+    while block + m <= haystack.len() {
+        let text = &haystack[block..haystack.len().min(block + size)];
+        for values in [&mut ranked, &mut squared, &mut terminators] {
+            values.fill(0);
+        }
+        for (index, unit) in text.iter().enumerate() {
+            let r = rank(*unit);
+            ranked[index] = r;
+            squared[index] = r * r;
+            terminators[index] = u64::from(!dot_matches(*unit));
+        }
+        for values in [&mut ranked, &mut squared, &mut terminators] {
+            ntt(values, false, work);
+        }
+        for i in 0..size {
+            ranked[i] = add_mod(
+                add_mod(
+                    mont_mul(weighted[i], ranked[i]),
+                    mont_mul(literal[i], squared[i]),
+                ),
+                mont_mul(any[i], terminators[i]),
+            );
+        }
+        ntt(&mut ranked, true, work);
+        *work += text.len() + 1 - m;
+        if let Some(start) =
+            (0..=text.len() - m).find(|start| add_mod(ranked[start + m - 1], constant) == 0)
+        {
+            return Some(block + start);
+        }
+        block += size + 1 - m;
+    }
+    None
 }
 
 pub(crate) struct Glob {
