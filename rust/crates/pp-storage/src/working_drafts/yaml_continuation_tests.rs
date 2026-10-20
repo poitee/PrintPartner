@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use super::observation::{PreparationBudget, PreparationLimits, ReadFailure};
 use super::yaml::{Document, Node};
 use serde_json::Value;
