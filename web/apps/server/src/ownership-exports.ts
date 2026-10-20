@@ -66,10 +66,11 @@ export function inspectOwnershipExports(root: string, profiles: readonly Profile
   };
   const stlTree = (path: string, pieces: string[], layout: string[]) => {
     const profile = owner(pieces, layout[1], /^profile-([1-9][0-9]*)$/);
-    const revisionId = /^revision-([1-9][0-9]*)$/.exec(layout[2] ?? "")?.[1];
-    if (!planRevisions.some(revision => String(revision.id) === revisionId && revision.profileId === profile.id)) throw new Error("Unassigned export artifact");
     if (!/^(all|missing)$/.test(layout[3] ?? "") || !/^(color|color_dir)$/.test(layout[4] ?? "")
       || !/^content-[a-f0-9]{64}$/.test(layout[5] ?? "")) throw new Error("Unsupported export artifact layout");
+    if (layout[2] === "empty" && readdirSync(path).length === 0) return;
+    const revisionId = /^revision-([1-9][0-9]*)$/.exec(layout[2] ?? "")?.[1];
+    if (!planRevisions.some(revision => String(revision.id) === revisionId && revision.profileId === profile.id)) throw new Error("Unassigned export artifact");
     if (readdirSync(path).length === 0) return;
     const files = new Map<string, number>();
     const collect = (directory: string, prefix: string[]) => {
