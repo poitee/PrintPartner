@@ -522,6 +522,11 @@ class NativeDiagnosticTest(unittest.TestCase):
              ['/dev/disk42'], ['force-status.jsonl: JSONDecodeError']),
             ('wrong shape', '{"images": []}', '{"status": 16}\n',
              [], ['owned.json: AttributeError', 'force-status.jsonl: KeyError']),
+            ('invalid UTF-8', b'[\xff]', '\xff' + force + '\n',
+             [], ['owned.json: UnicodeDecodeError', 'force-status.jsonl: UnicodeDecodeError']),
+            ('non-string target', '[{"system-entities": [{"dev-entry": 7}]}]',
+             force + '\n{"command": [null]}\n',
+             ['/dev/disk42'], ['owned.json: TypeError', 'force-status.jsonl: TypeError']),
         ):
             with self.subTest(name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -529,8 +534,9 @@ class NativeDiagnosticTest(unittest.TestCase):
                 image.parent.mkdir()
                 image.touch()
                 (root / 'diagnostics/before').mkdir(parents=True)
-                (root / 'diagnostics/before/owned.json').write_text(owned)
-                (root / 'diagnostics/force-status.jsonl').write_text(forces)
+                (root / 'diagnostics/before/owned.json').write_bytes(
+                    owned if isinstance(owned, bytes) else owned.encode())
+                (root / 'diagnostics/force-status.jsonl').write_bytes(forces.encode('latin-1'))
                 tools = root / 'bin'
                 tools.mkdir()
                 for tool, body in (

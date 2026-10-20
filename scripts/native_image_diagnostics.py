@@ -72,10 +72,13 @@ def after_workflow(root, real):
     directory = root / 'diagnostics' / 'after'
     unreadable = []
 
-    def receipt(path, text, parse):
+    def receipt(path, data, parse):
         # A corrupt receipt must not skip the probes for devices named elsewhere.
         try:
-            return parse(text)
+            found = parse(json.loads(data))
+            if not all(isinstance(device, str) for device in found):
+                raise TypeError(f'non-string device in {sorted(map(repr, found))}')
+            return found
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
             unreadable.append(f'{path.name}: {type(error).__name__}: {error}')
             return set()
@@ -83,11 +86,11 @@ def after_workflow(root, real):
     before = root / 'diagnostics' / 'before' / 'owned.json'
     devices = dev_entries(owned)
     if before.exists():
-        devices |= receipt(before, before.read_text(), lambda text: dev_entries(json.loads(text)))
+        devices |= receipt(before, before.read_bytes(), dev_entries)
     forces = root / 'diagnostics' / 'force-status.jsonl'
     if forces.exists():
-        for line in forces.read_text().splitlines():
-            devices |= receipt(forces, line, lambda text: {json.loads(text)['command'][-1]})
+        for line in forces.read_bytes().splitlines():
+            devices |= receipt(forces, line, lambda force: {force['command'][-1]})
     devices = sorted(devices)
     (directory / 'devices.json').write_text(json.dumps({
         'devices': devices, 'note': '' if devices else 'No owned devices identified; device probes skipped',
