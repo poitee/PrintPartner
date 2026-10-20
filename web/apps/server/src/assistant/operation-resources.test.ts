@@ -8,11 +8,16 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, relative, isAbsolute, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { drizzle as drizzlePostgres } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { registerPostgresSyncQuery, unregisterPostgresSyncQuery } from "../db/sync-db-bridge.js";
+import { MAX_MCP_INLINE_FILE_BYTES } from "../services/upload-limits.js";
 import { SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import * as schema from "../db/schema.js";
+import * as postgresSchema from "../db/schema-pg.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy.js";
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
@@ -67,7 +72,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -858,6 +863,7 @@ it("traces propose_create_source_category paths, plan dismissals and tenants aga
 });
 
 type CategoryTool = "propose_rename_source_category" | "propose_delete_source_category" | "propose_set_source_category";
+type SourceProposalTool = "propose_update_source" | "propose_update_source_naming" | "propose_import_source_files";
 type CategoryProbe = [string, ...unknown[]];
 const CATEGORY_TABLES = ["table:app_settings", "table:build_profiles", "table:plan_decisions", "table:projects", "table:source_docs"];
 const CATEGORY_UNION = ["file:source-workspace", ...CATEGORY_TABLES];
@@ -870,7 +876,7 @@ function sourceCategoryProposal(type: CategoryTool, planId: number, label: strin
   };
 }
 
-async function traceCategory(tool: CategoryTool | "list_sources" | "list_source_categories", input: Record<string, unknown>, tables: string[], options: {
+async function traceCategory(tool: CategoryTool | SourceProposalTool | "list_sources" | "list_source_categories", input: Record<string, unknown>, tables: string[], options: {
   repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
 } = {}) {
   const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
@@ -3249,4 +3255,123 @@ it("pins path hints to Node's exact version 1 reader", () => {
     fs.writeFileSync(path, `${header}\nrules: []\n`);
     expect(() => inferOptionGroupsFromPaths(["gre402.stl"], dataDir)).toThrow(`${path}: version must be 1`);
   }
+});
+
+const SOURCE_PROPOSAL_TOOLS: SourceProposalTool[] = ["propose_update_source", "propose_update_source_naming", "propose_import_source_files"];
+const SOURCE_PROPOSAL_TABLES = ["table:projects", "table:source_docs"];
+const SOURCE_NAMING_PROFILE = {
+  roles: [{ id: "primary", label: "Primary", markers: [] }, { id: "accent", label: "Accent", markers: ["[a]"] }, { id: "clear", label: "Clear", markers: ["[c]"] }, { id: "opaque", label: "Opaque", markers: ["[o]"] }],
+  quantity: { regex: String.raw`[ _]x([0-9]+)\.stl$`, default: 1 },
+  slug: { strip_markers: true, strip_quantity: true }, folder_rules: [], export_role_order: ["primary", "accent", "clear", "opaque"],
+};
+
+function sourceProposal(tool: SourceProposalTool, params: Record<string, unknown>) {
+  const descriptions = {
+    propose_update_source: ["update Source Fixture", "Apply the reviewed Source metadata change."],
+    propose_update_source_naming: ["update naming for Fixture", "Apply the reviewed Source naming rules."],
+    propose_import_source_files: ["import Source files", "Publish the confirmed upload as a pinned Source revision."],
+  };
+  const [label, summary] = descriptions[tool];
+  return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.", action: { type: tool, plan_id: 0, label, summary, params } };
+}
+
+for (const isolated of [false, true]) {
+  it.each(SOURCE_PROPOSAL_TOOLS)(`traces %s proposal selectors, validation and no writes under ${isolated ? "isolated" : "trusted"} policy`, async (tool) => {
+    const { repository, sourceFiles, files: listFiles } = categoryTraceFixture(isolated);
+    const options = { repository, files: sourceFiles };
+    const sources = SOURCE_PROPOSAL_TABLES;
+    const naming = ["table:app_settings", ...sources];
+    const plan = repo.createProfile("Ignored proposal plan");
+    const valid = tool === "propose_update_source" ? { patch: { name: "Renamed", ignored: true } }
+      : tool === "propose_update_source_naming" ? { use_defaults: true } : { archive_base64: " YQ== " };
+    const params = tool === "propose_update_source" ? { source_id: sourceId, patch: { name: "Renamed" } }
+      : tool === "propose_update_source_naming" ? { source_id: sourceId, use_defaults: true } : { source_id: sourceId, archive_base64: "YQ==" };
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params });
+    const selectors = tool === "propose_import_source_files" ? [{ source_id: sourceId }, { source_id: String(sourceId) }, { source_id: `${sourceId}.9` }]
+      : [{ source_id: sourceId }, { source_id: String(sourceId) }, { source_name: " fixture " }, { source_id: "invalid", source_name: "Fixture" }];
+    for (const selector of selectors) {
+      expect(await traceCategory(tool, { ...selector, ...valid, plan_id: plan.id, profile_id: plan.id }, sources, { ...options, files: "source_name" in selector ? listFiles : sourceFiles, activePlanId: plan.id })).toEqual(sourceProposal(tool, params));
+    }
+    const required = tool === "propose_import_source_files" ? "source_id must reference an existing Source" : "source_id or source_name required";
+    for (const source_id of [undefined, null, "bad"]) expect(await traceCategory(tool, { source_id, ...valid }, [], { repository })).toEqual({ error: required });
+    expect(await traceCategory(tool, { source_id: 999999, source_name: "Fixture", ...valid }, ["table:projects"], { repository })).toEqual({ error: required });
+    expect(await traceCategory(tool, { source_id: sourceId, ...valid }, ["table:projects"], { repository, tenantId: "other" })).toEqual({ error: required });
+    if (tool !== "propose_import_source_files") {
+      expect(await traceCategory(tool, { source_name: "Absent", ...valid }, sources, { ...options, files: listFiles })).toEqual({ error: required });
+      expect(await traceCategory(tool, { source_name: "Fixture", ...valid }, sources, { repository, tenantId: "other" })).toEqual({ error: required });
+    }
+    if (tool === "propose_update_source") {
+      for (const patch of [undefined, null, 42, [], "name"]) expect(await traceCategory(tool, { source_id: sourceId, patch }, sources, options)).toEqual({ error: "patch required" });
+      for (const patch of [{}, { unsupported: true }]) expect(await traceCategory(tool, { source_id: sourceId, patch }, sources, options)).toEqual({ error: "patch has no supported fields" });
+      const patch = { name: "New", url: "https://example.test", branch: "main", tag: null, source_kind: "local", source_type: "model", role: "base", metadata: { category: "Tools" }, manifest_community_slug: "fixture" };
+      expect(await traceCategory(tool, { source_id: sourceId, patch }, sources, options)).toEqual(sourceProposal(tool, { source_id: sourceId, patch }));
+      expect(await traceCategory(tool, { source_id: sourceId, patch: { manifest_community_slug: "../escape" } }, sources, options)).toEqual({ error: "manifest_community_slug must be 1 to 64 lowercase letters, digits, dots, hyphens or underscores, starting with a letter or digit, and not kit-catalog or registry-index" });
+    } else if (tool === "propose_update_source_naming") {
+      for (const profile of [undefined, null, 42, "bad"]) expect(await traceCategory(tool, { source_id: sourceId, profile }, sources, options)).toEqual({ error: "use_defaults or profile required" });
+      expect(await traceCategory(tool, { source_id: sourceId, profile: {} }, naming, options)).toEqual(sourceProposal(tool, { source_id: sourceId, use_defaults: false, profile: SOURCE_NAMING_PROFILE }));
+      expect(await traceCategory(tool, { source_id: sourceId, profile: { quantity: { default: 2 } } }, naming, options)).toEqual(sourceProposal(tool, { source_id: sourceId, use_defaults: false, profile: { ...SOURCE_NAMING_PROFILE, quantity: { ...SOURCE_NAMING_PROFILE.quantity, default: 2 } } }));
+      expect(await traceCategory(tool, { source_id: sourceId, use_defaults: true, profile: { quantity: { default: 0 } } }, sources, options)).toEqual(sourceProposal(tool, params));
+      const invalid = await traceCategory(tool, { source_id: sourceId, profile: { quantity: { default: 0 } } }, naming, options);
+      expect(invalid).toEqual({ error: "profile.quantity.default: Too small: expected number to be >=1" });
+    } else {
+      for (const input of [{}, { archive_base64: " " }, { files: [] }, { files: {}, archive_base64: null }, { archive_base64: "YQ==", files: [{}] }]) expect(await traceCategory(tool, { source_id: sourceId, ...input }, sources, options)).toEqual({ error: "provide exactly one of archive_base64 or files" });
+      const files = [{ path: " part.stl ", content_base64: " YQ== " }];
+      expect(await traceCategory(tool, { source_id: sourceId, files }, sources, options)).toEqual(sourceProposal(tool, { source_id: sourceId, files }));
+      for (const [files, error] of [
+        [[null], "Invalid file"], [[{}], "Each file requires path and content_base64"],
+        [[{ path: "/absolute", content_base64: "YQ==" }], "File path escapes Source root"],
+        [[{ path: "dir\\..\\escape", content_base64: "YQ==" }], "File path escapes Source root"],
+        [[{ path: "part.stl", content_base64: "???" }], "content must be base64"],
+      ] satisfies [unknown[], string][]) expect(await traceCategory(tool, { source_id: sourceId, files }, sources, options)).toEqual({ error });
+      expect(await traceCategory(tool, { source_id: sourceId, archive_base64: "!" }, sources, options)).toEqual({ error: "content must be base64" });
+      const oversized = "A".repeat(Math.ceil((MAX_MCP_INLINE_FILE_BYTES + 1) * 4 / 3));
+      expect(await traceCategory(tool, { source_id: sourceId, archive_base64: oversized }, sources, options)).toEqual({ error: "upload exceeds the 64 MiB MCP limit" });
+    }
+    const order = ["projects", "source_docs", ...(tool === "propose_update_source_naming" ? ["app_settings"] : [])];
+    for (const [index, table] of order.entries()) {
+      sqlite.exec(`ALTER TABLE ${table} RENAME TO unavailable_table`);
+      try {
+        expect(await traceCategory(tool, { source_id: sourceId, ...(tool === "propose_update_source_naming" ? { profile: {} } : valid) }, order.slice(0, index).map((name) => `table:${name}`).sort(), { repository, files: index >= 2 ? sourceFiles : [] })).toEqual({ error: `no such table: ${table}` });
+      } finally { sqlite.exec(`ALTER TABLE unavailable_table RENAME TO ${table}`); }
+    }
+    const tables = tool === "propose_update_source_naming" ? naming : sources;
+    const expected = [...(isolated ? ["file:source-workspace"] : []), ...tables];
+    expect([...unions.get(tool) ?? []].sort()).toEqual(expected);
+    const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+  });
+}
+
+it("traces import publication capability refusal before source or upload reads", async () => {
+  const pool = new Pool({ connectionString: "postgresql://unused:unused@127.0.0.1:1/unused", connectionTimeoutMillis: 100 });
+  const postgres = drizzlePostgres(pool, { schema: postgresSchema });
+  let queries = 0;
+  registerPostgresSyncQuery(postgres, () => { queries += 1; throw new Error("Unexpected PostgreSQL read"); });
+  const repository = new AppRepository(postgres, "default", join(dataDir, "repos"));
+  try {
+    expect(await traceCategory("propose_import_source_files", { source_id: sourceId, archive_base64: "YQ==" }, [], { repository })).toEqual({ error: "Source revision publication is unavailable on experimental PostgreSQL because atomic publication transactions are not supported." });
+    expect(pool.totalCount).toBe(0);
+    expect(queries).toBe(0);
+  } finally { unregisterPostgresSyncQuery(postgres); await pool.end(); }
+});
+
+it.each(SOURCE_PROPOSAL_TOOLS)("traces %s isolated rejected workspace paths without source content reads", async (tool) => {
+  const { repository, repos, workspace } = categoryTraceFixture(true);
+  const input = tool === "propose_update_source" ? { patch: { name: "Renamed" } }
+    : tool === "propose_update_source_naming" ? { use_defaults: true } : { archive_base64: "YQ==" };
+  const params = tool === "propose_update_source" ? { source_id: sourceId, patch: { name: "Renamed" } }
+    : tool === "propose_update_source_naming" ? { source_id: sourceId, use_defaults: true } : { source_id: sourceId, archive_base64: "YQ==" };
+  for (const [path, files] of [
+    [null, []], ["", []],
+    [userRoot, [["realpathSync", repos]]],
+    [join(repos, "absent"), [["realpathSync", repos]]],
+  ] satisfies [string | null, CategoryProbe[]][]) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    expect(await traceCategory(tool, { source_id: sourceId, ...input }, SOURCE_PROPOSAL_TABLES, { repository, files })).toEqual(sourceProposal(tool, params));
+  }
+  fs.rmdirSync(workspace);
+  fs.symlinkSync(userRoot, workspace, "dir");
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  expect(await traceCategory(tool, { source_id: sourceId, ...input }, SOURCE_PROPOSAL_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual(sourceProposal(tool, params));
 });

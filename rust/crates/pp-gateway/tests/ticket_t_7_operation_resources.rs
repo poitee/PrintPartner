@@ -114,6 +114,58 @@ fn ticket_t_7_ownership_set_source_category_proposal_refuses_invalid_admission_b
 }
 
 #[test]
+fn ticket_t_7_ownership_propose_update_source_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_update_source",
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_update_source_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_update_source");
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_update_source_naming_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_update_source_naming",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_update_source_naming_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_update_source_naming");
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_import_source_files_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_import_source_files",
+        json!([
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_import_source_files_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_import_source_files");
+}
+
+#[test]
 fn ticket_t_7_ownership_list_sources_has_complete_node_owned_resources() {
     assert_sqlite_tool_resources(
         "tool.list_sources",
@@ -421,6 +473,9 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.propose_rename_source_category",
         "tool.propose_delete_source_category",
         "tool.propose_set_source_category",
+        "tool.propose_update_source",
+        "tool.propose_update_source_naming",
+        "tool.propose_import_source_files",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -444,8 +499,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 32);
-    assert_eq!(unresolved.len(), 411);
+    assert_eq!(reviewed.len(), 35);
+    assert_eq!(unresolved.len(), 408);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -715,6 +770,9 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.propose_rename_source_category",
         "tool.propose_delete_source_category",
         "tool.propose_set_source_category",
+        "tool.propose_update_source",
+        "tool.propose_update_source_naming",
+        "tool.propose_import_source_files",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -794,6 +852,18 @@ fn reviewed_participants_cannot_swap_operations() {
         (
             "tool.propose_delete_source_category",
             "tool.propose_set_source_category",
+        ),
+        (
+            "tool.propose_set_source_category",
+            "tool.propose_update_source",
+        ),
+        (
+            "tool.propose_update_source",
+            "tool.propose_update_source_naming",
+        ),
+        (
+            "tool.propose_update_source_naming",
+            "tool.propose_import_source_files",
         ),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
