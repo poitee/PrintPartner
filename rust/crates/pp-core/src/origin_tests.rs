@@ -526,17 +526,7 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             (old, new)
         };
         let address = reserved.local_addr().unwrap();
-        let mut reserved = Some(reserved);
-        let (listener, change) = crate::origin::bind_origin_using(
-            &owner,
-            |_| Ok(()),
-            |requested| {
-                assert_eq!(std::net::SocketAddr::V4(requested), address);
-                std::future::ready(Ok(reserved.take().unwrap()))
-            },
-        )
-        .await
-        .unwrap();
+        let (listener, change) = rebind_reserved(&owner, reserved).await;
         assert_eq!(listener.local_addr().unwrap(), address);
         assert_eq!(change, None);
         assert!(TcpListener::bind(address).await.is_err());
@@ -545,6 +535,26 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             assert_eq!(std::fs::read(fixture.path(name)).unwrap(), bytes);
         }
     }
+}
+
+/// Runs `bind_origin` with the saved port's listener still held. Dropping it
+/// first would let a parallel test bind the freed port before relaunch does.
+async fn rebind_reserved(
+    owner: &StorageLease,
+    reserved: TcpListener,
+) -> (TcpListener, Option<OriginChange>) {
+    let address = reserved.local_addr().unwrap();
+    let mut reserved = Some(reserved);
+    crate::origin::bind_origin_using(
+        owner,
+        |_| Ok(()),
+        |requested| {
+            assert_eq!(std::net::SocketAddr::V4(requested), address);
+            std::future::ready(Ok(reserved.take().unwrap()))
+        },
+    )
+    .await
+    .unwrap()
 }
 
 /// SIGKILLs this process without running any more of its code. `kill` may
@@ -670,11 +680,15 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
                 "unlinked publication became visible"
             );
         }
+        let owner = StorageLease::acquire(&fixture.0).unwrap();
         // Hold the crashed port when nothing was published so relaunch must
         // choose and publish a fresh one.
-        let _held = (!published).then_some(crashed);
-        let owner = StorageLease::acquire(&fixture.0).unwrap();
-        let (listener, change) = bind_origin(&owner).await.unwrap();
+        let (listener, change) = if published {
+            rebind_reserved(&owner, crashed).await
+        } else {
+            let _held = crashed;
+            bind_origin(&owner).await.unwrap()
+        };
         let address = listener.local_addr().unwrap();
         assert_eq!(change, None);
         assert_eq!(address == crashed_address, published);
@@ -684,8 +698,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
             std::fs::read(fixture.config()).unwrap(),
             expected.as_bytes()
         );
-        drop(listener);
-        let (listener, change) = bind_origin(&owner).await.unwrap();
+        let (listener, change) = rebind_reserved(&owner, listener).await;
         assert_eq!(listener.local_addr().unwrap(), address);
         assert_eq!(change, None);
         assert_eq!(
@@ -808,8 +821,12 @@ async fn ticket_t_12_origin_cleanup_removes_only_owned_regular_temporary_files()
         let fifo_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
         let owner = StorageLease::acquire(&fixture.0).unwrap();
-        drop(reserved);
-        let result = bind_origin(&owner).await;
+        let result = if config == "valid" {
+            Ok(rebind_reserved(&owner, reserved).await)
+        } else {
+            drop(reserved);
+            bind_origin(&owner).await
+        };
         if config == "corrupt" {
             assert!(result.is_err());
         } else {
