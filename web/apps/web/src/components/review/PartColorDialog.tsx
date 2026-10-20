@@ -6,7 +6,7 @@ import { useFilamentCatalogQuery } from "../../queries/filaments";
 import { usePatchPartMutation } from "../../queries/planReview";
 import { useRoleFilamentsQuery } from "../../queries/roleFilaments";
 import { useSpoolmanWorkflowAccess } from "../../hooks/useSpoolmanWorkflowAccess";
-import { hasSpoolmanAssignment } from "../../lib/spoolmanIds";
+import { hasSpoolmanAssignment, hasSpoolmanColorOrigin } from "../../lib/spoolmanIds";
 import { catalogColorGroups } from "../FilamentSwatch";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -36,14 +36,14 @@ export default function PartColorDialog({ part, profileId, onClose }: {
   const [selection, setSelection] = useState("current");
   const [enteredHex, setEnteredHex] = useState<string | null>(null);
 
-  const isSpoolmanAssigned = hasSpoolmanAssignment(part);
+  const isSpoolmanColor = hasSpoolmanColorOrigin(part);
   const liveColor = catalogQuery.data?.spoolman_colors?.find((color) => color.id === part.filament_color_id);
-  const currentDisplay = isSpoolmanAssigned
+  const currentDisplay = isSpoolmanColor
     ? (part.filament_custom_hex || liveColor?.combo_label || liveColor?.display_name
       || (!spoolmanAccess.gated && part.filament_display) || part.filament_color_id || "Unassigned")
     : (part.filament_display || part.filament_hex || "Unassigned");
   const defaultHex = part.filament_custom_hex
-    ?? (isSpoolmanAssigned ? liveColor?.hex : part.filament_hex) ?? "#808080";
+    ?? (isSpoolmanColor ? liveColor?.hex : part.filament_hex) ?? "#808080";
   const hex = enteredHex ?? defaultHex;
 
   const allowedRoles = (options?.roles ?? []).filter(

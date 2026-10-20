@@ -40,7 +40,6 @@ describe("role filament queries", () => {
   it.each([
     { filament_color_id: " spoolman:int-1:filament:2 ", spoolman_spool_id: null },
     { filament_color_id: null, spoolman_spool_id: " spoolman:int-1:spool:5 " },
-    { filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5" },
   ])("masks denied role enrichment for assignment %j", async (assignment) => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     queryClient.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
@@ -48,7 +47,7 @@ describe("role filament queries", () => {
       profile_id: 1, effective: { spoolman: { enabled: false, source: "plan" } },
     });
     const assignedRole = { ...role(1), ...assignment, filament_display: "Spoolman Blue", filament_hex: "#0000ff", filament_custom_hex: "#123456" };
-    const catalogRole = { ...role(1), role: "accent", filament_color_id: "catalog:red", spoolman_spool_id: "  " };
+    const catalogRole = { ...role(1), role: "accent", filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5", filament_display: "Catalog Red", filament_hex: "#ff0000" };
     vi.mocked(fetchRoleFilaments).mockResolvedValueOnce([assignedRole, catalogRole]);
     queryClient.setQueryData(queryKeys.roleFilaments(1, false), [assignedRole, catalogRole]);
     const { result, unmount } = renderHook(() => useRoleFilamentsQuery(1), { wrapper: wrapper(queryClient) });
