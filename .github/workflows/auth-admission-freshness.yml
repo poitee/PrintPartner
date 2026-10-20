@@ -11,6 +11,8 @@ on:
       - "web/packages/contracts/**"
       - "web/packages/domain/**"
       - "web/package*.json"
+      - "web/tsconfig.base.json"
+      - "web/scripts/atomic-package-build.mjs"
       - "scripts/setup-ci-linux.sh"
       - ".github/workflows/auth-admission-freshness.yml"
   pull_request:
