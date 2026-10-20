@@ -1940,12 +1940,15 @@ if sys.argv[1] == "wait":
     /// child's inherited trap swallows it and a `sleep 30` then outlives the
     /// grace period (GRE-719). Short sleeps bound that to 0.1 s, and the shell
     /// still runs its own trap once the current sleep ends.
-    async fn spawn_cooperative_child() -> tokio::process::Child {
+    async fn spawn_cooperative_child() -> (
+        tokio::process::Child,
+        tokio::io::BufReader<tokio::process::ChildStdout>,
+    ) {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut command = tokio::process::Command::new("/bin/sh");
         command
             .arg("-c")
-            .arg("trap 'exit 0' TERM; echo ready; while :; do sleep 0.1; done")
+            .arg("trap 'echo terminated; exit 0' TERM; echo ready; while :; do sleep 0.1; done")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .process_group(0)
@@ -1958,12 +1961,12 @@ if sys.argv[1] == "wait":
             .unwrap()
             .unwrap();
         assert_eq!(line, "ready\n");
-        child
+        (child, stdout)
     }
 
     #[tokio::test]
     async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
-        let child = spawn_cooperative_child().await;
+        let (child, _stdout) = spawn_cooperative_child().await;
         let outcome = stop_owned_child(child, true).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
         assert_eq!(outcome.exit, super::CompatExit::Graceful);
@@ -1978,9 +1981,18 @@ if sys.argv[1] == "wait":
 
     #[tokio::test]
     async fn ticket_t_3_drain_restart_cleanup_switches_to_sigterm_when_shutdown_starts() {
-        let child = spawn_cooperative_child().await;
+        use tokio::io::AsyncBufReadExt;
+
+        let (child, mut stdout) = spawn_cooperative_child().await;
         let outcome = stop_owned_child_at(child, false, Some(Duration::from_millis(100))).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
+        assert_eq!(outcome.exit, super::CompatExit::Graceful);
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(line, "terminated\n");
         assert!(
             outcome.elapsed < Duration::from_secs(3),
             "{:?}",
