@@ -2,12 +2,68 @@ import { describe, expect, it } from "vitest";
 import {
   collectKitBundleSourceRefs,
   kitSourceRefFromRecord,
+  kitSourceRefFromProject,
   kitSourceRefToExportRecord,
+  kitLayerProjectExportRecord,
   kitMatchedSourcePatch,
   kitUnmatchedSourceFromRef,
 } from "./kit-bundle-share.js";
 
 describe("kit-bundle-share", () => {
+  const project = {
+    name: "Synthetic source",
+    url: "https://github.com/example/synthetic",
+    branch: "main",
+    tag: "v1.2.3",
+    sourceKind: "github",
+    sourceType: "git",
+    role: "base",
+    importedPaths: '["STLs/"]',
+    metadataJson: null,
+    manifestCommunitySlug: null,
+  };
+
+  it.each([
+    ["registry-index", null],
+    ["kit-catalog", null],
+    ["../legacy", null],
+    ["Legacy Slug", null],
+    ["a".repeat(65), null],
+    ["", null],
+    [null, null],
+    ["ldo-2.4-sb-tap", "ldo-2.4-sb-tap"],
+    ["  valid-slug  ", "valid-slug"],
+  ])("roundtrips legacy project slug %j in source and layer exports", (slug, expected) => {
+    const ref = kitSourceRefFromProject({ ...project, manifestCommunitySlug: slug });
+    for (const exportRecord of [kitSourceRefToExportRecord, kitLayerProjectExportRecord]) {
+      const exported = exportRecord(ref);
+      if (expected === null) {
+        expect(exported).not.toHaveProperty("manifest_community_slug");
+      } else {
+        expect(exported.manifest_community_slug).toBe(expected);
+      }
+      expect(kitSourceRefFromRecord(exported)).toEqual({
+        ...ref,
+        manifest_community_slug: expected,
+      });
+      expect(collectKitBundleSourceRefs({
+        sources: [exported],
+        layers: [{ layer_type: "base", project: exported }],
+      })).toEqual([{ ...ref, manifest_community_slug: expected, layer_type: "base" }]);
+    }
+  });
+
+  it.each(["kit-catalog", "../legacy", "Legacy Slug", "a".repeat(65)])(
+    "still rejects invalid imported slug %j",
+    (slug) => {
+      expect(() => kitSourceRefFromRecord({
+        name: project.name,
+        url: project.url,
+        manifest_community_slug: slug,
+      })).toThrow("manifest_community_slug must be");
+    },
+  );
+
   it("merges sources array with layer project refs", () => {
     const refs = collectKitBundleSourceRefs({
       sources: [
