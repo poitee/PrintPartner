@@ -759,11 +759,18 @@ async fn failed_recovery_closes_selected_listener_before_returning() {
     );
     // The selected descriptor is closed, or was reused by something that
     // cannot be bound to the held address.
-    let reused = std::mem::ManuallyDrop::new(unsafe { std::net::TcpListener::from_raw_fd(fd) });
-    assert!(
-        unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1
-            || reused.local_addr().ok() != Some(address)
-    );
+    let name = |fd| {
+        let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of_val(&storage) as libc::socklen_t;
+        let status = unsafe { libc::getsockname(fd, (&raw mut storage).cast(), &mut len) };
+        (status == 0).then(|| {
+            unsafe { std::slice::from_raw_parts((&raw const storage).cast::<u8>(), len as usize) }
+                .to_vec()
+        })
+    };
+    let held_name = name(held.as_raw_fd());
+    assert!(held_name.is_some());
+    assert_ne!(name(fd), held_name);
     assert_no_temporary(&fixture);
 }
 
