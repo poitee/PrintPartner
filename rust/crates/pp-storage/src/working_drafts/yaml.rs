@@ -389,6 +389,29 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     i += 1;
                     if matches!(*c, '\r' | '\n') {
                         line_start = true;
+                        if *c == '\r' && chars.get(i) == Some(&'\n') {
+                            output.push('\n');
+                            consumed += 1;
+                            i += 1;
+                        }
+                        // js-yaml folds the blank lines after an escaped line
+                        // break away; saphyr keeps each as a newline.
+                        loop {
+                            let mut end = i;
+                            while chars.get(end).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                                if (end - i).is_multiple_of(1024) {
+                                    budget.check()?;
+                                }
+                                end += 1;
+                            }
+                            let width = match chars.get(end..end + 2) {
+                                Some(['\r', '\n']) => 2,
+                                _ if chars.get(end).is_some_and(|c| matches!(c, '\r' | '\n')) => 1,
+                                _ => break,
+                            };
+                            consumed += end + width - i;
+                            i = end + width;
+                        }
                     }
                 }
                 continue;
