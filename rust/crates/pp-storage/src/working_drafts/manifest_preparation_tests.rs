@@ -296,9 +296,9 @@ fn preparation_manifest_helpers_propagate_budget_and_cancellation() {
         )
         .unwrap()
     };
-    let mut b = comparison_work(26);
-    apply(&mut parts, &docs, vec![], vec![], &mut b).unwrap();
     let mut b = comparison_work(25);
+    apply(&mut parts, &docs, vec![], vec![], &mut b).unwrap();
+    let mut b = comparison_work(24);
     assert!(matches!(
         apply(&mut parts, &docs, vec![], vec![], &mut b),
         Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
@@ -370,7 +370,7 @@ fn apply_compares_variant_paths_up_to_the_visit_limit() {
 }
 
 #[test]
-fn apply_refuses_quadratic_comparisons_by_work_not_bytes() {
+fn apply_charges_linear_work_for_one_star_patterns() {
     let cancelled = AtomicBool::new(false);
     let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
     let rule = format!("parts: ['*{}b']", "a".repeat(2047));
@@ -388,10 +388,18 @@ fn apply_refuses_quadratic_comparisons_by_work_not_bytes() {
             )
         })
         .collect();
-    assert!(matches!(
-        apply(&mut parts, &docs, vec![], vec![], &mut b),
-        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
-    ));
+    // Backtracking spent about 2048² steps per part, over 400M in all.
+    let linear = 100 * 3 * (key.len() + 2049);
+    let mut b = PreparationBudget::new(
+        &cancelled,
+        PreparationLimits {
+            comparison_work: linear,
+            ..PreparationLimits::default()
+        },
+    )
+    .unwrap();
+    apply(&mut parts, &docs, vec![], vec![], &mut b).unwrap();
+    assert!(parts.iter().all(|part| part.manifest.requirement.is_none()));
 }
 
 #[test]
