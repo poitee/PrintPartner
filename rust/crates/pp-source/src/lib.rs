@@ -62,7 +62,7 @@ pub enum Error {
     /// The file's absolute published path would reach `PATH_MAX`, so readers
     /// that open it by path could not.
     StoredPathTooLong {
-        path: SourcePath,
+        path: String,
         bytes: usize,
     },
     CorruptSnapshot,
@@ -87,9 +87,8 @@ impl fmt::Display for Error {
             ),
             Self::StoredPathTooLong { path, bytes } => write!(
                 f,
-                "stored-path-too-long: {} would be stored at an absolute path of {bytes} \
+                "stored-path-too-long: {path} would be stored at an absolute path of {bytes} \
                  bytes; this system opens paths of at most {} bytes",
-                path.as_str(),
                 PATH_MAX - 1
             ),
             _ => write!(f, "{}", self.category()),
@@ -697,6 +696,19 @@ fn expected_paths(files: &[ContentFile], identity: TreeIdentity) -> BTreeSet<Str
     paths
 }
 
+/// Every published file, the manifest included, must stay openable by its
+/// absolute path.
+fn check_stored_path(revision_bytes: usize, path: &str) -> Result<()> {
+    let bytes = revision_bytes + 1 + path.len();
+    if bytes >= PATH_MAX {
+        return Err(Error::StoredPathTooLong {
+            path: path.to_owned(),
+            bytes,
+        });
+    }
+    Ok(())
+}
+
 fn canonical_destination(
     path: &SourcePath,
     directories: &mut BTreeMap<String, String>,
@@ -792,6 +804,8 @@ impl SourceRoot {
         input: &LocalFiles,
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
+        let revision_bytes = self.revisions_bytes + 1 + request.upstream_revision_key.len();
+        check_stored_path(revision_bytes, MANIFEST)?;
         let mut bytes = 0;
         let mut docs = 0;
         let mut stls = 0;
@@ -809,18 +823,7 @@ impl SourceRoot {
             // Keep the original spelling for reading case-sensitive inputs, but
             // share one deterministic spelling for destination directories.
             let path = canonical_destination(&selected.path, &mut directories)?;
-            // Each file must stay openable by its published absolute path.
-            let bytes_at_path = self.revisions_bytes
-                + 1
-                + request.upstream_revision_key.len()
-                + 1
-                + path.as_str().len();
-            if bytes_at_path >= PATH_MAX {
-                return Err(Error::StoredPathTooLong {
-                    path,
-                    bytes: bytes_at_path,
-                });
-            }
+            check_stored_path(revision_bytes, path.as_str())?;
             // Folder canonicalization can introduce an exact omission overlap
             // that was absent from the original case-sensitive input paths.
             if omitted_paths.contains(path.as_str()) {

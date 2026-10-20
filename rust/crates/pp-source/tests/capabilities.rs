@@ -365,6 +365,54 @@ fn published_paths_stop_one_byte_short_of_path_max() {
 }
 
 #[test]
+fn published_manifest_also_stops_one_byte_short_of_path_max() {
+    let path_max = if cfg!(target_os = "macos") {
+        1024
+    } else {
+        4096
+    };
+    let fixture = Fixture::new();
+    // Under revision key "k2", `<root>/42/revisions/k2/<manifest>` is
+    // exactly `path_max` bytes, while `part.stl` still fits.
+    let root_bytes = path_max - "/42/revisions/k2/".len() - pp_source::MANIFEST.len();
+    let mut root = fixture.0.clone();
+    while root_bytes - root.as_os_str().len() > 101 {
+        root.push("d".repeat(99));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    root.push("e".repeat(root_bytes - root.as_os_str().len() - 1));
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(root.as_os_str().len(), root_bytes);
+    let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = repos.source(42).unwrap();
+    let mut req = request();
+
+    req.upstream_revision_key = "k2".into();
+    let error = source
+        .materialize(req.clone(), &input, budget())
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "stored-path-too-long: {} would be stored at an absolute path of {path_max} \
+             bytes; this system opens paths of at most {} bytes",
+            pp_source::MANIFEST,
+            path_max - 1
+        )
+    );
+    assert!(!root.join("42/revisions/k2").exists());
+
+    req.upstream_revision_key = "k".into();
+    source.materialize(req, &input, budget()).unwrap();
+    let manifest = root.join("42/revisions/k").join(pp_source::MANIFEST);
+    assert_eq!(manifest.as_os_str().len(), path_max - 1);
+    assert!(fs::read(manifest).unwrap().starts_with(b"{"));
+}
+
+#[test]
 fn cli_retry_reuses_revision_after_inputs_are_deleted() {
     use std::io::Write;
     use std::process::Stdio;
