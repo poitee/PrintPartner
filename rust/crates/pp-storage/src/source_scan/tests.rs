@@ -895,12 +895,7 @@ fn failure_metadata_matches_node_and_rolls_back() {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&actual).unwrap(),
-            case["result"],
-            "{}",
-            case["id"]
-        );
+        assert_eq!(actual, case["stored"], "{}", case["id"]);
         assert_eq!(case["error"], case["detail"]);
         tx.rollback().unwrap();
         let restored: Option<String> = connection
@@ -928,10 +923,7 @@ fn failure_metadata_matches_node_and_rolls_back() {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&persisted).unwrap(),
-            case["result"]
-        );
+        assert_eq!(persisted, case["stored"], "{}", case["id"]);
     }
 }
 

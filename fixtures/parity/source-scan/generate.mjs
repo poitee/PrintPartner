@@ -88,6 +88,10 @@ if (process.argv.includes("--probe")) {
       ["category", '{"category":" Printers / Frame "}'],
       ["empty-category", '{"category":" / / "}'],
       ["nonstring-category", '{"category":7}'],
+      ["lone-high-surrogate", String.raw`{"keep":7,"x":"\ud800"}`],
+      ["lone-low-surrogate", String.raw`{"x":"\udc00","\udc00":"key"}`],
+      ["surrogate-pairs", String.raw`{"reversed":"\ude00\ud83d","pair":"\ud83d\ude00","category":" a / \ud800 / "}`],
+      ["key-order", '{"b":1,"10":2,"2":3,"b":4,"sync_error":"old","01":5,"4294967295":6}'],
     ]) {
       raw.prepare("UPDATE projects SET metadata_json=? WHERE id=?").run(metadata, source.id);
       let error;
@@ -95,7 +99,7 @@ if (process.argv.includes("--probe")) {
         await syncProjectById(repo, directory, source.id, directory, { beforePublish: () => {}, maxDocsBytes: 1024 });
       } catch (caught) { error = caught.message; }
       const stored = raw.prepare("SELECT metadata_json FROM projects WHERE id=?").get(source.id).metadata_json;
-      failures.push({ id, metadata, detail: "disk read failed", result: JSON.parse(stored), error });
+      failures.push({ id, metadata, detail: "disk read failed", stored, error });
     }
   } finally {
     raw?.close();
