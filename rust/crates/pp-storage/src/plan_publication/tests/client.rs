@@ -120,10 +120,26 @@ fn fixture() -> Value {
     .unwrap()
 }
 fn database(data: &Value) -> Connection {
-    super::transaction::database(
-        &json!({"definitions": data["transactionSchema"]}),
-        &data["transactions"][0],
-    )
+    seeded_database(data, &json!({"seed": {}}))
+}
+/// Adds the rows Node recorded for a client case to the fixture database.
+fn seeded_database(data: &Value, case: &Value) -> Connection {
+    let mut state = data["transactions"][0].clone();
+    for (table, rows) in case["seed"].as_object().unwrap() {
+        state["before"][table]
+            .as_array_mut()
+            .unwrap()
+            .extend(rows.as_array().unwrap().iter().cloned());
+    }
+    super::transaction::database(&json!({"definitions": data["transactionSchema"]}), &state)
+}
+fn captured<'a>(data: &'a Value, id: &str) -> &'a Value {
+    data["clients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == id)
+        .unwrap_or_else(|| panic!("captured {id} Node contract"))
 }
 
 fn node_not_found_outcome(case: &Value) -> Value {
@@ -132,11 +148,15 @@ fn node_not_found_outcome(case: &Value) -> Value {
         "{}: unrecognized Node status",
         case["id"]
     );
-    assert_eq!(
-        case["body"],
-        json!({"detail":"Plan not found","code":"profile_not_found"}),
-        "{}: unrecognized Node not-found body",
-        case["id"]
+    assert!(
+        [
+            json!({"detail":"Plan not found","code":"profile_not_found"}),
+            json!({"detail":"Plan draft not found","code":"draft_not_found"}),
+        ]
+        .contains(&case["body"]),
+        "{}: unrecognized Node not-found body {}",
+        case["id"],
+        case["body"]
     );
     json!({"kind":"not_found"})
 }
@@ -178,10 +198,17 @@ fn database_rows(c: &Connection) -> BTreeMap<String, Vec<Vec<rusqlite::types::Va
         .collect()
 }
 
-fn assert_client_not_found(data: &Value, case: &Value, expected_owner: Option<&str>) {
+/// `expected_owner` is the tenant that owns the requested Plan, if any.
+/// `draft_plan` is the Plan that owns the requested draft, if any.
+fn assert_client_not_found(
+    data: &Value,
+    case: &Value,
+    expected_owner: Option<&str>,
+    draft_plan: Option<i64>,
+) {
     let id = case["id"].as_str().unwrap();
     let expected = node_not_found_outcome(case);
-    let mut c = database(data);
+    let mut c = seeded_database(data, case);
     let tenant = case["tenant"].as_str().unwrap();
     assert_eq!(case["credential"], "session", "{id}: session credential");
     seed_session(&c, tenant);
@@ -202,19 +229,35 @@ fn assert_client_not_found(data: &Value, case: &Value, expected_owner: Option<&s
             .collect::<Vec<_>>(),
         "{id}: Plan existence and ownership"
     );
+    let plan_lookup = case["body"]["code"] == "profile_not_found";
     if let Some(owner) = expected_owner {
-        assert_ne!(owner, tenant, "{id}: Plan belongs to another tenant");
+        assert_eq!(
+            owner != tenant,
+            plan_lookup,
+            "{id}: only a Plan lookup case uses another tenant's Plan"
+        );
     }
+    let draft_plans = c
+        .prepare("SELECT profile_id FROM plan_drafts WHERE id=?")
+        .unwrap()
+        .query_map([case["draft"].as_i64().unwrap()], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
     assert_eq!(
-        c.query_row(
-            "SELECT count(*) FROM plan_drafts WHERE id=?",
-            [case["draft"].as_i64().unwrap()],
-            |row| row.get::<_, i64>(0)
-        )
-        .unwrap(),
-        1,
-        "{id}: existing draft keeps this a Plan lookup case"
+        draft_plans,
+        draft_plan.into_iter().collect::<Vec<_>>(),
+        "{id}: draft existence and Plan"
     );
+    if !plan_lookup {
+        assert_ne!(
+            draft_plan,
+            Some(profile),
+            "{id}: draft is absent from the requested Plan"
+        );
+    }
     let before = database_rows(&c);
     assert!(
         before.contains_key("plan_apply_admissions"),
@@ -245,27 +288,44 @@ fn assert_client_not_found(data: &Value, case: &Value, expected_owner: Option<&s
 #[test]
 fn client_matches_node_not_found_contract_for_missing_plan() {
     let data = fixture();
-    let mut case = data["clients"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["id"] == "other-tenant")
-        .expect("captured foreign-Plan Node contract")
-        .clone();
+    let mut case = captured(&data, "other-tenant").clone();
     case["id"] = json!("missing-plan");
     case["tenant"] = json!("default");
     case["profile"] = json!(999_999);
-    assert_client_not_found(&data, &case, None);
+    assert_client_not_found(&data, &case, None, Some(1));
+}
+
+#[test]
+fn client_matches_node_not_found_contract_for_missing_draft() {
+    let data = fixture();
+    assert_client_not_found(
+        &data,
+        captured(&data, "missing-draft"),
+        Some("default"),
+        None,
+    );
+}
+
+#[test]
+fn client_matches_node_not_found_contract_for_mismatched_draft() {
+    let data = fixture();
+    let case = captured(&data, "mismatched-draft");
+    assert_eq!(case["profile"], 2, "mismatched-draft: second owned Plan");
+    assert_client_not_found(&data, case, Some("default"), Some(1));
 }
 
 #[test]
 fn client_matches_node_apply_route_keys_replay_context_and_error_text() {
     let data = fixture();
     let cases = data["clients"].as_array().unwrap();
-    assert_eq!(cases.len(), 9);
+    assert_eq!(cases.len(), 11);
     for case in cases {
+        // The missing-draft and mismatched-draft tests replay the draft cases.
+        if ["missing-draft", "mismatched-draft"].contains(&case["id"].as_str().unwrap()) {
+            continue;
+        }
         if case["status"] == 404 {
-            assert_client_not_found(&data, case, Some("default"));
+            assert_client_not_found(&data, case, Some("default"), Some(1));
             continue;
         }
         let mut c = database(&data);
