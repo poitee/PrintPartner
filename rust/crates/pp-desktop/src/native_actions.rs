@@ -47,7 +47,7 @@ impl SponsorAction {
         let Self::Enabled(origin) = self else {
             return None;
         };
-        let origin = serde_json::to_string(&origin.0.origin().ascii_serialization()).unwrap();
+        let origin = serde_json::Value::String(origin.0.origin().ascii_serialization()).to_string();
         Some(format!(
             r#"(() => {{
   if (window !== window.top || location.origin !== {origin}) return;
