@@ -105,6 +105,8 @@ enum ReviewedEntry {
     GetSourceDocs { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_docs")]
     UiOpenDocs { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_focus_kit_option")]
+    UiFocusKitOption { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_navigate")]
     UiNavigate { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_focus_stl_search")]
@@ -310,6 +312,16 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::UiFocusKitOption { resources } => (
+                "tool.ui_focus_kit_option",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::UiNavigate { resources } => (
                 "tool.ui_navigate",
                 resources,
@@ -416,6 +428,7 @@ impl Declarations {
             "tool.ui_navigate",
             "tool.ui_open_source",
             "tool.ui_open_docs",
+            "tool.ui_focus_kit_option",
             "tool.list_sources",
             "tool.list_source_categories",
             "tool.get_source_docs",
