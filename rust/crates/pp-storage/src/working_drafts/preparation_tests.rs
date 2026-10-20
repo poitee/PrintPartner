@@ -699,9 +699,18 @@ impl DraftReads for HintClientReads {
     ) -> ReadResult<DocumentRead> {
         b.check()?;
         match request.purpose() {
-            CatalogPurpose::ShippedHintsFirst => Ok(DocumentRead::Bytes(
-                br#"{"version":1,"rules":[{"path":"bracket.stl","option_group":"tool","variant_id":"bracket"},{"path":"bracket.stl","option_group":"tool","variant_id":"bracket","label":"Later label"},{"path":"absent.stl","option_group":"missing","variant_id":"none"}]}"#.to_vec(),
-            )),
+            CatalogPurpose::ShippedHintsFirst => {
+                let path = if self.cancel_search {
+                    "new.stl"
+                } else {
+                    "bracket.stl"
+                };
+                Ok(DocumentRead::Bytes(serde_json::to_vec(&json!({"version":1,"rules":[
+                    {"path":path,"option_group":"tool","variant_id":"bracket"},
+                    {"path":path,"option_group":"tool","variant_id":"bracket","label":"Later label"},
+                    {"path":"absent.stl","option_group":"missing","variant_id":"none"}
+                ]})).unwrap()))
+            }
             CatalogPurpose::CustomHints => {
                 HINT_PATH_VISITS.with(|counter| *counter.borrow_mut() = Some(self.visits.clone()));
                 if self.cancel_search {

@@ -585,15 +585,21 @@ fn inferred(
     }
     let mut groups = Vec::new();
     for (path, group, id, label) in rules {
-        if paths.iter().try_fold(false, |found, p| -> Result<bool> {
+        let mut matched = false;
+        for p in paths {
             #[cfg(test)]
             HINT_PATH_VISITS.with(|counter| {
                 if let Some(counter) = counter.borrow().as_ref() {
                     counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             });
-            Ok(found || manifest::path_matches(&path, p, b)?)
-        })? {
+            b.check()?;
+            if manifest::path_matches(&path, p, b)? {
+                matched = true;
+                break;
+            }
+        }
+        if matched {
             manifest::merge(
                 &mut groups,
                 vec![(
