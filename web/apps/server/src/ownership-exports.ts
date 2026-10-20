@@ -16,6 +16,8 @@ export type OwnershipExport = { path: string; sha256: string; profile_id: number
 type Profile = { id: number; tenantId: string };
 type ExportRevision = { id: number; profileId: number };
 const MAX_OWNERSHIP_STL_FILES = 10_000;
+// A crashed STL exporter leaves its mkdtemp stage beside the content folders; it was never published, so it is not copied.
+const STL_STAGE = /^\.tmp-[A-Za-z0-9]{6}$/;
 const plateManifestSchema = z.object({
   format: z.literal("accepted-plate-3mf-manifest-v1"),
   basis: z.object({ profile_id: z.number(), plate_revision_id: z.number() }),
@@ -66,12 +68,13 @@ export function inspectOwnershipExports(root: string, profiles: readonly Profile
   };
   const stlTree = (path: string, pieces: string[], layout: string[]) => {
     const profile = owner(pieces, layout[1], /^profile-([1-9][0-9]*)$/);
+    const stage = STL_STAGE.test(layout[5] ?? "");
     if (!/^(all|missing)$/.test(layout[3] ?? "") || !/^(color|color_dir)$/.test(layout[4] ?? "")
-      || !/^content-[a-f0-9]{64}$/.test(layout[5] ?? "")) throw new Error("Unsupported export artifact layout");
-    if (layout[2] === "empty" && readdirSync(path).length === 0) return;
+      || !(stage || /^content-[a-f0-9]{64}$/.test(layout[5] ?? ""))) throw new Error("Unsupported export artifact layout");
+    if (layout[2] === "empty" && (stage || readdirSync(path).length === 0)) return;
     const revisionId = /^revision-([1-9][0-9]*)$/.exec(layout[2] ?? "")?.[1];
     if (!planRevisions.some(revision => String(revision.id) === revisionId && revision.profileId === profile.id)) throw new Error("Unassigned export artifact");
-    if (readdirSync(path).length === 0) return;
+    if (stage || readdirSync(path).length === 0) return;
     const files = new Map<string, number>();
     const collect = (directory: string, prefix: string[]) => {
       const entries = readdirSync(directory).sort();
@@ -123,6 +126,12 @@ export function inspectOwnershipExports(root: string, profiles: readonly Profile
   if (!lstatSync(root).isDirectory()) throw new Error("Export root must be a directory");
   walk(root, []);
   return result;
+}
+
+export function inOwnershipStlStage(path: string): boolean {
+  const pieces = path.split("/");
+  const layout = pieces[0]?.startsWith("tenant-") ? pieces.slice(1) : pieces;
+  return layout[0] === "accepted-stl" && layout.length > 6 && STL_STAGE.test(layout[5] ?? "");
 }
 
 export function ownershipExportTarget(artifact: OwnershipExport, owner: string): string {
