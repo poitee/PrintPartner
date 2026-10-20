@@ -361,6 +361,23 @@
         "resources": []
       },
       {
+        "operation": "tool.propose_create_source_category",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_job_status",
         "resources": []
       },
@@ -1063,7 +1080,6 @@
       "tool.propose_add_source",
       "tool.propose_apply_plan_draft",
       "tool.propose_assign_role_filament",
-      "tool.propose_create_source_category",
       "tool.propose_delete_source_category",
       "tool.propose_edit_plan_draft_parts",
       "tool.propose_exclude_replaced_parts",

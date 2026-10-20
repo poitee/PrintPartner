@@ -67,7 +67,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -744,6 +744,115 @@ it("rejects undeclared database and file reads against the empty create build pr
   expect(entry).toEqual({ operation: "tool.propose_create_build", resources: [] });
   expect(() => expect(statements).toEqual([])).toThrow();
   expect(() => expect(observer.state.files).toEqual([])).toThrow();
+});
+
+function categoryProposal(planId: number, path: string, parent: string | null, resulting: string[]) {
+  const leaf = path.slice(path.lastIndexOf("/") + 1);
+  return {
+    status: "proposed",
+    note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: {
+      type: "propose_create_source_category", plan_id: planId,
+      label: `Add category ${path}`,
+      summary: parent ? `Add “${leaf}” as a subcategory of “${parent}”.` : `Add “${path}” as a top-level library category.`,
+      params: { path },
+    },
+    resulting_categories: resulting,
+  };
+}
+
+it("traces propose_create_source_category paths, plan dismissals and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Category plan");
+  const dismissed = repo.createProfile("Dismissed plan");
+  const otherType = repo.createProfile("Other dismissal");
+  repo.createPlanDecision({ planId: dismissed.id, actor: "user", kind: "dismissed_action", actionType: "propose_create_source_category", params: { path: "Elsewhere" } });
+  repo.createPlanDecision({ planId: otherType.id, actor: "user", kind: "dismissed_action", actionType: "propose_rename_source_category", params: { path: "Printers" } });
+  repo.createPlanDecision({ planId: plan.id, actor: "assistant", kind: "applied_action", actionType: "propose_create_source_category", params: { path: "Tools" } });
+  const foreign = tenantStorage.run("other", () => {
+    const foreignPlan = repo.createProfile("Other");
+    repo.createPlanDecision({ planId: foreignPlan.id, actor: "user", kind: "dismissed_action", actionType: "propose_create_source_category", params: { path: "Tools" } });
+    return foreignPlan;
+  });
+  const settingsBefore = sqlite.prepare("SELECT tenant_id, key, value FROM app_settings ORDER BY tenant_id, key").all();
+  const tables = ["table:app_settings", "table:build_profiles", "table:plan_decisions"];
+  const saved = ["Printers", "Printers/Core"];
+  const defaults = ["Printer kits", "Toolheads", "Probes & sensors", "Mods", "Hardware", "Other"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_create_source_category", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    if (content.status === "proposed") {
+      const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+      expect(output.proposedAction).toEqual(action);
+      const { id: _id, ...proposal } = action;
+      return { ...content, action: proposal };
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  const required = { error: "path (or name) required" };
+  for (const input of [{}, { path: " / ", name: "  ", parent: "/" }, { path: 42, name: {}, parent: ["Printers"] }]) {
+    expect(await trace(input, [])).toEqual(required);
+  }
+  expect(await trace({ plan_id: plan.id }, ["table:build_profiles"])).toEqual(required);
+  expect(await trace({}, [], "default", plan.id)).toEqual(required);
+  for (const input of [{ path: " Printers / Frame " }, { name: "Frame", parent: "Printers" }, { path: "", name: " Frame ", parent: " printers/ " }, { path: 7, name: "Frame", parent: "Printers" }]) {
+    const path = typeof input.parent === "string" && input.parent.includes("printers") ? "printers/Frame" : "Printers/Frame";
+    expect(await trace(input, ["table:app_settings"])).toEqual(categoryProposal(0, path, path.split("/")[0]!, [...saved, path]));
+  }
+  expect(await trace({ parent: "Tools" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Tools", name: "Frame", parent: "Printers" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Tools/Hotends/Volcano" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Tools/Hotends/Volcano", "Tools/Hotends", [...saved, "Tools", "Tools/Hotends", "Tools/Hotends/Volcano"]));
+  expect(await trace({ path: "Printers/Core/Bed" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Printers/Core/Bed", "Printers/Core", [...saved, "Printers/Core/Bed"]));
+  for (const path of ["printers/core", " PRINTERS "]) {
+    expect(await trace({ path, plan_id: plan.id }, ["table:app_settings", "table:build_profiles"])).toEqual({ error: `Category already exists: ${path.trim()}`, categories: saved });
+  }
+  for (const planId of [plan.id, String(plan.id), ` ${plan.id}.9 `]) {
+    expect(await trace({ path: "Tools", plan_id: planId, profile_id: foreign.id }, tables, "default", otherType.id)).toEqual(categoryProposal(plan.id, "Tools", null, [...saved, "Tools"]));
+  }
+  expect(await trace({ path: "Tools" }, ["table:app_settings", "table:plan_decisions"], "default", otherType.id)).toEqual(categoryProposal(otherType.id, "Tools", null, [...saved, "Tools"]));
+  const userDismissed = {
+    error: "user_dismissed",
+    detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
+    fingerprint: "propose_create_source_category|",
+    action_type: "propose_create_source_category",
+  };
+  for (const path of ["Elsewhere", "Tools", "Printers/Frame"]) {
+    expect(await trace({ path, plan_id: dismissed.id }, tables)).toEqual(userDismissed);
+    expect(await trace({ path }, ["table:app_settings", "table:plan_decisions"], "default", dismissed.id)).toEqual(userDismissed);
+  }
+  for (const planId of [foreign.id, 999999, 0, -1]) {
+    expect(await trace({ path: "Tools", plan_id: planId }, ["table:app_settings", "table:build_profiles"])).toEqual(categoryProposal(0, "Tools", null, [...saved, "Tools"]));
+    expect(await trace({ path: "Tools", plan_id: planId }, tables, "default", dismissed.id)).toEqual(userDismissed);
+  }
+  expect(await trace({ path: "Tools", plan_id: "invalid" }, ["table:app_settings", "table:plan_decisions"], "default", plan.id)).toEqual(categoryProposal(plan.id, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Tools" }, ["table:app_settings", "table:plan_decisions"], "default", foreign.id)).toEqual(categoryProposal(foreign.id, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Printers/Frame" }, ["table:app_settings"], "other")).toEqual(categoryProposal(0, "Printers/Frame", "Printers", [...defaults, "Printers", "Printers/Frame"]));
+  expect(await trace({ path: "mods", plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], "other")).toEqual({ error: "Category already exists: mods", categories: defaults });
+  expect(await trace({ path: "Tools", plan_id: foreign.id }, tables, "other")).toEqual(userDismissed);
+  expect(await trace({ path: "Tools" }, ["table:app_settings", "table:plan_decisions"], "other", dismissed.id)).toEqual(categoryProposal(dismissed.id, "Tools", null, [...defaults, "Tools"]));
+  for (const [table, expected] of [["build_profiles", []], ["app_settings", ["table:build_profiles"]], ["plan_decisions", ["table:app_settings", "table:build_profiles"]]] as const) {
+    sqlite.prepare(`ALTER TABLE ${table} RENAME TO unavailable_table`).run();
+    try {
+      expect(await trace({ path: "Tools", plan_id: plan.id }, [...expected])).toEqual({ error: `no such table: ${table}` });
+    } finally {
+      sqlite.prepare(`ALTER TABLE unavailable_table RENAME TO ${table}`).run();
+    }
+  }
+  expect(sqlite.prepare("SELECT tenant_id, key, value FROM app_settings ORDER BY tenant_id, key").all()).toEqual(settingsBefore);
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_create_source_category");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing create source category declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(tables);
 });
 
 it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation against its declaration", async () => {
