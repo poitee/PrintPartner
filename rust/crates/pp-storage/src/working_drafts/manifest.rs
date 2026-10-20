@@ -297,14 +297,18 @@ fn union<E>(
     right: &[ManifestText],
     charge: &mut impl FnMut(usize) -> Result<(), E>,
 ) -> Result<(), E> {
-    for s in std::mem::take(left)
-        .into_iter()
-        .chain(right.iter().cloned())
-    {
+    for s in std::mem::take(left) {
         let found = left.iter().position(|existing| *existing == s);
         charge(found.map_or(left.len(), |index| index + 1))?;
         if found.is_none() {
             left.push(s);
+        }
+    }
+    for s in right {
+        let found = left.iter().position(|existing| existing == s);
+        charge(found.map_or(left.len(), |index| index + 1))?;
+        if found.is_none() {
+            left.push(s.clone());
         }
     }
     Ok(())
