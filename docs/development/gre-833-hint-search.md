@@ -29,7 +29,10 @@ fold, the first-match test observes 12 iteration entries instead of six.
 The runtime-gate module passes three tests in each feature mode, plus one ignored
 child test that the environment test invokes in isolated subprocesses.
 
-Run from the repository root with the VM's cargo wrapper and shared sccache:
+Run from the repository root with the VM's cargo wrapper and shared sccache.
+The full unit suites also need the Node 22 fixture prerequisites from the
+[Rust workspace setup](../../rust/README.md): `npm --prefix web ci`, then builds
+of the `@print-partner/contracts` and `@print-partner/domain` workspaces.
 
 ```sh
 umask 022
