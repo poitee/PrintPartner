@@ -330,8 +330,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         }
         let c = chars[i];
         if let Some(q) = quote {
-            // js-yaml checks quoted continuation lines before reading flow keys.
-            if !flow.is_empty() && i > 0 && matches!(chars[i - 1], '\r' | '\n') {
+            // js-yaml checks quoted continuation lines before reading flow keys,
+            // and in block context requires them deeper than the block parent.
+            if i > 0 && matches!(chars[i - 1], '\r' | '\n') {
                 let mut end = i;
                 while chars.get(end) == Some(&' ') {
                     if (end - i).is_multiple_of(1024) {
@@ -346,8 +347,12 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     }
                     end += 1;
                 }
-                if indent < flow_indent && chars.get(end).is_some_and(|c| !matches!(c, '\r' | '\n'))
-                {
+                let deficient = if flow.is_empty() {
+                    parent.is_some_and(|p| indent <= p)
+                } else {
+                    indent < flow_indent
+                };
+                if deficient && chars.get(end).is_some_and(|c| !matches!(c, '\r' | '\n')) {
                     return invalid();
                 }
             }
@@ -389,6 +394,34 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     i += 1;
                     if matches!(*c, '\r' | '\n') {
                         line_start = true;
+                        if *c == '\r' && chars.get(i) == Some(&'\n') {
+                            output.push('\n');
+                            consumed += 1;
+                            i += 1;
+                        }
+                        // js-yaml folds the blank lines after an escaped line
+                        // break away; saphyr keeps each as a newline.
+                        let mut blank = 0usize;
+                        loop {
+                            if blank.is_multiple_of(1024) {
+                                budget.check()?;
+                            }
+                            blank += 1;
+                            let mut end = i;
+                            while chars.get(end).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                                if (end - i).is_multiple_of(1024) {
+                                    budget.check()?;
+                                }
+                                end += 1;
+                            }
+                            let width = match chars.get(end..end + 2) {
+                                Some(['\r', '\n']) => 2,
+                                _ if chars.get(end).is_some_and(|c| matches!(c, '\r' | '\n')) => 1,
+                                _ => break,
+                            };
+                            consumed += end + width - i;
+                            i = end + width;
+                        }
                     }
                 }
                 continue;
