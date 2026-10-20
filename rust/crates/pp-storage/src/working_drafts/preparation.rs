@@ -60,6 +60,9 @@ fn sort_paths<T>(
         indices.copy_from_slice(scratch);
         Ok(())
     }
+    if values.len() < 2 {
+        return Ok(());
+    }
     b.check()?;
     #[cfg(test)]
     PATH_SORT_TEST.with(|probe| {

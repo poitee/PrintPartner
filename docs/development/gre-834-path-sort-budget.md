@@ -8,6 +8,8 @@ immediately, before the next ICU call or draft write.
 Both sites use a stable merge sort of indices, then apply the resulting
 permutation to the original values. Equal keys keep their encounter order.
 The sort uses two buffers of indices and does not clone parts during merging.
+Empty and single-path sorts return without budget checks, preserving the caller's
+existing empty-scan cancellation handling.
 Checkout paths cache their lowercase keys once instead of allocating keys inside
 every comparison. The existing inventory entry and path limits still apply.
 
