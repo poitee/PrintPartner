@@ -42,6 +42,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_admission(admission())
+    }
+
+    fn with_admission(admission: WorkerAdmission) -> Self {
         let root = std::env::temp_dir().join(format!("pp-source-sync-{}", rand::random::<u64>()));
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
         let auth::Outcome::Session { token, .. } = owner
@@ -69,7 +73,7 @@ impl Fixture {
                 policy(),
             )
             .unwrap();
-        let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+        let worker = owner.job_worker_with_policy(policy(), admission).unwrap();
         Self {
             owner,
             root,
@@ -591,6 +595,248 @@ fn busy_source_leaves_the_target_pending() {
     held.release().unwrap();
     assert_eq!(local(sync.next(&mut lease)).key().ordinal, 0);
     assert_eq!(sync.targets(&job_id)[0].1, "claimed");
+}
+
+fn reopen(sync: Fixture) -> Fixture {
+    reopen_with_admission(sync, admission())
+}
+
+fn reopen_with_admission(sync: Fixture, admission: WorkerAdmission) -> Fixture {
+    let Fixture {
+        owner, root, token, ..
+    } = sync;
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let catalog = owner
+        .source_catalog_with_policy(
+            catalog::Credentials::Session(auth::Secret::new(token.clone())),
+            policy(),
+        )
+        .unwrap();
+    let worker = owner.job_worker_with_policy(policy(), admission).unwrap();
+    Fixture {
+        owner,
+        root,
+        token,
+        catalog,
+        worker,
+    }
+}
+
+fn change_job(sync: &Fixture, job_id: &str, change: impl FnOnce(&mut JobRecord)) {
+    let mut connection = sync.connection();
+    let tx = connection.transaction().unwrap();
+    let mut job = jobs::load(&tx, job_id).unwrap().unwrap();
+    change(&mut job);
+    jobs::save(&tx, &mut job, "test_recovery_setup").unwrap();
+    tx.commit().unwrap();
+}
+
+fn enqueue_later(sync: &Fixture, source_id: i64) -> String {
+    sync.user(UserOperation::Enqueue {
+        key: "later-sync".into(),
+        payload_version: 1,
+        payload: Payload::Sync {
+            project_ids: Some(vec![source_id as u64]),
+        },
+    })
+    .job_id
+}
+
+fn durable_claim_blocks_a_second_sync(restart: bool) {
+    let admission = WorkerAdmission {
+        kinds: vec![(JobKind::Sync, 2)],
+        total: 2,
+        per_resource: 2,
+        ..admission()
+    };
+    let mut sync = Fixture::with_admission(admission.clone());
+    let id = sync.source("Durably claimed");
+    let first_job = sync.enqueue(Some(vec![id as u64]));
+    let mut first = sync.open();
+    drop(local(sync.next(&mut first)));
+    if restart {
+        sync = reopen_with_admission(sync, admission);
+    } else {
+        change_job(&sync, &first_job, |job| job.lease_until = Some(now() - 1));
+    }
+    let ClaimedAttempt {
+        lease: resumed_first,
+        ..
+    } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(resumed_first.job_id(), first_job);
+    let second_job = enqueue_later(&sync, id);
+    let worker = &sync.worker;
+    let ClaimedAttempt {
+        lease: mut second, ..
+    } = worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(second.job_id(), second_job);
+    worker.open_source_sync(&second).unwrap();
+    let before = sync.snapshot();
+    let version = second.version();
+    let error = worker
+        .claim_next_source_sync_target(&mut second)
+        .err()
+        .unwrap();
+    assert!(error.downcast_ref::<SourceBusy>().is_some(), "{error:#}");
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(second.version(), version);
+    assert_eq!(sync.targets(&second_job), [(id, "pending".into(), None)]);
+    sync.worker.open_source_sync(&resumed_first).unwrap();
+    let target = local(worker.claim_next_source_sync_target(&mut second).unwrap());
+    assert_eq!(target.claim_generation, 1);
+    assert_eq!(sync.targets(&second_job), [(id, "claimed".into(), None)]);
+}
+
+#[test]
+fn durable_claim_returns_source_busy_after_restart() {
+    durable_claim_blocks_a_second_sync(true);
+}
+
+#[test]
+fn durable_claim_returns_source_busy_after_lease_expiry() {
+    durable_claim_blocks_a_second_sync(false);
+}
+
+fn terminal_recovery_closes_sync_batch(reason: &str, effect_confirmed: bool) {
+    for restart in [false, true] {
+        for claimed in [false, true] {
+            let mut sync = Fixture::new();
+            let [first, second] = ["First", "Second"].map(|name| sync.source(name));
+            let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+            if reason == "attempt_limit" {
+                change_job(&sync, &job_id, |job| {
+                    job.attempt = 99;
+                    job.generation = 99;
+                });
+            }
+            let mut lease = sync.open();
+            if claimed {
+                drop(local(sync.next(&mut lease)));
+            }
+            let before = sync.job(&job_id);
+            change_job(&sync, &job_id, |job| {
+                job.lease_until = Some(now() - 1);
+                if reason == "cancelled" {
+                    job.cancel_requested = true;
+                } else if reason == "effect" {
+                    job.state = PersistentState::EffectAdmitted;
+                    job.effects.push(jobs::EffectReceipt {
+                        intent: jobs::EffectIntent {
+                            operation: jobs::EffectOperation::SourceRefresh,
+                            basis_hash: "a".repeat(64),
+                            content_hash: "b".repeat(64),
+                            target: first.to_string(),
+                        },
+                        attempt: job.attempt,
+                        generation: job.generation,
+                        confirmed: effect_confirmed,
+                        no_effect: false,
+                        receipt: effect_confirmed.then(|| jobs::ResultArtifact {
+                            receipt_id: "sync-receipt".into(),
+                            content_hash: "b".repeat(64),
+                            target: first.to_string(),
+                        }),
+                        checklist_completion: None,
+                    });
+                }
+            });
+            let effects = sync.job(&job_id).effects;
+            if restart {
+                sync = reopen(sync);
+            }
+            assert!(sync.worker.claim_kind(JobKind::Sync).unwrap().is_none());
+            let recovered = sync.job(&job_id);
+            let unresolved = claimed || reason == "effect";
+            assert_eq!(
+                recovered.state,
+                if unresolved {
+                    PersistentState::ReconciliationRequired
+                } else if reason == "cancelled" {
+                    PersistentState::Cancelled
+                } else {
+                    PersistentState::Failed
+                }
+            );
+            assert_eq!(recovered.generation, before.generation + 1);
+            assert!(recovered.fence.is_none());
+            assert!(recovered.worker.is_none());
+            assert!(recovered.lease_until.is_none());
+            assert_eq!(recovered.effects, effects);
+            let detail = match reason {
+                "attempt_limit" => "Attempt limit reached",
+                "cancelled" => "Sync was cancelled",
+                "effect" if effect_confirmed => {
+                    "Resume from confirmed receipts requires handler reconciliation"
+                }
+                "effect" => "Inspect effect receipts and reconcile explicitly",
+                _ => unreachable!(),
+            };
+            assert_eq!(recovered.recovery.as_deref(), Some(detail));
+            assert_eq!(
+                sync.targets(&job_id),
+                [
+                    if claimed {
+                        (
+                            first,
+                            "reconciliation_required".into(),
+                            Some("local_settlement".into()),
+                        )
+                    } else {
+                        (first, "not_run".into(), Some("batch_halt".into()))
+                    },
+                    (second, "not_run".into(), Some("batch_halt".into())),
+                ]
+            );
+            assert_eq!(
+                sync.batch(&job_id),
+                if unresolved {
+                    ("reconciliation_required".into(), None)
+                } else {
+                    (
+                        "halted".into(),
+                        Some(
+                            if reason == "cancelled" {
+                                "cancelled"
+                            } else {
+                                "fatal"
+                            }
+                            .into(),
+                        ),
+                    )
+                }
+            );
+            let snapshot = sync.snapshot();
+            sync = reopen(sync);
+            assert_eq!(sync.snapshot(), snapshot);
+            let later_source = sync.source("Later work");
+            let later = enqueue_later(&sync, later_source);
+            let mut lease = sync.open();
+            assert_eq!(lease.job_id(), later);
+            assert_eq!(local(sync.next(&mut lease)).claim_generation, 1);
+            assert_eq!(sync.targets(&later), [(later_source, "claimed".into(), None)]);
+        }
+    }
+}
+
+#[test]
+fn attempt_limit_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("attempt_limit", false);
+}
+
+#[test]
+fn unconfirmed_effect_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("effect", false);
+}
+
+#[test]
+fn confirmed_effect_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("effect", true);
+}
+
+#[test]
+fn cancellation_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("cancelled", false);
 }
 
 #[test]
