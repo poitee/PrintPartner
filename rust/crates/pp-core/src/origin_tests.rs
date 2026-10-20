@@ -320,10 +320,9 @@ async fn occupied_origin_recovers_with_disclosure_and_preserves_portable_data() 
         0o600
     );
     assert!(TcpListener::bind(address).await.is_err());
-    drop(listener);
     drop(owner);
     let owner = StorageLease::acquire(&fixture.0).unwrap();
-    let (listener, change) = bind_origin(&owner).await.unwrap();
+    let (listener, change) = rebind_reserved(&owner, listener).await;
     assert_eq!(listener.local_addr().unwrap(), address);
     assert_eq!(change, None);
     assert_eq!(
@@ -714,6 +713,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
 #[tokio::test]
 async fn failed_recovery_closes_selected_listener_before_returning() {
     use crate::state_file::Boundary;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let fixture = Fixture::new();
     let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
     std::fs::write(
@@ -722,24 +722,47 @@ async fn failed_recovery_closes_selected_listener_before_returning() {
     )
     .unwrap();
     let owner = StorageLease::acquire(&fixture.0).unwrap();
-    let mut selected = None;
-    let result = crate::origin::bind_origin_with(&owner, |boundary| {
-        if boundary == Boundary::DirectorySync {
-            let bytes = std::fs::read_to_string(fixture.config())?;
-            let port: u16 = bytes.trim().strip_prefix("port = ").unwrap().parse()?;
-            let address = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-            assert!(std::net::TcpListener::bind(address).is_err());
-            selected = Some(address);
-            anyhow::bail!("injected directory sync failure");
-        }
-        Ok(())
-    })
+    // A duplicate keeps the selected port bound after recovery closes its
+    // listener, so no parallel test can take it before the check below.
+    let selected = std::cell::RefCell::new(None);
+    let result = crate::origin::bind_origin_using(
+        &owner,
+        |boundary| {
+            anyhow::ensure!(
+                boundary != Boundary::DirectorySync,
+                "injected directory sync failure"
+            );
+            Ok(())
+        },
+        |address| {
+            let selected = &selected;
+            async move {
+                let listener = TcpListener::bind(address).await?;
+                if address.port() == 0 {
+                    let fd = listener.as_raw_fd();
+                    let held = unsafe { libc::dup(fd) };
+                    assert!(held >= 0, "dup failed");
+                    *selected.borrow_mut() = Some((fd, unsafe { OwnedFd::from_raw_fd(held) }));
+                }
+                Ok(listener)
+            }
+        },
+    )
     .await;
     assert!(result.is_err());
-    let listener = TcpListener::bind(selected.unwrap()).await.unwrap();
+    let (fd, held) = selected.into_inner().unwrap();
+    let held = std::net::TcpListener::from(held);
+    let address = held.local_addr().unwrap();
     assert_eq!(
-        listener.local_addr().unwrap().port(),
-        selected.unwrap().port()
+        std::fs::read(fixture.config()).unwrap(),
+        format!("port = {}\n", address.port()).as_bytes()
+    );
+    // The selected descriptor is closed, or was reused by something that
+    // cannot be bound to the held address.
+    let reused = std::mem::ManuallyDrop::new(unsafe { std::net::TcpListener::from_raw_fd(fd) });
+    assert!(
+        unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1
+            || reused.local_addr().ok() != Some(address)
     );
     assert_no_temporary(&fixture);
 }
