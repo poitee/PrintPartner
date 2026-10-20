@@ -1220,11 +1220,11 @@ async function materializeStls(root: string, tenantId: string, profileId: number
   try {
     const repository = new AppRepository(getDb(store), tenantId, store.reposDir);
     const capture = captureAcceptedOperationalExport({ repository, profileId });
-    if (capture.kind !== "ready") return capture;
+    if (capture.kind !== "ready" && capture.kind !== "empty") return capture;
     return await materializeAcceptedStlBundle({ capture, reposDir: store.reposDir,
       tenantExportsDir: tenantExportDirectory(join(root, "exports"), tenantId),
       selection: "all", groupBy: "color", roleOrder: ["primary", "accent", "clear", "opaque"], ...options,
-      unitTokens: selectedUnit ? capture.export.parts.flatMap(part => part.units.map(unit => unit.token)).slice(0, 1) : [] });
+      unitTokens: selectedUnit && capture.kind === "ready" ? capture.export.parts.flatMap(part => part.units.map(unit => unit.token)).slice(0, 1) : [] });
   } finally { store.close(); }
 }
 
@@ -1356,3 +1356,73 @@ it("copies an empty accepted STL missing publication and recreates it after reop
     expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports).toEqual([]);
   }
 });
+
+it.each([
+  { selection: "all", groupBy: "color" },
+  { selection: "all", groupBy: "color_dir" },
+  { selection: "missing", groupBy: "color" },
+  { selection: "missing", groupBy: "color_dir" },
+] as const)("copies no-plan accepted STL $selection/$groupBy publications and recreates them after two reopens", async options => {
+  const paths = fixture();
+  edit(paths.sourceDir, raw => raw.exec("INSERT INTO build_profiles (id,name) VALUES (3,'Empty Plan')"));
+  const source = await materializeStls(paths.sourceDir, "default", 3, options);
+  if (source.kind !== "materialized") throw new Error(`Missing no-plan STL publication ${source.kind}`);
+  edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); });
+  expect(source.rootPath).toMatch(new RegExp(`/accepted-stl/profile-3/empty/${options.selection}/${options.groupBy}/content-[a-f0-9]{64}$`));
+  expect([source.bundlePath, source.fileCounts, source.warnings, readdirSync(source.rootPath)]).toEqual([null, {}, [], []]);
+  const input = manifest(paths.sourceDir);
+  expect(input.exports).toEqual([]);
+  const before = stlTreeState(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  const relative = source.rootPath.slice(tenantExportDirectory(join(paths.sourceDir, "exports"), "default").length + 1);
+  const target = join(tenantExportDirectory(join(paths.destinationDir, "exports"), "account-a"), relative);
+  expect(existsSync(target)).toBe(false);
+  for (let restart = 0; restart < 2; restart++) {
+    const reopened = await materializeStls(paths.destinationDir, "account-a", 3, options);
+    if (reopened.kind !== "materialized") throw new Error(`Missing copied no-plan STL publication ${reopened.kind}`);
+    expect([reopened.rootPath, reopened.bundlePath, reopened.fileCounts, reopened.warnings, readdirSync(target)]).toEqual([target, null, {}, [], []]);
+    expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports).toEqual([]);
+    expect((await materializeStls(paths.destinationDir, "account-b", 3, options)).kind).toBe("profile_not_found");
+  }
+  expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  expect(existsSync(join(paths.destinationDir, "exports/tenant-default"))).toBe(false);
+});
+
+it.each(["nonempty-publication", "file", "directory", "symlink", "leaf-symlink", "foreign-owner", "unknown-profile", "selection", "grouping", "content-key", "revision-segment"])(
+  "refuses %s no-plan accepted STL export trees without publishing", async kind => {
+    const paths = fixture();
+    const revision = kind === "nonempty-publication" ? await materializeStls(paths.sourceDir, "default", 1) : null;
+    edit(paths.sourceDir, raw => raw.exec("INSERT INTO build_profiles (id,name) VALUES (3,'Empty Plan')"));
+    const input = manifest(paths.sourceDir);
+    const source = await materializeStls(paths.sourceDir, "default", 3);
+    if (source.kind !== "materialized") throw new Error(`Missing no-plan STL publication ${source.kind}`);
+    edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); });
+    if (kind === "nonempty-publication") {
+      if (revision?.kind !== "materialized") throw new Error("Missing nonempty STL publication");
+      cpSync(revision.rootPath, source.rootPath, { recursive: true });
+    }
+    if (kind === "file") writeFileSync(join(source.rootPath, "notes.txt"), "unexpected");
+    if (kind === "directory") mkdirSync(join(source.rootPath, "unused"));
+    if (kind === "symlink") symlinkSync(join(paths.sourceDir, "repos"), join(source.rootPath, "linked"));
+    if (kind === "leaf-symlink") {
+      rmSync(source.rootPath, { recursive: true });
+      symlinkSync(join(paths.sourceDir, "repos"), source.rootPath);
+    }
+    const invalidPath = kind === "foreign-owner" ? source.rootPath.replace("tenant-default", "tenant-account-b")
+      : kind === "unknown-profile" ? source.rootPath.replace("profile-3", "profile-999")
+      : kind === "selection" ? source.rootPath.replace("/all/", "/other/")
+      : kind === "grouping" ? source.rootPath.replace("/color/", "/other/")
+      : kind === "content-key" ? source.rootPath.replace(/content-[a-f0-9]{64}$/, "content-invalid")
+      : kind === "revision-segment" ? source.rootPath.replace("/empty/", "/unknown/") : null;
+    if (invalidPath) {
+      mkdirSync(invalidPath, { recursive: true });
+      rmSync(source.rootPath, { recursive: true });
+    }
+    const before = stlTreeState(paths.sourceDir);
+    expect(() => inspectOwnershipCopy(paths)).toThrow();
+    await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow();
+    expect(existsSync(paths.destinationDir)).toBe(false);
+    expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+    expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  });
