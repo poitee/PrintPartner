@@ -137,6 +137,11 @@ impl NamingProfile {
         );
         validate_regex_structure(&self.quantity.regex)
             .map_err(|refusal| anyhow!(refusal.message))?;
+        #[cfg(feature = "desktop_rebuild")]
+        ensure!(
+            node_regex_syntax(&self.quantity.regex),
+            "Invalid quantity regex"
+        );
         regress::Regex::with_flags(&self.quantity.regex, "i")
             .map_err(|_| anyhow!("Invalid quantity regex"))?;
         let regex = regress::Regex::new(&format!("(?:{})|", self.quantity.regex))
@@ -154,13 +159,16 @@ impl NamingProfile {
 }
 struct RegexRefusal {
     message: &'static str,
-    /// A Rust-only bound on a pattern JavaScript would accept.
+    /// The pattern is otherwise well formed, so only a Rust-only bound refused it.
     #[cfg(feature = "desktop_rebuild")]
     limit: bool,
 }
+/// Reports the first refusal, but scans on past a limit so `limit` is only set
+/// for patterns whose groups and classes are otherwise balanced.
 fn validate_regex_structure(pattern: &str) -> Result<(), RegexRefusal> {
     const MAX_GROUP_DEPTH: usize = 16;
     const MAX_GROUPS: usize = 64;
+    let mut exceeded = (pattern.len() > 4096).then_some("Quantity regex too long");
     let refuse = |message, _limit: bool| {
         Err(RegexRefusal {
             message,
@@ -168,9 +176,6 @@ fn validate_regex_structure(pattern: &str) -> Result<(), RegexRefusal> {
             limit: _limit,
         })
     };
-    if pattern.len() > 4096 {
-        return refuse("Quantity regex too long", true);
-    }
     let mut escaped = false;
     let mut in_class = false;
     let mut depth = 0usize;
@@ -196,12 +201,12 @@ fn validate_regex_structure(pattern: &str) -> Result<(), RegexRefusal> {
                 depth += 1;
                 groups += 1;
                 if depth > MAX_GROUP_DEPTH || groups > MAX_GROUPS {
-                    return refuse("Quantity regex exceeds group complexity limits", true);
+                    exceeded = exceeded.or(Some("Quantity regex exceeds group complexity limits"));
                 }
             }
             b')' => {
                 if depth == 0 {
-                    return refuse("Invalid quantity regex groups", false);
+                    return refuse(exceeded.unwrap_or("Invalid quantity regex groups"), false);
                 }
                 depth -= 1;
             }
@@ -209,9 +214,50 @@ fn validate_regex_structure(pattern: &str) -> Result<(), RegexRefusal> {
         }
     }
     if escaped || in_class || depth != 0 {
-        return refuse("Invalid quantity regex structure", false);
+        return refuse(
+            exceeded.unwrap_or("Invalid quantity regex structure"),
+            false,
+        );
     }
-    Ok(())
+    match exceeded {
+        Some(message) => refuse(message, true),
+        None => Ok(()),
+    }
+}
+/// Rejects ES2025 syntax `regress` accepts but Node 22's V8 does not: group
+/// modifiers such as `(?i:a)` and group names repeated across alternatives.
+#[cfg(feature = "desktop_rebuild")]
+fn node_regex_syntax(pattern: &str) -> bool {
+    let mut names = Vec::new();
+    let mut escaped = false;
+    let mut in_class = false;
+    for (index, byte) in pattern.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if in_class {
+            in_class = byte != b']';
+        } else if byte == b'[' {
+            in_class = true;
+        } else if byte == b'('
+            && let Some(group) = pattern[index + 1..].strip_prefix('?')
+        {
+            match group.bytes().next() {
+                Some(b':' | b'=' | b'!') => {}
+                Some(b'<') if group[1..].starts_with(['=', '!']) => {}
+                Some(b'<') => {
+                    let name = group[1..].split('>').next().unwrap_or_default();
+                    if names.contains(&name) {
+                        return false;
+                    }
+                    names.push(name);
+                }
+                _ => return false,
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn uses_defaults(m: &Map<String, Value>) -> bool {
@@ -513,7 +559,7 @@ fn validate_stored_override(value: &Value) -> Result<()> {
             };
             return fail(path, message);
         }
-        if regress::Regex::with_flags(pattern, "i").is_err() {
+        if !node_regex_syntax(pattern) || regress::Regex::with_flags(pattern, "i").is_err() {
             return fail(path, "is an invalid regular expression");
         }
         let groups = regress::Regex::new(&format!("(?:{pattern})|"))

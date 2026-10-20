@@ -1,12 +1,12 @@
 # GRE-918 stored naming refusals
 
-The capture covers 35 named corrupt overrides. The table includes unknown
+The capture covers 39 named corrupt overrides. The table includes unknown
 top-level fields and fields inside roles, quantity, slug, and folder rules;
 duplicate roles; an invalid role ID; raw JSON type errors; blank fields;
 invalid and multi-group quantity regexes; out-of-range quantity defaults; an
 invalid functional class; short and duplicate export role orders; unknown
-keys that need JavaScript key order and literal quoting; a regex over Rust's
-group limit; and six mixed defects that record which error wins.
+keys that need JavaScript key order and literal quoting; well-formed and
+unbalanced regexes over Rust's group limit; regex syntax Node 22 rejects; and eight mixed defects that record which error wins.
 
 The [generator](../../rust/crates/pp-storage/tests/fixtures/gre918-stored-naming-node.mjs)
 calls the public Node repository methods `getSourceNaming` and
@@ -14,7 +14,7 @@ calls the public Node repository methods `getSourceNaming` and
 retains each raw override, the entire Node catalog result, the exact preparation
 error, and separate literal Rust expectations for both feature modes.
 
-Node 22.23.3 executed all 35 cases successfully during implementation.
+Node 22.23.3 executed all 39 cases successfully during implementation.
 Every catalog result was exactly `{"kind":"invalid_state"}`. This public method
 returns no detail field. The preparation error supplies Node's field detail;
 the capture never invents a catalog detail or converts a Rust error into one.
@@ -27,7 +27,7 @@ and SHM bytes are excluded because rows represent the database state.
 Rust preparation injects `Unread` through the public observation client.
 Every STL, manifest, or catalog observation panics, so a refusal must occur
 before file observation. Preparation remains gated by `desktop_rebuild`.
-The feature-off catalog test executes all 35 cases. A case with
+The feature-off catalog test executes all 39 cases. A case with
 `override_json` stores that exact text, so integer-like keys keep an order a
 JavaScript object would normalize.
 
@@ -43,22 +43,34 @@ in quotes without escaping. Messages use zod 4.6.7's literal text. For example, 
 `override.quantity.default: Invalid input: expected number, received string`
 before the blank folder rule, as Node does.
 
-Both public clients verify all 35 literal expectations with the feature on:
-catalog `GetNaming` and preparation `recompute`. 34 feature-on details match
+Both public clients verify all 39 literal expectations with the feature on:
+catalog `GetNaming` and preparation `recompute`. 38 feature-on details match
 Node. `regex-over-group-limit` is the one recorded difference. Before
 this fix, 16 of the original 21 differed. Feature-on catalog failures retain
 the outer text `Stored Source naming settings are invalid` and
 `CatalogFailure::InvalidStoredNaming`, with Node's detail as the root cause.
 
-Feature-off behavior is unchanged. All 35 feature-off details still differ
+Feature-off behavior is unchanged. All 39 feature-off details still differ
 from Node and stay marked `known_mismatch.feature_off: true`.
 
 Rust keeps its existing quantity regex length and group-complexity limits.
-A pattern that exceeds them fails with the limit's own message, such as
+An otherwise well-formed pattern that exceeds them fails with the limit's own
+message, such as
 `override.quantity.regex: Quantity regex exceeds group complexity limits`.
 Node compiles such a pattern and applies its normal checks. This was already
-a refusal before this change. Unbalanced groups and other syntax errors report
-Node's `is an invalid regular expression`.
+a refusal before this change. Unbalanced groups and classes report Node's
+`is an invalid regular expression`, even past a limit. A pattern past a limit
+with any other syntax error keeps the limit message, because Rust does not
+compile it.
+
+Rust compiles quantity regexes with `regress`, which accepts two ES2025 forms
+that Node 22's V8 rejects: group modifiers such as `(?i:(a))` and group names
+repeated across alternatives such as `(?<x>a)|(?<x>b)`. With the feature on,
+every quantity regex check refuses both. That covers saves, global defaults,
+and stored overrides. A refused save reports `Invalid quantity regex`, and a
+stored override reports Node's `is an invalid regular expression`. With the
+feature off, both forms are still accepted. Other differences between
+`regress` and V8 syntax are not covered here.
 
 Regenerate with Node 22 on `PATH` and installed `web` dependencies:
 

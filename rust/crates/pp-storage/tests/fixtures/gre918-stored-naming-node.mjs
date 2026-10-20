@@ -46,6 +46,10 @@ const cases = [
   ['unknown-keys-index-order', new Raw('{"surprise":true,"2":true,"1":true}'), "Unknown naming field", "override: Unrecognized keys: \"1\", \"2\", \"surprise\""],
   ['unknown-key-quote', { 'a"b\\c': true }, "Unknown naming field", "override: Unrecognized key: \"a\"b\\c\""],
   ['regex-over-group-limit', { quantity: { regex: '(a)'.repeat(65) } }, "Quantity regex exceeds group complexity limits", "override.quantity.regex: Quantity regex exceeds group complexity limits"],
+  ['regex-over-limit-unbalanced', { quantity: { regex: '('.repeat(17) } }, "Quantity regex exceeds group complexity limits", "override.quantity.regex: is an invalid regular expression"],
+  ['mixed-regex-modifier-default-zero', { quantity: { regex: '(?i:(a))', default: 0 } }, "Invalid quantity default", "override.quantity.regex: is an invalid regular expression"],
+  ['regex-duplicate-group-name', { quantity: { regex: '(?<x>a)|(?<x>b)' } }, "Quantity regex must have one capture group", "override.quantity.regex: is an invalid regular expression"],
+  ['mixed-regex-non-ascii-default-zero', { quantity: { regex: 'é(?<é>a)', default: 0 } }, "Invalid quantity default", "override.quantity.default: Too small: expected number to be >=1"],
 ];
 
 function files(directory, relative = '') {

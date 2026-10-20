@@ -1,4 +1,7 @@
-use pp_storage::{Limits, WriterOwner, catalog::Request};
+use pp_storage::{
+    Limits, WriterOwner,
+    catalog::{NamingCommand, NamingProfile, Request},
+};
 use rusqlite::{Connection, types::Value as SqlValue};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -127,7 +130,7 @@ fn cases() -> Vec<Value> {
         .collect();
     assert_eq!(
         cases.len(),
-        35,
+        39,
         "the feature-off test must exercise the capture"
     );
     cases
@@ -185,6 +188,44 @@ fn catalog_refusals_retain_exact_details_in_both_feature_modes() {
             case["known_mismatch"][mode],
             json!(expected != case["node_preparation"].as_str().unwrap()),
             "{name}: mismatch classification"
+        );
+    }
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn saving_a_regex_node_22_rejects_follows_the_feature() {
+    let fixture = Fixture::new();
+    let owner = WriterOwner::open(&fixture.0, Limits::default()).unwrap().0;
+    let client = owner.local_source_catalog();
+    let mut profile = NamingProfile::default();
+    profile.quantity.regex = "(?i:(a))".into();
+    let before = fixture.snapshot();
+    let result = client.execute(Request::SaveNaming {
+        id: 1,
+        settings: NamingCommand::Override { profile },
+    });
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        let error = result.unwrap_err();
+        assert_eq!(error.to_string(), "Invalid quantity regex");
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(pp_storage::catalog::CatalogFailure::Input(_))
+        ));
+        assert_eq!(
+            fixture.snapshot(),
+            before,
+            "refused save changed stored data"
+        );
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    {
+        result.unwrap();
+        assert_ne!(
+            fixture.snapshot(),
+            before,
+            "feature-off save still accepts it"
         );
     }
     owner.shutdown().unwrap();
