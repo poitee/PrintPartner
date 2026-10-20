@@ -81,6 +81,12 @@ enum ReviewedEntry {
     ProposeDeleteSourceCategory { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_set_source_category")]
     ProposeSetSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_source")]
+    ProposeUpdateSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_source_naming")]
+    ProposeUpdateSourceNaming { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_import_source_files")]
+    ProposeImportSourceFiles { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -218,6 +224,34 @@ impl ReviewedEntry {
                     Table(AppSettings),
                     Table(BuildProfiles),
                     Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeUpdateSource { resources } => (
+                "tool.propose_update_source",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeUpdateSourceNaming { resources } => (
+                "tool.propose_update_source_naming",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeImportSourceFiles { resources } => (
+                "tool.propose_import_source_files",
+                resources,
+                BTreeSet::from([
                     Table(Projects),
                     Table(SourceDocs),
                     File(FileFamily::SourceWorkspace),
@@ -471,6 +505,9 @@ impl Declarations {
             "tool.propose_rename_source_category",
             "tool.propose_delete_source_category",
             "tool.propose_set_source_category",
+            "tool.propose_update_source",
+            "tool.propose_update_source_naming",
+            "tool.propose_import_source_files",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
