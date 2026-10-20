@@ -20,7 +20,8 @@ hosts. Those removed requirements are tracked in
 ## CI and local checks
 
 `.github/workflows/pr-evidence.yml` runs body lint on
-`pull_request` events, including body edits. It executes the protected
+`pull_request` events, including body edits. Draft PRs skip the job; marking
+a PR ready starts validation. It executes the protected
 default branch's checker with read-only permissions. This keeps the same
 repository evidence policy for stacked PRs whose base branches predate the
 checker. The PR body enters the checker through an environment variable;

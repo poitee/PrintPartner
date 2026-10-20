@@ -22,6 +22,7 @@ on:
       - ".github/workflows/**"
       - ".github/actions/**"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "web/**"
       - "fixtures/**"
@@ -48,6 +49,7 @@ concurrency:
 
 jobs:
   web:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     permissions:
       contents: read
       actions: read
@@ -114,6 +116,7 @@ jobs:
         run: npm run lint && npm run lint:dead && npm run typecheck && npm test
 
   web-build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     permissions:
       contents: read
       actions: read
@@ -171,6 +174,7 @@ jobs:
   # The OrcaSlicer base image is about 1.7 GB. When the Actions cache has evicted it, the
   # registry pull alone can take 4 minutes, so this job has its own time limit (GRE-638).
   sidecar:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -195,6 +199,7 @@ jobs:
             -B -m unittest discover -v -p 'test_*.py'
 
   docker:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     needs: [web, web-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10

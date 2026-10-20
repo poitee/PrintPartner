@@ -3,6 +3,7 @@ name: Desktop runtime
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - 'rust/**'
       - 'rust-toolchain.toml'
@@ -47,6 +48,7 @@ jobs:
   # Unit tests, clippy and fmt run in Rust cross-OS. This job keeps the proofs
   # that need the built server: lifecycle evidence, Python drivers and smoke tests.
   runtime:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     env:
@@ -175,6 +177,7 @@ jobs:
           if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
 
   source-artifacts:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
@@ -260,6 +263,7 @@ jobs:
           if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
 
   rust-verify:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:

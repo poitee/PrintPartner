@@ -14,6 +14,36 @@ EVENT = json.loads((ROOT / "scripts/fixtures/merge_group/checks_requested.json")
 
 
 class MergeGroupWorkflowTests(unittest.TestCase):
+    def test_drafts_skip_every_pr_ci_job_and_ready_events_restart_them(self):
+        guard = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+        count = 0
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+            events = workflow.get("on", {})
+            if not isinstance(events, dict) or "pull_request" not in events:
+                continue
+            count += 1
+            with self.subTest(workflow=path.name):
+                types = events["pull_request"]["types"]
+                self.assertIn("ready_for_review", types)
+                self.assertIn("converted_to_draft", types)
+                for job_id, job in workflow["jobs"].items():
+                    with self.subTest(job=job_id):
+                        condition = job.get("if", "")
+                        self.assertTrue(condition == guard or condition.startswith(f"({guard}) && ("),
+                                        f"{path.name}:{job_id} allocates a runner on draft PRs")
+        self.assertGreater(count, 0)
+
+    def test_required_workflows_still_emit_job_checks_for_drafts(self):
+        for filename, names in (("actionlint.yml", {"actionlint", "zizmor"}),
+                                ("rust-cross-os.yml", {"rust (linux)", "rust (windows)"})):
+            workflow = yaml.load((ROOT / ".github/workflows" / filename).read_text(),
+                                 Loader=yaml.BaseLoader)
+            self.assertNotIn("paths", workflow["on"]["pull_request"])
+            self.assertNotIn("paths-ignore", workflow["on"]["pull_request"])
+            self.assertTrue(names <= {job.get("name", job_id)
+                                      for job_id, job in workflow["jobs"].items()})
+
     def test_required_workflows_accept_merge_group_fixture(self):
         for filename in ("actionlint.yml", "rust-cross-os.yml", "desktop-native-macos.yml"):
             with self.subTest(workflow=filename):
@@ -47,9 +77,10 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                     job = jobs[job_id]
                     self.assertEqual(job.get("name", job_id), context)
                     self.assertEqual(job["needs"], "changes")
-                    self.assertEqual(job["if"], "${{ !cancelled() && "
+                    self.assertEqual(job["if"], "(github.event_name != 'pull_request' || "
+                                     "!github.event.pull_request.draft) && (!cancelled() && "
                                      "(needs.changes.result != 'success' || "
-                                     "needs.changes.outputs.relevant != 'false') }}")
+                                     "needs.changes.outputs.relevant != 'false'))")
                     checkout = next(step for step in job["steps"]
                                     if step.get("uses", "").startswith("actions/checkout@"))
                     self.assertNotIn("ref", checkout.get("with", {}))

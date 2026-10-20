@@ -122,6 +122,7 @@ for (const [name, change] of [
   ['trigger list', w => { w.on = ['push', 'pull_request']; }],
   ['missing PR trigger', w => { delete w.on.pull_request; }],
   ['closed PRs only', w => { w.on.pull_request.types = ['closed']; }],
+  ['missing synchronize event', w => { w.on.pull_request.types = ['opened', 'reopened', 'ready_for_review', 'converted_to_draft']; }],
   ['ignored paths', w => { w.on.push['paths-ignore'] = ['**']; }],
   ['removed coverage', w => { w.on.push.paths.shift(); }],
   ['negative path', w => { w.on.pull_request.paths.push('!rust/**'); }],

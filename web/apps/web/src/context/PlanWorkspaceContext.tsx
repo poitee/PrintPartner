@@ -671,6 +671,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
               const { queryAllowed } = spoolmanWorkflowAccess({ profileId, health: currentHealth, plan: currentFeatures });
               const cachedReviews = [true, false].map((includeExcluded) =>
                 queryClient.getQueryState<PlanReview>(queryKeys.planReview(profileId, includeExcluded, queryAllowed)));
+              // On a version tie keep the full Review first: the included-only one omits excluded Parts.
               cachedReviews.sort((a, b) =>
                 (b?.data?.accepted_basis?.plan_version ?? 0) - (a?.data?.accepted_basis?.plan_version ?? 0));
               const currentReview = cachedReviews.find((state) => state?.data)?.data ??

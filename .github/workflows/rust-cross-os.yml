@@ -31,6 +31,7 @@ env:
 
 jobs:
   changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -55,7 +56,7 @@ jobs:
     name: rust (linux)
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     env:
       RUST_OS: linux
@@ -200,7 +201,7 @@ jobs:
     name: rust (macos)
     needs: changes
     # macOS is opt-in on ready PRs, and always selected on non-PR events.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))))
     concurrency:
       group: rust-macos-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -222,7 +223,7 @@ jobs:
     name: rust (windows)
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
     # Enable only after the full Windows Rust smoke passes.
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.PP_LOCAL_WIN == 'true') && fromJSON('["self-hosted","windows","x64","pp-local-win"]') || 'windows-latest' }}
     env:
@@ -240,7 +241,7 @@ jobs:
 
   alert-macos-main:
     needs: [rust-linux, rust-macos, rust-windows]
-    if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (failure() && github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
