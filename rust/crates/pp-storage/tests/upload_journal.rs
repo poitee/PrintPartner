@@ -354,6 +354,24 @@ fn admission_refuses_unbound_inputs_and_targets_without_writing() {
 }
 
 #[test]
+fn admission_size_overflow_precedes_duplicate_paths_without_writing() {
+    let fixture = Fixture::open();
+    for second in ["other.stl", "part.stl", "Part.stl", "./PART.stl"] {
+        let files = vec![
+            file("part.stl", 1),
+            file(second, 1),
+            file("last.stl", u64::MAX),
+        ];
+        let request = admission("overflow", create("overflow"), &files);
+        assert_eq!(
+            fixture.refused(request, files, 0),
+            "Input size overflow",
+            "{second}"
+        );
+    }
+}
+
+#[test]
 fn node_upload_limits_match_the_journal_boundaries() {
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../../fixtures/parity/uploads/uploads.json"
@@ -376,6 +394,21 @@ fn node_upload_limits_match_the_journal_boundaries() {
             "Input limit",
         ),
         (
+            "over_limit_duplicate",
+            "Uploaded source exceeds the 256 MiB upload limit",
+            "Input limit",
+        ),
+        (
+            "over_limit_case_duplicate",
+            "Uploaded source exceeds the 256 MiB upload limit",
+            "Input limit",
+        ),
+        (
+            "over_limit_alias_duplicate",
+            "Uploaded source exceeds the 256 MiB upload limit",
+            "Input limit",
+        ),
+        (
             "parent",
             "File path escapes extraction directory: ../part.stl",
             "Invalid relative path",
@@ -392,7 +425,7 @@ fn node_upload_limits_match_the_journal_boundaries() {
         ),
     ];
     let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 22);
+    assert_eq!(cases.len(), 25);
     for case in cases {
         let id = case["id"].as_str().unwrap();
         let node = match &case["result"]["error"] {
