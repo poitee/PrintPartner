@@ -258,14 +258,27 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             {
                 return invalid();
             }
+            let mut block_end = false;
             if let Some((base, required)) = block {
                 let required = required.or_else(|| (!blank).then_some(line_indent));
-                if blank
-                    || required
-                        .is_some_and(|n| line_indent >= n && base.is_none_or(|b| line_indent > b))
+                // js-yaml ends every block scalar at a document marker.
+                let marker = line_indent == 0
+                    && matches!(chars.get(i..i + 3), Some(['-', '-', '-'] | ['.', '.', '.']))
+                    && chars.get(i + 3).copied().is_none_or(yaml_blank_break);
+                if !marker
+                    && (blank
+                        || required.is_some_and(|n| {
+                            line_indent >= n && base.is_none_or(|b| line_indent > b)
+                        }))
                 {
                     block = Some((base, required));
                     let end = line_end(&chars, i, budget)?;
+                    // js-yaml counts a root indentation indicator from column 0
+                    // and saphyr from column 1, and saphyr rejects a tab at
+                    // column 0, so each root block line moves one column deeper.
+                    if base.is_none() && start < end {
+                        output.push(' ');
+                    }
                     for c in &chars[start..end] {
                         output.push(*c);
                         if *c == '\u{e000}' {
@@ -282,6 +295,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     continue;
                 }
                 block = None;
+                block_end = true;
             }
             for c in &chars[start..i] {
                 output.push(*c);
@@ -325,6 +339,18 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 node = true;
                 quoted_end = false;
                 continue;
+            }
+            // js-yaml skips a comment or whitespace-only line that ends a block
+            // scalar, but saphyr rejects some indented comments and reads a tab
+            // as indentation. A `#` at column 0 ends the scalar in saphyr too.
+            if block_end && (plain_blank || chars.get(content) == Some(&'#')) {
+                output.truncate(output.len() - line_indent);
+                consumed += content - i;
+                i = content;
+                if plain_blank {
+                    output.push('#');
+                    continue;
+                }
             }
             // A comment line ends a plain scalar in js-yaml, but saphyr continues
             // the scalar across one led by a tab. Without its indent, saphyr
@@ -1459,6 +1485,13 @@ mod tests {
     fn yaml_tab_lines_match_js_yaml() {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-tab-lines-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_block_scalars_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-block-scalars-node.json"
         ));
     }
 
