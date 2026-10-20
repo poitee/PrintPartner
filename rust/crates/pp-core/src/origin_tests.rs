@@ -22,8 +22,20 @@ impl Fixture {
         Self(path)
     }
 
+    fn path(&self, name: &str) -> PathBuf {
+        for entry in std::fs::read_dir(&self.0).unwrap() {
+            let existing = entry.unwrap().file_name();
+            let existing = existing.to_str().unwrap();
+            assert!(
+                existing == name || existing.to_lowercase() != name.to_lowercase(),
+                "case-folding fixture collision: {existing:?} and {name:?}"
+            );
+        }
+        self.0.join(name)
+    }
+
     fn config(&self) -> PathBuf {
-        self.0.join("desktop.toml")
+        self.path("desktop.toml")
     }
 }
 
@@ -33,11 +45,35 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+#[should_panic(expected = "case-folding fixture collision")]
+fn fixture_rejects_historical_case_fold_collision() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.path("desktop.toml-0123456789abcdef.new"),
+        b"stale publication",
+    )
+    .unwrap();
+    fixture.path("desktop.toml-0123456789abcdeF.new");
+}
+
+#[test]
+fn fixture_allows_exact_reuse_and_distinct_mixed_case_names() {
+    let fixture = Fixture::new();
+    let stale = fixture.path("desktop.toml-0123456789abcdef.new");
+    std::fs::write(&stale, b"stale publication").unwrap();
+    assert_eq!(fixture.path("desktop.toml-0123456789abcdef.new"), stale);
+    let preserved = fixture.path("desktop.toml-1123456789abcdeF.new");
+    std::fs::write(&preserved, b"preserved bytes").unwrap();
+    assert_eq!(std::fs::read(stale).unwrap(), b"stale publication");
+    assert_eq!(std::fs::read(preserved).unwrap(), b"preserved bytes");
+}
+
 #[tokio::test]
 async fn ticket_t_12_linked_config_is_refused_without_replacement() {
     for present in [false, true] {
         let fixture = Fixture::new();
-        let target = fixture.0.join("external.toml");
+        let target = fixture.path("external.toml");
         if present {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             std::fs::write(
@@ -52,7 +88,7 @@ async fn ticket_t_12_linked_config_is_refused_without_replacement() {
         assert_eq!(std::fs::read_link(fixture.config()).unwrap(), target);
         assert_eq!(target.exists(), present);
         drop(owner);
-        assert!(!fixture.0.join(".desktop-owner.json").exists());
+        assert!(!fixture.path(".desktop-owner.json").exists());
     }
 }
 
@@ -126,7 +162,7 @@ async fn ticket_t_12_corrupt_config_preserves_data() {
         assert_eq!(std::fs::read(fixture.config()).unwrap(), bytes);
     }
     drop(owner);
-    assert!(!fixture.0.join(".desktop-owner.json").exists());
+    assert!(!fixture.path(".desktop-owner.json").exists());
 }
 
 #[tokio::test]
@@ -247,14 +283,10 @@ async fn occupied_origin_recovers_with_disclosure_and_preserves_portable_data() 
     let old_port = occupied.local_addr().unwrap().port();
     let old_bytes = format!("port = {old_port}\n");
     std::fs::write(fixture.config(), &old_bytes).unwrap();
-    let alias = fixture.0.join("hard-link.toml");
+    let alias = fixture.path("hard-link.toml");
     std::fs::hard_link(fixture.config(), &alias).unwrap();
-    std::fs::write(fixture.0.join("print-partner.db"), b"opaque database").unwrap();
-    std::fs::write(
-        fixture.0.join("browser-preferences.json"),
-        b"opaque sidecar",
-    )
-    .unwrap();
+    std::fs::write(fixture.path("print-partner.db"), b"opaque database").unwrap();
+    std::fs::write(fixture.path("browser-preferences.json"), b"opaque sidecar").unwrap();
     let owner = StorageLease::acquire(&fixture.0).unwrap();
     let (listener, change) = bind_origin(&owner).await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -295,11 +327,11 @@ async fn occupied_origin_recovers_with_disclosure_and_preserves_portable_data() 
     assert_eq!(listener.local_addr().unwrap(), address);
     assert_eq!(change, None);
     assert_eq!(
-        std::fs::read(fixture.0.join("print-partner.db")).unwrap(),
+        std::fs::read(fixture.path("print-partner.db")).unwrap(),
         b"opaque database"
     );
     assert_eq!(
-        std::fs::read(fixture.0.join("browser-preferences.json")).unwrap(),
+        std::fs::read(fixture.path("browser-preferences.json")).unwrap(),
         b"opaque sidecar"
     );
     assert_no_temporary(&fixture);
@@ -371,7 +403,7 @@ fn replacement_recheck_refuses_changed_content_identity_and_links() {
                     if race == "content" {
                         std::fs::write(fixture.config(), b"port = 23456\n")?;
                     } else {
-                        std::fs::rename(fixture.config(), fixture.0.join("old"))?;
+                        std::fs::rename(fixture.config(), fixture.path("old"))?;
                         match race {
                             "identity" => std::fs::write(fixture.config(), b"port = 12345\n")?,
                             "link" => symlink("old", fixture.config())?,
@@ -388,7 +420,7 @@ fn replacement_recheck_refuses_changed_content_identity_and_links() {
             assert_eq!(std::fs::read(fixture.config()).unwrap(), b"port = 23456\n");
         } else {
             assert_eq!(
-                std::fs::read(fixture.0.join("old")).unwrap(),
+                std::fs::read(fixture.path("old")).unwrap(),
                 b"port = 12345\n"
             );
         }
@@ -472,7 +504,7 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
             ),
         ];
         for (name, bytes) in portable {
-            std::fs::write(fixture.0.join(name), bytes).unwrap();
+            std::fs::write(fixture.path(name), bytes).unwrap();
         }
         run_crash_child(
             "origin_tests::ticket_t_12_origin_crash_relaunch_reuses_complete_published_config",
@@ -510,7 +542,7 @@ async fn ticket_t_12_origin_crash_relaunch_reuses_complete_published_config() {
         assert!(TcpListener::bind(address).await.is_err());
         assert_eq!(std::fs::read(fixture.config()).unwrap(), expected);
         for (name, bytes) in portable {
-            assert_eq!(std::fs::read(fixture.0.join(name)).unwrap(), bytes);
+            assert_eq!(std::fs::read(fixture.path(name)).unwrap(), bytes);
         }
     }
 }
@@ -550,7 +582,7 @@ fn run_crash_child(test: &str, fixture: &Fixture, case: usize, new_bytes: &str) 
     };
     // A child that failed before taking the lease leaves no runtime record;
     // let the status assertions below report that failure instead.
-    if let Ok(runtime) = std::fs::read(fixture.0.join("crash-runtime")) {
+    if let Ok(runtime) = std::fs::read(fixture.path("crash-runtime")) {
         std::fs::remove_dir(std::ffi::OsStr::from_bytes(&runtime)).unwrap();
     }
     assert!(!timed_out, "publication child exceeded its crash deadline");
@@ -605,7 +637,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
             ),
         ];
         for (name, bytes) in portable {
-            std::fs::write(fixture.0.join(name), bytes).unwrap();
+            std::fs::write(fixture.path(name), bytes).unwrap();
         }
         run_crash_child(
             "origin_tests::ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config",
@@ -661,7 +693,7 @@ async fn ticket_t_12_first_origin_crash_relaunch_publishes_one_complete_config()
             expected.as_bytes()
         );
         for (name, bytes) in portable {
-            assert_eq!(std::fs::read(fixture.0.join(name)).unwrap(), bytes);
+            assert_eq!(std::fs::read(fixture.path(name)).unwrap(), bytes);
         }
     }
 }
@@ -750,7 +782,7 @@ async fn ticket_t_12_origin_cleanup_removes_only_owned_regular_temporary_files()
         if config != "missing" {
             std::fs::write(fixture.config(), &bytes).unwrap();
         }
-        let stale = fixture.0.join("desktop.toml-0123456789abcdef.new");
+        let stale = fixture.path("desktop.toml-0123456789abcdef.new");
         std::fs::write(&stale, b"stale publication").unwrap();
         let preserved = [
             "desktop.toml-0123456789abcde.new",
@@ -763,16 +795,16 @@ async fn ticket_t_12_origin_cleanup_removes_only_owned_regular_temporary_files()
             "browser-preferences.json",
         ];
         for name in preserved {
-            std::fs::write(fixture.0.join(name), b"preserved bytes").unwrap();
+            std::fs::write(fixture.path(name), b"preserved bytes").unwrap();
         }
-        let directory = fixture.0.join("desktop.toml-1111111111111111.new");
+        let directory = fixture.path("desktop.toml-1111111111111111.new");
         std::fs::create_dir(&directory).unwrap();
         std::fs::write(directory.join("child"), b"directory contents").unwrap();
-        let linked = fixture.0.join("desktop.toml-2222222222222222.new");
+        let linked = fixture.path("desktop.toml-2222222222222222.new");
         symlink("print-partner.db", &linked).unwrap();
-        let dangling = fixture.0.join("desktop.toml-3333333333333333.new");
+        let dangling = fixture.path("desktop.toml-3333333333333333.new");
         symlink("absent", &dangling).unwrap();
-        let fifo = fixture.0.join("desktop.toml-4444444444444444.new");
+        let fifo = fixture.path("desktop.toml-4444444444444444.new");
         let fifo_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
         let owner = StorageLease::acquire(&fixture.0).unwrap();
@@ -798,7 +830,7 @@ async fn ticket_t_12_origin_cleanup_removes_only_owned_regular_temporary_files()
         }
         for name in preserved {
             assert_eq!(
-                std::fs::read(fixture.0.join(name)).unwrap(),
+                std::fs::read(fixture.path(name)).unwrap(),
                 b"preserved bytes"
             );
         }
