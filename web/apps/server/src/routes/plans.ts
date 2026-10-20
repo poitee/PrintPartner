@@ -1,8 +1,8 @@
-import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { join } from "node:path";
 import { z } from "zod";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type {
   AcceptedProfileProgress,
   AcceptedProfileSummary,
