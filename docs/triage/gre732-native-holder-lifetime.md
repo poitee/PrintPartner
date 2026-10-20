@@ -62,3 +62,29 @@ discard it. Portable executable cases refuse each setup operation with two
 statuses and assert the exact failure report. A forwarded native attach refusal
 also exercises that pipeline. Production cleanup, retries and the repeated
 native assertions are unchanged.
+
+Main [run 39434456705](https://github.com/poitee/PrintPartner/actions/runs/39434456705/job/118668277513)
+shows a successful forced APFS unmount followed by three whole-disk eject EBUSY
+responses after the Python holder closed. The registered DiskImages helper is
+an expected backing-file owner. Its presence alone does not identify the eject
+blocker. Two `diskutil info` probes timed out; those exceptions replaced real
+`hdiutil` status 16 with wrapper status 1 and prevented the later probes.
+
+The native test now records the real command status without running heavy
+failure probes between retries. It records an owned-image and IOKit baseline
+before the first force and collects a matching census after the workflow on
+success and failure. Each post-workflow probe has a deadline, records errors,
+and lets later probes continue. Receipts include holder process state, block
+and raw device open files, IOKit image-driver/media trees, and device-filtered
+kernel, FSKit, DiskImages and DiskArbitration logs. CI uploads these receipts,
+the workflow output and command trace outside the disposable fixture root even
+when an assertion fails. Each probe output is capped at 1 MiB.
+
+Apple's [DiskArbitration source](https://github.com/apple-oss-distributions/DiskArbitration/blob/main/diskarbitrationd/DARequest.c)
+opens the raw device for `DKIOCEJECT` and searches raw paths for process owners.
+That source version suggests the missing `/dev/rdisk*` probes may identify an
+owner missed by block-device inspection. It does not establish the blocker in
+the hosted runner's implementation. These changes repair the diagnostic status
+boundary and collect missing evidence; they do not establish or fix the eject
+cause. Production cleanup and the native no-warning and detached-image
+assertions remain unchanged.

@@ -11,6 +11,8 @@ import textwrap
 import unittest
 from unittest.mock import patch
 
+from native_image_diagnostics import after_workflow, probe, retain
+
 
 WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/desktop-native-macos.yml'
 STEP = '      - name: Verify source Unicode and case regressions on macOS\n'
@@ -59,36 +61,16 @@ if native:
     command = [json.loads(os.environ['REAL_TOOLS'])[name], *args]
     if name == 'hdiutil' and '-force' in args:
         assert (root / 'closed').exists(), 'holder was not closed before force'
+        sys.path.insert(0, os.environ['DIAGNOSTICS_MODULE'])
+        from native_image_diagnostics import before_force, force_status
+        before_force(root, json.loads(os.environ['REAL_TOOLS']))
         print('force requested', flush=True)
         command.insert(-1, '-verbose')
     status = subprocess.call(command)
+    if name == 'hdiutil' and '-force' in args:
+        force_status(root, command, status)
     if name == 'hdiutil' and args[0] in ('create', 'attach') and status:
         print(f'hdiutil {args[0]} exited with status {status}', file=sys.stderr, flush=True)
-    if name == 'hdiutil' and '-force' in args and status:
-        real = json.loads(os.environ['REAL_TOOLS'])
-        image_path = next(root.glob('pp-source-case.*/fixtures.sparseimage'))
-        info = subprocess.run([real['hdiutil'], 'info', '-plist'],
-                              stdout=subprocess.PIPE, timeout=10)
-        if info.returncode == 0:
-            images = plistlib.loads(info.stdout).get('images', [])
-            for image in images:
-                if pathlib.Path(image['image-path']).resolve() != image_path.resolve():
-                    continue
-                print('Owned image after failed force:', image, flush=True)
-                devices = [item['dev-entry'] for item in image.get('system-entities', [])
-                           if 'dev-entry' in item]
-                subprocess.run([real['lsof'], '-nP', str(image_path), *devices], timeout=10)
-                subprocess.run(['sudo', '-n', real['lsof'], '-nP', str(image_path), *devices],
-                               timeout=10)
-                for device in devices:
-                    subprocess.run(['diskutil', 'info', device], timeout=3)
-                predicate = 'process == "diskarbitrationd" AND (' + ' OR '.join(
-                    f'eventMessage CONTAINS "{pathlib.Path(device).name}"'
-                    for device in devices) + ')'
-                subprocess.run(['sudo', '-n', '/usr/bin/log', 'show', '--last', '1m',
-                                '--style', 'compact', '--predicate', predicate], timeout=15)
-        subprocess.run(['ps', '-p', (root / 'holder.pid').read_text(),
-                        '-o', 'pid,ppid,state,command'], timeout=10)
     if name == 'lsof':
         (root / 'release').touch()
         deadline = time.monotonic() + 10
@@ -150,12 +132,27 @@ class CleanupTest(unittest.TestCase):
                    TEST_STATUS=str(status), DETACH_SUCCEEDS=str(succeeds),
                    LSOF_STATUS=str(diagnostic), FORCE_STATUS=str(force),
                    REFUSE_SETUP=refuse_setup, SETUP_STATUS=str(setup_status),
-                   NATIVE=str(int(native)), REAL_TOOLS=json.dumps(real))
+                   NATIVE=str(int(native)), REAL_TOOLS=json.dumps(real),
+                   DIAGNOSTICS_MODULE=str(Path(__file__).resolve().parent))
         script = root / 'step.sh'
         script.write_text(workflow_body())
-        result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', str(script)],
-                                env=env, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, timeout=90)
+        try:
+            result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', str(script)],
+                                    env=env, text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, timeout=90)
+        finally:
+            if native:
+                try:
+                    after_workflow(root, real)
+                except (OSError, ValueError) as error:
+                    print(f'Native diagnostic collection failed: {error}', flush=True)
+                evidence = os.environ.get('PP_NATIVE_IMAGE_EVIDENCE')
+                if evidence:
+                    try:
+                        retain(root, evidence, result.stdout if 'result' in locals()
+                               else 'Workflow did not complete')
+                    except OSError as error:
+                        print(f'Native diagnostic retention failed: {error}', flush=True)
         cargo_exit = root / 'cargo-exit'
         if (result.returncode != status or not cargo_exit.exists()
                 or cargo_exit.read_text() != str(status)):
@@ -391,7 +388,8 @@ class NativeHolderProtocolTest(unittest.TestCase):
                 tool.chmod(0o755)
                 real[name] = str(tool)
             env = dict(os.environ, RUNNER_TEMP=directory, TMPDIR=directory,
-                       NATIVE='1', TEST_STATUS='23', REAL_TOOLS=json.dumps(real))
+                       NATIVE='1', TEST_STATUS='23', REAL_TOOLS=json.dumps(real),
+                       DIAGNOSTICS_MODULE=str(Path(__file__).resolve().parent))
 
             def run(name, *args):
                 return subprocess.run([sys.executable, str(root / name), *args], env=env,
@@ -416,6 +414,85 @@ class NativeHolderProtocolTest(unittest.TestCase):
                         os.kill(int(pid.read_text()), signal.SIGTERM)
                     except ProcessLookupError:
                         pass
+
+
+class NativeDiagnosticTest(unittest.TestCase):
+    def test_missing_probe_executable_is_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(probe(root, 'missing', [str(root / 'absent')]), b'')
+            self.assertIn('No such file', json.loads((root / 'missing.json').read_text())['error'])
+            self.assertEqual(probe(root, 'later', [sys.executable, '-c', 'print("continued")']),
+                             b'continued\n')
+
+    def test_force_status_survives_timed_out_probe_and_retains_success_baseline(self):
+        for status in (0, 16):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / 'pp-source-case.fixture/fixtures.sparseimage'
+                image.parent.mkdir()
+                image.touch()
+                (root / 'closed').touch()
+                (root / 'holder.pid').write_text(str(os.getpid()))
+                attached = root / 'attached'
+                attached.touch()
+                raw = plistlib.dumps({'images': [{'image-path': str(image), 'hdid-pid': 42,
+                                      'system-entities': [{'dev-entry': '/dev/disk42'}]}]})
+                tools = root / 'bin'
+                tools.mkdir()
+                hdiutil = tools / 'real-hdiutil'
+                hdiutil.write_text(f'#!{sys.executable}\nimport pathlib, sys\n'
+                                   f'attached = pathlib.Path({str(attached)!r})\n'
+                                   'if sys.argv[1] == "info":\n'
+                                   f'    sys.stdout.buffer.write({raw!r} if attached.exists() else '
+                                   f'{plistlib.dumps({"images": []})!r})\n'
+                                   'else:\n'
+                                   + ('    attached.unlink()\n' if status == 0 else '')
+                                   + f'    raise SystemExit({status})\n')
+                hdiutil.chmod(0o755)
+                for name, body in (
+                    ('diskutil', 'import time; print("partial diskutil", flush=True); time.sleep(4)'),
+                    ('ioreg', 'print("owned disk42 open clients")'),
+                    ('lsof', 'raise SystemExit(1)'),
+                    ('sudo', 'print("later privileged probe")'),
+                ):
+                    tool = tools / name
+                    tool.write_text(f'#!{sys.executable}\n{body}\n')
+                    tool.chmod(0o755)
+                driver = tools / 'hdiutil'
+                driver.write_text(f'#!{sys.executable}\n' + textwrap.dedent(TOOLS))
+                driver.chmod(0o755)
+                real = {'hdiutil': str(hdiutil), 'lsof': str(tools / 'lsof')}
+                env = dict(os.environ, RUNNER_TEMP=directory, NATIVE='1',
+                           REAL_TOOLS=json.dumps(real), PATH=f'{tools}:{os.environ["PATH"]}',
+                           DIAGNOSTICS_MODULE=str(Path(__file__).resolve().parent))
+                result = subprocess.run([str(driver), 'detach', '-force', '/dev/disk42'],
+                                        env=env, stdout=subprocess.PIPE, text=True, timeout=10)
+                self.assertEqual((result.returncode, result.stdout), (status, 'force requested\n'))
+                self.assertEqual(json.loads((root / 'diagnostics/force-status.jsonl').read_text())['status'], status)
+                with patch.dict(os.environ, PATH=env['PATH']):
+                    after_workflow(root, real)
+                before = root / 'diagnostics/before'
+                after = root / 'diagnostics/after'
+                self.assertEqual(json.loads((before / 'owned.json').read_text())[0]['hdid-pid'], 42)
+                self.assertEqual(len(json.loads((after / 'owned.json').read_text())), int(status != 0))
+                self.assertEqual(json.loads((after / 'disk42-diskutil.json').read_text())['error'],
+                                 'TimeoutExpired')
+                self.assertEqual((after / 'disk42-diskutil.out').read_text(), 'partial diskutil\n')
+                self.assertEqual((after / 'media-iokit.out').read_text(), 'owned disk42 open clients\n')
+                self.assertEqual((after / 'system-log.out').read_text(), 'later privileged probe\n')
+                holder_command = json.loads((after / 'holders.json').read_text())['command']
+                self.assertEqual(holder_command[-2:], ['/dev/disk42', '/dev/rdisk42'])
+                self.assertTrue((before / 'holder.json').is_file())
+                self.assertTrue((after / 'holder.json').is_file())
+                with tempfile.TemporaryDirectory() as evidence:
+                    destination = retain(root, evidence, result.stdout)
+                    shutil.rmtree(root / 'diagnostics')
+                    self.assertEqual((destination / 'workflow.txt').read_text(), 'force requested\n')
+                    self.assertEqual(json.loads((destination / 'trace').read_text()),
+                                     ['hdiutil', 'detach', '-force', '/dev/disk42'])
+                    self.assertTrue((destination / 'before/owned.json').is_file())
+                    self.assertTrue((destination / 'after/system-log.json').is_file())
 
 
 if __name__ == '__main__':
