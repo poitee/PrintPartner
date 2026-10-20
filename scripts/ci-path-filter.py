@@ -14,6 +14,7 @@ def relevant(path, kind):
         return True
     if kind == "native" and (path.startswith(".cursor/skills/verify-print-partner-rust/helpers/")
                              or path in {".github/workflows/desktop-native-macos.yml",
+                                         "scripts/native_image_diagnostics.py",
                                          "scripts/test_native_image_cleanup.py"}):
         return True
     if kind == "actions":
