@@ -409,12 +409,22 @@ impl ReviewedEntry {
             Self::ListSources { resources } => (
                 "tool.list_sources",
                 resources,
-                BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]),
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
             Self::ListSourceCategories { resources } => (
                 "tool.list_source_categories",
                 resources,
-                BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]),
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
         };
         let count = resources.len();

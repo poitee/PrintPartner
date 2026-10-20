@@ -146,14 +146,17 @@ fn rollback_admits_only_when_node_reads_every_written_format() {
             ]))
         );
     }
-    assert_eq!(
-        index.admit_rollback("tool.list_sources"),
-        Ok(&BTreeSet::from([
-            Table(Projects),
-            Table(SourceDocs),
-            Table(AppSettings)
-        ]))
-    );
+    for participant in ["tool.list_sources", "tool.list_source_categories"] {
+        assert_eq!(
+            index.admit_rollback(participant),
+            Ok(&BTreeSet::from([
+                Table(Projects),
+                Table(SourceDocs),
+                Table(AppSettings),
+                File(FileFamily::SourceWorkspace),
+            ]))
+        );
+    }
     assert_eq!(
         index.admit_rollback("tool.preview_source_naming"),
         Ok(&BTreeSet::from([Table(Projects), Table(AppSettings)]))
@@ -168,7 +171,12 @@ fn rollback_admits_only_when_node_reads_every_written_format() {
     );
 
     value["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(2);
-    for participant in ["tool.read_source_file", "tool.search_source_files"] {
+    for participant in [
+        "tool.read_source_file",
+        "tool.search_source_files",
+        "tool.list_sources",
+        "tool.list_source_categories",
+    ] {
         assert_eq!(
             admit(&value).unwrap().admit_rollback(participant),
             Err(AdmissionError::IncompatibleLiveFormat {
