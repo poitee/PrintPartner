@@ -1,0 +1,200 @@
+{
+  "generatedBy": "node fixtures/parity/publication-row-text/generate.mjs",
+  "cases": [
+    {
+      "id": "plan_revision_input_sets-ascii-at",
+      "table": "plan_revision_input_sets",
+      "row": {
+        "tenantId": "fixtures",
+        "profileId": 1,
+        "inputSetDigest": "e197f3b998d7f36e0e5da08d9f94434f25687ca0a0126ddafba62226117e1e69",
+        "expectedInputCount": 0,
+        "formatVersion": 2,
+        "recordedAt": {
+          "repeat": "a",
+          "count": 32732
+        },
+        "publishedAt": {
+          "repeat": "a",
+          "count": 32732
+        },
+        "fixtureExtraText": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted"
+    },
+    {
+      "id": "plan_revision_inputs-ascii-at",
+      "table": "plan_revision_inputs",
+      "row": {
+        "tenant_id": "fixtures",
+        "input_set_id": 1,
+        "source_id": 1,
+        "source_layer": {
+          "repeat": "a",
+          "count": 65455
+        },
+        "layer_order": 0,
+        "tracking_kind": "untracked",
+        "source_revision_id": null,
+        "manifest_digest": null,
+        "effective_naming_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fixture_extra_text": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted"
+    },
+    {
+      "id": "plan_revision_input_sets-ascii-over",
+      "table": "plan_revision_input_sets",
+      "row": {
+        "tenantId": "fixtures",
+        "profileId": 1,
+        "inputSetDigest": "e197f3b998d7f36e0e5da08d9f94434f25687ca0a0126ddafba62226117e1e69",
+        "expectedInputCount": 0,
+        "formatVersion": 2,
+        "recordedAt": {
+          "repeat": "a",
+          "count": 32732,
+          "suffix": "x"
+        },
+        "publishedAt": {
+          "repeat": "a",
+          "count": 32732,
+          "suffix": "x"
+        },
+        "fixtureExtraText": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted_operational_row_text_limit"
+    },
+    {
+      "id": "plan_revision_inputs-ascii-over",
+      "table": "plan_revision_inputs",
+      "row": {
+        "tenant_id": "fixtures",
+        "input_set_id": 1,
+        "source_id": 1,
+        "source_layer": {
+          "repeat": "a",
+          "count": 65455,
+          "suffix": "x"
+        },
+        "layer_order": 0,
+        "tracking_kind": "untracked",
+        "source_revision_id": null,
+        "manifest_digest": null,
+        "effective_naming_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fixture_extra_text": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted_operational_row_text_limit"
+    },
+    {
+      "id": "plan_revision_input_sets-utf8-at",
+      "table": "plan_revision_input_sets",
+      "row": {
+        "tenantId": "fixtures",
+        "profileId": 1,
+        "inputSetDigest": "e197f3b998d7f36e0e5da08d9f94434f25687ca0a0126ddafba62226117e1e69",
+        "expectedInputCount": 0,
+        "formatVersion": 2,
+        "recordedAt": {
+          "repeat": "é",
+          "count": 16366
+        },
+        "publishedAt": {
+          "repeat": "é",
+          "count": 16366
+        },
+        "fixtureExtraText": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted"
+    },
+    {
+      "id": "plan_revision_inputs-utf8-at",
+      "table": "plan_revision_inputs",
+      "row": {
+        "tenant_id": "fixtures",
+        "input_set_id": 1,
+        "source_id": 1,
+        "source_layer": {
+          "repeat": "😀",
+          "count": 16363,
+          "suffix": "éx"
+        },
+        "layer_order": 0,
+        "tracking_kind": "untracked",
+        "source_revision_id": null,
+        "manifest_digest": null,
+        "effective_naming_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fixture_extra_text": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted"
+    },
+    {
+      "id": "plan_revision_input_sets-utf8-over",
+      "table": "plan_revision_input_sets",
+      "row": {
+        "tenantId": "fixtures",
+        "profileId": 1,
+        "inputSetDigest": "e197f3b998d7f36e0e5da08d9f94434f25687ca0a0126ddafba62226117e1e69",
+        "expectedInputCount": 0,
+        "formatVersion": 2,
+        "recordedAt": {
+          "repeat": "é",
+          "count": 16366,
+          "suffix": "x"
+        },
+        "publishedAt": {
+          "repeat": "é",
+          "count": 16366,
+          "suffix": "x"
+        },
+        "fixtureExtraText": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted_operational_row_text_limit"
+    },
+    {
+      "id": "plan_revision_inputs-utf8-over",
+      "table": "plan_revision_inputs",
+      "row": {
+        "tenant_id": "fixtures",
+        "input_set_id": 1,
+        "source_id": 1,
+        "source_layer": {
+          "repeat": "😀",
+          "count": 16363,
+          "suffix": "éxx"
+        },
+        "layer_order": 0,
+        "tracking_kind": "untracked",
+        "source_revision_id": null,
+        "manifest_digest": null,
+        "effective_naming_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fixture_extra_text": {
+          "repeat": "😀",
+          "count": 16385
+        }
+      },
+      "expected": "accepted_operational_row_text_limit"
+    }
+  ]
+}

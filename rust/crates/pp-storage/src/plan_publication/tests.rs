@@ -130,6 +130,72 @@ fn preparation_text_limit_counts_node_fields_as_utf8() {
 }
 
 #[test]
+fn inserted_rows_match_node_publication_text_boundaries() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../fixtures/parity/publication-row-text/node.json"
+    ))
+    .unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let table = case["table"].as_str().unwrap();
+        let mut row = case["row"].clone();
+        for value in row.as_object_mut().unwrap().values_mut() {
+            if value.is_object() {
+                *value = json!(format!(
+                    "{}{}",
+                    value["repeat"]
+                        .as_str()
+                        .unwrap()
+                        .repeat(value["count"].as_u64().unwrap() as usize),
+                    value["suffix"].as_str().unwrap_or("")
+                ));
+            }
+        }
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let columns = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|key| model::snake(key))
+            .collect::<Vec<_>>()
+            .join(",");
+        tx.execute_batch(&format!("CREATE TABLE {table}({columns})"))
+            .unwrap();
+        let result = super::insert(&tx, table, &row, false);
+        match case["expected"].as_str().unwrap() {
+            "accepted" => {
+                result.unwrap_or_else(|err| panic!("{}: {err}", case["id"]));
+                let extra: String = tx
+                    .query_row(
+                        &format!("SELECT fixture_extra_text FROM {table}"),
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(extra, "😀".repeat(16385), "{}", case["id"]);
+            }
+            "accepted_operational_row_text_limit" => {
+                assert_eq!(
+                    error(result),
+                    "Accepted operational row text limit",
+                    "{}",
+                    case["id"]
+                );
+                let count: i64 = tx
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(count, 0, "{}", case["id"]);
+            }
+            outcome => panic!("Unknown Node outcome: {outcome}"),
+        }
+    }
+}
+
+#[test]
 fn inserted_rows_count_only_node_named_text_fields() {
     for (table, fields, excluded) in [
         (
