@@ -192,33 +192,36 @@ impl Fixture {
     }
 
     fn snapshot(&self) -> Value {
-        let connection = self.connection();
-        let rows = |sql: &str| -> Vec<Vec<String>> {
-            let mut statement = connection.prepare(sql).unwrap();
-            let width = statement.column_count();
-            statement
-                .query_map([], |row| {
-                    (0..width)
-                        .map(|index| row.get::<_, rusqlite::types::Value>(index))
-                        .map(|value| value.map(|value| format!("{value:?}")))
-                        .collect()
-                })
-                .unwrap()
-                .collect::<rusqlite::Result<_>>()
-                .unwrap()
-        };
-        serde_json::json!([
-            rows("SELECT * FROM source_sync_batches"),
-            rows("SELECT * FROM source_sync_targets ORDER BY ordinal"),
-            rows("SELECT document FROM durable_jobs"),
-            rows("SELECT count(*) FROM durable_job_history"),
-        ])
+        database_snapshot(&self.connection())
     }
 
     fn begin_work(&self, id: i64) -> Result<catalog::SourceWorkLease> {
         self.catalog
             .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
     }
+}
+
+fn database_snapshot(connection: &Connection) -> Value {
+    let rows = |sql: &str| -> Vec<Vec<String>> {
+        let mut statement = connection.prepare(sql).unwrap();
+        let width = statement.column_count();
+        statement
+            .query_map([], |row| {
+                (0..width)
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .map(|value| value.map(|value| format!("{value:?}")))
+                    .collect()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    };
+    serde_json::json!([
+        rows("SELECT * FROM source_sync_batches"),
+        rows("SELECT * FROM source_sync_targets ORDER BY ordinal"),
+        rows("SELECT document FROM durable_jobs"),
+        rows("SELECT count(*) FROM durable_job_history"),
+    ])
 }
 
 fn local(target: NextSyncTarget) -> SyncTargetLease {
@@ -662,7 +665,286 @@ fn cancel_and_revoked_authority_close_the_batch() {
 }
 
 #[test]
-fn cancel_closes_an_open_batch_after_worker_advance_refusal() {
+fn open_authority_refusal_prunes_terminal_jobs() {
+    let sync = Fixture::new();
+    let id = sync.source("Pending");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let ClaimedAttempt { lease, .. } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    sync.worker.open_source_sync(&lease).unwrap();
+    let mut connection = sync.connection();
+    let tx = connection.transaction().unwrap();
+    let mut older = jobs::load(&tx, &job_id).unwrap().unwrap();
+    older.job_id = "older-terminal".into();
+    older.state = PersistentState::Failed;
+    older.worker = None;
+    older.fence = None;
+    older.lease_until = None;
+    jobs::save(&tx, &mut older, "test_terminal").unwrap();
+    tx.execute(
+        "UPDATE durable_jobs SET updated=?1 WHERE id=?2",
+        params![now() - 86401, older.job_id],
+    )
+    .unwrap();
+    tx.execute("DELETE FROM sessions", []).unwrap();
+    tx.commit().unwrap();
+    let error = sync.worker.open_source_sync(&lease).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<auth::AuthorityFailure>(),
+        Some(&auth::AuthorityFailure::CredentialInvalid)
+    );
+    assert_sync_refusal(&sync, &job_id, &lease, false, true);
+    let tx = connection.transaction().unwrap();
+    assert!(jobs::load(&tx, "older-terminal").unwrap().is_none());
+    assert_eq!(
+        tx.query_row("SELECT count(*) FROM durable_jobs", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(tx);
+    assert_refusal_survives_reopen(sync, &job_id);
+}
+
+#[test]
+fn open_and_advance_authority_refusal_halts_without_claimed_targets() {
+    for (opened, advance) in [(false, false), (true, false), (true, true)] {
+        let sync = Fixture::new();
+        let id = sync.source("Pending");
+        let job_id = sync.enqueue(Some(vec![id as u64]));
+        let ClaimedAttempt { mut lease, .. } =
+            sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+        if opened {
+            sync.worker.open_source_sync(&lease).unwrap();
+        }
+        sync.connection()
+            .execute("DELETE FROM sessions", [])
+            .unwrap();
+        let error = if advance {
+            sync.worker
+                .update(&mut lease, WorkerOperation::Heartbeat)
+                .unwrap_err()
+        } else {
+            sync.worker.open_source_sync(&lease).unwrap_err()
+        };
+        assert_eq!(
+            error.downcast_ref::<auth::AuthorityFailure>(),
+            Some(&auth::AuthorityFailure::CredentialInvalid)
+        );
+        let refused = sync.job(&job_id);
+        assert_eq!(refused.state, PersistentState::Failed);
+        assert_sync_refusal(&sync, &job_id, &lease, false, opened);
+        assert_refusal_survives_reopen(sync, &job_id);
+    }
+}
+
+#[test]
+fn open_and_advance_authority_refusals_preserve_claimed_target_evidence() {
+    for at_open in [false, true] {
+        let mut sync = Fixture::new();
+        let first = sync.source("Claimed");
+        let second = sync.source("Pending");
+        let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+        let mut lease = sync.open();
+        let mut target = Some(local(sync.next(&mut lease)));
+        let evidence = sync.connection().query_row(
+            "SELECT parent_generation,attempt_worker,attempt_fence_digest,reservation_incarnation,reservation_token,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| (0..10).map(|index| row.get::<_, rusqlite::types::Value>(index)).collect::<rusqlite::Result<Vec<_>>>(),
+        ).unwrap();
+        if at_open {
+            drop(target.take());
+            let Fixture {
+                owner, root, token, ..
+            } = sync;
+            owner.shutdown().unwrap();
+            let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+            let catalog = owner
+                .source_catalog_with_policy(
+                    catalog::Credentials::Session(auth::Secret::new(token.clone())),
+                    policy(),
+                )
+                .unwrap();
+            let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+            lease = worker.claim_kind(JobKind::Sync).unwrap().unwrap().lease;
+            sync = Fixture {
+                owner,
+                root,
+                token,
+                catalog,
+                worker,
+            };
+        }
+        sync.connection()
+            .execute("DELETE FROM sessions", [])
+            .unwrap();
+        let error = if at_open {
+            sync.worker.open_source_sync(&lease).unwrap_err()
+        } else {
+            sync.worker
+                .update(&mut lease, WorkerOperation::Progress(10))
+                .unwrap_err()
+        };
+        assert_eq!(
+            error.downcast_ref::<auth::AuthorityFailure>(),
+            Some(&auth::AuthorityFailure::CredentialInvalid)
+        );
+        assert_sync_refusal(&sync, &job_id, &lease, true, true);
+        let retained = sync.connection().query_row(
+            "SELECT parent_generation,attempt_worker,attempt_fence_digest,reservation_incarnation,reservation_token,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| (0..10).map(|index| row.get::<_, rusqlite::types::Value>(index)).collect::<rusqlite::Result<Vec<_>>>(),
+        ).unwrap();
+        assert_eq!(retained, evidence);
+        assert_eq!(
+            sync.targets(&job_id),
+            [
+                (
+                    first,
+                    "reconciliation_required".into(),
+                    Some("authority_refused".into())
+                ),
+                (second, "not_run".into(), Some("batch_halt".into())),
+            ]
+        );
+        if !at_open {
+            sync.login();
+            sync.catalog = sync
+                .owner
+                .source_catalog_with_policy(
+                    catalog::Credentials::Session(auth::Secret::new(sync.token.clone())),
+                    policy(),
+                )
+                .unwrap();
+            let busy = sync.begin_work(first).err().unwrap();
+            assert!(busy.downcast_ref::<SourceBusy>().is_some());
+        }
+        drop(target);
+        assert_refusal_survives_reopen(sync, &job_id);
+    }
+}
+
+#[test]
+fn unrecognized_open_and_advance_failures_leave_the_batch_unchanged() {
+    let sync = Fixture::new();
+    let id = sync.source("Claimed");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    sync.connection()
+        .execute("ALTER TABLE sessions RENAME TO unavailable_sessions", [])
+        .unwrap();
+    let before = sync.snapshot();
+    let open_error = sync.worker.open_source_sync(&lease).unwrap_err();
+    assert!(
+        open_error.downcast_ref::<rusqlite::Error>().is_some(),
+        "{open_error:#}"
+    );
+    assert_eq!(sync.snapshot(), before);
+    let advance_error = sync
+        .worker
+        .update(&mut lease, WorkerOperation::Heartbeat)
+        .unwrap_err();
+    assert!(
+        advance_error.downcast_ref::<rusqlite::Error>().is_some(),
+        "{advance_error:#}"
+    );
+    assert_eq!(sync.snapshot(), before);
+    sync.connection()
+        .execute("ALTER TABLE unavailable_sessions RENAME TO sessions", [])
+        .unwrap();
+    assert_eq!(sync.job(&job_id).state, PersistentState::Running);
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn assert_sync_refusal(
+    sync: &Fixture,
+    job_id: &str,
+    lease: &AttemptLease,
+    claimed: bool,
+    opened: bool,
+) {
+    let job = sync.job(job_id);
+    let refusal = job.authority_refusal.as_ref().unwrap();
+    assert_eq!(
+        (refusal.reason, refusal.phase, refusal.generation),
+        (
+            AuthorityRefusalReason::CredentialInvalid,
+            AuthorityRefusalPhase::SourceWriter,
+            lease.generation(),
+        )
+    );
+    assert_eq!(job.generation, lease.generation() + 1);
+    assert!(job.worker.is_none() && job.fence.is_none() && job.lease_until.is_none());
+    assert_eq!(
+        job.recovery.as_deref(),
+        Some("Original credential is no longer valid")
+    );
+    assert_eq!(
+        job.state,
+        if claimed {
+            PersistentState::ReconciliationRequired
+        } else {
+            PersistentState::Failed
+        }
+    );
+    if opened {
+        assert_eq!(
+            sync.batch(job_id),
+            if claimed {
+                ("reconciliation_required".into(), None)
+            } else {
+                ("halted".into(), Some("authority_refused".into()))
+            }
+        );
+        if !claimed {
+            assert_eq!(sync.targets(job_id)[0].1, "not_run");
+        }
+    } else {
+        assert_eq!(
+            sync.connection()
+                .query_row("SELECT count(*) FROM source_sync_batches", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(sync.targets(job_id).is_empty());
+    }
+    let before = sync.snapshot();
+    assert!(sync.worker.open_source_sync(lease).is_err());
+    let mut stale = lease.clone();
+    assert!(
+        sync.worker
+            .update(&mut stale, WorkerOperation::Heartbeat)
+            .is_err()
+    );
+    assert_eq!(sync.snapshot(), before);
+}
+
+fn assert_refusal_survives_reopen(sync: Fixture, job_id: &str) {
+    let before = sync.snapshot();
+    let refused = sync.job(job_id);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let mut connection = Connection::open(root.join("print-partner.db")).unwrap();
+    let tx = connection.transaction().unwrap();
+    let reopened = jobs::load(&tx, job_id).unwrap().unwrap();
+    assert_eq!(reopened.authority_refusal, refused.authority_refusal);
+    assert_eq!(reopened.recovery, refused.recovery);
+    assert_eq!(reopened.generation, refused.generation);
+    assert_eq!(reopened.state, refused.state);
+    drop(tx);
+    assert_eq!(database_snapshot(&connection), before);
+    drop(connection);
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cancel_preserves_a_batch_halted_by_worker_advance_refusal() {
     let mut sync = Fixture::new();
     let id = sync.source("Pending");
     let job_id = sync.enqueue(Some(vec![id as u64]));
@@ -701,16 +983,19 @@ fn cancel_closes_an_open_batch_after_worker_advance_refusal() {
     assert_eq!(refused.state, PersistentState::ReconciliationRequired);
     assert_eq!(
         refused.authority_refusal.as_ref().unwrap().phase,
-        AuthorityRefusalPhase::WorkerAdvance
+        AuthorityRefusalPhase::SourceWriter
     );
-    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
     sync.login();
     let cancelled = sync.user(UserOperation::Cancel {
         job_id: job_id.clone(),
     });
     assert!(cancelled.cancel_requested);
     assert_eq!(cancelled.state, PersistentState::ReconciliationRequired);
-    assert_eq!(cancelled.generation, refused.generation + 1);
+    assert_eq!(cancelled.generation, refused.generation);
     assert_eq!(cancelled.authority_refusal, refused.authority_refusal);
     assert_eq!(
         sync.batch(&job_id),

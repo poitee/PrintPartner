@@ -273,9 +273,9 @@ enum TransactionDecision {
     },
 }
 #[cfg(feature = "desktop_rebuild")]
-struct CommittedRefusal {
-    job: JobRecord,
-    failure: auth::AuthorityFailure,
+pub(crate) struct CommittedRefusal {
+    pub(crate) job: JobRecord,
+    pub(crate) failure: auth::AuthorityFailure,
 }
 /// The original credential of a claimed attempt, revalidated under the
 /// current policy.
@@ -1560,8 +1560,10 @@ pub(crate) fn execute(
         )?),
         #[cfg(feature = "desktop_rebuild")]
         Command::OpenSourceSync { lease, policy } => {
-            crate::source_sync::open(&tx, &lease, policy)?;
-            TransactionDecision::Outcome(Outcome::SourceSyncOpened)
+            match crate::source_sync::open(&tx, &lease, policy)? {
+                Some(refusal) => TransactionDecision::Refused(refusal),
+                None => TransactionDecision::Outcome(Outcome::SourceSyncOpened),
+            }
         }
         #[cfg(feature = "desktop_rebuild")]
         Command::ClaimSourceSyncTarget {
@@ -2898,13 +2900,24 @@ fn refuse_advance(
         }
         _ => None,
     };
-    record_refusal(
-        tx,
-        job,
-        reason,
-        AuthorityRefusalPhase::WorkerAdvance,
-        matching_receipt,
-    )?;
+    if job.kind == JobKind::Sync {
+        let error = reason.failure().into();
+        set_sync_source_writer_authority_refusal(job, &error);
+        *job = crate::source_sync::halt_job(
+            tx,
+            job.clone(),
+            "authority_refused",
+            &format!("{error:#}"),
+        )?;
+    } else {
+        record_refusal(
+            tx,
+            job,
+            reason,
+            AuthorityRefusalPhase::WorkerAdvance,
+            matching_receipt,
+        )?;
+    }
     Ok(Some(CommittedRefusal {
         job: job.clone(),
         failure: reason.failure(),
