@@ -1331,7 +1331,7 @@ fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
 }
 fn recover_attempt(tx: &Transaction<'_>, mut job: JobRecord) -> Result<()> {
     let owner_cleanup = job.awaits_owner_cleanup();
-    let detail =if job.effects.iter().any(|effect| !effect.confirmed) {
+    let detail = if job.effects.iter().any(|effect| !effect.confirmed) {
         job.state = PersistentState::ReconciliationRequired;
         Some("Inspect effect receipts and reconcile explicitly")
     } else if !job.effects.is_empty() {
