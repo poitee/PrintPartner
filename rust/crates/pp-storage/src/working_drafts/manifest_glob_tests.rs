@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use super::super::observation::BuilderGlob;
 use super::{
     Glob, canonicalize_regex_unit, dot_matches, find_masked, find_short_masked, fits,
