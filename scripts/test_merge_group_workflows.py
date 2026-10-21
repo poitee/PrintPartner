@@ -36,7 +36,8 @@ class MergeGroupWorkflowTests(unittest.TestCase):
 
     def test_required_workflows_still_emit_job_checks_for_drafts(self):
         for filename, names in (("actionlint.yml", {"actionlint", "zizmor"}),
-                                ("rust-cross-os.yml", {"rust (linux)", "rust (windows)"})):
+                                ("rust-cross-os.yml", {"rust (linux)", "rust (windows)"}),
+                                ("pr-evidence.yml", {"Lint Evidence block"})):
             workflow = yaml.load((ROOT / ".github/workflows" / filename).read_text(),
                                  Loader=yaml.BaseLoader)
             self.assertNotIn("paths", workflow["on"]["pull_request"])
@@ -45,12 +46,38 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                                       for job_id, job in workflow["jobs"].items()})
 
     def test_required_workflows_accept_merge_group_fixture(self):
-        for filename in ("actionlint.yml", "rust-cross-os.yml", "desktop-native-macos.yml"):
+        for filename in ("actionlint.yml", "rust-cross-os.yml", "desktop-native-macos.yml",
+                         "pr-evidence.yml"):
             with self.subTest(workflow=filename):
                 workflow = yaml.load(
                     (ROOT / ".github/workflows" / filename).read_text(), Loader=yaml.BaseLoader
                 )
                 self.assertEqual(workflow["on"].get("merge_group"), {"types": [EVENT["action"]]})
+
+    def test_merge_group_evidence_runs_and_passes_without_a_pr_body(self):
+        workflow = yaml.load((ROOT / ".github/workflows/pr-evidence.yml").read_text(),
+                             Loader=yaml.BaseLoader)
+        self.assertEqual(workflow["on"]["merge_group"], {"types": ["checks_requested"]})
+        self.assertEqual(workflow["concurrency"], {
+            "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-"
+                     "${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}",
+            "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+        })
+        job = workflow["jobs"]["lint-pr-body"]
+        self.assertEqual(job["if"],
+                         "github.event_name != 'pull_request' || !github.event.pull_request.draft")
+        self.assertNotIn("needs", job)
+        steps = job["steps"]
+        self.assertEqual(steps[0]["if"], "github.event_name == 'merge_group'")
+        result = subprocess.run(["bash", "-e", "-c", steps[0]["run"]],
+                                env={"PATH": os.environ["PATH"]},
+                                capture_output=True, text=True, check=True)
+        self.assertIn("Merge group check passed.", result.stdout)
+        for step in steps[1:]:
+            self.assertEqual(step["if"], "github.event_name == 'pull_request'")
+        for event in ("pull_request", "merge_group"):
+            self.assertNotIn("paths", workflow["on"][event])
+            self.assertNotIn("paths-ignore", workflow["on"][event])
 
     def test_required_lint_and_rust_jobs_use_the_filter(self):
         for filename, kind, contexts in (
