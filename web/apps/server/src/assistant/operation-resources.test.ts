@@ -21,6 +21,8 @@ import * as postgresSchema from "../db/schema-pg.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy.js";
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
+import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
+import { acceptPlanForTest } from "../test/accept-plan.js";
 import { createJobRunner } from "../services/job-runner.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { getLogger } from "../services/logger.js";
@@ -72,7 +74,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -3374,4 +3376,166 @@ it.each(SOURCE_PROPOSAL_TOOLS)("traces %s isolated rejected workspace paths with
   fs.symlinkSync(userRoot, workspace, "dir");
   sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
   expect(await traceCategory(tool, { source_id: sourceId, ...input }, SOURCE_PROPOSAL_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual(sourceProposal(tool, params));
+});
+
+const IDLE_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revisions"].map((table) => `table:${table}`);
+const REFUSED_SNAPSHOT_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revisions", "projects", "source_revisions"].map((table) => `table:${table}`);
+type AcceptedPlanTool = "propose_set_plan_progress" | "propose_set_plan_assembly";
+const ACCEPTED_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revision_required_unit_sets", "plan_revision_required_units", "plan_revisions", "print_progress", "projects", "required_units", "source_revisions"].map((table) => `table:${table}`);
+
+function acceptedPlanSelect(statement: unknown, tenantId: string): string[] {
+  const sql = z.string().parse(statement);
+  if (["BEGIN DEFERRED", "COMMIT", "ROLLBACK"].includes(sql)) return [];
+  if (sql.startsWith('select "id", "name", "order_number", "archived_at" from "build_profiles"')) return [tableForObservedSelect(sql, tenantId)];
+  const match = /^select (?:(?!\bfrom\b).)+ from "([a-z_]+)" where (?:(?!\bfrom\b|\bjoin\b).)+$/.exec(sql);
+  if (!match || !ACCEPTED_PLAN_TABLES.includes(`table:${match[1]}`)) throw new Error(`Unsupported SQL: ${sql}`);
+  return [`table:${match[1]}`];
+}
+
+async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printer_checkoff", input: Record<string, unknown>, tables: string[], options: {
+  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
+} = {}) {
+  const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId })); }
+  finally { observer.state.active = false; }
+  const observed = [...new Set(statements.flatMap((sql) => tool === "propose_verify_printer_checkoff" ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId)))].sort();
+  expect(observed).toEqual(tables);
+  const observedFiles = observer.state.files.map(({ api, args }): CategoryProbe => [api, ...args]);
+  expect(observedFiles).toEqual(files);
+  const union = unions.get(tool) ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  if (observedFiles.length > 0) {
+    expect(observedFiles.every(([, path]) => typeof path === "string" && under(join(dataDir, "repos"), path))).toBe(true);
+    union.add("file:source-workspace");
+  }
+  unions.set(tool, union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+function acceptedPlanFixture(isolated: boolean) {
+  const repos = join(dataDir, "repos");
+  const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  const source = repo.createSource({ name: "Accepted", source_kind: "local" });
+  const workspace = join(repos, String(source.id));
+  const snapshot = join(workspace, "revisions", "a");
+  fs.mkdirSync(snapshot, { recursive: true });
+  fs.writeFileSync(join(snapshot, "bracket_x2.stl"), "solid b\nendsolid b\n");
+  sqlite.prepare("UPDATE projects SET local_path = ?, last_synced_at = ? WHERE id = ?").run(workspace, "2026-01-01T00:00:00.000Z", source.id);
+  const revision = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${source.id}/revisions/a`, syncedAt: "2026-01-01T00:00:00.000Z", completeness: "complete" });
+  sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, source.id);
+  repo.updateImportRules(source.id, ["bracket_x2.stl"]);
+  const plan = repo.createProfile("Accepted plan", source.id);
+  expect(acceptPlanForTest(repo, plan.id).merged).toBe(true);
+  const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+  if (accepted.kind !== "ready") throw new Error(`Accepted fixture is ${accepted.kind}`);
+  const part = accepted.snapshot.parts[0]!;
+  expect(part.units.map(({ unitIndex }) => unitIndex)).toEqual([0, 1]);
+  const files: CategoryProbe[] = isolated ? [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", snapshot], ["statSync", snapshot]] : [];
+  return { repository, workspace, plan, part, basis: acceptedPlanBasis(accepted.snapshot), files, idle: repo.createProfile("Not accepted"), foreign: tenantStorage.run("other", () => repo.createProfile("Foreign accepted")) };
+}
+
+function acceptedPlanProposal(type: AcceptedPlanTool | "propose_verify_printer_checkoff", planId: number, label: string, summary: string, params: Record<string, unknown>) {
+  return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.", action: { id: expect.any(String), type, plan_id: planId, label, summary, params } };
+}
+
+function assertAcceptedPlanDeclaration(tool: AcceptedPlanTool | "propose_verify_printer_checkoff", observed: string[], expected = observed) {
+  expect([...unions.get(tool) ?? []].sort()).toEqual(observed);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+  if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(expected);
+}
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces propose_set_plan_progress plan selection, row validation and tenants under ${policy} policy`, async () => {
+    const { repository, plan, part, basis, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const options = { repository, files };
+    const rows = [{ part_id: part.projectionPartId, printed_count: 2 }];
+    const proposal = (planId: number, proposed = rows) => acceptedPlanProposal("propose_set_plan_progress", planId, "update Plan print progress", "Apply the reviewed printed-unit counts.", { plan_id: planId, rows: proposed, accepted_basis: basis });
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id, rows }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(proposal(plan.id));
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { rows }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(proposal(plan.id));
+    const coerced = [{ part_id: String(part.projectionPartId), printed_count: "0", ignored: true }];
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows: coerced }, ACCEPTED_PLAN_TABLES, options)).toEqual(proposal(plan.id, [{ part_id: part.projectionPartId, printed_count: 0 }]));
+    for (const plan_id of [undefined, null, "invalid"]) expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id, rows }, [], { repository })).toEqual({ error: "plan_id required" });
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id, rows }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: idle.id, rows }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Accepted Plan is not ready" });
+    for (const invalid of [undefined, [], "rows"]) expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows: invalid }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "rows required" });
+    for (const row of [null, {}, { part_id: 999999, printed_count: 1 }, { part_id: part.projectionPartId, printed_count: -1 }, { part_id: part.projectionPartId, printed_count: 3 }]) {
+      expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows: [rows[0], row] }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "Invalid progress row" });
+    }
+    assertAcceptedPlanDeclaration("propose_set_plan_progress", [...(isolated ? ["file:source-workspace"] : []), ...ACCEPTED_PLAN_TABLES], ["file:source-workspace", ...ACCEPTED_PLAN_TABLES]);
+  });
+
+  it(`traces propose_set_plan_assembly targets, unit tokens and tenants under ${policy} policy`, async () => {
+    const { repository, plan, part, basis, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const options = { repository, files };
+    const proposal = (unitIndex: number, assembled: boolean) => acceptedPlanProposal("propose_set_plan_assembly", plan.id, "update Plan assembly checkoff", "Apply the reviewed assembly state.", { plan_id: plan.id, part_id: part.projectionPartId, unit_index: unitIndex, assembled, accepted_basis: basis, token: part.units[unitIndex]!.token });
+    for (const [unit_index, assembled] of [[0, true], [1, false], ["1", true]] as const) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { plan_id: plan.id, part_id: part.projectionPartId, unit_index, assembled }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(proposal(Number(unit_index), assembled));
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_assembly", { part_id: String(part.projectionPartId), unit_index: 0, assembled: true }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(proposal(0, true));
+    const valid = { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
+    for (const invalid of [{ plan_id: undefined }, { part_id: null }, { unit_index: "first" }, { assembled: "true" }]) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, ...invalid }, [], { repository })).toEqual({ error: "plan_id, part_id, unit_index, and assembled are required" });
+    }
+    for (const target of [{ part_id: 999999 }, { unit_index: 2 }, { unit_index: -1 }]) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, ...target }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "part_id and unit_index are not in the accepted Plan" });
+    }
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Accepted Plan is not ready" });
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_assembly", valid, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Accepted Plan is not ready" });
+    expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Accepted Plan is not ready" });
+    assertAcceptedPlanDeclaration("propose_set_plan_assembly", [...(isolated ? ["file:source-workspace"] : []), ...ACCEPTED_PLAN_TABLES], ["file:source-workspace", ...ACCEPTED_PLAN_TABLES]);
+  });
+}
+
+it.each<AcceptedPlanTool>(["propose_set_plan_progress", "propose_set_plan_assembly"])("traces %s isolated symlink snapshot refusal before unit reads", async (tool) => {
+  const { repository, workspace, plan, part } = acceptedPlanFixture(true);
+  const repos = join(dataDir, "repos");
+  fs.renameSync(workspace, `${workspace}-moved`);
+  fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
+  const input = tool === "propose_set_plan_progress" ? { plan_id: plan.id, rows: [{ part_id: part.projectionPartId, printed_count: 1 }] } : { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
+  const error = tool === "propose_set_plan_progress" ? "Plan not found" : "Accepted Plan is not ready";
+  expect(await traceAcceptedPlan(tool, input, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error });
+});
+
+it("rejects reads outside the accepted Plan declaration", () => {
+  expect(() => acceptedPlanSelect('select "id", "project_id" from "source_docs" where "source_docs"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => acceptedPlanSelect('select "id" from "parts" left join "app_settings" on 1 where "parts"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => acceptedPlanSelect('update "print_progress" set "completed" = 1 where "print_progress"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(acceptedPlanSelect('select "id" from "print_progress" where "print_progress"."part_id" in (1.0)', "default")).toEqual(["table:print_progress"]);
+});
+
+it("traces propose_verify_printer_checkoff link lookup, states and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Checkoff plan");
+  const link = (id: string, state: string, profile_id = plan.id) => ({ id, integration_id: "prusa", printer_id: "mk4", filename: `${id}.bgcode`, profile_id, state, units: [] });
+  repo.setSetting("printer.checkoff_links", JSON.stringify([link("awaiting", "awaiting_verify"), link("watching", "watching"), link("unowned", "awaiting_verify", 999999)]));
+  tenantStorage.run("other", () => repo.setSetting("printer.checkoff_links", JSON.stringify([link("hidden", "awaiting_verify")])));
+  const decisions = [{ part_id: 1, unit_index: 0, result: "rejected", reason: " kept verbatim " }, "unvalidated"];
+  const settings = ["table:app_settings"];
+  const proposal = (id: string, planId: number) => acceptedPlanProposal("propose_verify_printer_checkoff", planId, `verify printer checkoff ${id}.bgcode`, "Apply the reviewed confirmed or rejected unit decisions.", { link_id: id, decisions });
+  for (const link_id of ["awaiting", " awaiting "]) expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id, decisions }, settings, { activePlanId: 999998 })).toEqual(proposal("awaiting", plan.id));
+  expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "unowned", decisions }, settings)).toEqual(proposal("unowned", 999999));
+  expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "watching", decisions }, settings)).toEqual({ error: "Checkoff link is not awaiting verification" });
+  for (const link_id of ["absent", "hidden"]) expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id, decisions }, settings)).toEqual({ error: "Checkoff link not found" });
+  expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "hidden", decisions }, settings, { tenantId: "other" })).toEqual(proposal("hidden", plan.id));
+  for (const input of [{ decisions }, { link_id: " ", decisions }, { link_id: 1, decisions }, { link_id: "awaiting" }, { link_id: "awaiting", decisions: [] }, { link_id: "awaiting", decisions: {} }]) {
+    expect(await traceAcceptedPlan("propose_verify_printer_checkoff", input, [])).toEqual({ error: "link_id and decisions are required" });
+  }
+  for (const stored of ["[invalid", "{}", ""]) {
+    repo.setSetting("printer.checkoff_links", stored);
+    expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "awaiting", decisions }, settings)).toEqual({ error: "Checkoff link not found" });
+  }
+  expect(observer.state.files).toEqual([]);
+  assertAcceptedPlanDeclaration("propose_verify_printer_checkoff", settings);
 });
