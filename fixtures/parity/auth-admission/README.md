@@ -1,10 +1,11 @@
 # Auth admission parity
 
-Refs GRE-877. Fourteen cases use real loopback HTTP to cover registration and password reset admission.
+Refs GRE-877. Thirty-two cases use real loopback HTTP to cover registration, password reset, login, logout, and password change admission.
+Login also covers a second Host or Origin header and each of `X-Forwarded-Host`, `X-Forwarded-For`, `X-Forwarded-Proto`, and `Forwarded`.
 The generator uses Node's full `buildApp` with CORS reflection enabled and explicitly configured loopback SMTP.
 Rust replays the same closed recipes through the public auth router, using pooled storage by default and rebuild storage with `desktop_rebuild`.
-The Rust test owns eleven literal response differences and checks both complete public error objects.
-Seven are security corrections. Four are HTTP error mappings, including guard-before-body ordering.
+The Rust test owns twenty-six literal response differences and checks both complete public error objects.
+Twenty-two are security corrections. Four are HTTP error mappings, including guard-before-body ordering.
 
 Node 22.23.3 is the canonical runtime, with web dependencies installed by it and contracts/domain built.
 Capture and plain `--check` exit 2 on any other Node version. `--check --additional-runtime` compares another runtime
@@ -30,4 +31,4 @@ Each case owns disposable storage and ephemeral listeners. Cleanup runs before c
 mail drain to twenty-five seconds, and a forty-five second case budget. Body recipes retain byte length and SHA-256 rather than padding.
 Host and Origin are symbolic, so no ephemeral ports, generated IDs, tokens, cookies, or large bodies enter the golden.
 
-Additional endpoints and duplicate and forwarded headers remain a follow-up slice.
+Reset-password, `/auth/me`, and API-key endpoints remain a follow-up slice.

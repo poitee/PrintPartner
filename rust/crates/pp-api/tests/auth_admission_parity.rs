@@ -35,6 +35,8 @@ const FIXTURE: &str = include_str!("../../../../fixtures/parity/auth-admission/n
 const EMAIL: &str = "admission@example.test";
 const REGISTER: &str = r#"{"email":"admission@example.test","password":"fixture-admission-password","display_name":"Admission"}"#;
 const FORGOT: &str = r#"{"email":"admission@example.test"}"#;
+const LOGIN: &str = r#"{"email":"admission@example.test","password":"fixture-admission-password"}"#;
+const CHANGE: &str = r#"{"current_password":"fixture-admission-password","new_password":"fixture-admission-password-changed"}"#;
 const TABLES: [&str; 4] = [
     "users",
     "sessions",
@@ -54,19 +56,96 @@ const NODE_SIZE_ERROR: &str = r#"{"statusCode":413,"code":"FST_ERR_CTP_BODY_TOO_
 enum Route {
     Register,
     Forgot,
+    Login,
+    Logout,
+    Change,
 }
 impl Route {
+    const ALL: [Self; 5] = [
+        Self::Register,
+        Self::Forgot,
+        Self::Login,
+        Self::Logout,
+        Self::Change,
+    ];
     fn name(self) -> &'static str {
         match self {
             Self::Register => "register",
             Self::Forgot => "forgot",
+            Self::Login => "login",
+            Self::Logout => "logout",
+            Self::Change => "change",
         }
     }
     fn path(self) -> &'static str {
         match self {
             Self::Register => "register",
             Self::Forgot => "forgot-password",
+            Self::Login => "login",
+            Self::Logout => "logout",
+            Self::Change => "change-password",
         }
+    }
+    fn base_body(self) -> &'static str {
+        match self {
+            Self::Register => REGISTER,
+            Self::Forgot => FORGOT,
+            Self::Login => LOGIN,
+            Self::Logout => "{}",
+            Self::Change => CHANGE,
+        }
+    }
+    fn suffixes(self) -> &'static [&'static str] {
+        const GUARDS: &[&str] = &[
+            "control",
+            "foreign-origin",
+            "missing-origin",
+            "foreign-host",
+        ];
+        match self {
+            Self::Register | Self::Logout | Self::Change => GUARDS,
+            Self::Forgot => &[
+                "control",
+                "at-16384",
+                "foreign-origin",
+                "missing-origin",
+                "foreign-host",
+                "over-16384",
+                "over-1048576",
+                "malformed",
+                "text-plain",
+                "foreign-origin-over-1048576",
+            ],
+            Self::Login => &[
+                "control",
+                "foreign-origin",
+                "missing-origin",
+                "foreign-host",
+                "duplicate-host",
+                "duplicate-origin",
+                "x-forwarded-host",
+                "x-forwarded-for",
+                "x-forwarded-proto",
+                "forwarded",
+            ],
+        }
+    }
+    fn productive_rows(self) -> Rows {
+        let mut rows = Rows::default();
+        match self {
+            Self::Register => (rows.users, rows.sessions) = (1, 1),
+            Self::Forgot => rows.reset_tokens = 1,
+            Self::Login => rows.sessions = 1,
+            Self::Logout => rows.sessions = -1,
+            Self::Change => {}
+        }
+        rows
+    }
+    fn issues_session(self) -> bool {
+        matches!(self, Self::Register | Self::Login | Self::Change)
+    }
+    fn needs_cookie(self) -> bool {
+        matches!(self, Self::Logout | Self::Change)
     }
 }
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -102,6 +181,7 @@ struct Observation {
     status: u16,
     public_error: Option<Value>,
     rows: Rows,
+    state_changed: bool,
     mail_connections: u32,
     session_issued: bool,
 }
@@ -122,16 +202,15 @@ struct Case {
     host: Authority,
     content_type: String,
     body: BodyRecipe,
+    #[serde(default)]
+    extra_header: Option<(String, String)>,
     body_len: usize,
     body_sha256: String,
     node: Observation,
 }
 impl Case {
     fn body(&self) -> Vec<u8> {
-        let base = match self.route {
-            Route::Register => REGISTER,
-            Route::Forgot => FORGOT,
-        };
+        let base = self.route.base_body();
         match &self.body {
             BodyRecipe::Valid => base.as_bytes().to_vec(),
             BodyRecipe::Raw { text } => text.as_bytes().to_vec(),
@@ -176,6 +255,27 @@ struct Difference {
     rust: Lit,
     reason: &'static str,
 }
+const fn origin_fix(id: &'static str, reason: &'static str) -> Difference {
+    guard_fix(id, ORIGIN_ERROR, reason)
+}
+const fn host_fix(id: &'static str, reason: &'static str) -> Difference {
+    guard_fix(id, HOST_ERROR, reason)
+}
+const fn guard_fix(id: &'static str, error: &'static str, reason: &'static str) -> Difference {
+    Difference {
+        id,
+        kind: Kind::SecurityCorrection,
+        node: Lit {
+            status: 200,
+            error: None,
+        },
+        rust: Lit {
+            status: 403,
+            error: Some(error),
+        },
+        reason,
+    }
+}
 macro_rules! difference {
     ($id:literal, $kind:ident, $ns:literal, $ne:expr, $rs:literal, $re:expr, $reason:literal) => {
         Difference {
@@ -194,59 +294,89 @@ macro_rules! difference {
     };
 }
 const DIFFERENCES: &[Difference] = &[
-    difference!(
+    origin_fix(
         "register/foreign-origin",
-        SecurityCorrection,
-        200,
-        None,
-        403,
-        Some(ORIGIN_ERROR),
-        "Reject foreign Origin before registration"
+        "Reject foreign Origin before registration",
     ),
-    difference!(
+    origin_fix(
         "register/missing-origin",
-        SecurityCorrection,
-        200,
-        None,
-        403,
-        Some(ORIGIN_ERROR),
-        "Require Origin before registration"
+        "Require Origin before registration",
     ),
-    difference!(
+    host_fix(
         "register/foreign-host",
-        SecurityCorrection,
-        200,
-        None,
-        403,
-        Some(HOST_ERROR),
-        "Reject foreign Host before registration"
+        "Reject foreign Host before registration",
     ),
-    difference!(
+    origin_fix(
         "forgot/foreign-origin",
-        SecurityCorrection,
-        200,
-        None,
-        403,
-        Some(ORIGIN_ERROR),
-        "Reject foreign Origin before reset-token issuance"
+        "Reject foreign Origin before reset-token issuance",
     ),
-    difference!(
+    origin_fix(
         "forgot/missing-origin",
-        SecurityCorrection,
-        200,
-        None,
-        403,
-        Some(ORIGIN_ERROR),
-        "Require Origin before reset-token issuance"
+        "Require Origin before reset-token issuance",
     ),
-    difference!(
+    host_fix(
         "forgot/foreign-host",
-        SecurityCorrection,
-        200,
-        None,
-        403,
-        Some(HOST_ERROR),
-        "Reject foreign Host before reset-token issuance"
+        "Reject foreign Host before reset-token issuance",
+    ),
+    origin_fix(
+        "login/foreign-origin",
+        "Reject foreign Origin before password login",
+    ),
+    origin_fix(
+        "login/missing-origin",
+        "Require Origin before password login",
+    ),
+    host_fix(
+        "login/foreign-host",
+        "Reject foreign Host before password login",
+    ),
+    host_fix(
+        "login/duplicate-host",
+        "Reject a second Host instead of trusting the first",
+    ),
+    origin_fix(
+        "login/duplicate-origin",
+        "Reject a second Origin instead of joining values",
+    ),
+    host_fix(
+        "login/x-forwarded-host",
+        "Reject proxy Host claims on loopback auth",
+    ),
+    host_fix(
+        "login/x-forwarded-for",
+        "Reject proxy client claims on loopback auth",
+    ),
+    host_fix(
+        "login/x-forwarded-proto",
+        "Reject proxy scheme claims on loopback auth",
+    ),
+    host_fix(
+        "login/forwarded",
+        "Reject RFC 7239 proxy claims on loopback auth",
+    ),
+    origin_fix(
+        "logout/foreign-origin",
+        "Reject foreign Origin before session deletion",
+    ),
+    origin_fix(
+        "logout/missing-origin",
+        "Require Origin before session deletion",
+    ),
+    host_fix(
+        "logout/foreign-host",
+        "Reject foreign Host before session deletion",
+    ),
+    origin_fix(
+        "change/foreign-origin",
+        "Reject foreign Origin before password change",
+    ),
+    origin_fix(
+        "change/missing-origin",
+        "Require Origin before password change",
+    ),
+    host_fix(
+        "change/foreign-host",
+        "Reject foreign Host before password change",
     ),
     difference!(
         "forgot/over-16384",
@@ -298,25 +428,9 @@ fn fixture() -> Fixture {
     let fixture: Fixture = serde_json::from_str(FIXTURE).unwrap();
     assert_eq!(fixture.version, 1);
     assert!(fixture.cors_origin);
-    let suffixes = [
-        "control",
-        "foreign-origin",
-        "missing-origin",
-        "foreign-host",
-        "at-16384",
-        "over-16384",
-        "over-1048576",
-        "malformed",
-        "text-plain",
-        "foreign-origin-over-1048576",
-    ];
     let mut expected = HashSet::new();
-    for route in [Route::Register, Route::Forgot] {
-        for suffix in &suffixes[..if route == Route::Register {
-            4
-        } else {
-            suffixes.len()
-        }] {
+    for route in Route::ALL {
+        for suffix in route.suffixes() {
             expected.insert(format!("{}/{suffix}", route.name()));
         }
     }
@@ -368,32 +482,30 @@ fn fixture() -> Fixture {
                 BodyRecipe::Valid,
                 "control" | "foreign-origin" | "missing-origin" | "foreign-host" | "text-plain",
             ) => {}
+            (BodyRecipe::Valid, _) if extra_header(suffix).is_some() => {}
             _ => panic!("wrong body recipe for {}", case.id),
         }
+        assert_eq!(
+            case.extra_header,
+            extra_header(suffix).map(|(name, value)| (name.into(), value.into())),
+            "{}: extra header",
+            case.id
+        );
         let admitted = case.node.status < 400;
-        let rows = if !admitted {
-            Rows::default()
+        let rows = if admitted {
+            case.route.productive_rows()
         } else {
-            match case.route {
-                Route::Register => Rows {
-                    users: 1,
-                    sessions: 1,
-                    ..Rows::default()
-                },
-                Route::Forgot => Rows {
-                    reset_tokens: 1,
-                    ..Rows::default()
-                },
-            }
+            Rows::default()
         };
         assert_eq!(case.node.rows, rows, "{}: Node work", case.id);
+        assert_eq!(case.node.state_changed, admitted, "{}: Node state", case.id);
         assert_eq!(
             case.node.mail_connections,
             u32::from(admitted && case.route == Route::Forgot)
         );
         assert_eq!(
             case.node.session_issued,
-            admitted && case.route == Route::Register
+            admitted && case.route.issues_session()
         );
         assert_eq!(case.node.public_error.is_none(), admitted);
         let body = case.body();
@@ -420,16 +532,27 @@ fn fixture() -> Fixture {
         match diff.kind {
             Kind::SecurityCorrection => {
                 assert!(diff.node.status < 400 && diff.rust.status >= 400);
-                assert_ne!(case.node.rows, Rows::default());
+                assert!(case.node.state_changed);
             }
             Kind::ErrorMapping => assert!(diff.node.status >= 400 && diff.rust.status >= 400),
         }
     }
     fixture
 }
+fn extra_header(suffix: &str) -> Option<(&'static str, &'static str)> {
+    Some(match suffix {
+        "duplicate-host" => ("host", "evil.example"),
+        "duplicate-origin" => ("origin", "http://evil.example"),
+        "x-forwarded-host" => ("x-forwarded-host", "evil.example"),
+        "x-forwarded-for" => ("x-forwarded-for", "203.0.113.9"),
+        "x-forwarded-proto" => ("x-forwarded-proto", "https"),
+        "forwarded" => ("forwarded", "for=203.0.113.9;host=evil.example;proto=https"),
+        _ => return None,
+    })
+}
 
 #[derive(Debug, PartialEq, Eq)]
-struct Snapshot(BTreeMap<String, Vec<Vec<Value>>>);
+struct Snapshot(BTreeMap<String, Vec<Value>>);
 impl Snapshot {
     fn read(db: &Connection) -> Result<Self> {
         let mut tables = TABLES.to_vec();
@@ -444,20 +567,30 @@ impl Snapshot {
         let mut result = BTreeMap::new();
         for table in tables {
             let mut statement = db.prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))?;
-            let columns = statement.column_count();
+            let columns: Vec<String> = statement
+                .column_names()
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
             let rows = statement
                 .query_map([], |row| {
-                    (0..columns)
-                        .map(|i| {
-                            Ok(match row.get_ref(i)? {
-                                ValueRef::Null => Value::Null,
-                                ValueRef::Integer(n) => json!(n),
-                                ValueRef::Real(n) => json!(n),
-                                ValueRef::Text(bytes) => json!(String::from_utf8_lossy(bytes)),
-                                ValueRef::Blob(bytes) => json!({"blob":hex::encode(bytes)}),
-                            })
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(i, column)| {
+                            Ok((
+                                column.clone(),
+                                match row.get_ref(i)? {
+                                    ValueRef::Null => Value::Null,
+                                    ValueRef::Integer(n) => json!(n),
+                                    ValueRef::Real(n) => json!(n),
+                                    ValueRef::Text(bytes) => json!(String::from_utf8_lossy(bytes)),
+                                    ValueRef::Blob(bytes) => json!({"blob":hex::encode(bytes)}),
+                                },
+                            ))
                         })
-                        .collect::<rusqlite::Result<Vec<_>>>()
+                        .collect::<rusqlite::Result<serde_json::Map<_, _>>>()
+                        .map(Value::Object)
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             result.insert(table.to_owned(), rows);
@@ -611,7 +744,11 @@ impl Server {
             stop_smtp: Some(stop_smtp),
         })
     }
-    async fn post(&self, case: &Case) -> Result<(Reply, Value, bool)> {
+    async fn post(
+        &self,
+        case: &Case,
+        cookie: Option<&str>,
+    ) -> Result<(Reply, Value, Option<String>)> {
         let mut request = self
             .client
             .post(format!("{}/auth/{}", self.origin, case.route.path()))
@@ -631,17 +768,21 @@ impl Server {
             Authority::Foreign => request = request.header("Origin", "http://evil.example"),
             Authority::Absent => {}
         }
+        if let Some((name, value)) = &case.extra_header {
+            request = request.header(name, value);
+        }
+        if let Some(cookie) = cookie {
+            request = request.header("Cookie", cookie);
+        }
         let response = request.send().await?;
         let status = response.status().as_u16();
         let cookie = response
             .headers()
             .get_all("set-cookie")
             .iter()
-            .any(|value| {
-                value.to_str().is_ok_and(|value| {
-                    value.starts_with("pp_session=") && !value.starts_with("pp_session=;")
-                })
-            });
+            .filter_map(|value| value.to_str().ok()?.split(';').next())
+            .find(|pair| pair.starts_with("pp_session=") && *pair != "pp_session=")
+            .map(str::to_owned);
         let body: Value = response.json().await?;
         Ok((
             Reply {
@@ -729,15 +870,18 @@ async fn observe(case: &Case, seed: &Case) -> Result<Evidence> {
         .await
         .context("case setup lifetime")??;
     let result = timeout_at(deadline, async {
-        if case.route == Route::Forgot {
-            let (reply, _, cookie) = server.post(seed).await?;
+        let mut session = None;
+        if case.route != Route::Register {
+            let (reply, _, cookie) = server.post(seed, None).await?;
             ensure!(
-                reply.status == 200 && cookie,
+                reply.status == 200 && cookie.is_some(),
                 "seed registration failed: {reply:?}"
             );
+            session = cookie.filter(|_| case.route.needs_cookie());
         }
         let before = Snapshot::read(server.db.as_ref().unwrap())?;
-        let (reply, body, session_issued) = server.post(case).await?;
+        let (reply, body, cookie) = server.post(case, session.as_deref()).await?;
+        let session_issued = cookie.is_some();
         Ok::<_, anyhow::Error>((before, reply, body, session_issued))
     })
     .await
@@ -762,6 +906,7 @@ async fn observe(case: &Case, seed: &Case) -> Result<Evidence> {
             status: reply.status,
             public_error: reply.public_error,
             rows: after.delta(&before),
+            state_changed: after != before,
             mail_connections: server.connections.load(Ordering::SeqCst),
             session_issued,
         },
@@ -778,9 +923,13 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
         .iter()
         .find(|diff| diff.id == case.id)
         .map_or_else(|| case.node.reply(), |diff| diff.rust.reply());
+    ensure!(
+        actual.reply() == expected,
+        "reply mismatch, expected {expected:?}"
+    );
     if actual.status >= 400 {
         ensure!(
-            evidence.before == evidence.after,
+            evidence.before == evidence.after && !actual.state_changed,
             "refusal changed full auth snapshot"
         );
         ensure!(actual.rows == Rows::default(), "refusal row delta");
@@ -790,46 +939,18 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
         );
         ensure!(!actual.session_issued, "refusal issued session");
     } else {
-        let expected_rows = match case.route {
-            Route::Register => Rows {
-                users: 1,
-                sessions: 1,
-                ..Rows::default()
-            },
-            Route::Forgot => Rows {
-                reset_tokens: 1,
-                ..Rows::default()
-            },
-        };
-        ensure!(actual.rows == expected_rows, "productive row delta");
+        ensure!(
+            actual.rows == case.route.productive_rows() && actual.state_changed,
+            "productive work"
+        );
+        ensure!(
+            actual.session_issued == case.route.issues_session(),
+            "productive session cookie"
+        );
         match case.route {
-            Route::Register => {
-                ensure!(
-                    actual.session_issued
-                        && actual.mail_connections == 0
-                        && evidence.mail_failures == 0,
-                    "register cookie/mail"
-                );
-                ensure!(
-                    evidence.body["user"]["email"] == EMAIL
-                        && evidence.body["user"]["display_name"] == "Admission",
-                    "register success fields"
-                );
-                let id = evidence.body["user"]["user_id"]
-                    .as_str()
-                    .context("response user id")?;
-                ensure!(
-                    evidence.after.0["users"]
-                        .iter()
-                        .any(|row| row.iter().any(|v| v == id)),
-                    "response user persisted"
-                );
-            }
             Route::Forgot => {
                 ensure!(
-                    !actual.session_issued
-                        && actual.mail_connections >= 1
-                        && evidence.mail_failures == 1,
+                    actual.mail_connections >= 1 && evidence.mail_failures == 1,
                     "reset must attempt SMTP and fail STARTTLS"
                 );
                 ensure!(
@@ -837,12 +958,42 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
                     "forgot success fields"
                 );
             }
+            route => {
+                ensure!(
+                    actual.mail_connections == 0 && evidence.mail_failures == 0,
+                    "{} mail traffic",
+                    route.name()
+                );
+            }
+        }
+        match case.route {
+            Route::Register | Route::Login => {
+                ensure!(
+                    evidence.body["user"]["email"] == EMAIL
+                        && evidence.body["user"]["display_name"] == "Admission",
+                    "user success fields"
+                );
+                let id = evidence.body["user"]["user_id"]
+                    .as_str()
+                    .context("response user id")?;
+                ensure!(
+                    evidence.after.0["users"].iter().any(|row| row["id"] == id),
+                    "response user persisted"
+                );
+            }
+            Route::Logout | Route::Change => {
+                ensure!(evidence.body == json!({"ok":true}), "ok success body");
+            }
+            Route::Forgot => {}
+        }
+        if case.route == Route::Change {
+            ensure!(
+                evidence.after.0["users"][0]["password_hash"]
+                    != evidence.before.0["users"][0]["password_hash"],
+                "password change must rewrite the password hash"
+            );
         }
     }
-    ensure!(
-        actual.reply() == expected,
-        "reply mismatch, expected {expected:?}"
-    );
     ensure!(
         evidence.cleanup_errors.is_empty(),
         "cleanup: {:?}",
@@ -881,6 +1032,18 @@ async fn register_auth_admission_parity() {
 async fn forgot_auth_admission_parity() {
     compare(Route::Forgot).await;
 }
+#[tokio::test]
+async fn login_auth_admission_parity() {
+    compare(Route::Login).await;
+}
+#[tokio::test]
+async fn logout_auth_admission_parity() {
+    compare(Route::Logout).await;
+}
+#[tokio::test]
+async fn change_password_auth_admission_parity() {
+    compare(Route::Change).await;
+}
 #[test]
 fn node_auth_admission_snapshot_is_current() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -905,7 +1068,7 @@ fn node_auth_admission_snapshot_is_current() {
         "Node freshness failed:\n{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("auth admission: 14 real-listener cases passed on "));
+    assert!(stdout.contains("auth admission: 32 real-listener cases passed on "));
 }
 #[test]
 fn comparator_rejects_response_and_work_changes() {
@@ -928,6 +1091,7 @@ fn comparator_rejects_response_and_work_changes() {
             status: 403,
             public_error: Some(json!({"detail":"Invalid request host"})),
             rows: Rows::default(),
+            state_changed: false,
             mail_connections: 0,
             session_issued: false,
         },
@@ -938,7 +1102,26 @@ fn comparator_rejects_response_and_work_changes() {
         cleanup_errors: Vec::new(),
     };
     assert!(validate(case, &baseline()).is_ok());
-    for mutation in 0..10 {
+    for diff in DIFFERENCES {
+        if let Kind::SecurityCorrection = diff.kind {
+            let case = fixture
+                .cases
+                .iter()
+                .find(|case| case.id == diff.id)
+                .unwrap();
+            let bypassed = Evidence {
+                observation: case.node.clone(),
+                ..baseline()
+            };
+            let error = validate(case, &bypassed).unwrap_err().to_string();
+            assert!(
+                error.starts_with("reply mismatch"),
+                "{}: guard bypass {error}",
+                diff.id
+            );
+        }
+    }
+    for mutation in 0..11 {
         let mut evidence = baseline();
         match mutation {
             0 => evidence.observation.status = 400,
@@ -956,8 +1139,9 @@ fn comparator_rejects_response_and_work_changes() {
                     .0
                     .get_mut("users")
                     .unwrap()
-                    .push(vec![json!("changed")]);
+                    .push(json!({"id":"changed"}));
             }
+            10 => evidence.observation.state_changed = true,
             _ => unreachable!(),
         }
         assert!(
