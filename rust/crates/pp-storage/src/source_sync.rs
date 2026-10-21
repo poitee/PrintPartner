@@ -423,7 +423,15 @@ pub(crate) fn next(
         }
         Some((name, _)) => name,
     };
-    ensure!(!state.source_busy(&job.tenant, source_id), SourceBusy);
+    let durably_claimed: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_sync_targets WHERE tenant=?1 AND requested_source_id=?2 AND state='claimed')",
+        params![job.tenant, source_id],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        !durably_claimed && !state.source_busy(&job.tenant, source_id),
+        SourceBusy
+    );
     let token = state.next_token()?;
     let observation =
         crate::source_scan::project_observation(tx, &job.tenant, source_id, authority.subject())?;
