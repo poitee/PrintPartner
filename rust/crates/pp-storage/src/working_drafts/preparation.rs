@@ -457,10 +457,10 @@ fn role_name(role: crate::catalog::naming::RoleId) -> String {
 pub(super) struct LayerNaming {
     profile: Arc<NamingProfile>,
     /// A compile error is reported when a path is parsed, as before.
-    quantity: Result<regress::Regex, regress::Error>,
+    quantity: Result<QuantityRegex, regress::Error>,
     /// `None` when `strip_quantity` is off or the derived pattern does not
     /// compile; an invalid pattern leaves the slug unchanged.
-    strip: Option<regress::Regex>,
+    strip: Option<QuantityRegex>,
 }
 impl LayerNaming {
     pub(super) fn new(profile: Arc<NamingProfile>) -> Self {
@@ -472,12 +472,53 @@ impl LayerNaming {
             .strip_quantity
             .then(|| strip_pattern(regex).ok())
             .flatten()
-            .and_then(|pattern| regress::Regex::with_flags(&pattern, "i").ok());
+            .and_then(|pattern| QuantityRegex::new(&pattern).ok());
         Self {
-            quantity: regress::Regex::with_flags(regex, "i"),
+            quantity: QuantityRegex::new(regex),
             strip,
             profile,
         }
+    }
+}
+/// A quantity regex compiled with `/i`, matched the way Node's V8 matches it.
+///
+/// Without the `u` flag, V8 never case-folds a non-ASCII character to ASCII,
+/// but `regress` does: `s` matches U+017F, `i` matches U+0131 and `[a-z]`
+/// matches U+212A. In the BMP, only these three differ for a pattern that can
+/// only name ASCII. For such a pattern, the input swaps each for a stand-in
+/// of the same UTF-8 width that no case rule touches, so match offsets still
+/// index the original input. Patterns that can name non-ASCII characters
+/// (literally or through `\x`, `\u` or `\<digit>` escapes) keep matching as
+/// before; docs/desktop-rebuild.md records that unsupported remainder.
+struct QuantityRegex {
+    regex: regress::Regex,
+    names_only_ascii: bool,
+}
+impl QuantityRegex {
+    fn new(pattern: &str) -> Result<Self, regress::Error> {
+        let names_only_ascii = pattern.is_ascii()
+            && !pattern
+                .as_bytes()
+                .windows(2)
+                .any(|w| w[0] == b'\\' && matches!(w[1], b'x' | b'u' | b'0'..=b'9'));
+        Ok(Self {
+            regex: regress::Regex::with_flags(pattern, "i")?,
+            names_only_ascii,
+        })
+    }
+    fn find(&self, input: &str) -> Option<regress::Match> {
+        if !self.names_only_ascii || input.is_ascii() {
+            return self.regex.find(input);
+        }
+        let input: String = input
+            .chars()
+            .map(|c| match c {
+                '\u{17f}' | '\u{131}' => '\u{2bc}',
+                '\u{212a}' => '\u{2129}',
+                c => c,
+            })
+            .collect();
+        self.regex.find(&input)
     }
 }
 /// Turns the quantity regex into one that matches the quantity suffix of a
@@ -614,8 +655,8 @@ pub(super) fn parse(
             slug.len()
                 .saturating_add(profile.quantity.regex.len().saturating_mul(8)),
         )?;
-        if let Some(strip) = &naming.strip {
-            slug = replace_match(&slug, strip, "");
+        if let Some(m) = naming.strip.as_ref().and_then(|strip| strip.find(&slug)) {
+            slug.replace_range(m.range, "");
         }
     }
     if slug.is_empty() {

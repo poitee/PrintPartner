@@ -681,6 +681,12 @@ enum ClientAttempt {
     SortBudget(usize),
     SortCancel(usize),
     SortMatch,
+    /// A `preparation-quantity-folding-node.jsonl` case; `refuse` exhausts
+    /// the comparison budget once the revision is read.
+    Quantity {
+        name: &'static str,
+        refuse: bool,
+    },
 }
 struct ClientReads {
     inner: Reads,
@@ -698,6 +704,9 @@ impl DraftReads for ClientReads {
                 ClientAttempt::SortBudget(sort) | ClientAttempt::SortCancel(sort) => Some(sort),
                 _ => None,
             };
+            if let ClientAttempt::Quantity { refuse: true, .. } = self.attempt {
+                b.limit_comparisons_after(0);
+            }
             if let Some(sort) = target {
                 PATH_SORT_TEST.with(|probe| {
                     *probe.borrow_mut() = Some(PathSortProbe {
@@ -754,13 +763,25 @@ fn client_attempt(attempt: ClientAttempt) {
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
-    let case: Value = serde_json::from_str(match attempt {
+    let case: Value = match attempt {
         ClientAttempt::SortBudget(_) | ClientAttempt::SortCancel(_) | ClientAttempt::SortMatch => {
-            include_str!("../../tests/fixtures/preparation-path-sort-node.json")
+            serde_json::from_str(include_str!(
+                "../../tests/fixtures/preparation-path-sort-node.json"
+            ))
+            .unwrap()
         }
-        _ => include_str!("../../tests/fixtures/preparation-hints-node.json"),
-    })
-    .unwrap();
+        ClientAttempt::Quantity { name, .. } => {
+            include_str!("../../tests/fixtures/preparation-quantity-folding-node.jsonl")
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .find(|case| case["name"] == name)
+                .unwrap()
+        }
+        _ => serde_json::from_str(include_str!(
+            "../../tests/fixtures/preparation-hints-node.json"
+        ))
+        .unwrap(),
+    };
     let root = FixtureRoot(
         std::env::temp_dir().join(format!("pp-preparation-client-{}", rand::random::<u64>())),
     );
@@ -777,6 +798,9 @@ fn client_attempt(attempt: ClientAttempt) {
     )
     .unwrap();
     let connection = Connection::open(&database).unwrap();
+    for step in case["setup"].as_array().into_iter().flatten() {
+        connection.execute_batch(step.as_str().unwrap()).unwrap();
+    }
     let files: Vec<Value> = case["files"]
         .as_array()
         .unwrap()
@@ -844,7 +868,16 @@ fn client_attempt(attempt: ClientAttempt) {
         Arc::new(AtomicBool::new(false)),
         Duration::from_secs(60),
     );
-    if !matches!(attempt, ClientAttempt::Match | ClientAttempt::SortMatch) {
+    if let ClientAttempt::Quantity { refuse: true, .. } = attempt {
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "LimitExceeded(ComparisonWork)"
+        );
+        assert_eq!(snapshot(), before);
+    } else if !matches!(
+        attempt,
+        ClientAttempt::Match | ClientAttempt::SortMatch | ClientAttempt::Quantity { .. }
+    ) {
         let error = result.unwrap_err();
         if matches!(
             attempt,
@@ -938,4 +971,22 @@ fn preparation_path_sort_honors_cancellation() {
 #[test]
 fn preparation_path_sort_preserves_node_order() {
     client_attempt(ClientAttempt::SortMatch);
+}
+#[test]
+fn preparation_long_s_quantity_matches_v8() {
+    for refuse in [false, true] {
+        client_attempt(ClientAttempt::Quantity {
+            name: "long-s",
+            refuse,
+        });
+    }
+}
+#[test]
+fn preparation_ascii_quantity_matching_is_unchanged() {
+    for refuse in [false, true] {
+        client_attempt(ClientAttempt::Quantity {
+            name: "ascii",
+            refuse,
+        });
+    }
 }

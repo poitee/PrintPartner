@@ -409,6 +409,27 @@ cmp /persist/tmp/preparation-trim.jsonl rust/crates/pp-storage/tests/fixtures/pr
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_preparation_trim
 ```
 
+Quantity regexes run with `/i` and no `u` flag. V8 then never case-folds a
+non-ASCII character to ASCII, but `regress` 0.11.1 and 0.12.0 do. Across the
+BMP, ASCII patterns see exactly three characters differently: U+017F long s and
+U+0131 dotless i match `s` and `i`, and U+212A Kelvin sign matches `[a-z]` and
+`\w`. When the pattern is ASCII with no `\x`, `\u` or backslash-digit escape,
+preparation matches against a copy of the input with U+02BC in place of U+017F
+and U+0131 and U+2129 in place of U+212A. These stand-ins have the same UTF-8
+width and no case mappings, so match offsets index the original name. Other
+patterns keep the old matching. Two divergences remain for them: U+1E9E and
+U+212B match `[\x80-\xff]` in `regress` but not in V8, and non-ASCII pattern
+text is not covered (GRE-836). `preparation_long_s_quantity_matches_v8` and
+`preparation_ascii_quantity_matching_is_unchanged` drive the public recompute
+client against literal Node 22.23.3 outcomes. Both also refuse at the
+comparison budget and check that draft rows and STL files are unchanged.
+
+```sh
+npx --yes --package=node@22 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/preparation-quantity-folding-node.mjs web/apps/server > /persist/tmp/quantity-folding.jsonl
+cmp /persist/tmp/quantity-folding.jsonl rust/crates/pp-storage/tests/fixtures/preparation-quantity-folding-node.jsonl
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib -- _quantity_
+```
+
 Tests compare literal Node fingerprints, Parts and digests, propagate resource
 refusals, and cancel at every budget checkpoint. Regenerate the fixtures twice:
 
