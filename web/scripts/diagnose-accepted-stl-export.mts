@@ -264,7 +264,7 @@ async function main() {
       measurement.restore();
     }
     report.validation = validate(root, result, units);
-    assert.equal(measurement.flush.calls, 6, "Expected the source flush, four directory flushes, and the ZIP flush");
+    assert.equal(measurement.flush.calls, 5, "Expected the source flush, three directory flushes, and the ZIP flush");
     assert.equal(measurement.flush.callbacks, measurement.flush.calls);
     assert.equal(measurement.flush.errors + measurement.flush.synchronousThrows, 0);
     assert.equal(measurement.flush.inflight, 0);

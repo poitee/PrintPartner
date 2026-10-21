@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -41,6 +41,7 @@ import {
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
 const COPY_BATCH_SIZE = 4;
+const execFileAsync = promisify(execFile);
 const flushFile = promisify(fsync);
 
 export type StlPackGroupBy = "color" | "color_dir";
@@ -213,9 +214,9 @@ async function writeVerifiedStream(
   path: string,
   createStream: () => ReturnType<typeof createReadStream>,
   expected: Readonly<{ size: number; sha256: string }>,
-  options?: Readonly<{ charge?: boolean; flush?: boolean }>,
+  options?: Readonly<{ flush?: boolean }>,
 ): Promise<boolean> {
-  if (options?.charge !== false) chargeTenantDiskBytes(expected.size);
+  chargeTenantDiskBytes(expected.size);
   const descriptor = openSync(
     path,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -282,11 +283,15 @@ async function flushDirectory(directory: string): Promise<void> {
   }
 }
 
-// Linux `sync -f` is syncfs: one barrier for every dirty file on that filesystem.
-function filesystemSync(directory: string): boolean {
+// Linux `sync -f` is syncfs. Exit 0 is the only success. The child does not block the event loop.
+async function filesystemSync(directory: string): Promise<boolean> {
   if (process.platform !== "linux") return false;
-  const result = spawnSync("sync", ["-f", directory], { stdio: "ignore" });
-  return result.status === 0;
+  try {
+    await execFileAsync("sync", ["-f", directory]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fsyncIndependentFile(path: string): Promise<void> {
@@ -298,14 +303,10 @@ async function fsyncIndependentFile(path: string): Promise<void> {
   }
 }
 
-async function durableCopyBytes(
-  stage: string,
-  directory: string,
-  files: readonly ExpectedFile[],
-): Promise<void> {
-  if (filesystemSync(stage)) return;
+async function persistPlacedBytes(stage: string, files: readonly ExpectedFile[]): Promise<void> {
+  if (await filesystemSync(stage)) return;
   for (const file of files) {
-    await fsyncIndependentFile(join(directory, basename(file.relativePath)));
+    await fsyncIndependentFile(join(stage, ...file.relativePath.split("/")));
   }
 }
 
@@ -643,6 +644,7 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
   const revisionSegment = basis ? `revision-${basis.revisionId}` : "empty";
   const warnings: AcceptedStlBundleWarning[] = [];
   const expected: ExpectedFile[] = [];
+  const placedDirectories: string[] = [];
   const fileCounts: Record<string, number> = {};
   const usedNames = new Map<string, Set<string>>();
   let stage: string | null = null;
@@ -711,20 +713,20 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
             sha256: opened.lease.expectedSha256,
           });
           if (!placed) return { kind: "output_failure" };
-          await durableCopyBytes(stage, directory, placed);
-          await flushDurableNames(stage, [directory]);
+          placedDirectories.push(directory);
           expected.push(...placed);
           fileCounts[role] = (fileCounts[role] ?? 0) + placed.length;
         } finally {
           rmSync(stagedSource, { force: true });
         }
-        await flushDirectory(stage);
       } finally {
         opened.lease.close();
       }
     }
     let hasBundle = false;
     if (expected.length > 0) {
+      await persistPlacedBytes(stage, expected);
+      await flushDurableNames(stage, placedDirectories);
       const zip = await writeZip(
         stage,
         expected,
