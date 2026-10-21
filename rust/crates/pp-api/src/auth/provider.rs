@@ -97,6 +97,40 @@ impl ProviderClient {
             flows: Mutex::default(),
         })))
     }
+
+    /// Point token and profile exchange at one already-running loopback fake.
+    /// Authorize URLs stay on the public providers. The client must still be
+    /// uniquely owned, and the origin must be bare `http://127.0.0.1:<port>`.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn redirect_exchange_to_loopback_for_tests(&mut self, origin: &str) -> Result<()> {
+        let url = reqwest::Url::parse(origin)?;
+        ensure!(
+            url.scheme() == "http"
+                && url.host_str() == Some("127.0.0.1")
+                && url.port().is_some()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && url.username().is_empty()
+                && url.password().is_none(),
+            "OAuth exchange override requires a bare loopback HTTP origin"
+        );
+        let Some(inner) = Arc::get_mut(&mut self.0) else {
+            anyhow::bail!("OAuth client is already shared");
+        };
+        let base = url.as_str().trim_end_matches('/');
+        if let Some(config) = inner.github.as_mut() {
+            config.endpoints.token = format!("{base}/github/token");
+            config.endpoints.profile = format!("{base}/github/user");
+            config.endpoints.email = Some(format!("{base}/github/emails"));
+        }
+        if let Some(config) = inner.discord.as_mut() {
+            config.endpoints.token = format!("{base}/discord/token");
+            config.endpoints.profile = format!("{base}/discord/user");
+        }
+        Ok(())
+    }
+
     fn config(&self, provider: Provider) -> Option<&ProviderConfig> {
         match provider {
             Provider::Github => self.0.github.as_ref(),
