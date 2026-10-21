@@ -42,6 +42,8 @@ mod siblings;
 #[cfg(test)]
 mod siblings_tests;
 mod yaml;
+#[cfg(test)]
+mod yaml_continuation_tests;
 
 #[derive(Clone, Debug)]
 pub enum Request {
