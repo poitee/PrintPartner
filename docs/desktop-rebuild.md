@@ -160,6 +160,57 @@ and keys follow JavaScript property order. `text`, `optional_text`, and
 `join`, an array that reaches itself through an alias contributes an empty
 string, so `project: &a [*a]` coerces to `""`.
 
+#### Known differences
+
+[GRE-841](https://linear.app/greetz/issue/GRE-841/p2-working-draft-yaml-remaining-flow-key-and-verbatim-tag-parity-gaps)
+records flow-key and verbatim-tag documents that `Document::parse` and
+js-yaml 5.4.3 do not treat the same way. The parity bar in the
+[definition of done](development/definition-of-done.md) still requires a
+match on real working-draft files and on every document Node's writer
+emits. The forms below come from generated differential cases. The app
+does not write them, and a person editing a draft does not produce
+them. They stay unsupported.
+
+Rust refuses these documents. js-yaml accepts them:
+
+- An explicit empty flow key, such as `[? ]`, `[? : x]`, `[? , x]`, a
+  `?` before the end of a flow line, or `[a, ? ]`. js-yaml returns the
+  key `"null"`. `[? ]` loads as `[{"null":null}]`.
+- An empty implicit flow key, or a flow colon with no space before a
+  tab or a nested collection. `[:[]]` loads as `[{"null":[]}]`. The
+  same spacing difference includes `{:[]}`, `{a:\tx}`, `{"q":\tx}`,
+  `[a:[]]`, and a multi-line quoted flow key followed by a tab.
+- A verbatim tag with no space before the following text, such as
+  `!<tag:yaml.org,2002:str>b c1`.
+- A block `:` line after a flow value. One shape is the key `a`, a flow
+  list on the next line, a blank line, and then `: ]`.
+- A line-broken empty tagged flow entry. The text `k: [!!str`, a line
+  break, and `]` loads in js-yaml as `{"k":[""]}`.
+- A property on the line after a flow mapping, then a colon. One shape
+  is `- - {a: "a`, a continued line `   b", !!str`, and then `:x}`.
+
+Rust accepts these documents. js-yaml rejects them:
+
+- A comment with no space after a quoted key's colon, such as
+  `{"q":# c`, a newline, and `}`, the same shape inside a flow
+  sequence, and `{"q" :# c` with a space only before the colon. A space
+  before `#` is a different document. js-yaml accepts that spaced form
+  as one key whose value is null.
+- A flow `?` followed directly by `,`, `]`, or `}`. Examples are `[?]`,
+  `{?}`, `[x, ?]`, and `[!!str ?]`.
+- A tab used as the separator in block structure. Examples are a tab
+  before `- x` under a key, a tab between `-` and `:`, and a tab
+  between `:` and `!!str`.
+- A tag before an implicit key on its own line. One shape is the key
+  `a`, then a line `  !<tag:yaml.org,2002:str> &x : `. js-yaml reports
+  an unknown mapping tag.
+
+`fixtures/parity/yaml-flow-properties/` records Node's results for
+explicit empty flow keys, implicit empty flow keys, adjacent
+verbatim-tag text, a block colon after a flow collection, a multi-line
+quoted flow key followed by a tab, and a comment immediately after a
+quoted key's colon. That corpus does not assert Rust parity.
+
 The remaining D12 units are the mutating executor and preparation.
 
 ```sh
