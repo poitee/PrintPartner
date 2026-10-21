@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -281,6 +282,33 @@ async function flushDirectory(directory: string): Promise<void> {
   }
 }
 
+// Linux `sync -f` is syncfs: one barrier for every dirty file on that filesystem.
+function filesystemSync(directory: string): boolean {
+  if (process.platform !== "linux") return false;
+  const result = spawnSync("sync", ["-f", directory], { stdio: "ignore" });
+  return result.status === 0;
+}
+
+async function fsyncIndependentFile(path: string): Promise<void> {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    await flushFile(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+async function durableCopyBytes(
+  stage: string,
+  directory: string,
+  files: readonly ExpectedFile[],
+): Promise<void> {
+  if (filesystemSync(stage)) return;
+  for (const file of files) {
+    await fsyncIndependentFile(join(directory, basename(file.relativePath)));
+  }
+}
+
 async function flushDurableNames(stage: string, directories: readonly string[]): Promise<void> {
   const seen = new Set<string>();
   for (const directory of directories) {
@@ -292,8 +320,8 @@ async function flushDurableNames(stage: string, directories: readonly string[]):
   }
 }
 
-// Each loose unit is its own file. A per-file flush cannot finish 10,001 units
-// inside the export deadline, so the caller flushes the holding directory once.
+// Each loose unit is its own file. Directory fsync persists names, not file bytes.
+// The caller syncs those bytes once, then flushes the holding directories.
 async function placeVerifiedUnitFiles(input: Readonly<{
   directory: string;
   source: string;
@@ -683,6 +711,7 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
             sha256: opened.lease.expectedSha256,
           });
           if (!placed) return { kind: "output_failure" };
+          await durableCopyBytes(stage, directory, placed);
           await flushDurableNames(stage, [directory]);
           expected.push(...placed);
           fileCounts[role] = (fileCounts[role] ?? 0) + placed.length;

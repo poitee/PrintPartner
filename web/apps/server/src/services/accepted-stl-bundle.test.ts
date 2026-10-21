@@ -667,15 +667,20 @@ describe("materializeAcceptedStlBundle", () => {
     const firstPath = join(published, "widget_01.stl");
     const secondPath = join(published, "widget_02.stl");
     const lastPath = join(published, "widget_10001.stl");
-    const first = statSync(firstPath);
-    const second = statSync(secondPath);
-    const last = statSync(lastPath);
     const original = Buffer.from("accepted-stl");
     expect(readFileSync(firstPath)).toEqual(original);
     expect(readFileSync(secondPath)).toEqual(original);
     expect(readFileSync(lastPath)).toEqual(original);
-    expect(new Set([first.ino, second.ino, last.ino]).size).toBe(3);
-    expect([first.nlink, second.nlink, last.nlink]).toEqual([1, 1, 1]);
+    const names = readdirSync(published).filter((name) => name.endsWith(".stl"));
+    const inodes = new Set<number>();
+    for (const name of names) {
+      const stats = statSync(join(published, name));
+      expect(stats.isFile()).toBe(true);
+      expect(stats.nlink).toBe(1);
+      inodes.add(stats.ino);
+    }
+    expect(names).toHaveLength(10_001);
+    expect(inodes.size).toBe(10_001);
     const edited = Buffer.from("edited-unit!");
     writeFileSync(firstPath, edited);
     expect(readFileSync(firstPath)).toEqual(edited);
