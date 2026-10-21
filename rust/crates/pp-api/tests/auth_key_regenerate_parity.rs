@@ -351,7 +351,9 @@ async fn run_case(case: &Value, mutate: bool) {
     assert_eq!(snapshot(&server, &names), case["before"], "before rotation");
     let stored_before = stored_settings(&server);
     let target = match case["id"].as_str().unwrap() {
-        "owner-session-rotation" | "missing-session" => keys["owner"]["id"].as_str().unwrap(),
+        "owner-session-rotation" | "missing-session" | "invalid-session" => {
+            keys["owner"]["id"].as_str().unwrap()
+        }
         "foreign-tenant" => keys["foreign"]["id"].as_str().unwrap(),
         "missing-key" => "key_missing",
         _ => panic!("unknown fixture case"),
@@ -370,7 +372,16 @@ async fn run_case(case: &Value, mutate: bool) {
         entry["path"],
         format!("/settings/api-keys/{normalized_target}/regenerate")
     );
-    let cookie = entry["actor"].as_str().map(|actor| cookies[actor].as_str());
+    let cookie = match (case["id"].as_str().unwrap(), entry.get("credential")) {
+        ("invalid-session", Some(credential)) => {
+            assert_eq!(credential, "<invalid-session>");
+            assert!(entry["actor"].is_null());
+            Some("pp_session=invalid-session")
+        }
+        ("invalid-session", None) => panic!("invalid-session case requires an explicit credential"),
+        (_, None) => entry["actor"].as_str().map(|actor| cookies[actor].as_str()),
+        _ => panic!("unknown rotation credential"),
+    };
     let response = server.post(&path, json!({}), cookie).await;
     let status = response.status().as_u16();
     assert_eq!(json!(status), entry["status"], "rotation HTTP status");
@@ -506,7 +517,7 @@ fn fixture() -> Value {
 async fn node_regeneration_transcripts_match_rust_router_and_client() {
     let fixture = fixture();
     let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 4);
+    assert_eq!(cases.len(), 5);
     for case in cases {
         run_case(case, false).await;
     }
