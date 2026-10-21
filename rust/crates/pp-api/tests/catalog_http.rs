@@ -1,0 +1,401 @@
+use pp_storage::{
+    Limits, WriterOwner,
+    catalog::{CreateSource, Outcome, Request, SourceSummary},
+};
+#[cfg(feature = "desktop_rebuild")]
+use pp_storage::{
+    auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
+    catalog::Credentials,
+};
+use reqwest::{Client, Method};
+use serde_json::{Map, Value, json};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
+#[cfg(feature = "desktop_rebuild")]
+fn policy() -> AuthPolicy {
+    AuthPolicy {
+        registration: RegistrationPolicy::FirstAccountOnly,
+        first_user: FirstUserTenant::NewUser,
+        session_tenant: SessionTenantPolicy::SingleAccountDefault,
+    }
+}
+
+fn open() -> (Arc<Mutex<WriterOwner>>, PathBuf) {
+    let directory = std::env::temp_dir().join(format!("pp-catalog-http-{}", random()));
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    (Arc::new(Mutex::new(owner)), directory)
+}
+
+fn random() -> String {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).unwrap();
+    hex::encode(bytes)
+}
+
+fn sample(name: &str, note: &str) -> CreateSource {
+    let metadata: Map<String, Value> = serde_json::from_value(json!({
+        "note": note,
+        "remote_update_status": "up_to_date",
+        "remote_checked_at": "2026-01-02T00:00:00.000Z"
+    }))
+    .unwrap();
+    CreateSource {
+        name: name.into(),
+        url: Some(format!("https://example.test/{name}")),
+        branch: Some("main".into()),
+        tag: Some("v1".into()),
+        source_kind: Some("github".into()),
+        source_type: Some("git".into()),
+        role: Some("reference".into()),
+        metadata: Some(metadata),
+    }
+}
+
+fn list(owner: &WriterOwner) -> Vec<SourceSummary> {
+    match owner
+        .local_source_catalog()
+        .execute(Request::List {})
+        .unwrap()
+    {
+        Outcome::Sources(rows) => rows,
+        _ => panic!("list"),
+    }
+}
+
+fn seed(owner: &WriterOwner) -> Vec<SourceSummary> {
+    let catalog = owner.local_source_catalog();
+    for (name, note) in [("Alpha", "kept"), ("Zebra", "other")] {
+        catalog
+            .execute(Request::Create {
+                source: sample(name, note),
+            })
+            .unwrap();
+    }
+    let rows = list(owner);
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["Alpha", "Zebra"]
+    );
+    assert_eq!(rows[0].metadata.as_ref().unwrap()["note"], "kept");
+    assert_eq!(rows[0].update_status.as_deref(), Some("up_to_date"));
+    assert!(rows[0].content_available && rows[0].local_path.is_some());
+    rows
+}
+
+fn files(dir: &Path) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(&path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                pending.push(entry.path());
+            } else {
+                let rel = entry
+                    .path()
+                    .strip_prefix(dir)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                out.push((rel, entry.metadata().unwrap().len()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+struct Server {
+    origin: String,
+    client: Client,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Server {
+    async fn spawn(listener: tokio::net::TcpListener, router: axum::Router) -> Self {
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+        });
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .build()
+            .unwrap();
+        Self {
+            origin,
+            client,
+            shutdown: Some(shutdown),
+            task: Some(task),
+        }
+    }
+
+    async fn send(&self, method: Method, path: &str, headers: &[(&str, &str)]) -> (u16, Value) {
+        let mut request = self
+            .client
+            .request(method, format!("{}{path}", self.origin))
+            .header("Origin", &self.origin);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = request.send().await.unwrap();
+        let status = response.status().as_u16();
+        if matches!(status, 200 | 401 | 403) {
+            assert_eq!(
+                response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok()),
+                Some("application/json")
+            );
+        }
+        (status, response.json().await.unwrap_or(Value::Null))
+    }
+
+    async fn stop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(task) = self.task.take() {
+            task.await.unwrap();
+        }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn listener() -> (tokio::net::TcpListener, String) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    (listener, origin)
+}
+
+fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: PathBuf) {
+    let Ok(owner) = Arc::try_unwrap(owner) else {
+        panic!("router still holds storage");
+    };
+    owner.into_inner().unwrap().shutdown().unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn catalog_reads_flag_off_are_404() {
+    let (owner, directory) = open();
+    let before = {
+        let guard = owner.lock().unwrap();
+        seed(&guard)
+    };
+    let snapshot = files(&directory);
+    let (listener, _) = listener().await;
+    let mut server = Server::spawn(listener, axum::Router::new()).await;
+    refuse_mounted_reads(&server).await;
+    server.stop().await;
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), before);
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_reads_flag_off_are_404() {
+    use pp_api::catalog::{CatalogHttpConfig, admit_catalog_routes};
+    let (owner, directory) = open();
+    let before = {
+        let guard = owner.lock().unwrap();
+        seed(&guard)
+    };
+    let snapshot = files(&directory);
+    for flag in [
+        None,
+        Some(""),
+        Some("0"),
+        Some("false"),
+        Some("TRUE"),
+        Some(" true "),
+    ] {
+        let (bound, origin) = listener().await;
+        let router = admit_catalog_routes(
+            CatalogHttpConfig::from_startup(&origin, "default", policy(), flag).unwrap(),
+            Arc::clone(&owner),
+        );
+        let mut server = Server::spawn(bound, router).await;
+        refuse_mounted_reads(&server).await;
+        server.stop().await;
+    }
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), before);
+    shutdown(owner, directory);
+}
+
+async fn refuse_mounted_reads(server: &Server) {
+    for path in [
+        "/sources",
+        "/sources/1",
+        "/api/v1/sources",
+        "/api/v1/sources/1",
+    ] {
+        let (status, body) = server.send(Method::GET, path, &[]).await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("sources").is_none() && body.get("name").is_none());
+    }
+    let (status, _) = server.send(Method::POST, "/sources", &[]).await;
+    assert_eq!(status, 404);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_reads_match_existing_source_metadata() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        catalog::{CatalogHttpConfig, admit_catalog_routes},
+    };
+    let (owner, directory) = open();
+    let seeded = {
+        let guard = owner.lock().unwrap();
+        seed(&guard)
+    };
+    let (bound, origin) = listener().await;
+    let auth = owner.lock().unwrap().auth_with_policy(policy()).unwrap();
+    let router = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(&origin, "default", policy(), Some("true")).unwrap(),
+        Arc::clone(&owner),
+    )
+    .merge(auth_router(
+        AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false).unwrap(),
+        auth,
+        ProviderClient::new(None, None).unwrap(),
+        ResetMailer::disabled(),
+    ));
+    let mut server = Server::spawn(bound, router).await;
+    let registered = server
+        .client
+        .post(format!("{}/auth/register", server.origin))
+        .header("Origin", &server.origin)
+        .json(&json!({"email":"reader@example.test","password":"password-1234"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let cookie = registered.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let token = cookie.strip_prefix("pp_session=").unwrap();
+    let session_rows = {
+        let guard = owner.lock().unwrap();
+        match guard
+            .source_catalog_with_policy(Credentials::Session(Secret::new(token.into())), policy())
+            .unwrap()
+            .execute(Request::List {})
+            .unwrap()
+        {
+            Outcome::Sources(rows) => rows,
+            _ => panic!("session list"),
+        }
+    };
+    assert_eq!(session_rows, seeded);
+    let expected = json!({ "sources": session_rows });
+    for prefix in ["", "/api/v1"] {
+        let (status, body) = server
+            .send(
+                Method::GET,
+                &format!("{prefix}/sources"),
+                &[("Cookie", &cookie)],
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix}");
+        assert_eq!(body, expected);
+        for row in &session_rows {
+            let (status, body) = server
+                .send(
+                    Method::GET,
+                    &format!("{prefix}/sources/{}", row.id),
+                    &[("Cookie", &cookie)],
+                )
+                .await;
+            assert_eq!(status, 200);
+            assert_eq!(body, serde_json::to_value(row).unwrap());
+        }
+    }
+    let key = server
+        .client
+        .post(format!("{}/settings/api-keys", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(key.status(), 201);
+    let key: Value = key.json().await.unwrap();
+    let bearer = format!("Bearer {}", key["key"].as_str().unwrap());
+    let (status, body) = server
+        .send(Method::GET, "/sources", &[("Authorization", &bearer)])
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body, expected);
+    let rows = list(&owner.lock().unwrap());
+    let snapshot = files(&directory);
+    let (status, body) = server.send(Method::GET, "/sources", &[]).await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (401, Some("Authentication required"))
+    );
+    let (status, body) = server
+        .send(
+            Method::GET,
+            "/sources",
+            &[("Cookie", &cookie), ("x-forwarded-for", "203.0.113.8")],
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (403, Some("Invalid request host"))
+    );
+    let (status, body) = server
+        .send(Method::GET, "/sources/nope", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    let (status, _) = server
+        .send(Method::POST, "/sources", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!(status, 405);
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), rows);
+    let (status, body) = server
+        .send(Method::GET, "/sources/999999", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    assert_eq!(list(&owner.lock().unwrap()), rows);
+    server.stop().await;
+    shutdown(owner, directory);
+}
