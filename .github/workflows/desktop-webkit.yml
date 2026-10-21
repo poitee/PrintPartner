@@ -80,6 +80,7 @@ jobs:
         if: runner.environment != 'self-hosted' || runner.os != 'Linux'
         with:
           workspaces: rust -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build and stage the production desktop assets
         run: |
           npm --prefix web ci

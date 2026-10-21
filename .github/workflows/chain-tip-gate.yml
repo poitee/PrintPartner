@@ -30,9 +30,15 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+      # Save only when the gated commit is the main commit that dispatched this run.
+      - name: Check whether the gated commit is main
+        id: tree
+        run: |
+          if [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ]; then echo is-main=true; else echo is-main=false; fi >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust -> target
+          save-if: ${{ github.ref == 'refs/heads/main' && steps.tree.outputs.is-main == 'true' }}
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: nextest@0.9.148

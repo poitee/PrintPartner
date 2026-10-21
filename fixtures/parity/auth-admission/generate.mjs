@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createRequire } from "node:module";
@@ -15,16 +15,19 @@ const canonicalNode = "v22.23.3";
 const email = "admission@example.test";
 const registration = { email, password: "fixture-admission-password", display_name: "Admission" };
 const tables = { users: "users", sessions: "sessions", reset_tokens: "password_reset_tokens", identities: "auth_identities" };
+const resetToken = "fixture-admission-reset-token";
 const bodies = {
   register: registration, forgot: { email }, login: { email, password: registration.password }, logout: {},
+  reset: { token: resetToken, password: "fixture-admission-password-reset" }, me: {}, create: {}, revoke: {}, regenerate: {},
   change: { current_password: registration.password, new_password: "fixture-admission-password-changed" },
 };
-const paths = { register: "register", forgot: "forgot-password", login: "login", logout: "logout", change: "change-password" };
+const paths = { register: "register", forgot: "forgot-password", login: "login", logout: "logout", change: "change-password", reset: "reset-password", me: "me" };
 const productive = {
   register: { users: 1, sessions: 1, reset_tokens: 0, identities: 0 }, forgot: { users: 0, sessions: 0, reset_tokens: 1, identities: 0 },
   login: { users: 0, sessions: 1, reset_tokens: 0, identities: 0 }, logout: { users: 0, sessions: -1, reset_tokens: 0, identities: 0 },
   change: { users: 0, sessions: 0, reset_tokens: 0, identities: 0 },
 };
+for (const route of ["reset", "me", "create", "revoke", "regenerate"]) productive[route] = { users: 0, sessions: 0, reset_tokens: route === "reset" ? -1 : 0, identities: 0 };
 const guards = ["control", "foreign-origin", "missing-origin", "foreign-host"];
 const extraHeaders = {
   "duplicate-host": ["host", "evil.example"], "duplicate-origin": ["origin", "http://evil.example"],
@@ -37,6 +40,9 @@ const cases = [
   ...[...guards, ...Object.keys(extraHeaders)].map((name) => ["login", name]),
   ...guards.map((name) => ["logout", name]),
   ...guards.map((name) => ["change", name]),
+  ...guards.map((name) => ["reset", name]),
+  ...[...guards, ...Object.keys(extraHeaders), "cross-site"].map((name) => ["me", name]),
+  ...["create", "revoke", "regenerate"].flatMap((route) => [...guards, ...Object.keys(extraHeaders)].map((name) => [route, name])),
 ].map(([route, name]) => ({
   id: `${route}/${name}`, route,
   origin: name.startsWith("foreign-origin") ? "foreign" : name === "missing-origin" ? "absent" : "listener",
@@ -46,10 +52,10 @@ const cases = [
     : name === "at-16384" ? { kind: "exact_bytes", bytes: 16384 }
     : name === "over-16384" ? { kind: "exact_bytes", bytes: 16385 }
     : name.endsWith("over-1048576") ? { kind: "exact_bytes", bytes: 1048577 } : { kind: "valid" },
-  ...(extraHeaders[name] && { extra_header: extraHeaders[name] }),
+  ...((extraHeaders[name] || name === "cross-site") && { extra_header: extraHeaders[name] ?? ["sec-fetch-site", "cross-site"] }),
 }));
 function bodyFor(recipe) {
-  const base = JSON.stringify(bodies[recipe.route]);
+  const base = recipe.route === "me" ? "" : JSON.stringify(bodies[recipe.route]);
   if (recipe.body.kind === "raw") return Buffer.from(recipe.body.text);
   if (recipe.body.kind === "valid") return Buffer.from(base);
   assert(recipe.body.bytes >= Buffer.byteLength(base));
@@ -62,7 +68,7 @@ async function bounded(promise, ms, label) {
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms); })]); }
   finally { clearTimeout(timer); }
 }
-function post(origin, recipe, cookie) {
+function send(origin, recipe, cookie, keyId) {
   return new Promise((resolve, reject) => {
     let captured = false;
     const body = bodyFor(recipe);
@@ -70,7 +76,11 @@ function post(origin, recipe, cookie) {
     if (recipe.origin !== "absent") headers.push("origin", recipe.origin === "foreign" ? "http://evil.example" : origin);
     if (recipe.extra_header) headers.push(...recipe.extra_header);
     if (cookie) headers.push("cookie", cookie);
-    const req = request(`${origin}/auth/${paths[recipe.route]}`, { method: "POST", headers, agent: false }, (res) => {
+    const path = ["create", "revoke", "regenerate"].includes(recipe.route)
+      ? `/settings/api-keys${recipe.route === "create" ? "" : `/${keyId}${recipe.route === "regenerate" ? "/regenerate" : ""}`}`
+      : `/auth/${paths[recipe.route]}`;
+    const method = recipe.route === "me" ? "GET" : recipe.route === "revoke" ? "DELETE" : "POST";
+    const req = request(`${origin}${path}`, { method, headers, agent: false }, (res) => {
       captured = true;
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
@@ -138,24 +148,36 @@ if (process.argv.includes("--probe")) {
       await within(app.listen({ host: "127.0.0.1", port: 0 }), 5000, "HTTP listen");
       const origin = `http://127.0.0.1:${app.server.address().port}`;
       db = new Database(join(directory, "print-partner.db"));
-      let cookie;
+      let cookie, keyId;
       if (recipe.route !== "register") {
-        const seed = await within(post(origin, cases[0]), 10000, "seed request");
+        const seed = await within(send(origin, cases[0]), 10000, "seed request");
         assert.equal(seed.status, 200, "seed registration");
-        if (["logout", "change"].includes(recipe.route)) cookie = seed.cookie.find((value) => value.startsWith("pp_session=")).split(";")[0];
+        if (["logout", "change", "me", "create", "revoke", "regenerate"].includes(recipe.route)) cookie = seed.cookie.find((value) => value.startsWith("pp_session=")).split(";")[0];
+      }
+      if (recipe.route === "reset") {
+        const user = db.prepare("SELECT id FROM users WHERE email=?").get(email);
+        db.prepare("INSERT INTO password_reset_tokens(id,user_id,expires_at,created_at) VALUES(?,?,?,?)").run(
+          createHash("sha256").update(resetToken).digest("hex"), user.id, "2099-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
+      }
+      if (["create", "revoke", "regenerate"].includes(recipe.route)) {
+        const seed = await within(send(origin, cases.find((row) => row.id === "create/control"), cookie), 10000, "seed API key");
+        assert.equal(seed.status, 201, "seed API key");
+        keyId = seed.body.id;
+        assert.equal(typeof keyId, "string");
       }
       const snapshot = () => {
         const state = Object.fromEntries(Object.entries(tables).map(([key, table]) => [key, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+        state.settings = db.prepare("SELECT * FROM app_settings ORDER BY rowid").all();
         state.sequence = db.prepare("SELECT 1 FROM sqlite_master WHERE name='sqlite_sequence'").get() ? db.prepare("SELECT * FROM sqlite_sequence ORDER BY name").all() : null;
         return state;
       };
       const before = snapshot();
-      const response = await within(post(origin, recipe, cookie), 10000, "case request");
+      const response = await within(send(origin, recipe, cookie, keyId), 10000, "case request");
       await within(app.close(), 10000, "HTTP stop");
       app = undefined;
       await within(ports.db.close(), 5000, "database stop");
       const after = snapshot();
-      result = { before, after, response, mail: { ...mail.counts } };
+      result = { before, after, response, keyId, mail: { ...mail.counts } };
     } catch (error) { failure = error; }
     finally {
       for (const clean of [async () => { if (app) { app.server.closeAllConnections(); await within(app.close(), 10000, "HTTP cleanup"); } },
@@ -165,7 +187,7 @@ if (process.argv.includes("--probe")) {
       }
     }
     if (failure) { if (cleanupErrors.length) console.error(cleanupErrors); throw failure; }
-    const { before, after, response } = result;
+    const { before, after, response, keyId } = result;
     const rows = Object.fromEntries(Object.keys(tables).map((key) => [key, after[key].length - before[key].length]));
     const session_issued = response.cookie.some((cookie) => /^pp_session=[^;]+;/.test(cookie));
     const admitted = response.status < 400;
@@ -179,17 +201,36 @@ if (process.argv.includes("--probe")) {
         assert.equal(session_issued, false);
       } else {
         assert.deepEqual(rows, productive[recipe.route], `${recipe.id}: productive rows`);
-        assert(state_changed, `${recipe.id}: productive state change`);
-        assert.equal(session_issued, ["register", "login", "change"].includes(recipe.route));
+        assert.equal(state_changed, recipe.route !== "me", `${recipe.id}: productive state change`);
+        assert.equal(session_issued, ["register", "login", "change", "reset"].includes(recipe.route));
         assert.equal(result.mail.connections, recipe.route === "forgot" ? 1 : 0);
         assert.equal(result.mail.messages, recipe.route === "forgot" ? 1 : 0);
-        if (["register", "login"].includes(recipe.route)) {
+        if (["register", "login", "reset", "me"].includes(recipe.route)) {
           assert.equal(response.body.user.user_id, after.users[0].id);
           assert.equal(response.body.user.email, email);
           assert.equal(response.body.user.display_name, "Admission");
+          if (recipe.route === "me") assert.equal(response.body.multi_user, true);
         } else if (recipe.route === "forgot") assert.deepEqual(response.body, { ok: true, message: "If an account exists for that email, a reset link was sent." });
-        else assert.deepEqual(response.body, { ok: true });
-        if (recipe.route === "change") assert.notEqual(after.users[0].password_hash, before.users[0].password_hash);
+        else if (["create", "regenerate"].includes(recipe.route)) {
+          assert.equal(response.status, 201);
+          assert.equal(typeof response.body.id, "string");
+          assert.equal(typeof response.body.key, "string");
+          assert(!JSON.stringify(after).includes(response.body.key), "plaintext key persisted");
+          const keys = (state) => JSON.parse(state.settings.find((row) => row.key === "api_keys_v1").value);
+          assert.equal(keys(after).length, keys(before).length + 1);
+          assert(keys(after).some((key) => key.id === response.body.id && key.isActive === true
+            && key.keyHash === createHmac("sha256", "print-partner:settings-api-key:v1").update(response.body.key).digest("hex")));
+          if (recipe.route === "regenerate") assert.equal(keys(after).find((key) => key.id === keyId).isActive, false);
+        } else if (recipe.route === "revoke") {
+          assert.deepEqual(response.body, { success: true });
+          assert.equal(JSON.parse(after.settings.find((row) => row.key === "api_keys_v1").value).find((key) => key.id === keyId).isActive, false);
+        } else assert.deepEqual(response.body, { ok: true });
+        if (["change", "reset"].includes(recipe.route)) assert.notEqual(after.users[0].password_hash, before.users[0].password_hash);
+        if (recipe.route === "reset") {
+          assert.equal(after.reset_tokens.length, 0);
+          assert.equal(after.sessions.length, 1);
+          assert.notEqual(after.sessions[0].id, before.sessions[0].id);
+        }
       }
     } catch (error) {
       if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], "comparison and cleanup failed");

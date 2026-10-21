@@ -758,14 +758,29 @@ async fn failed_recovery_closes_selected_listener_before_returning() {
         format!("port = {}\n", address.port()).as_bytes()
     );
     // The selected descriptor is closed, or was reused by something that
-    // cannot be bound to the held address.
+    // cannot be a stream socket bound to the held address. The socket type
+    // is part of the identity because a reused UDP socket can bind the same
+    // address and port as the held TCP listener.
     let name = |fd| {
+        let mut kind: libc::c_int = 0;
+        let mut kind_len = std::mem::size_of_val(&kind) as libc::socklen_t;
+        let kind_status = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_TYPE,
+                (&raw mut kind).cast(),
+                &mut kind_len,
+            )
+        };
         let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
         let mut len = std::mem::size_of_val(&storage) as libc::socklen_t;
         let status = unsafe { libc::getsockname(fd, (&raw mut storage).cast(), &mut len) };
-        (status == 0).then(|| {
-            unsafe { std::slice::from_raw_parts((&raw const storage).cast::<u8>(), len as usize) }
-                .to_vec()
+        (kind_status == 0 && status == 0).then(|| {
+            let bytes = unsafe {
+                std::slice::from_raw_parts((&raw const storage).cast::<u8>(), len as usize)
+            };
+            (kind, bytes.to_vec())
         })
     };
     let held_name = name(held.as_raw_fd());

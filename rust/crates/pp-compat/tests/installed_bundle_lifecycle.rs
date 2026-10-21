@@ -13,7 +13,7 @@ use std::{
         unix::fs::{OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Deserialize)]
@@ -131,6 +131,32 @@ async fn wait_for_ready(
     .context("Compatibility readiness timed out")?
 }
 
+/// The supervisor records why a start failed (readiness timeout, or the child's
+/// exit code or signal) only after it reaps the child and leaves `Stopping`.
+async fn start_failure_diagnostics(
+    supervisor: Supervisor,
+    status: &mut tokio::sync::watch::Receiver<Status>,
+    data_dir: &Path,
+) -> String {
+    let settled = match tokio::time::timeout(
+        Duration::from_secs(15),
+        status.wait_for(|state| !matches!(state, Status::Starting | Status::Stopping)),
+    )
+    .await
+    {
+        Ok(Ok(state)) => format!("{:?}", *state),
+        Ok(Err(_)) => "status channel closed".to_owned(),
+        Err(_) => "still stopping after 15s".to_owned(),
+    };
+    let shutdown = tokio::time::timeout(Duration::from_secs(16), supervisor.shutdown())
+        .await
+        .map(|exit| format!("{exit:?}"))
+        .unwrap_or_else(|_| "timed out".to_owned());
+    let records = pp_compat::recent_diagnostics(data_dir)
+        .unwrap_or_else(|error| format!("Supervisor log unavailable: {error}\n"));
+    format!("settled status: {settled}\nshutdown: {shutdown}\nsupervisor log:\n{records}")
+}
+
 fn process_exists(pid: u32) -> Result<bool> {
     let result = unsafe { libc::kill(pid as i32, 0) };
     if result == 0 {
@@ -170,6 +196,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
     ensure!(release.os == "macos", "Installed release is not macOS");
     let web_root = contents.join(&release.web);
     let assets = web_root.join("apps/web/dist");
+    let verify_started = Instant::now();
     let bundle = pp_compat::verify_bundle(
         Bundle {
             node: contents.join(&release.node),
@@ -180,6 +207,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         },
         &assets,
     )?;
+    let verified = verify_started.elapsed();
     let ownership = TestOwnership::create(
         required_path("PP_COMPAT_TEST_DATA_DIR")?,
         required_path("PP_COMPAT_TEST_RUNTIME_DIR")?,
@@ -195,7 +223,22 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         port,
     })?;
     let mut status = supervisor.handle.status.clone();
-    let (generation, ready_pid) = wait_for_ready(&mut status).await?;
+    let start_requested = Instant::now();
+    let (generation, ready_pid) = match wait_for_ready(&mut status).await {
+        Ok(ready) => ready,
+        Err(error) => {
+            let waited = start_requested.elapsed();
+            let diagnostics =
+                start_failure_diagnostics(supervisor, &mut status, &ownership.data_dir).await;
+            return Err(error.context(format!(
+                "Release verified in {verified:?}; readiness abandoned after {waited:?}\n{diagnostics}"
+            )));
+        }
+    };
+    println!(
+        "Release verified in {verified:?}; ready after {:?}",
+        start_requested.elapsed()
+    );
     ensure!(process_exists(ready_pid)?, "Ready child PID is absent");
     let socket = ownership
         .runtime_dir

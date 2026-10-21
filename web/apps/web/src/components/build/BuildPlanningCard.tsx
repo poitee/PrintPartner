@@ -7,6 +7,7 @@ import { assistantChangeSummary } from "../../lib/sourcesSetupTasks";
 import { statusTone } from "../../lib/statusTone";
 import { cn } from "../../lib/utils";
 import { useBuildPlanningQuery } from "./useBuildPlanningQuery";
+import { useOrdersVisible } from "../../hooks/useOrdersVisible";
 import {
   Card,
   CardContent,
@@ -42,6 +43,7 @@ export default function BuildPlanningCard({
   planId: number | null;
 }) {
   const planningQuery = useBuildPlanningQuery({ planId });
+  const ordersVisible = useOrdersVisible(planId);
   const state = planningQuery.data ?? null;
   const error = planningQuery.error;
 
@@ -104,7 +106,7 @@ export default function BuildPlanningCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
-        {brief.special_request ? (
+        {ordersVisible && brief.special_request ? (
           <p className="whitespace-pre-wrap text-muted-foreground">
             {brief.special_request}
           </p>
