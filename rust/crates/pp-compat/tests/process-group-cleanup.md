@@ -129,10 +129,18 @@ descendant was alive in `__do_sys_pause`.
 
 This was the planned-shutdown case, with no previously observed exit and no
 EOF cancellation. The fixture installed a Python SIGTERM callback that called
-`sys.exit(0)` while the leader blocked reading stdin. It now uses `SIG_DFL`.
-The OS terminates the leader on SIGTERM, while the descendant still ignores
-SIGTERM and requires group SIGKILL. All five shutdown scenarios and the
-descendant's exact SIGKILL status assertions remain intact.
+`sys.exit(0)` before the leader read stdin. CPython's C signal handler only
+records a pending signal. The interpreter runs the Python callback at its next
+pending-signal check, or when a blocking system call returns `EINTR`. SIGTERM
+can arrive after the last check and before `read` enters the kernel. The C
+handler then runs in user space, so `read` blocks without `EINTR`. The pending
+callback waits for input that never arrives because the test keeps stdin open.
+The captures match this race: the leader was alive in `anon_pipe_read` after
+planned shutdown sent SIGTERM to its group. The fixture now uses `SIG_DFL`.
+The kernel then terminates the leader on SIGTERM at any point, including inside
+`read`. The descendant still ignores SIGTERM and requires group SIGKILL. All
+five shutdown scenarios and the descendant's exact SIGKILL status assertions
+remain intact.
 
 ## Independent simulator assets
 
@@ -145,18 +153,28 @@ This setup correction does not change or skip a test.
 
 ## Reproduction
 
-Prepare simulator assets with the repository's existing
-`rust/scripts/prove-measured-startup-death.py --evidence <evidence>/measured`.
-It generates a measured native Node simulator and runs its startup-death proof.
-These are simulator assets, not a built production web bundle.
+Run these commands from the repository root. Use a disposable Cargo target
+directory for this soak only. In a shared target directory, another build can
+replace the test executable during the soak or hold the Cargo build lock.
 
-Read the two generated paths in `<evidence>/measured/environment.json`.
-Set `PP_DESKTOP_RELEASE_MANIFEST` for Cargo and
-`PP_COMPAT_MEASURED_STARTUP_STAGE` for full-suite execution. Build with
-`cargo test --locked --manifest-path rust/Cargo.toml -p pp-compat --lib --no-run`.
-Use the executable path printed by Cargo as `<binary>` below.
+```sh
+export CARGO_TARGET_DIR=<soak-target>
+python3 rust/scripts/prove-measured-startup-death.py --evidence <evidence>/measured
+```
 
-Run each command through the configured landing slot wrapper.
+The proof script generates a measured native Node simulator and runs its
+startup-death proof. These are simulator assets, not a built production web
+bundle. Read the two generated paths in `<evidence>/measured/environment.json`.
+Export `PP_DESKTOP_RELEASE_MANIFEST` for Cargo and
+`PP_COMPAT_MEASURED_STARTUP_STAGE` for full-suite execution. Then build the
+test executable in the same target directory.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-compat --lib --no-run
+```
+
+Use the path that Cargo prints after `Executable unittests src/lib.rs` as
+`<binary>` below.
 
 ```sh
 python3 rust/scripts/stress-group-cleanup.py --binary <binary> --scope pair --runs 200 --evidence <evidence>/pair
@@ -198,15 +216,10 @@ inventory, rejects missing or ignored target tests, and retains nonzero-exit
 failures. It cannot accept a nested passing summary over a filtered root suite.
 
 The CLI regressions use disposable fake libtest executables to check interleaved
-output, scope routing, refusal before log creation, and failure statuses. The
-runner exits 1 when a child test fails, even if its summary reports success. It
-exits 2 when required tests are missing or ignored. The Desktop runtime workflow
-runs this self-test in its existing scripts step and saves
-`stress-group-cleanup-self-tests.log`. You can also run it without a Rust build:
-
-```sh
-python3 rust/scripts/stress-group-cleanup.py --self-test
-```
+output, scope routing, refusal before log creation, and failure statuses. They
+also run each soak command above against a fake binary and require the documented
+exit statuses. [Run the stress-runner self-tests](../../../../docs/development/stress-runner-self-tests.md)
+describes the command, its exit statuses, and its CI step.
 
 ## GRE-733 macOS group lifetime
 
