@@ -1,13 +1,24 @@
 use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, State},
+    body::{Body, Bytes, to_bytes},
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
 };
 use serde_json::json;
 use std::net::{IpAddr, SocketAddr};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+const ADMISSION_PERMITS: usize = 64;
+const TARGET_LIMIT: usize = 16 * 1024;
+const READ_BODY_LIMIT: usize = 1024 * 1024;
+const BODY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct DraftHttpConfig {
@@ -15,6 +26,9 @@ pub struct DraftHttpConfig {
     host: String,
     api_key_tenant: String,
     enabled: bool,
+    body_limit: usize,
+    /// Storage wait; GRE-940 read handlers consume it.
+    wait: Duration,
 }
 
 impl DraftHttpConfig {
@@ -60,28 +74,64 @@ impl DraftHttpConfig {
             host,
             api_key_tenant: api_key_tenant.into(),
             enabled: matches!(flag, Some("1" | "true")),
+            body_limit: 8 * 1024 * 1024,
+            wait: Duration::from_millis(100),
         })
     }
+
+    /// Lowers the PATCH body limit and storage wait; raising either fails.
+    pub fn with_limits(mut self, body_limit: usize, wait: Duration) -> Result<Self> {
+        ensure!(
+            (1..=self.body_limit).contains(&body_limit) && wait <= self.wait,
+            "Draft limits can only be lowered"
+        );
+        self.body_limit = body_limit;
+        self.wait = wait;
+        Ok(self)
+    }
+}
+
+#[derive(Clone)]
+struct Guard {
+    config: DraftHttpConfig,
+    admission: Arc<Semaphore>,
 }
 
 /// Mounts `routes` at the root and `/api/v2` behind loopback admission when
 /// `PP_DESKTOP_REBUILD` was exactly `1` or `true` at startup. Otherwise
 /// nothing is mounted and every request falls through to 404.
+///
+/// The guard buffers each body before routing, so Axum's 2 MiB extractor
+/// default is disabled and the guard's limits are authoritative.
 pub fn admit_draft_routes(config: DraftHttpConfig, routes: Router) -> Router {
     if !config.enabled {
         return Router::new();
     }
+    let guard_state = Guard {
+        config,
+        admission: Arc::new(Semaphore::new(ADMISSION_PERMITS)),
+    };
     Router::new()
         .merge(routes.clone())
         .nest("/api/v2", routes)
-        .layer(middleware::from_fn_with_state(config, guard))
+        .layer(DefaultBodyLimit::disable())
+        .layer(middleware::from_fn_with_state(guard_state, guard))
 }
 
 async fn guard(
-    State(config): State<DraftHttpConfig>,
+    State(Guard { config, admission }): State<Guard>,
     mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
+    let Ok(permit) = admission.try_acquire_owned() else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Draft service temporarily unavailable",
+        );
+    };
+    if request.uri().to_string().len() > TARGET_LIMIT {
+        return failure(StatusCode::URI_TOO_LONG, "Request target too long");
+    }
     if let Err((status, detail)) = admit(&config, &request) {
         return failure(status, detail);
     }
@@ -89,7 +139,51 @@ async fn guard(
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     request.extensions_mut().insert(principal);
-    next.run(request).await
+    let limit = match *request.method() {
+        Method::PATCH => config.body_limit,
+        _ => config.body_limit.min(READ_BODY_LIMIT),
+    };
+    let (parts, body) = request.into_parts();
+    let bytes = match tokio::time::timeout(BODY_TIMEOUT, to_bytes(body, limit)).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "Request body too large"),
+        Err(_) => return failure(StatusCode::REQUEST_TIMEOUT, "Request body timed out"),
+    };
+    let response = next
+        .run(axum::extract::Request::from_parts(parts, Body::from(bytes)))
+        .await;
+    response.map(|body| {
+        Body::new(AdmittedBody {
+            body,
+            _permit: permit,
+        })
+    })
+}
+
+/// Holds an admission permit until the response body is consumed or dropped.
+struct AdmittedBody {
+    body: Body,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl http_body::Body for AdmittedBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<std::result::Result<http_body::Frame<Bytes>, Self::Error>>> {
+        Pin::new(&mut self.body).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.body.size_hint()
+    }
 }
 
 fn admit(
