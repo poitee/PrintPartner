@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = ["pp-storage/desktop_rebuild"]
+desktop_rebuild = ["pp-storage/desktop_rebuild", "dep:ryu-js"]
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
@@ -22,6 +22,7 @@ hex.workspace = true
 base64 = "=0.22.1"
 getrandom = "=0.3.4"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "form", "stream"] }
+ryu-js = { version = "=1.0.2", optional = true }
 rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "webpki-roots"] }
 
