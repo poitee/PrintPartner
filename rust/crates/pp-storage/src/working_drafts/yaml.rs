@@ -162,6 +162,47 @@ fn yaml_blank_break(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\r' | '\n' | '\0')
 }
 
+// js-yaml rejects these characters in a scalar.
+fn non_printable(c: char) -> bool {
+    matches!(
+        c,
+        '\0'..='\x08'
+            | '\x0b'
+            | '\x0c'
+            | '\x0e'..='\x1f'
+            | '\x7f'..='\u{84}'
+            | '\u{86}'..='\u{9f}'
+            | '\u{fffe}'
+            | '\u{ffff}'
+    )
+}
+
+// js-yaml reads a line that starts with a BOM as a document boundary when the
+// separation space after the BOM reaches `%` or `---` at the start of a line.
+fn bom_boundary(chars: &[char], i: usize, budget: &PreparationBudget<'_>) -> ReadResult<bool> {
+    let mut j = i + 1;
+    let mut line = j;
+    loop {
+        budget.check()?;
+        while chars.get(j).is_some_and(|c| matches!(c, ' ' | '\t')) {
+            j += 1;
+        }
+        if chars.get(j) == Some(&'#') {
+            j = line_end(chars, j, budget)?;
+        }
+        match chars.get(j) {
+            Some('\r') if chars.get(j + 1) == Some(&'\n') => j += 2,
+            Some('\r' | '\n') => j += 1,
+            _ => break,
+        }
+        line = j;
+    }
+    Ok(j == line
+        && (chars.get(j) == Some(&'%')
+            || (chars.get(j..j + 3) == Some(&['-', '-', '-'])
+                && chars.get(j + 3).copied().is_none_or(yaml_blank_break))))
+}
+
 fn scalar_chars(source: &str, budget: &PreparationBudget<'_>) -> ReadResult<Vec<char>> {
     let mut chars = Vec::new();
     let mut checkpoint = 0;
@@ -193,6 +234,10 @@ struct FlowProperty {
 
 fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String> {
     budget.check()?;
+    // js-yaml rejects any input that contains a NUL.
+    if source.contains('\0') {
+        return invalid();
+    }
     let chars = scalar_chars(source, budget)?;
     let mut output = String::with_capacity(source.len());
     let mut i = 0;
@@ -212,8 +257,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     // The line began inside a quoted scalar, so its indent is unknown here.
     let mut quoted_line = false;
     let mut quoted_end = false;
-    // A block scalar's parent indent (None at the root) and, once known, its
-    // content indent.
+    // A block scalar's parent indent (None at a root node js-yaml indents at
+    // column 0) and, once known, its content indent.
     let mut block: Option<(Option<usize>, Option<usize>)> = None;
     // js-yaml's indent for the outermost flow collection: one past its block
     // parent, or the indent of the line the root node starts on.
@@ -258,15 +303,33 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             {
                 return invalid();
             }
+            let mut block_end = false;
             if let Some((base, required)) = block {
+                let detected = required.is_some();
                 let required = required.or_else(|| (!blank).then_some(line_indent));
-                if blank
-                    || required
-                        .is_some_and(|n| line_indent >= n && base.is_none_or(|b| line_indent > b))
+                // js-yaml ends every block scalar at a document marker.
+                let marker = line_indent == 0
+                    && (matches!(chars.get(i..i + 3), Some(['-', '-', '-'] | ['.', '.', '.']))
+                        && chars.get(i + 3).copied().is_none_or(yaml_blank_break)
+                        || chars.get(i) == Some(&'\u{feff}') && bom_boundary(&chars, i, budget)?);
+                if !marker
+                    && (blank
+                        || required.is_some_and(|n| {
+                            line_indent >= n && base.is_none_or(|b| line_indent > b)
+                        }))
                 {
                     block = Some((base, required));
                     let end = line_end(&chars, i, budget)?;
+                    // js-yaml counts a root indentation indicator from column 0
+                    // and saphyr from column 1, and saphyr rejects a tab at
+                    // column 0, so each root block line moves one column deeper.
+                    if base.is_none() && start < end {
+                        output.push(' ');
+                    }
                     for c in &chars[start..end] {
+                        if non_printable(*c) {
+                            return invalid();
+                        }
                         output.push(*c);
                         if *c == '\u{e000}' {
                             output.push(*c);
@@ -281,7 +344,17 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     line_start = false;
                     continue;
                 }
+                // saphyr reads a comment or `---` after a root block scalar with
+                // no indicator and no content as that content.
+                let whitespace = chars[i..]
+                    .iter()
+                    .find(|c| !matches!(c, ' ' | '\t'))
+                    .is_none_or(|c| matches!(c, '\r' | '\n'));
+                if parent.is_none() && !detected && !whitespace && !(marker && chars[i] == '.') {
+                    return invalid();
+                }
                 block = None;
+                block_end = true;
             }
             for c in &chars[start..i] {
                 output.push(*c);
@@ -325,6 +398,23 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 node = true;
                 quoted_end = false;
                 continue;
+            }
+            // js-yaml skips a comment or whitespace-only line that ends a block
+            // scalar, but saphyr rejects some indented comments and reads a tab
+            // as indentation. A `#` at column 0 ends the scalar in saphyr too.
+            let comment = chars.get(content) == Some(&'#');
+            // js-yaml allows only comments after a root block scalar.
+            if block_end && parent.is_none() && !plain_blank && !comment {
+                return invalid();
+            }
+            if block_end && (plain_blank || comment) {
+                output.truncate(output.len() - line_indent);
+                consumed += content - i;
+                i = content;
+                if plain_blank {
+                    output.push('#');
+                    continue;
+                }
             }
             // A comment line ends a plain scalar in js-yaml, but saphyr continues
             // the scalar across one led by a tab. Without its indent, saphyr
@@ -593,20 +683,22 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 return invalid();
             }
             let end = line_end(&chars, i, budget)?;
+            // js-yaml indents a root node from the line it starts on.
+            let base = parent.or_else(|| document_indent.and_then(|n| n.checked_sub(1)));
             let mut explicit = None;
             for c in &chars[i + 1..end] {
                 if let Some(n) = c.to_digit(10)
                     && n > 0
                 {
                     // js-yaml counts the indicator from the parent's indent.
-                    explicit = Some(parent.map_or(n as usize - 1, |p| p + n as usize));
+                    explicit = Some(base.map_or(n as usize - 1, |p| p + n as usize));
                     break;
                 }
                 if *c == '#' {
                     break;
                 }
             }
-            block = Some((parent, explicit));
+            block = Some((base, explicit));
             for c in &chars[i..end] {
                 output.push(*c);
                 consumed += c.len_utf8();
@@ -1459,6 +1551,13 @@ mod tests {
     fn yaml_tab_lines_match_js_yaml() {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-tab-lines-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_block_scalars_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-block-scalars-node.json"
         ));
     }
 
