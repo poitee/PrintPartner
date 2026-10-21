@@ -1045,6 +1045,10 @@ async fn change_password_auth_admission_parity() {
     compare(Route::Change).await;
 }
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS runners intermittently reset the Node probe's upload with write ECONNRESET before it reads the response; the Linux auth-admission-freshness workflow owns the canonical check"
+)]
 fn node_auth_admission_snapshot_is_current() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
