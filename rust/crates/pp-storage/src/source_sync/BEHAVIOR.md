@@ -18,13 +18,31 @@ batch closure for cancellation and retained generic effects from older Jobs.
 `halt_job` fences the attempt and saves it once. Reopening storage preserves the
 closed batch. Unrelated queued work remains eligible for admission.
 
+## Bind a claimed target
+
+`ServerWorkerClient::bind_source_sync_target` checks a claimed Local target
+against its stored claim before the worker trusts it. It returns a
+`BoundSyncTarget` with the target key, Source ID and claim generation. The
+binding requires all of these conditions:
+
+- The attempt is live and its Job is Sync and not cancelled.
+- The batch is open and its sealed basis still matches the payload, target
+  count and basis digest.
+- The target ordinal is in the basis, the target is `claimed` at the held claim
+  generation, and the claim records this attempt's generation, worker and fence.
+- The held reservation token and writer incarnation are the ones recorded on the
+  target, and the token is still live for the target's Source.
+
+Binding writes nothing, so a refusal leaves every row unchanged. It does not
+compare the Source configuration or observation. D18 (b) adds that check.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
-CARGO_TARGET_DIR=/persist/home/build/gre856-target \
+CARGO_TARGET_DIR=/persist/home/build/gre773-target \
 cargo test -p pp-storage --features desktop_rebuild --lib source_sync::tests --no-fail-fast
 ```
 
@@ -40,6 +58,12 @@ through restart and lease expiry, with and without a claimed target. They assert
 the Job state, target states, batch phase, one generation bump, retained effects,
 reopen stability, and admission of later work on an unrelated Source. Fixtures use
 temporary directories and fake accounts and Sources.
+
+`sync_candidate_requires_claim_and_current_source_proof` and
+`sync_candidate_rejects_changed_basis` cover binding. They tamper with the held
+lease, the stored token and the sealed basis, and assert the exact refusal and an
+unchanged database for each case. Once the changes are restored, the same target
+binds again.
 
 Check the package in both feature modes:
 

@@ -1416,3 +1416,209 @@ fn claims_require_an_open_batch_and_the_live_attempt() {
     assert_eq!(sync.snapshot(), before);
     assert_eq!(local(sync.next(&mut lease)).key().ordinal, 0);
 }
+
+fn refuse_bind(sync: &Fixture, lease: &AttemptLease, target: &SyncTargetLease) -> String {
+    let before = sync.snapshot();
+    let error = sync
+        .worker
+        .bind_source_sync_target(lease, target)
+        .err()
+        .unwrap();
+    assert_eq!(sync.snapshot(), before);
+    error.to_string()
+}
+
+fn tamper(sync: &Fixture, sql: &str, job_id: &str) {
+    assert_eq!(sync.connection().execute(sql, [job_id]).unwrap(), 1);
+}
+
+#[test]
+fn sync_candidate_requires_claim_and_current_source_proof() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let bound = BoundSyncTarget {
+        key: SyncTargetKey {
+            job_id: job_id.clone(),
+            ordinal: 0,
+        },
+        source_id: first,
+        claim_generation: 1,
+    };
+    let before = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    assert_eq!(sync.snapshot(), before);
+
+    target.key.job_id = "other-job".into();
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target Job mismatch"
+    );
+    target.key.job_id = job_id.clone();
+    target.key.ordinal = 1;
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target is not claimed"
+    );
+    target.key.ordinal = 0;
+    target.claim_generation = 2;
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target claim generation mismatch"
+    );
+    target.claim_generation = 1;
+    let claim = sync.snapshot();
+    let fence = digest(lease.fence());
+    tamper(
+        &sync,
+        &format!(
+            "UPDATE source_sync_targets SET attempt_fence_digest='{}' WHERE job_id=?1 AND ordinal=0",
+            "b".repeat(64)
+        ),
+        &job_id,
+    );
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target attempt mismatch"
+    );
+    tamper(
+        &sync,
+        &format!(
+            "UPDATE source_sync_targets SET attempt_fence_digest='{fence}' WHERE job_id=?1 AND ordinal=0"
+        ),
+        &job_id,
+    );
+    assert_eq!(sync.snapshot(), claim);
+
+    let stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    assert_eq!(refuse_bind(&sync, &stale, &target), "Stale attempt fence");
+
+    let claimed = std::mem::replace(&mut target.source_work, sync.begin_work(other).unwrap());
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target reservation mismatch"
+    );
+    let held = sync.snapshot();
+    let set_token = |token: u64| {
+        tamper(
+            &sync,
+            &format!(
+                "UPDATE source_sync_targets SET reservation_token='{token:016x}' WHERE job_id=?1 AND ordinal=0"
+            ),
+            &job_id,
+        )
+    };
+    set_token(target.source_work.proof().unwrap().token);
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Wrong Source reservation"
+    );
+    std::mem::replace(&mut target.source_work, claimed)
+        .release()
+        .unwrap();
+    set_token(target.source_work.proof().unwrap().token);
+    assert_eq!(sync.snapshot(), held);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    target.source_work.release().unwrap();
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Lease already released"
+    );
+}
+
+#[test]
+fn sync_candidate_rejects_changed_basis() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let sealed = sync.snapshot();
+    let digest: String = sync
+        .connection()
+        .query_row(
+            "SELECT target_basis_digest FROM source_sync_batches WHERE job_id=?1",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let batch = "UPDATE source_sync_batches SET";
+    let second_target = "WHERE job_id=?1 AND ordinal=1";
+    for (change, restore, expected) in [
+        (
+            format!(
+                "{batch} target_basis_digest='{}' WHERE job_id=?1",
+                "a".repeat(64)
+            ),
+            format!("{batch} target_basis_digest='{digest}' WHERE job_id=?1"),
+            "Sync target basis mismatch",
+        ),
+        (
+            format!("UPDATE source_sync_targets SET requested_source_id={other} {second_target}"),
+            format!("UPDATE source_sync_targets SET requested_source_id={second} {second_target}"),
+            "Sync selected Sources mismatch",
+        ),
+        (
+            format!("{batch} target_count=target_count+1 WHERE job_id=?1"),
+            format!("{batch} target_count=target_count-1 WHERE job_id=?1"),
+            "Sync target count mismatch",
+        ),
+    ] {
+        tamper(&sync, &change, &job_id);
+        assert_eq!(refuse_bind(&sync, &lease, &target), expected);
+        tamper(&sync, &restore, &job_id);
+        assert_eq!(sync.snapshot(), sealed);
+    }
+
+    tamper(
+        &sync,
+        "UPDATE source_sync_batches SET phase='reconciliation_required' WHERE job_id=?1",
+        &job_id,
+    );
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync batch is not open"
+    );
+    tamper(
+        &sync,
+        "UPDATE source_sync_batches SET phase='open' WHERE job_id=?1",
+        &job_id,
+    );
+    assert_eq!(sync.snapshot(), sealed);
+
+    target.key.ordinal = 2;
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target is outside the sealed basis"
+    );
+    target.key.ordinal = 0;
+    let busy = sync.begin_work(first).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap()
+            .source_id,
+        first
+    );
+    assert_eq!(sync.snapshot(), sealed);
+}

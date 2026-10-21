@@ -1,6 +1,6 @@
 use crate::{
     SettingsClient,
-    catalog::{SourceBinding, SourceBusy, SourceWorkLease, State},
+    catalog::{SourceBinding, SourceBusy, SourceWorkLease, SourceWorkProof, State},
     jobs::{AttemptLease, JobKind, JobRecord, Payload, PersistentState, SourceSyncFailure},
     source_scan::LocalScanObservation,
 };
@@ -19,10 +19,8 @@ pub struct SyncTargetKey {
 /// is released or dropped.
 pub struct SyncTargetLease {
     pub(crate) key: SyncTargetKey,
-    #[cfg_attr(not(test), expect(dead_code, reason = "D18 (b) settles with this"))]
     pub(crate) source_work: SourceWorkLease,
     pub(crate) observation: LocalScanObservation,
-    #[cfg_attr(not(test), expect(dead_code, reason = "D18 (b) settles with this"))]
     pub(crate) claim_generation: i64,
 }
 
@@ -34,6 +32,31 @@ impl SyncTargetLease {
     pub fn observation(&self) -> &LocalScanObservation {
         &self.observation
     }
+
+    pub(crate) fn candidate(&self) -> Result<SyncCandidate> {
+        Ok(SyncCandidate {
+            key: self.key.clone(),
+            claim_generation: self.claim_generation,
+            proof: self.source_work.proof()?,
+        })
+    }
+}
+
+/// What a worker presents for binding: the target it claimed, the claim
+/// generation it saw and the reservation it holds.
+pub(crate) struct SyncCandidate {
+    key: SyncTargetKey,
+    claim_generation: i64,
+    proof: SourceWorkProof,
+}
+
+/// A claimed target whose held reservation, attempt and sealed basis still
+/// match its stored claim. D18 (b) validates its content against this.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundSyncTarget {
+    pub(crate) key: SyncTargetKey,
+    pub(crate) source_id: i64,
+    pub(crate) claim_generation: i64,
 }
 
 pub enum NextSyncTarget {
@@ -469,6 +492,77 @@ pub(crate) fn next(
         },
         version: job.state_version,
     }))
+}
+
+/// Binds a candidate to its stored claim. The attempt must be live, the
+/// batch open and its sealed basis intact, the target claimed by this attempt
+/// at the candidate's generation, and the held token the one recorded and
+/// still live for the target's Source. Writes nothing.
+pub(crate) fn bind(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    candidate: &SyncCandidate,
+) -> Result<BoundSyncTarget> {
+    let job = require_sync_job(tx, lease)?;
+    let key = &candidate.key;
+    ensure!(key.job_id == job.job_id, "Sync target Job mismatch");
+    ensure!(!job.cancel_requested, "Sync was cancelled");
+    let phase: Option<String> = tx
+        .query_row(
+            "SELECT phase FROM source_sync_batches WHERE job_id=?1",
+            [&job.job_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    ensure!(phase.as_deref() == Some("open"), "Sync batch is not open");
+    let source_id = *validate_basis(tx, &job)?
+        .get(usize::try_from(key.ordinal)?)
+        .ok_or_else(|| anyhow!("Sync target is outside the sealed basis"))?;
+    type Claim = (
+        String,
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let (target_state, claim_generation, parent_generation, worker, fence, incarnation, token): Claim = tx.query_row(
+        "SELECT state,claim_generation,parent_generation,attempt_worker,attempt_fence_digest,reservation_incarnation,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2",
+        params![key.job_id, key.ordinal],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+    )?;
+    ensure!(target_state == "claimed", "Sync target is not claimed");
+    ensure!(
+        claim_generation == candidate.claim_generation,
+        "Sync target claim generation mismatch"
+    );
+    ensure!(
+        parent_generation == Some(job.generation)
+            && worker.as_deref() == Some(lease.worker())
+            && fence == Some(digest(lease.fence())),
+        "Sync target attempt mismatch"
+    );
+    let proof = &candidate.proof;
+    ensure!(
+        incarnation.as_deref() == Some(proof.incarnation.as_str())
+            && token == Some(token_text(proof.token)?),
+        "Sync target reservation mismatch"
+    );
+    crate::source_scan::require_live_reservation(
+        state,
+        proof,
+        &SourceBinding {
+            tenant: job.tenant,
+            id: source_id,
+        },
+    )?;
+    Ok(BoundSyncTarget {
+        key: key.clone(),
+        source_id,
+        claim_generation,
+    })
 }
 
 fn ordinary_failure(tx: &Transaction<'_>, mut job: JobRecord, key: &SyncTargetKey) -> Result<Next> {

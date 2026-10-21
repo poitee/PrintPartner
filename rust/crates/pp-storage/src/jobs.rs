@@ -230,6 +230,8 @@ pub enum Outcome {
     SourceSyncOpened,
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncTarget(crate::source_sync::NextSyncTarget, i64),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncBound(crate::source_sync::BoundSyncTarget),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -380,6 +382,11 @@ pub(crate) enum Command {
         lease: AttemptLease,
         policy: AuthPolicy,
         storage: SettingsClient,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    BindSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
     },
     Retain {
         per_tenant: usize,
@@ -1037,6 +1044,30 @@ impl ServerWorkerClient {
             _ => unreachable!(),
         }
     }
+
+    /// Checks a claimed target against its stored claim before the worker
+    /// trusts it. A refusal changes nothing.
+    pub fn bind_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        target: &crate::source_sync::SyncTargetLease,
+    ) -> Result<crate::source_sync::BoundSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::BindSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncBound(target) => Ok(target),
+            _ => unreachable!(),
+        }
+    }
 }
 
 fn random() -> String {
@@ -1597,6 +1628,15 @@ pub(crate) fn execute(
                 TransactionDecision::Outcome(Outcome::SourceSyncTarget(target, version))
             }
         },
+        #[cfg(feature = "desktop_rebuild")]
+        Command::BindSourceSyncTarget { lease, candidate } => {
+            TransactionDecision::Outcome(Outcome::SourceSyncBound(crate::source_sync::bind(
+                &tx,
+                catalog_state,
+                &lease,
+                &candidate,
+            )?))
+        }
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
