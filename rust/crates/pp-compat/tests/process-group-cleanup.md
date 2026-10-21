@@ -159,9 +159,9 @@ Use the executable path printed by Cargo as `<binary>` below.
 Run each command through the configured landing slot wrapper.
 
 ```sh
-python3 rust/crates/pp-compat/tests/stress-group-cleanup.py --binary <binary> --scope pair --runs 200 --evidence <evidence>/pair
-python3 rust/crates/pp-compat/tests/stress-group-cleanup.py --binary <binary> --scope alone --runs 200 --evidence <evidence>/alone
-python3 rust/crates/pp-compat/tests/stress-group-cleanup.py --binary <binary> --scope suite --runs 200 --cpus 4 --evidence <evidence>/suite
+python3 rust/scripts/stress-group-cleanup.py --binary <binary> --scope pair --runs 200 --evidence <evidence>/pair
+python3 rust/scripts/stress-group-cleanup.py --binary <binary> --scope alone --runs 200 --evidence <evidence>/alone
+python3 rust/scripts/stress-group-cleanup.py --binary <binary> --scope suite --runs 200 --cpus 4 --evidence <evidence>/suite
 ```
 
 On Linux, each loop confines itself and its burners to the selected CPUs.
@@ -197,11 +197,15 @@ summary instead of individual status lines. It also checks the binary's test
 inventory, rejects missing or ignored target tests, and retains nonzero-exit
 failures. It cannot accept a nested passing summary over a filtered root suite.
 
-The CLI regressions reproduce the interleaved output and exercise both failure
-guards. They failed before the validator correction and pass afterward.
+The CLI regressions use disposable fake libtest executables to check interleaved
+output, scope routing, refusal before log creation, and failure statuses. The
+runner exits 1 when a child test fails, even if its summary reports success. It
+exits 2 when required tests are missing or ignored. The Desktop runtime workflow
+runs this self-test in its existing scripts step and saves
+`stress-group-cleanup-self-tests.log`. You can also run it without a Rust build:
 
 ```sh
-python3 rust/crates/pp-compat/tests/test_stress_group_cleanup.py
+python3 rust/scripts/stress-group-cleanup.py --self-test
 ```
 
 ## GRE-733 macOS group lifetime
