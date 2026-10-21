@@ -5,7 +5,6 @@ import {
   createReadStream,
   createWriteStream,
   fsync,
-  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -41,9 +40,6 @@ import {
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
 const COPY_BATCH_SIZE = 4;
-const HARD_LINK_UNSUPPORTED = new Set([
-  "EPERM", "EACCES", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK",
-]);
 const flushFile = promisify(fsync);
 
 export type StlPackGroupBy = "color" | "color_dir";
@@ -216,9 +212,9 @@ async function writeVerifiedStream(
   path: string,
   createStream: () => ReturnType<typeof createReadStream>,
   expected: Readonly<{ size: number; sha256: string }>,
-  charge = true,
+  options?: Readonly<{ charge?: boolean; flush?: boolean }>,
 ): Promise<boolean> {
-  if (charge) chargeTenantDiskBytes(expected.size);
+  if (options?.charge !== false) chargeTenantDiskBytes(expected.size);
   const descriptor = openSync(
     path,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -234,7 +230,7 @@ async function writeVerifiedStream(
       position = writeChunk(descriptor, chunk, position);
     }
     valid = position === expected.size && hash.digest("hex") === expected.sha256;
-    if (valid) await flushFile(descriptor);
+    if (valid && options?.flush !== false) await flushFile(descriptor);
     return valid;
   } finally {
     closeSync(descriptor);
@@ -254,11 +250,6 @@ function writeLease(
     size: lease.size,
     sha256: lease.expectedSha256,
   });
-}
-
-function hardLinkUnsupported(error: unknown): boolean {
-  const code = errorCode(error);
-  return code !== undefined && HARD_LINK_UNSUPPORTED.has(code);
 }
 
 function directoriesToFlush(stage: string, directory: string): string[] {
@@ -301,8 +292,8 @@ async function flushDurableNames(stage: string, directories: readonly string[]):
   }
 }
 
-// Identical copies are additional names for the verified inode. A new name is
-// durable once its directory is flushed, so a crash cannot publish a torn copy.
+// Each loose unit is its own file. A per-file flush cannot finish 10,001 units
+// inside the export deadline, so the caller flushes the holding directory once.
 async function placeVerifiedUnitFiles(input: Readonly<{
   directory: string;
   source: string;
@@ -312,48 +303,25 @@ async function placeVerifiedUnitFiles(input: Readonly<{
   part: AcceptedExportPart;
   size: number;
   sha256: string;
-}>): Promise<{ readonly files: readonly ExpectedFile[]; readonly linked: boolean } | null> {
+}>): Promise<readonly ExpectedFile[] | null> {
   const files = input.units.map((unit) => ({
     relativePath: `${input.folder}/${entryName(input.part, unit, input.names)}`,
     size: input.size,
     sha256: input.sha256,
   }));
-  const placed: ExpectedFile[] = [];
-  const copies: { file: ExpectedFile; charged: boolean }[] = [];
-  let allowLinks = true;
-  let linked = false;
-  for (const file of files) {
-    const target = join(input.directory, basename(file.relativePath));
-    if (!allowLinks) {
-      copies.push({ file, charged: false });
-      continue;
-    }
-    chargeTenantDiskBytes(file.size);
-    try {
-      linkSync(input.source, target);
-      placed.push(file);
-      linked = true;
-    } catch (error) {
-      if (errorCode(error) === "EEXIST") return null;
-      if (!hardLinkUnsupported(error)) throw error;
-      allowLinks = false;
-      copies.push({ file, charged: true });
-    }
-  }
-  for (let offset = 0; offset < copies.length; offset += COPY_BATCH_SIZE) {
-    const batch = copies.slice(offset, offset + COPY_BATCH_SIZE);
-    const copied = await Promise.allSettled(batch.map((entry) => writeVerifiedStream(
-      join(input.directory, basename(entry.file.relativePath)),
+  for (let offset = 0; offset < files.length; offset += COPY_BATCH_SIZE) {
+    const batch = files.slice(offset, offset + COPY_BATCH_SIZE);
+    const copied = await Promise.allSettled(batch.map((file) => writeVerifiedStream(
+      join(input.directory, basename(file.relativePath)),
       () => createReadStream(input.source),
-      entry.file,
-      !entry.charged,
+      file,
+      { flush: false },
     )));
     const rejected = copied.find((result) => result.status === "rejected");
     if (rejected) throw rejected.reason;
     if (copied.some((result) => result.status === "fulfilled" && !result.value)) return null;
-    placed.push(...batch.map((entry) => entry.file));
   }
-  return { files: placed, linked };
+  return files;
 }
 
 function hashRegularFile(path: string): string | null {
@@ -650,7 +618,6 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
   const fileCounts: Record<string, number> = {};
   const usedNames = new Map<string, Set<string>>();
   let stage: string | null = null;
-  let linkedPublication = false;
   try {
     const tenantRoot = resolve(input.tenantExportsDir);
     mkdirSync(tenantRoot, { recursive: true, mode: 0o700 });
@@ -716,14 +683,13 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
             sha256: opened.lease.expectedSha256,
           });
           if (!placed) return { kind: "output_failure" };
-          if (placed.linked) await flushDurableNames(stage, [directory]);
-          expected.push(...placed.files);
-          fileCounts[role] = (fileCounts[role] ?? 0) + placed.files.length;
-          linkedPublication = placed.linked || linkedPublication;
+          await flushDurableNames(stage, [directory]);
+          expected.push(...placed);
+          fileCounts[role] = (fileCounts[role] ?? 0) + placed.length;
         } finally {
           rmSync(stagedSource, { force: true });
         }
-        if (linkedPublication) await flushDirectory(stage);
+        await flushDirectory(stage);
       } finally {
         opened.lease.close();
       }

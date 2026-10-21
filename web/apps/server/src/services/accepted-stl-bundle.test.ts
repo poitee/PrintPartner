@@ -46,10 +46,6 @@ const acceptedArtifactTestHook = vi.hoisted(() => {
     failZipRead: false,
     zipReadFailures: 0,
     failFileFlush: false,
-    rejectHardLinks: false,
-    holdCopyFlushes: false,
-    fileFlushCalls: 0,
-    pendingFlushes: new Array<() => void>(),
   };
 });
 
@@ -58,7 +54,6 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...actual,
     fsync(descriptor: number, callback: (error: NodeJS.ErrnoException | null) => void) {
-      acceptedArtifactTestHook.fileFlushCalls++;
       if (acceptedArtifactTestHook.failFileFlush) {
         callback(new Error("file flush failed"));
         return;
@@ -79,20 +74,8 @@ vi.mock("node:fs", async (importOriginal) => {
           measurement.flushLatencyTotalMs += elapsed;
           measurement.flushLatencyMaxMs = Math.max(measurement.flushLatencyMaxMs, elapsed);
         }
-        if (acceptedArtifactTestHook.holdCopyFlushes && acceptedArtifactTestHook.fileFlushCalls > 1) {
-          acceptedArtifactTestHook.pendingFlushes.push(() => callback(error));
-        } else {
-          callback(error);
-        }
+        callback(error);
       });
-    },
-    linkSync(existingPath: string, newPath: string) {
-      if (acceptedArtifactTestHook.rejectHardLinks) {
-        const error = new Error("hard link unsupported") as NodeJS.ErrnoException;
-        error.code = "EOPNOTSUPP";
-        throw error;
-      }
-      return actual.linkSync(existingPath, newPath);
     },
     createReadStream(...args: Parameters<typeof actual.createReadStream>) {
       const [path, options] = args;
@@ -368,10 +351,6 @@ afterEach(() => {
   acceptedArtifactTestHook.failZipRead = false;
   acceptedArtifactTestHook.zipReadFailures = 0;
   acceptedArtifactTestHook.failFileFlush = false;
-  acceptedArtifactTestHook.rejectHardLinks = false;
-  acceptedArtifactTestHook.holdCopyFlushes = false;
-  acceptedArtifactTestHook.fileFlushCalls = 0;
-  for (const release of acceptedArtifactTestHook.pendingFlushes.splice(0)) release();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -390,13 +369,9 @@ describe("materializeAcceptedStlBundle", () => {
     expect(entries.some((entry) => String(entry).includes(".tmp-") || String(entry).includes("content-"))).toBe(false);
   });
 
-  it("drains pending copy flushes before cleaning up a quota failure", async () => {
+  it("removes partial copies when a later unit exceeds the quota", async () => {
     const paths = fixture();
-    // Private copies, and their flushes, run only when another name is refused.
-    acceptedArtifactTestHook.rejectHardLinks = true;
-    acceptedArtifactTestHook.holdCopyFlushes = true;
-    let settled = false;
-    const failure = runWithTenantDiskQuota({
+    await expect(runWithTenantDiskQuota({
       dataDir: dirname(paths.tenantExportsDir),
       reposDir: paths.reposDir,
       tenantId: "default",
@@ -406,18 +381,8 @@ describe("materializeAcceptedStlBundle", () => {
       ...paths,
       capture: capture([part({ snapshotRoot: paths.snapshotRoot, completed: [false, false, false, false] })]),
       selection: "all", groupBy: "color", roleOrder: ["accent"],
-    })).then(
-      (result) => { settled = true; return result; },
-      (error: unknown) => { settled = true; return error; },
-    );
+    }))).rejects.toBeInstanceOf(TenantDiskQuotaError);
 
-    await vi.waitFor(() => expect(acceptedArtifactTestHook.pendingFlushes).toHaveLength(1));
-    expect(settled).toBe(false);
-    const staging = readdirSync(paths.tenantExportsDir, { recursive: true });
-    expect(staging.some((entry) => String(entry).endsWith("widget_01.stl"))).toBe(true);
-    for (const release of acceptedArtifactTestHook.pendingFlushes.splice(0)) release();
-
-    expect(await failure).toBeInstanceOf(TenantDiskQuotaError);
     const entries = readdirSync(paths.tenantExportsDir, { recursive: true });
     expect(entries.some((entry) => String(entry).includes(".tmp-") || String(entry).includes("content-"))).toBe(false);
   });
@@ -699,13 +664,25 @@ describe("materializeAcceptedStlBundle", () => {
     expect(result).toMatchObject({ kind: "materialized", fileCounts: { accent: 10_001 } });
     if (result.kind !== "materialized") return;
     const published = join(result.rootPath, "accent", "_root");
-    const first = statSync(join(published, "widget_01.stl"));
-    const second = statSync(join(published, "widget_02.stl"));
-    expect(readFileSync(join(published, "widget_01.stl"))).toEqual(Buffer.from("accepted-stl"));
-    expect(first.ino).toBe(second.ino);
-    expect(first.nlink).toBe(10_001);
-    // Source inode, accent/_root, accent, the stage before removing the source
-    // name, and the stage again after that removal.
+    const firstPath = join(published, "widget_01.stl");
+    const secondPath = join(published, "widget_02.stl");
+    const lastPath = join(published, "widget_10001.stl");
+    const first = statSync(firstPath);
+    const second = statSync(secondPath);
+    const last = statSync(lastPath);
+    const original = Buffer.from("accepted-stl");
+    expect(readFileSync(firstPath)).toEqual(original);
+    expect(readFileSync(secondPath)).toEqual(original);
+    expect(readFileSync(lastPath)).toEqual(original);
+    expect(new Set([first.ino, second.ino, last.ino]).size).toBe(3);
+    expect([first.nlink, second.nlink, last.nlink]).toEqual([1, 1, 1]);
+    const edited = Buffer.from("edited-unit!");
+    writeFileSync(firstPath, edited);
+    expect(readFileSync(firstPath)).toEqual(edited);
+    expect(readFileSync(secondPath)).toEqual(original);
+    expect(readFileSync(lastPath)).toEqual(original);
+    // Source file, accent/_root, accent, the stage before removing the source
+    // name, and the stage again after that removal. Copies are not flushed.
     expect(measurement).toMatchObject({
       flushCalls: 5, flushCallbacks: 5, flushErrors: 0, flushInflight: 0,
       zipSources: 10_001, zipEnds: 10_001, zipErrors: 0,
