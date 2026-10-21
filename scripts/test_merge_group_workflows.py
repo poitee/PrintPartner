@@ -74,7 +74,11 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True)
         self.assertIn("Merge group check passed.", result.stdout)
         for step in steps[1:]:
-            self.assertEqual(step["if"], "github.event_name == 'pull_request'")
+            if step.get("uses", "").startswith("actions/setup-node@") or step.get("name") == "Verify Node version":
+                # check-ci-tool-pins requires the Node pin and its assertion to run unconditionally.
+                self.assertNotIn("if", step)
+            else:
+                self.assertEqual(step["if"], "github.event_name == 'pull_request'")
         for event in ("pull_request", "merge_group"):
             self.assertNotIn("paths", workflow["on"][event])
             self.assertNotIn("paths-ignore", workflow["on"][event])
