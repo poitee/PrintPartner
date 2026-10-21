@@ -1,4 +1,7 @@
-use pp_storage::{Limits, WriterOwner, catalog::Request};
+use pp_storage::{
+    Limits, WriterOwner,
+    catalog::{NamingCommand, NamingProfile, Outcome, Request},
+};
 use rusqlite::{Connection, types::Value as SqlValue};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -45,12 +48,15 @@ impl Fixture {
     fn sql(&self) -> Connection {
         Connection::open(self.0.join("print-partner.db")).unwrap()
     }
-    fn naming(&self, raw: &Value) {
+    fn naming(&self, case: &Value) {
+        let stored = match case["override_json"].as_str() {
+            Some(raw) => format!(r#"{{"naming":{{"use_defaults":false,"override":{raw}}}}}"#),
+            None => {
+                json!({"naming":{"use_defaults":false,"override":case["override"]}}).to_string()
+            }
+        };
         self.sql()
-            .execute(
-                "UPDATE projects SET metadata_json=? WHERE id=1",
-                [json!({"naming":{"use_defaults":false,"override":raw}}).to_string()],
-            )
+            .execute("UPDATE projects SET metadata_json=? WHERE id=1", [stored])
             .unwrap();
     }
     fn snapshot(&self) -> Snapshot {
@@ -124,7 +130,7 @@ fn cases() -> Vec<Value> {
         .collect();
     assert_eq!(
         cases.len(),
-        21,
+        54,
         "the feature-off test must exercise the capture"
     );
     cases
@@ -137,7 +143,7 @@ fn catalog_refusals_retain_exact_details_in_both_feature_modes() {
     let client = owner.local_source_catalog();
     for case in cases() {
         let name = case["name"].as_str().unwrap();
-        fixture.naming(&case["override"]);
+        fixture.naming(&case);
         let before = fixture.snapshot();
         let result = client.execute(Request::GetNaming { id: 1 });
         assert_eq!(
@@ -182,6 +188,67 @@ fn catalog_refusals_retain_exact_details_in_both_feature_modes() {
             case["known_mismatch"][mode],
             json!(expected != case["node_preparation"].as_str().unwrap()),
             "{name}: mismatch classification"
+        );
+    }
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn saving_valid_unicode_group_names_preserves_the_pattern() {
+    let fixture = Fixture::new();
+    let owner = WriterOwner::open(&fixture.0, Limits::default()).unwrap().0;
+    let client = owner.local_source_catalog();
+    for name in [r"\u0078", r"\u{78}", r"\uD835\uDC9C", r"\u{1D49C}"] {
+        let pattern = format!("(?<{name}>a)");
+        let mut profile = NamingProfile::default();
+        profile.quantity.regex = pattern.clone();
+        let Outcome::Data(saved) = client
+            .execute(Request::SaveNaming {
+                id: 1,
+                settings: NamingCommand::Override { profile },
+            })
+            .unwrap()
+        else {
+            panic!("expected saved naming data for {name}");
+        };
+        assert_eq!(saved["effective"]["quantity"]["regex"], pattern, "{name}");
+    }
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn saving_a_regex_node_22_rejects_follows_the_feature() {
+    let fixture = Fixture::new();
+    let owner = WriterOwner::open(&fixture.0, Limits::default()).unwrap().0;
+    let client = owner.local_source_catalog();
+    let mut profile = NamingProfile::default();
+    profile.quantity.regex = "(?i:(a))".into();
+    let before = fixture.snapshot();
+    let result = client.execute(Request::SaveNaming {
+        id: 1,
+        settings: NamingCommand::Override { profile },
+    });
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        let error = result.unwrap_err();
+        assert_eq!(error.to_string(), "Invalid quantity regex");
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(pp_storage::catalog::CatalogFailure::Input(_))
+        ));
+        assert_eq!(
+            fixture.snapshot(),
+            before,
+            "refused save changed stored data"
+        );
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    {
+        result.unwrap();
+        assert_ne!(
+            fixture.snapshot(),
+            before,
+            "feature-off save still accepts it"
         );
     }
     owner.shutdown().unwrap();
@@ -244,7 +311,7 @@ mod preparation {
             .unwrap();
         for case in cases() {
             let name = case["name"].as_str().unwrap();
-            fixture.naming(&case["override"]);
+            fixture.naming(&case);
             let before = fixture.snapshot();
             let result = client.recompute(
                 Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
