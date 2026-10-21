@@ -1,0 +1,710 @@
+{
+  "metadata": {
+    "node": "v22.23.3",
+    "generator": "fixtures/parity/profile-overlay/generate.mjs",
+    "sources": [
+      {
+        "path": "web/packages/domain/src/merge.ts",
+        "sha256": "7be7d8577fe30dc58fb4dd29b348998a550be99e33cf7d318a0049237a040331"
+      },
+      {
+        "path": "web/packages/domain/src/stl-naming.ts",
+        "sha256": "3f598102c81dfc1b5d628df1cc440e6062cf6594374939f3bb6643e2c5043c78"
+      },
+      {
+        "path": "web/packages/domain/src/import-rules.ts",
+        "sha256": "de68ec783482def81804fed67a698b8d4278fc9bf296e8db4b89a10ab3a4eb30"
+      },
+      {
+        "path": "web/packages/domain/src/scanner.ts",
+        "sha256": "2005243a822cf6936903e377ef3e1cb2b229db8b50fd75bdef8356e05e238c0f"
+      },
+      {
+        "path": "web/apps/server/src/services/plan-freshness.ts",
+        "sha256": "707b3e64056c94d42d28d8ac0d7917e5bde64ad1ea10d7322b58eae86edba1b8"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "base-only",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)"
+      ],
+      "files": {
+        "10": [
+          "bracket.stl",
+          "clip_x2.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "bracket.stl",
+          "relativePath": "bracket.stl",
+          "filename": "bracket.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "clip_x2.stl",
+          "relativePath": "clip_x2.stl",
+          "filename": "clip_x2.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 2,
+          "quantityOverride": null,
+          "quantityEffective": 2,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        }
+      ]
+    },
+    {
+      "name": "addon-adds",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Addon','https://overlay.invalid/Addon','/overlay-root/sources/11',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)"
+      ],
+      "files": {
+        "10": [
+          "bracket.stl"
+        ],
+        "11": [
+          "clip.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "bracket.stl",
+          "relativePath": "bracket.stl",
+          "filename": "bracket.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "clip.stl",
+          "relativePath": "clip.stl",
+          "filename": "clip.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "added",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Addon",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        }
+      ]
+    },
+    {
+      "name": "addon-replaces",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Addon','https://overlay.invalid/Addon','/overlay-root/sources/11',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)"
+      ],
+      "files": {
+        "10": [
+          "bracket.stl"
+        ],
+        "11": [
+          "bracket.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "bracket.stl",
+          "relativePath": "bracket.stl",
+          "filename": "bracket.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "replaced",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Addon",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        }
+      ]
+    },
+    {
+      "name": "addon-order-alpha-then-beta",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Alpha','https://overlay.invalid/Alpha','/overlay-root/sources/11',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(12,'default','Beta','https://overlay.invalid/Beta','/overlay-root/sources/12',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,2,'addon',12)"
+      ],
+      "files": {
+        "10": [
+          "bracket.stl"
+        ],
+        "11": [
+          "shared.stl"
+        ],
+        "12": [
+          "shared.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "bracket.stl",
+          "relativePath": "bracket.stl",
+          "filename": "bracket.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "shared.stl",
+          "relativePath": "shared.stl",
+          "filename": "shared.stl",
+          "sourceLayer": "addon:Beta",
+          "status": "replaced",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Alpha",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 12,
+          "sourceLayer": "addon:Beta",
+          "layerOrder": 2,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        }
+      ]
+    },
+    {
+      "name": "addon-order-beta-then-alpha",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Beta','https://overlay.invalid/Beta','/overlay-root/sources/11',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(12,'default','Alpha','https://overlay.invalid/Alpha','/overlay-root/sources/12',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,2,'addon',12)"
+      ],
+      "files": {
+        "10": [
+          "bracket.stl"
+        ],
+        "11": [
+          "shared.stl"
+        ],
+        "12": [
+          "shared.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "bracket.stl",
+          "relativePath": "bracket.stl",
+          "filename": "bracket.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "shared.stl",
+          "relativePath": "shared.stl",
+          "filename": "shared.stl",
+          "sourceLayer": "addon:Alpha",
+          "status": "replaced",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Beta",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 12,
+          "sourceLayer": "addon:Alpha",
+          "layerOrder": 2,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        }
+      ]
+    },
+    {
+      "name": "scalar-quantity-default",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Addon','https://overlay.invalid/Addon','/overlay-root/sources/11','{\"naming\":{\"use_defaults\":false,\"override\":{\"quantity\":{\"default\":4}}}}',NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)"
+      ],
+      "files": {
+        "10": [
+          "stay.stl",
+          "plain.stl"
+        ],
+        "11": [
+          "plain.stl",
+          "extra.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "plain.stl",
+          "relativePath": "plain.stl",
+          "filename": "plain.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "replaced",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 4,
+          "quantityOverride": null,
+          "quantityEffective": 4,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "stay.stl",
+          "relativePath": "stay.stl",
+          "filename": "stay.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "extra.stl",
+          "relativePath": "extra.stl",
+          "filename": "extra.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "added",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 4,
+          "quantityOverride": null,
+          "quantityEffective": 4,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Addon",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "a0b9297e6f8280c97523ce0e3363c02fcb3481d4bf0f413b8fa6cd2612f790df"
+        }
+      ]
+    },
+    {
+      "name": "scalar-strip-quantity-off",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Addon','https://overlay.invalid/Addon','/overlay-root/sources/11','{\"naming\":{\"use_defaults\":false,\"override\":{\"slug\":{\"strip_quantity\":false}}}}',NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)"
+      ],
+      "files": {
+        "10": [
+          "clip.stl"
+        ],
+        "11": [
+          "clip_x2.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "clip.stl",
+          "relativePath": "clip.stl",
+          "filename": "clip.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "clip_x2.stl",
+          "relativePath": "clip_x2.stl",
+          "filename": "clip_x2.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "added",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 2,
+          "quantityOverride": null,
+          "quantityEffective": 2,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Addon",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "6dfcadad9c90317fefa141a9aa407152d846fb1a1adb288b56743c85e19a2b2f"
+        }
+      ]
+    },
+    {
+      "name": "default-strip-conflicts",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Addon','https://overlay.invalid/Addon','/overlay-root/sources/11',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)"
+      ],
+      "files": {
+        "10": [
+          "clip.stl"
+        ],
+        "11": [
+          "clip_x2.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "clip.stl",
+          "relativePath": "clip.stl",
+          "filename": "clip.stl",
+          "sourceLayer": "base:Base",
+          "status": "conflict",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "clip_x2.stl",
+          "relativePath": "clip_x2.stl",
+          "filename": "clip_x2.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "conflict",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 2,
+          "quantityOverride": null,
+          "quantityEffective": 2,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Addon",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        }
+      ]
+    },
+    {
+      "name": "included-and-excluded",
+      "setup": [
+        "INSERT INTO build_profiles(id,tenant_id,name,accepted_plan_version) VALUES(3,'default','Overlay Build',0)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(10,'default','Base','https://overlay.invalid/Base','/overlay-root/sources/10',NULL,'[\"keep.stl\"]',NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,0,'base',10)",
+        "INSERT INTO projects(id,tenant_id,name,url,local_path,metadata_json,imported_paths,current_source_revision_id) VALUES(11,'default','Addon','https://overlay.invalid/Addon','/overlay-root/sources/11',NULL,NULL,NULL)",
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES('default',3,1,'addon',11)"
+      ],
+      "files": {
+        "10": [
+          "keep.stl",
+          "drop.stl",
+          "shared.stl"
+        ],
+        "11": [
+          "shared.stl",
+          "addon.stl"
+        ]
+      },
+      "parts": [
+        {
+          "partKey": "keep.stl",
+          "relativePath": "keep.stl",
+          "filename": "keep.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "addon.stl",
+          "relativePath": "addon.stl",
+          "filename": "addon.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "added",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "shared.stl",
+          "relativePath": "shared.stl",
+          "filename": "shared.stl",
+          "sourceLayer": "addon:Addon",
+          "status": "added",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": true,
+          "notes": "",
+          "artifactDigest": null
+        },
+        {
+          "partKey": "drop.stl",
+          "relativePath": "drop.stl",
+          "filename": "drop.stl",
+          "sourceLayer": "base:Base",
+          "status": "base",
+          "roleInferred": "primary",
+          "roleOverride": null,
+          "quantityInferred": 1,
+          "quantityOverride": null,
+          "quantityEffective": 1,
+          "included": false,
+          "notes": "",
+          "artifactDigest": null
+        }
+      ],
+      "inputs": [
+        {
+          "sourceId": 10,
+          "sourceLayer": "base:Base",
+          "layerOrder": 0,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        },
+        {
+          "sourceId": 11,
+          "sourceLayer": "addon:Addon",
+          "layerOrder": 1,
+          "trackingKind": "untracked",
+          "sourceRevisionId": null,
+          "manifestDigest": null,
+          "effectiveNamingDigest": "2a4d5de52a78e3061a683e653adb73f201978beac974776e2dc8267214cc4430"
+        }
+      ]
+    }
+  ]
+}
