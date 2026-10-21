@@ -1,6 +1,6 @@
 # YAML flow properties Node corpus
 
-This standalone corpus records the six divergence families named in GRE-841 for GRE-871. It records Node outcomes only. It does not assert current Rust parser parity.
+This standalone corpus records the six divergence families named in GRE-841 for GRE-871. The generator records Node outcomes only, so `source.rustParity` stays `not asserted`. `yaml_flow_properties_corpus_matches_js_yaml` in `rust/crates/pp-storage/src/working_drafts/yaml.rs` checks the Rust parser against it. Until GRE-841 covers them, the test expects Rust to refuse the verbatim-tag adjacency and block-colon cases.
 
 The 31 cases cover explicit empty flow keys, implicit empty flow keys, adjacent verbatim-tag text, a block colon after a flow collection, a multiline quoted flow key followed by a tab, and a comment immediately after a quoted key's colon. Controls distinguish a missing value from an empty mapping: `{"q":}` loads as `{"q":null}`, not `{}`. They also show that a space before the comment changes refusal into a one-key mapping with a null value.
 

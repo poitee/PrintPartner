@@ -273,6 +273,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     let mut node_tab = false;
     let mut flow_key = false;
     let mut flow_property: Option<FlowProperty> = None;
+    // Output offset after a flow sequence's `?`. saphyr drops the token after
+    // an empty explicit key there, so the shield writes the key as `~`.
+    let mut explicit_key: Option<usize> = None;
     let mut consumed = 0usize;
     let mut next_check = 4096usize;
     while i < chars.len() {
@@ -597,7 +600,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             continue;
         }
         let mut separator = false;
+        let mut empty_key = None;
         if !yaml_blank_break(c) {
+            empty_key = explicit_key.take();
             // js-yaml ends a flow node at its properties when a line break
             // follows and the next line is not indented past the collection.
             // That line may sit below the collection's indent.
@@ -669,6 +674,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             }
             continue;
         }
+        // js-yaml reads no node from a flow `?` that a flow indicator follows.
+        if node && c == '?' && !flow.is_empty() && matches!(next, Some(',' | ']' | '}')) {
+            return invalid();
+        }
         if node && matches!(c, '"' | '\'') {
             quote = Some(c);
             plain = false;
@@ -723,6 +732,15 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             || (node && matches!(c, '[' | '{'))
             || (node && matches!(c, '-' | '?') && next.is_none_or(yaml_blank_break));
         if structural {
+            // js-yaml reads no comment right after a quoted key's colon.
+            if colon && quoted_end && next == Some('#') {
+                return invalid();
+            }
+            if let Some(offset) = empty_key
+                && matches!(c, ':' | ',' | ']')
+            {
+                output.insert_str(offset, " ~");
+            }
             if flow.is_empty() && c == ':' {
                 parent = Some(node_column.unwrap_or(column));
             } else if flow.is_empty() && matches!(c, '-' | '?') {
@@ -750,6 +768,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 ',' => flow.last() == Some(&'{'),
                 _ => false,
             };
+            if c == '?' && flow.last() == Some(&'[') {
+                explicit_key = Some(output.len() + 1);
+            }
             node = !matches!(c, ']' | '}');
             plain = false;
             quoted_end = false;
@@ -768,7 +789,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             }
         }
         output.push(c);
-        if separator {
+        // saphyr needs a space after a flow `:` before a tab or a collection.
+        if separator || (colon && !flow.is_empty() && matches!(next, Some('\t' | '[' | '{'))) {
             output.push(' ');
         }
         if plain && c == '\u{e000}' {
@@ -1559,6 +1581,47 @@ mod tests {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-block-scalars-node.json"
         ));
+    }
+
+    #[test]
+    fn yaml_flow_keys_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-keys-node.json"
+        ));
+    }
+
+    // GRE-871's corpus. A verbatim tag followed directly by text, and a block
+    // `:` line whose value starts with `]`, still differ from js-yaml and stay
+    // pinned here until GRE-841 covers them.
+    #[test]
+    fn yaml_flow_properties_corpus_matches_js_yaml() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../fixtures/parity/yaml-flow-properties/node.json"
+        ))
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut pending = 0;
+        for case in corpus["cases"].as_array().unwrap() {
+            let input = case["input"].as_str().unwrap();
+            let expected =
+                (case["outcome"]["kind"] == "decoded").then(|| case["outcome"]["value"].clone());
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let actual = match Document::parse(input.as_bytes(), &mut budget) {
+                Ok(doc) => Some(json(&doc, doc.root, &mut budget)),
+                Err(ReadFailure::InvalidDocument) => None,
+                Err(err) => panic!("{input:?}: {err:?}"),
+            };
+            if matches!(
+                case["family"].as_str(),
+                Some("block-colon-after-flow" | "verbatim-tag-adjacency")
+            ) {
+                assert_eq!(actual, None, "{input:?}");
+                pending += 1;
+            } else {
+                assert_eq!(actual, expected, "{input:?}");
+            }
+        }
+        assert_eq!(pending, 7);
     }
 
     #[test]
