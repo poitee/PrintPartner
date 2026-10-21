@@ -413,10 +413,11 @@ Quantity regexes run with `/i` and no `u` flag. V8 then never case-folds a
 non-ASCII character to ASCII, but `regress` 0.11.1 and 0.12.0 do. Across the
 BMP, ASCII patterns see exactly three characters differently: U+017F long s and
 U+0131 dotless i match `s` and `i`, and U+212A Kelvin sign matches `[a-z]` and
-`\w`. When the pattern is ASCII with no `\x`, `\u` or backslash-digit escape,
+`\w`. When the pattern is ASCII with no `\x`, `\u`, `\k` or backslash-digit escape,
 preparation matches against a copy of the input with U+02BC in place of U+017F
 and U+0131 and U+2129 in place of U+212A. These stand-ins have the same UTF-8
-width and no case mappings, so match offsets index the original name. Other
+width and no case mappings, so match offsets index the original name.
+Backreferences are excluded because U+017F and U+0131 share a stand-in. Other
 patterns keep the old matching. Two divergences remain for them: U+1E9E and
 U+212B match `[\x80-\xff]` in `regress` but not in V8, and non-ASCII pattern
 text is not covered (GRE-836). `preparation_long_s_quantity_matches_v8` and

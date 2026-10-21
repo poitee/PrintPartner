@@ -487,9 +487,11 @@ impl LayerNaming {
 /// matches U+212A. In the BMP, only these three differ for a pattern that can
 /// only name ASCII. For such a pattern, the input swaps each for a stand-in
 /// of the same UTF-8 width that no case rule touches, so match offsets still
-/// index the original input. Patterns that can name non-ASCII characters
-/// (literally or through `\x`, `\u` or `\<digit>` escapes) keep matching as
-/// before; docs/desktop-rebuild.md records that unsupported remainder.
+/// index the original input. Backreferences (`\<digit>`, `\k`) are excluded
+/// too, because they compare input characters with each other and U+017F and
+/// U+0131 share a stand-in. Patterns that can name non-ASCII characters
+/// (literally or through `\x` or `\u`) or use backreferences keep matching
+/// as before; docs/desktop-rebuild.md records that unsupported remainder.
 struct QuantityRegex {
     regex: regress::Regex,
     names_only_ascii: bool,
@@ -500,7 +502,7 @@ impl QuantityRegex {
             && !pattern
                 .as_bytes()
                 .windows(2)
-                .any(|w| w[0] == b'\\' && matches!(w[1], b'x' | b'u' | b'0'..=b'9'));
+                .any(|w| w[0] == b'\\' && matches!(w[1], b'x' | b'u' | b'k' | b'0'..=b'9'));
         Ok(Self {
             regex: regress::Regex::with_flags(pattern, "i")?,
             names_only_ascii,

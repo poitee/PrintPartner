@@ -974,11 +974,10 @@ fn preparation_path_sort_preserves_node_order() {
 }
 #[test]
 fn preparation_long_s_quantity_matches_v8() {
-    for refuse in [false, true] {
-        client_attempt(ClientAttempt::Quantity {
-            name: "long-s",
-            refuse,
-        });
+    for name in ["long-s", "long-s-backreference"] {
+        for refuse in [false, true] {
+            client_attempt(ClientAttempt::Quantity { name, refuse });
+        }
     }
 }
 #[test]
