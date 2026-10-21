@@ -9,6 +9,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use tokio::process::Command;
 
 const HTTPS_ORIGIN: &str = "https://127.0.0.1:48921";
 const LOGIN_LOOPBACK: &str = "pp_session=<token>; Max-Age=1209600; Path=/; HttpOnly; SameSite=Lax";
@@ -409,18 +410,19 @@ async fn observe(case: &Case, account: &Account) -> NodeCookie {
     actual
 }
 
-#[test]
-fn node_cookie_fixture_is_current() {
+#[tokio::test]
+async fn node_cookie_fixture_is_current() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let node = std::env::var_os("PP_SCHEMA_PARITY_NODE")
         .or_else(|| std::env::var_os("PP_TEST_NODE"))
         .unwrap_or_else(|| "node".into());
     let generator = root.join("fixtures/parity/auth-cookie/generate.mjs");
-    let output = std::process::Command::new(&node)
+    let output = Command::new(&node)
         .arg(&generator)
         .arg("--check")
         .current_dir(&root)
         .output()
+        .await
         .unwrap_or_else(|error| {
             panic!(
                 "Cannot run {node:?} {generator:?} --check: {error}. Install Node 22 and web dependencies. Set PP_SCHEMA_PARITY_NODE or PP_TEST_NODE to select Node."
