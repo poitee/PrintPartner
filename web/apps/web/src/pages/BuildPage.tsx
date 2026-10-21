@@ -14,6 +14,7 @@ import MergeConflictBanner from "../components/MergeConflictBanner";
 import PlanSpecialRequestField from "../components/PlanSpecialRequestField";
 import BuildRecipePanel from "../components/build/BuildRecipePanel";
 import BuildPlanningCard from "../components/build/BuildPlanningCard";
+import { useOrdersVisible } from "../hooks/useOrdersVisible";
 import { useBuildPlanningQuery } from "../components/build/useBuildPlanningQuery";
 import EmptyState from "../components/layout/EmptyState";
 import PageHeader from "../components/layout/PageHeader";
@@ -180,6 +181,7 @@ export default function BuildPage() {
   const profileDataError = loadError ?? layerQueryError;
 
   const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
+  const ordersVisible = useOrdersVisible(selectedProfileId);
   const buildStale = selectedProfile?.freshness.status === "stale";
 
   const mergeConflicts = useMemo(
@@ -625,7 +627,7 @@ export default function BuildPage() {
 
       {workspaceReady && selectedProfileId != null && (
         <div className="space-y-6">
-          <section id="build-request" className="space-y-2">
+          {ordersVisible ? <section id="build-request" className="space-y-2">
             <h2 className="text-sm font-semibold tracking-wide">Build request</h2>
             <label
               htmlFor={`plan-special-request-${selectedProfileId}`}
@@ -638,7 +640,7 @@ export default function BuildPage() {
               value={selectedProfile?.special_request}
               className="max-w-xl"
             />
-          </section>
+          </section> : null}
 
           <section id="attached-sources" className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
