@@ -12,7 +12,7 @@ import { readAcceptedPlatesInternal } from "./db/accepted-plates.js";
 import { validateOwnershipPlateComparisonBudget, validateOwnershipPlateProtection, validateOwnershipPlateTextBytes } from "./ownership-plate-history.js";
 import { openVerifiedAcceptedArtifact } from "./services/accepted-artifacts.js";
 import { ownershipHistoryTables, validateOwnershipHistory } from "./ownership-history.js";
-import { inOwnershipStlStage, inspectOwnershipExports, ownershipExportClaimSchema, ownershipExportTarget, ownershipFileDigest, type OwnershipExport } from "./ownership-exports.js";
+import { inOwnershipExportStage, inspectOwnershipExports, ownershipExportClaimSchema, ownershipExportTarget, ownershipFileDigest, type OwnershipExport } from "./ownership-exports.js";
 import { schemaMigrations } from "./db/migrations-sqlite.js";
 import { currentSchemaVersion } from "./db/schema.js";
 import { readSchemaVersion } from "./db/upgrade-guard.js";
@@ -381,7 +381,7 @@ export async function executeOwnershipCopy({ sourceDir, destinationDir, manifest
       if (copy.pragma("integrity_check", { simple: true }) !== "ok" || z.array(z.unknown()).parse(copy.pragma("foreign_key_check")).length) throw new Error("Staged database integrity failed");
     } finally { copy.close(); }
     const stagedFiles = new Map(productFileDigests(stage));
-    const copiedFiles = sourceFiles.filter(([path]) => !(path.startsWith(`exports${sep}`) && inOwnershipStlStage(path.slice(8).split(sep).join("/"))));
+    const copiedFiles = sourceFiles.filter(([path]) => !(path.startsWith(`exports${sep}`) && inOwnershipExportStage(path.slice(8).split(sep).join("/"))));
     if (stagedFiles.size !== copiedFiles.length) throw new Error("Staged artifact inventory differs from source");
     for (const [path, digest] of copiedFiles) {
       const artifact = path.startsWith(`exports${sep}`) ? artifacts.find(artifact => artifact.path === path.slice(8).split(sep).join("/")) : undefined;

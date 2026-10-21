@@ -1198,6 +1198,35 @@ it.each(["cross-plan", "manifest-mismatch", "unknown-file", "missing-plate", "ma
   expect(() => inspectOwnershipCopy(paths)).toThrow();
   await refused(paths, input);
 });
+it("leaves crash-left accepted Plate stages behind and copies the published tree", async () => {
+  const paths = plateFixture();
+  const source = await materializePlates(paths.sourceDir, "default", 1);
+  if (source.kind !== "materialized") throw new Error("Missing source Plate export");
+  const published = manifest(paths.sourceDir);
+  const revision = join(paths.sourceDir, "exports/tenant-default/accepted-plates/profile-1/revision-3");
+  const stage = mkdtempSync(join(revision, "..", ".revision-3.tmp-"));
+  cpSync(revision, stage, { recursive: true });
+  const input = manifest(paths.sourceDir);
+  expect(input).toEqual(published);
+  const before = files(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(files(paths.sourceDir)).toEqual(before);
+  expect(readdirSync(join(tenantExportDirectory(join(paths.destinationDir, "exports"), "account-a"), "accepted-plates/profile-1"))).toEqual(["revision-3"]);
+  const reopened = await materializePlates(paths.destinationDir, "account-a", 1);
+  if (reopened.kind !== "materialized") throw new Error(`Copied Plate export unavailable ${reopened.kind}`);
+  expect(reopened.bundle.sha256).toBe(source.bundle.sha256);
+});
+it.each(["unknown-revision", "unknown-profile", "stage-file"])("refuses %s crash-left accepted Plate stages", async kind => {
+  const paths = plateFixture();
+  await materializePlates(paths.sourceDir, "default", 1);
+  const input = manifest(paths.sourceDir);
+  const profile = join(paths.sourceDir, "exports/tenant-default/accepted-plates/profile-1");
+  const stage = mkdtempSync(join(profile, kind === "unknown-revision" ? ".revision-999.tmp-" : ".revision-3.tmp-"));
+  if (kind === "unknown-profile") { cpSync(stage, stage.replace("profile-1", "profile-999"), { recursive: true }); rmSync(stage, { recursive: true }); }
+  if (kind === "stage-file") { rmSync(stage, { recursive: true }); writeFileSync(stage, "partial"); }
+  expect(() => inspectOwnershipCopy(paths)).toThrow();
+  await refused(paths, input);
+});
 
 function stlTreeState(root: string): Record<string, string> {
   const state: Record<string, string> = {};
@@ -1273,7 +1302,7 @@ it.each(["color", "color_dir", "missing", "group", "color_group", "group_color",
     expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports.map(file => file.tenant_id)).toEqual(["account-a", "account-a", "account-b", "account-b"]);
   });
 
-it.each(["cross-plan", "unknown-revision", "wrong-scope", "content-key", "selection", "grouping", "missing-zip", "missing-stl", "unknown-file", "extra-stl", "empty-directory", "symlink", "directory-symlink", "fifo", "zip-directory", "zip-symlink", "zip-fifo", "truncated-zip", "zip-entry-budget", "stl-size"])(
+it.each(["cross-plan", "unknown-revision", "wrong-scope", "content-key", "selection", "grouping", "missing-zip", "missing-stl", "unknown-file", "extra-stl", "empty-directory", "symlink", "directory-symlink", "fifo", "zip-directory", "zip-symlink", "zip-fifo", "truncated-zip", "zip-entry-budget", "stl-size", "stl-content"])(
   "refuses %s accepted STL export trees without publishing", async kind => {
     const paths = fixture();
     const publication = await materializeStls(paths.sourceDir, "default", 1);
@@ -1302,6 +1331,7 @@ it.each(["cross-plan", "unknown-revision", "wrong-scope", "content-key", "select
     if (kind === "zip-fifo") { rmSync(publication.bundlePath); execFileSync("mkfifo", [publication.bundlePath]); }
     if (kind === "truncated-zip") writeFileSync(publication.bundlePath, "invalid zip");
     if (kind === "stl-size") writeFileSync(loose, "short STL");
+    if (kind === "stl-content") { const bytes = readFileSync(loose); bytes[0] = bytes[0]! ^ 1; writeFileSync(loose, bytes); }
     if (kind === "zip-entry-budget") {
       const bytes = readFileSync(publication.bundlePath);
       const end = bytes.lastIndexOf(Buffer.from("504b0506", "hex"));
