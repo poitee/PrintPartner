@@ -1,14 +1,17 @@
 import { cn } from "@/lib/utils";
+import { useOrdersVisible } from "../hooks/useOrdersVisible";
 
 type Props = {
+  profileId: number | null | undefined;
   note: string | null | undefined;
   className?: string;
 };
 
-/** Quiet Progress readout of the plan special-request note. */
-export default function PlanSpecialRequestLine({ note, className }: Props) {
+/** Quiet Progress readout of the plan special-request note. Hidden when Orders is off. */
+export default function PlanSpecialRequestLine({ profileId, note, className }: Props) {
+  const ordersVisible = useOrdersVisible(profileId);
   const text = note?.trim();
-  if (!text) return null;
+  if (!ordersVisible || !text) return null;
   return (
     <p
       className={cn("text-sm text-muted-foreground", className)}

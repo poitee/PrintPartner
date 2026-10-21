@@ -37,11 +37,14 @@ const REGISTER: &str = r#"{"email":"admission@example.test","password":"fixture-
 const FORGOT: &str = r#"{"email":"admission@example.test"}"#;
 const LOGIN: &str = r#"{"email":"admission@example.test","password":"fixture-admission-password"}"#;
 const CHANGE: &str = r#"{"current_password":"fixture-admission-password","new_password":"fixture-admission-password-changed"}"#;
-const TABLES: [&str; 4] = [
+const RESET: &str =
+    r#"{"token":"fixture-admission-reset-token","password":"fixture-admission-password-reset"}"#;
+const TABLES: [&str; 5] = [
     "users",
     "sessions",
     "password_reset_tokens",
     "auth_identities",
+    "app_settings",
 ];
 const FORGOT_SUCCESS: &str =
     r#"{"ok":true,"message":"If an account exists for that email, a reset link was sent."}"#;
@@ -59,14 +62,24 @@ enum Route {
     Login,
     Logout,
     Change,
+    Reset,
+    Me,
+    Create,
+    Revoke,
+    Regenerate,
 }
 impl Route {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 10] = [
         Self::Register,
         Self::Forgot,
         Self::Login,
         Self::Logout,
         Self::Change,
+        Self::Reset,
+        Self::Me,
+        Self::Create,
+        Self::Revoke,
+        Self::Regenerate,
     ];
     fn name(self) -> &'static str {
         match self {
@@ -75,23 +88,38 @@ impl Route {
             Self::Login => "login",
             Self::Logout => "logout",
             Self::Change => "change",
+            Self::Reset => "reset",
+            Self::Me => "me",
+            Self::Create => "create",
+            Self::Revoke => "revoke",
+            Self::Regenerate => "regenerate",
         }
     }
-    fn path(self) -> &'static str {
-        match self {
+    fn path(self, key_id: Option<&str>) -> String {
+        let auth = match self {
+            Self::Create => return "/settings/api-keys".into(),
+            Self::Revoke => return format!("/settings/api-keys/{}", key_id.unwrap()),
+            Self::Regenerate => {
+                return format!("/settings/api-keys/{}/regenerate", key_id.unwrap());
+            }
+            Self::Reset => "reset-password",
+            Self::Me => "me",
             Self::Register => "register",
             Self::Forgot => "forgot-password",
             Self::Login => "login",
             Self::Logout => "logout",
             Self::Change => "change-password",
-        }
+        };
+        format!("/auth/{auth}")
     }
     fn base_body(self) -> &'static str {
         match self {
             Self::Register => REGISTER,
             Self::Forgot => FORGOT,
             Self::Login => LOGIN,
-            Self::Logout => "{}",
+            Self::Logout | Self::Create | Self::Revoke | Self::Regenerate => "{}",
+            Self::Me => "",
+            Self::Reset => RESET,
             Self::Change => CHANGE,
         }
     }
@@ -103,7 +131,20 @@ impl Route {
             "foreign-host",
         ];
         match self {
-            Self::Register | Self::Logout | Self::Change => GUARDS,
+            Self::Register | Self::Logout | Self::Change | Self::Reset => GUARDS,
+            Self::Me => &[
+                "control",
+                "foreign-origin",
+                "missing-origin",
+                "foreign-host",
+                "duplicate-host",
+                "duplicate-origin",
+                "x-forwarded-host",
+                "x-forwarded-for",
+                "x-forwarded-proto",
+                "forwarded",
+                "cross-site",
+            ],
             Self::Forgot => &[
                 "control",
                 "at-16384",
@@ -116,7 +157,7 @@ impl Route {
                 "text-plain",
                 "foreign-origin-over-1048576",
             ],
-            Self::Login => &[
+            Self::Login | Self::Create | Self::Revoke | Self::Regenerate => &[
                 "control",
                 "foreign-origin",
                 "missing-origin",
@@ -137,15 +178,22 @@ impl Route {
             Self::Forgot => rows.reset_tokens = 1,
             Self::Login => rows.sessions = 1,
             Self::Logout => rows.sessions = -1,
-            Self::Change => {}
+            Self::Reset => rows.reset_tokens = -1,
+            Self::Change | Self::Me | Self::Create | Self::Revoke | Self::Regenerate => {}
         }
         rows
     }
     fn issues_session(self) -> bool {
-        matches!(self, Self::Register | Self::Login | Self::Change)
+        matches!(
+            self,
+            Self::Register | Self::Login | Self::Change | Self::Reset
+        )
     }
     fn needs_cookie(self) -> bool {
-        matches!(self, Self::Logout | Self::Change)
+        matches!(
+            self,
+            Self::Logout | Self::Change | Self::Me | Self::Create | Self::Revoke | Self::Regenerate
+        )
     }
 }
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -276,6 +324,19 @@ const fn guard_fix(id: &'static str, error: &'static str, reason: &'static str) 
         reason,
     }
 }
+const fn admission_fix(id: &'static str, status: u16, error: &'static str) -> Difference {
+    Difference {
+        node: Lit {
+            status,
+            error: None,
+        },
+        ..guard_fix(
+            id,
+            error,
+            "Reject untrusted request metadata before auth route handling",
+        )
+    }
+}
 macro_rules! difference {
     ($id:literal, $kind:ident, $ns:literal, $ne:expr, $rs:literal, $re:expr, $reason:literal) => {
         Difference {
@@ -294,6 +355,45 @@ macro_rules! difference {
     };
 }
 const DIFFERENCES: &[Difference] = &[
+    admission_fix("reset/foreign-origin", 200, ORIGIN_ERROR),
+    admission_fix("reset/missing-origin", 200, ORIGIN_ERROR),
+    admission_fix("reset/foreign-host", 200, HOST_ERROR),
+    admission_fix("me/foreign-origin", 200, ORIGIN_ERROR),
+    admission_fix("me/foreign-host", 200, HOST_ERROR),
+    admission_fix("me/duplicate-host", 200, HOST_ERROR),
+    admission_fix("me/duplicate-origin", 200, ORIGIN_ERROR),
+    admission_fix("me/x-forwarded-host", 200, HOST_ERROR),
+    admission_fix("me/x-forwarded-for", 200, HOST_ERROR),
+    admission_fix("me/x-forwarded-proto", 200, HOST_ERROR),
+    admission_fix("me/forwarded", 200, HOST_ERROR),
+    admission_fix("me/cross-site", 200, ORIGIN_ERROR),
+    admission_fix("create/foreign-origin", 201, ORIGIN_ERROR),
+    admission_fix("create/missing-origin", 201, ORIGIN_ERROR),
+    admission_fix("create/foreign-host", 201, HOST_ERROR),
+    admission_fix("create/duplicate-host", 201, HOST_ERROR),
+    admission_fix("create/duplicate-origin", 201, ORIGIN_ERROR),
+    admission_fix("create/x-forwarded-host", 201, HOST_ERROR),
+    admission_fix("create/x-forwarded-for", 201, HOST_ERROR),
+    admission_fix("create/x-forwarded-proto", 201, HOST_ERROR),
+    admission_fix("create/forwarded", 201, HOST_ERROR),
+    admission_fix("revoke/foreign-origin", 200, ORIGIN_ERROR),
+    admission_fix("revoke/missing-origin", 200, ORIGIN_ERROR),
+    admission_fix("revoke/foreign-host", 200, HOST_ERROR),
+    admission_fix("revoke/duplicate-host", 200, HOST_ERROR),
+    admission_fix("revoke/duplicate-origin", 200, ORIGIN_ERROR),
+    admission_fix("revoke/x-forwarded-host", 200, HOST_ERROR),
+    admission_fix("revoke/x-forwarded-for", 200, HOST_ERROR),
+    admission_fix("revoke/x-forwarded-proto", 200, HOST_ERROR),
+    admission_fix("revoke/forwarded", 200, HOST_ERROR),
+    admission_fix("regenerate/foreign-origin", 201, ORIGIN_ERROR),
+    admission_fix("regenerate/missing-origin", 201, ORIGIN_ERROR),
+    admission_fix("regenerate/foreign-host", 201, HOST_ERROR),
+    admission_fix("regenerate/duplicate-host", 201, HOST_ERROR),
+    admission_fix("regenerate/duplicate-origin", 201, ORIGIN_ERROR),
+    admission_fix("regenerate/x-forwarded-host", 201, HOST_ERROR),
+    admission_fix("regenerate/x-forwarded-for", 201, HOST_ERROR),
+    admission_fix("regenerate/x-forwarded-proto", 201, HOST_ERROR),
+    admission_fix("regenerate/forwarded", 201, HOST_ERROR),
     origin_fix(
         "register/foreign-origin",
         "Reject foreign Origin before registration",
@@ -498,7 +598,12 @@ fn fixture() -> Fixture {
             Rows::default()
         };
         assert_eq!(case.node.rows, rows, "{}: Node work", case.id);
-        assert_eq!(case.node.state_changed, admitted, "{}: Node state", case.id);
+        assert_eq!(
+            case.node.state_changed,
+            admitted && case.route != Route::Me,
+            "{}: Node state",
+            case.id
+        );
         assert_eq!(
             case.node.mail_connections,
             u32::from(admitted && case.route == Route::Forgot)
@@ -532,7 +637,7 @@ fn fixture() -> Fixture {
         match diff.kind {
             Kind::SecurityCorrection => {
                 assert!(diff.node.status < 400 && diff.rust.status >= 400);
-                assert!(case.node.state_changed);
+                assert_eq!(case.node.state_changed, case.route != Route::Me);
             }
             Kind::ErrorMapping => assert!(diff.node.status >= 400 && diff.rust.status >= 400),
         }
@@ -541,6 +646,7 @@ fn fixture() -> Fixture {
 }
 fn extra_header(suffix: &str) -> Option<(&'static str, &'static str)> {
     Some(match suffix {
+        "cross-site" => ("sec-fetch-site", "cross-site"),
         "duplicate-host" => ("host", "evil.example"),
         "duplicate-origin" => ("origin", "http://evil.example"),
         "x-forwarded-host" => ("x-forwarded-host", "evil.example"),
@@ -744,14 +850,22 @@ impl Server {
             stop_smtp: Some(stop_smtp),
         })
     }
-    async fn post(
+    async fn send(
         &self,
         case: &Case,
         cookie: Option<&str>,
+        key_id: Option<&str>,
     ) -> Result<(Reply, Value, Option<String>)> {
         let mut request = self
             .client
-            .post(format!("{}/auth/{}", self.origin, case.route.path()))
+            .request(
+                match case.route {
+                    Route::Me => reqwest::Method::GET,
+                    Route::Revoke => reqwest::Method::DELETE,
+                    _ => reqwest::Method::POST,
+                },
+                format!("{}{}", self.origin, case.route.path(key_id)),
+            )
             .header(
                 "Host",
                 if case.host == Authority::Foreign {
@@ -864,7 +978,7 @@ struct Evidence {
     mail_failures: u64,
     cleanup_errors: Vec<String>,
 }
-async fn observe(case: &Case, seed: &Case) -> Result<Evidence> {
+async fn observe(case: &Case, seed: &Case, key_seed: &Case) -> Result<Evidence> {
     let deadline = Instant::now() + Duration::from_secs(45);
     let mut server = timeout(Duration::from_secs(10), Server::start())
         .await
@@ -872,15 +986,25 @@ async fn observe(case: &Case, seed: &Case) -> Result<Evidence> {
     let result = timeout_at(deadline, async {
         let mut session = None;
         if case.route != Route::Register {
-            let (reply, _, cookie) = server.post(seed, None).await?;
+            let (reply, _, cookie) = server.send(seed, None, None).await?;
             ensure!(
                 reply.status == 200 && cookie.is_some(),
                 "seed registration failed: {reply:?}"
             );
             session = cookie.filter(|_| case.route.needs_cookie());
         }
-        let before = Snapshot::read(server.db.as_ref().unwrap())?;
-        let (reply, body, cookie) = server.post(case, session.as_deref()).await?;
+        let db = server.db.as_ref().unwrap();
+        if case.route == Route::Reset {
+            let user: String = db.query_row("SELECT id FROM users WHERE email=?1", [EMAIL], |row| row.get(0))?;
+            db.execute("INSERT INTO password_reset_tokens(id,user_id,expires_at,created_at) VALUES(?1,?2,?3,?4)", rusqlite::params![hex::encode(Sha256::digest(b"fixture-admission-reset-token")), user, "2099-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"])?;
+        }
+        let key_id = if matches!(case.route, Route::Create | Route::Revoke | Route::Regenerate) {
+            let (reply, body, _) = server.send(key_seed, session.as_deref(), None).await?;
+            ensure!(reply.status == 201, "seed key failed: {reply:?}");
+            Some(body["id"].as_str().context("seed key id")?.to_owned())
+        } else { None };
+        let before = Snapshot::read(db)?;
+        let (reply, body, cookie) = server.send(case, session.as_deref(), key_id.as_deref()).await?;
         let session_issued = cookie.is_some();
         Ok::<_, anyhow::Error>((before, reply, body, session_issued))
     })
@@ -940,7 +1064,8 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
         ensure!(!actual.session_issued, "refusal issued session");
     } else {
         ensure!(
-            actual.rows == case.route.productive_rows() && actual.state_changed,
+            actual.rows == case.route.productive_rows()
+                && actual.state_changed == (case.route != Route::Me),
             "productive work"
         );
         ensure!(
@@ -967,7 +1092,7 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
             }
         }
         match case.route {
-            Route::Register | Route::Login => {
+            Route::Register | Route::Login | Route::Reset | Route::Me => {
                 ensure!(
                     evidence.body["user"]["email"] == EMAIL
                         && evidence.body["user"]["display_name"] == "Admission",
@@ -984,9 +1109,72 @@ fn validate(case: &Case, evidence: &Evidence) -> Result<()> {
             Route::Logout | Route::Change => {
                 ensure!(evidence.body == json!({"ok":true}), "ok success body");
             }
+            Route::Create | Route::Regenerate | Route::Revoke => {
+                let keys = |snapshot: &Snapshot| -> Result<Vec<Value>> {
+                    let row = snapshot.0["app_settings"]
+                        .iter()
+                        .find(|row| row["key"] == "api_keys_v1")
+                        .context("key settings")?;
+                    Ok(serde_json::from_str(
+                        row["value"].as_str().context("key JSON")?,
+                    )?)
+                };
+                let before = keys(&evidence.before)?;
+                let after = keys(&evidence.after)?;
+                if case.route == Route::Revoke {
+                    ensure!(
+                        evidence.body == json!({"success":true})
+                            && after.len() == before.len()
+                            && after[0]["isActive"] == false,
+                        "key revoked"
+                    );
+                } else {
+                    ensure!(
+                        actual.status == 201
+                            && evidence.body["key"]
+                                .as_str()
+                                .is_some_and(|key| key.starts_with("ppk_")),
+                        "created key response"
+                    );
+                    ensure!(
+                        !serde_json::to_string(&evidence.after.0)?
+                            .contains(evidence.body["key"].as_str().unwrap()),
+                        "plaintext key persisted"
+                    );
+                    ensure!(
+                        after.len() == before.len() + 1
+                            && after.iter().any(|key| key["id"] == evidence.body["id"]
+                                && key["isActive"] == true
+                                && key["keyHash"].as_str().is_some_and(|hash| hash.len() == 64
+                                    && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))),
+                        "created key persisted"
+                    );
+                    if case.route == Route::Regenerate {
+                        ensure!(
+                            after[0]["isActive"] == false && after[0]["id"] == before[0]["id"],
+                            "old key deactivated"
+                        );
+                    }
+                }
+            }
             Route::Forgot => {}
         }
-        if case.route == Route::Change {
+        if case.route == Route::Me {
+            ensure!(
+                evidence.body["multi_user"] == true,
+                "me multi-user response"
+            );
+        }
+        if case.route == Route::Reset {
+            ensure!(
+                evidence.after.0["password_reset_tokens"].is_empty()
+                    && evidence.after.0["sessions"].len() == 1
+                    && evidence.after.0["sessions"][0]["id"]
+                        != evidence.before.0["sessions"][0]["id"],
+                "reset consumes token and replaces old session"
+            );
+        }
+        if matches!(case.route, Route::Change | Route::Reset) {
             ensure!(
                 evidence.after.0["users"][0]["password_hash"]
                     != evidence.before.0["users"][0]["password_hash"],
@@ -1009,9 +1197,17 @@ async fn compare(route: Route) {
         .find(|case| case.id == "register/control")
         .unwrap();
     for case in fixture.cases.iter().filter(|case| case.route == route) {
-        let evidence = observe(case, seed)
-            .await
-            .unwrap_or_else(|error| panic!("{}: {error:#}", case.id));
+        let evidence = observe(
+            case,
+            seed,
+            fixture
+                .cases
+                .iter()
+                .find(|case| case.id == "create/control")
+                .unwrap(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{}: {error:#}", case.id));
         eprintln!(
             "{} observed {:?}, mail failures {}",
             case.id, evidence.observation, evidence.mail_failures
@@ -1044,7 +1240,25 @@ async fn logout_auth_admission_parity() {
 async fn change_password_auth_admission_parity() {
     compare(Route::Change).await;
 }
+#[tokio::test]
+async fn reset_password_auth_admission_parity() {
+    compare(Route::Reset).await;
+}
+#[tokio::test]
+async fn me_auth_admission_parity() {
+    compare(Route::Me).await;
+}
+#[tokio::test]
+async fn api_key_auth_admission_parity() {
+    for route in [Route::Create, Route::Revoke, Route::Regenerate] {
+        compare(route).await;
+    }
+}
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS runners intermittently reset the Node probe's upload with write ECONNRESET before it reads the response; the Linux auth-admission-freshness workflow owns the canonical check"
+)]
 fn node_auth_admission_snapshot_is_current() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
@@ -1068,7 +1282,7 @@ fn node_auth_admission_snapshot_is_current() {
         "Node freshness failed:\n{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("auth admission: 32 real-listener cases passed on "));
+    assert!(stdout.contains("auth admission: 77 real-listener cases passed on "));
 }
 #[test]
 fn comparator_rejects_response_and_work_changes() {
@@ -1121,7 +1335,7 @@ fn comparator_rejects_response_and_work_changes() {
             );
         }
     }
-    for mutation in 0..11 {
+    for mutation in 0..12 {
         let mut evidence = baseline();
         match mutation {
             0 => evidence.observation.status = 400,
@@ -1142,6 +1356,12 @@ fn comparator_rejects_response_and_work_changes() {
                     .push(json!({"id":"changed"}));
             }
             10 => evidence.observation.state_changed = true,
+            11 => evidence
+                .after
+                .0
+                .get_mut("app_settings")
+                .unwrap()
+                .push(json!({"key":"api_keys_v1","value":"changed"})),
             _ => unreachable!(),
         }
         assert!(

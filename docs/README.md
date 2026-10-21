@@ -46,6 +46,7 @@ Print Partner is moving its backend from Node to one Rust core. The core runs as
 - [Contributing](development/contributing.md)
 - [Continuous integration](development/ci.md)
 - [Change a CI workflow](development/ci-controls.md)
+- [Run the stress-runner self-tests](development/stress-runner-self-tests.md)
 - [Definition of done](development/definition-of-done.md)
 - [Gate evidence](contributing/gate-evidence.md)
 

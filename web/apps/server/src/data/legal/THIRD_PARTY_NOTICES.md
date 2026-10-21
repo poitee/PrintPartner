@@ -93,9 +93,9 @@ Built-in printer presets use common printer model names for bed-size hints only.
 
 ## Rust TLS trust roots
 
-`webpki-roots` 1.0.9 supplies Mozilla CA certificate data for Rust SMTP TLS. The crate declares `CDLA-Permissive-2.0`. The agreement below accompanies that data in Print Partner distributions.
+`webpki-roots` 1.0.10 supplies Mozilla CA certificate data for Rust SMTP TLS. The crate declares `CDLA-Permissive-2.0`. The agreement below accompanies that data in Print Partner distributions.
 
-Source: https://github.com/rustls/webpki-roots/tree/v/1.0.9/webpki-roots
+Source: https://github.com/rustls/webpki-roots/tree/v/1.0.10/webpki-roots
 
 ```text
 # Community Data License Agreement - Permissive - Version 2.0
