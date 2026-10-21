@@ -63,3 +63,22 @@ from `true` to `false`. Run the focused Rust test and confirm that
 literal pattern and key `probe-aa-end.stl`. The assertion must report actual
 `Some(String("optional"))` against expected `Some(Null)`.
 Restore the fixture, then rerun the Node `--check` and focused Rust test.
+
+## Segment-search digests (GRE-748)
+
+`rust/crates/pp-storage/tests/fixtures/manifest-segments-node.mjs` runs Node
+`matchKeyMatches` over the three generated families that the segment-search
+unit tests in `manifest_glob_tests.rs` use. It records each family's accept
+count and FNV-1a digest in `manifest-segments-node.json`, and the Rust tests
+compare against that file.
+
+- `exhaustive`: every pattern up to 5 units over `a`, `b`, LF, `?` and `*`,
+  against every key up to 6 units over `a`, `b` and LF.
+- `longKeys`: 4,000 seeded keys up to 399 units. Half of them space stars far
+  enough apart that segments take the NTT search.
+- `longMasked`: 1,000 patterns of the form `*` + masked segment + `*`, where
+  the segment has at least 65 units, so every case takes the NTT search.
+
+Each pattern and key is wrapped in `x`, which makes trimming, lowercasing and
+the basename fallback no-ops. The recorded outcome is then Node's `^pattern$`
+answer on the raw units. Desktop Contracts runs the generator with `--check`.

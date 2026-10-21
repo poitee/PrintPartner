@@ -138,6 +138,20 @@ fn regex_matches(pattern: &[u16], key: &[u16]) -> bool {
     row[0]
 }
 
+/// Accept count and FNV-1a digest that `manifest-segments-node.mjs` records
+/// for Node's `matchKeyMatches` over the same generated pairs.
+fn node_outcomes(generator: &str) -> (usize, u32) {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/manifest-segments-node.json"
+    ))
+    .unwrap();
+    let row = &fixture[generator];
+    (
+        row["accepted"].as_u64().unwrap() as usize,
+        row["digest"].as_u64().unwrap() as u32,
+    )
+}
+
 fn strings(alphabet: &[u16], max_len: u32) -> Vec<Vec<u16>> {
     let mut all = vec![Vec::new()];
     let mut layer = vec![Vec::new()];
@@ -175,9 +189,7 @@ fn segment_search_matches_regex_semantics_exhaustively() {
         }
     }
     assert_eq!((patterns.len(), keys.len()), (3906, 1093));
-    // Node's `RegExp("^" + regex + "$", "i").test`, run over the same pairs in
-    // the same order, gives this accept count and FNV-1a digest of outcomes.
-    assert_eq!((accepted, digest), (96_409, 0xc528_d672));
+    assert_eq!((accepted, digest), node_outcomes("exhaustive"));
 }
 
 #[test]
@@ -234,8 +246,61 @@ fn segment_search_matches_regex_semantics_on_long_keys() {
         accepted += usize::from(expected);
         digest = (digest ^ u32::from(expected)).wrapping_mul(0x0100_0193);
     }
-    // Node gives the same outcomes for the same generator.
-    assert_eq!((accepted, digest), (2804, 0xe572_5571));
+    assert_eq!((accepted, digest), node_outcomes("longKeys"));
+}
+
+#[test]
+fn long_masked_segments_match_node() {
+    let mut seed = 1748_u32;
+    let mut next = |bound: usize| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as usize % bound
+    };
+    let (mut accepted, mut digest) = (0, 0x811c_9dc5_u32);
+    for case in 0..1000 {
+        let mut key: Vec<u16> = (0..130 + next(400))
+            .map(|_| [0x61, 0x61, 0x61, 0x62][next(4)])
+            .collect();
+        let from = next(key.len() - 129);
+        let len = 65 + next(key.len() - from - 64);
+        for _ in 0..next(4) {
+            key[from + next(len)] = 0x2028;
+        }
+        let mut segment = key[from..from + len].to_vec();
+        for _ in 0..1 + next(len) {
+            let at = next(len);
+            if dot_matches(segment[at]) {
+                segment[at] = 0x3f;
+            }
+        }
+        if case % 4 == 1 {
+            let at = next(len);
+            segment[at] = [0x61, 0x62][next(2)];
+        }
+        if case % 4 == 2
+            && let Some(at) = segment.iter().position(|unit| *unit == 0x2028)
+        {
+            segment[at] = 0x3f;
+        }
+        if case % 4 == 3 {
+            let at = next(key.len());
+            key[at] = 0x2028;
+        }
+        if !segment.contains(&0x3f) {
+            let at = segment.iter().position(|unit| dot_matches(*unit)).unwrap();
+            segment[at] = 0x3f;
+        }
+        let pattern = [&[0x2a][..], &segment, &[0x2a]].concat();
+        let expected = regex_matches(&pattern, &key);
+        assert_eq!(
+            wildcard_matches(&pattern, &key, &mut 0),
+            expected,
+            "case {case}: {pattern:x?}, {key:x?}"
+        );
+        accepted += usize::from(expected);
+        digest = (digest ^ u32::from(expected)).wrapping_mul(0x0100_0193);
+    }
+    assert_eq!((accepted, digest), node_outcomes("longMasked"));
 }
 
 #[test]

@@ -403,6 +403,55 @@ fn apply_charges_linear_work_for_one_star_patterns() {
 }
 
 #[test]
+fn apply_refuses_masked_segment_search_past_the_comparison_budget() {
+    let cancelled = AtomicBool::new(false);
+    let key = "a".repeat(4096);
+    let run = |segment: String, comparison_work: usize| {
+        let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        let rule = format!("parts: ['*{segment}b*']");
+        let docs = [(
+            "F".into(),
+            "repo".into(),
+            parse(rule.as_bytes(), &mut b).unwrap(),
+        )];
+        let mut parts: Vec<_> = (0..100)
+            .map(|_| {
+                DraftPart::new(
+                    json!({"partKey": key, "included": true, "sourceLayer": "0:F"}),
+                    PartManifestMetadata::default(),
+                )
+            })
+            .collect();
+        let mut b = PreparationBudget::new(
+            &cancelled,
+            PreparationLimits {
+                comparison_work,
+                ..PreparationLimits::default()
+            },
+        )
+        .unwrap();
+        apply(&mut parts, &docs, vec![], vec![], &mut b)
+            .map(|()| parts.iter().all(|part| part.manifest.requirement.is_none()))
+    };
+    // The 2,049-unit middle segment is searched in full on every part. KMP
+    // charges about 20K steps per part and fits a linear grant. With `?` the
+    // NTT search charges about 758K per part, so the same grant refuses it.
+    let linear = 100 * 5 * (key.len() + 2051);
+    assert!(run("aa".repeat(1024), linear).unwrap());
+    assert!(matches!(
+        run("a?".repeat(1024), linear),
+        Err(ReadFailure::LimitExceeded(Resource::ComparisonWork))
+    ));
+    assert!(
+        run(
+            "a?".repeat(1024),
+            PreparationLimits::default().comparison_work
+        )
+        .unwrap()
+    );
+}
+
+#[test]
 fn apply_charges_raw_pattern_units_before_trimming() {
     let cancelled = AtomicBool::new(false);
     let limits = PreparationLimits {

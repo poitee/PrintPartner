@@ -1,0 +1,18 @@
+{
+  "exhaustive": {
+    "patterns": 3906,
+    "keys": 1093,
+    "accepted": 96409,
+    "digest": 3307787890
+  },
+  "longKeys": {
+    "cases": 4000,
+    "accepted": 2804,
+    "digest": 3849475441
+  },
+  "longMasked": {
+    "cases": 1000,
+    "accepted": 439,
+    "digest": 1193706946
+  }
+}
