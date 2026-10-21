@@ -273,6 +273,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     let mut node_tab = false;
     let mut flow_key = false;
     let mut flow_property: Option<FlowProperty> = None;
+    // Byte offset just after a flow sequence's `?`. saphyr drops an empty
+    // explicit key, so the shield writes that key as `~`.
+    let mut explicit_key: Option<usize> = None;
     let mut consumed = 0usize;
     let mut next_check = 4096usize;
     while i < chars.len() {
@@ -597,7 +600,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             continue;
         }
         let mut separator = false;
+        let mut empty_key = None;
         if !yaml_blank_break(c) {
+            empty_key = explicit_key.take();
             // js-yaml ends a flow node at its properties when a line break
             // follows and the next line is not indented past the collection.
             // That line may sit below the collection's indent.
@@ -658,7 +663,13 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     next_check = consumed + 4096;
                 }
             }
+            let closed_verbatim = verbatim && end > i && chars[end - 1] == '>';
             i = end;
+            // saphyr requires whitespace after a verbatim tag. js-yaml allows
+            // the following scalar to touch the closing `>`.
+            if closed_verbatim && chars.get(i).is_some_and(|c| !yaml_blank_break(*c)) {
+                output.push(' ');
+            }
             if c == '*' {
                 node = false;
             } else if !flow.is_empty() {
@@ -668,6 +679,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 });
             }
             continue;
+        }
+        // js-yaml reads no node from a flow `?` that a flow indicator follows.
+        if node && c == '?' && !flow.is_empty() && matches!(next, Some(',' | ']' | '}')) {
+            return invalid();
         }
         if node && matches!(c, '"' | '\'') {
             quote = Some(c);
@@ -723,6 +738,15 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             || (node && matches!(c, '[' | '{'))
             || (node && matches!(c, '-' | '?') && next.is_none_or(yaml_blank_break));
         if structural {
+            // js-yaml reads no comment directly after a quoted key's colon.
+            if colon && quoted_end && next == Some('#') {
+                return invalid();
+            }
+            if let Some(offset) = empty_key
+                && matches!(c, ':' | ',' | ']')
+            {
+                output.insert_str(offset, " ~");
+            }
             if flow.is_empty() && c == ':' {
                 parent = Some(node_column.unwrap_or(column));
             } else if flow.is_empty() && matches!(c, '-' | '?') {
@@ -750,6 +774,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 ',' => flow.last() == Some(&'{'),
                 _ => false,
             };
+            if c == '?' && flow.last() == Some(&'[') {
+                explicit_key = Some(output.len() + 1);
+            }
             node = !matches!(c, ']' | '}');
             plain = false;
             quoted_end = false;
@@ -768,7 +795,24 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             }
         }
         output.push(c);
-        if separator {
+        // saphyr needs a space after a flow `:` before a tab or a collection,
+        // and after a block `:` before a tab that starts a plain value. A block
+        // tab before `[` or `{` is a different document, which js-yaml rejects.
+        let tab_value = if colon && next == Some('\t') {
+            let mut ahead = i + 1;
+            while chars.get(ahead) == Some(&'\t') {
+                if (ahead - i).is_multiple_of(1024) {
+                    budget.check()?;
+                }
+                ahead += 1;
+            }
+            !(flow.is_empty() && matches!(chars.get(ahead), Some('[' | '{')))
+        } else {
+            false
+        };
+        if separator
+            || (colon && ((!flow.is_empty() && matches!(next, Some('[' | '{'))) || tab_value))
+        {
             output.push(' ');
         }
         if plain && c == '\u{e000}' {
@@ -1544,6 +1588,13 @@ mod tests {
     fn yaml_flow_collections_match_js_yaml() {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-flow-collections-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_flow_keys_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-keys-node.json"
         ));
     }
 
