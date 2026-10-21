@@ -3,7 +3,9 @@
 //! one call and has no journal, attempts or Source observations, so these cases
 //! port the reference `source_import_operation.rs` storage assertions.
 //! Fail and Cleanup retries adopt only a matching last attempt observation,
-//! after Source proof and authority checks. Run these regressions with
+//! after Source proof and authority checks. A generic claim of a recovered
+//! import records one `authority_refused` Source observation and does not
+//! record another when the claim is retried. Run these regressions with
 //! `cargo test -p pp-storage --features desktop_rebuild --test import_phases`.
 use pp_storage::{
     Limits, WriterOwner,
@@ -331,6 +333,24 @@ impl Fixture {
             })
             .unwrap()
             .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    fn refusal_events(&self, op: &Operation) -> i64 {
+        self.connection()
+            .query_row(
+                "SELECT COUNT(*) FROM durable_job_history WHERE job_id=?1 AND event='authority_refused'",
+                [&op.job_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn preclaim_rows(&self) -> i64 {
+        self.connection()
+            .query_row("SELECT COUNT(*) FROM source_preclaim_refusals", [], |row| {
+                row.get(0)
+            })
             .unwrap()
     }
 }
@@ -868,6 +888,60 @@ fn a_targeted_refusal_after_an_attempt_records_its_prior_generation() {
         (3, "authority_refused".into(), 2, None, None, None, false)
     );
     fixture.reopen();
+}
+
+#[test]
+fn a_revoked_credential_on_generic_recovery_records_one_authority_refusal() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let op = fixture.admit(
+        Credential::Session(Secret::new(token.clone())),
+        "generic-recovery",
+    );
+    let lease = fixture.claim(&op);
+    fixture.phase(&lease, owned(&op)).unwrap();
+    let fixture = fixture.reopen();
+    let recovered: i64 = fixture
+        .connection()
+        .query_row(
+            "SELECT generation FROM durable_jobs WHERE id=?1",
+            [&op.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    fixture.logout(&token);
+    assert!(fixture.worker.claim().unwrap().is_none());
+    assert_eq!(
+        fixture.job(&op),
+        ("failed".into(), Some("claim".into()), recovered + 1)
+    );
+    assert_eq!(fixture.refusal_events(&op), 1);
+    let refusal = (
+        2,
+        "authority_refused".into(),
+        recovered,
+        None,
+        None,
+        None,
+        false,
+    );
+    assert_eq!(fixture.observations(&op)[1], refusal);
+    assert_eq!(fixture.preclaim_rows(), 0);
+    assert!(fixture.worker.claim().unwrap().is_none());
+    assert!(
+        fixture
+            .worker
+            .claim_kind(JobKind::SuppliedSourceImport)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(fixture.refusal_events(&op), 1);
+    assert_eq!(fixture.observations(&op)[1], refusal);
+    assert_eq!(fixture.observations(&op).len(), 2);
+    let fixture = fixture.reopen();
+    assert_eq!(fixture.refusal_events(&op), 1);
+    assert_eq!(fixture.observations(&op)[1], refusal);
+    assert_eq!(fixture.observations(&op).len(), 2);
 }
 
 #[test]
