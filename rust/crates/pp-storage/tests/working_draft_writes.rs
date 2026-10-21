@@ -39,15 +39,17 @@ fn node(name: &str) -> Value {
         .find(|case| case["name"] == name)
         .unwrap()
 }
-fn updated() -> EditRequest {
-    serde_json::from_value(json!({
+fn updated_body() -> Value {
+    json!({
         "expected_snapshot_digest": OPENED,
         "decisions": [
             {"kind":"set_included","draft_part_ids":[5],"value":true},
             {"kind":"set_quantity_override","draft_part_ids":[4],"value":null},
         ],
-    }))
-    .unwrap()
+    })
+}
+fn updated() -> EditRequest {
+    serde_json::from_value(updated_body()).unwrap()
 }
 
 struct Fixture {
@@ -119,6 +121,10 @@ impl Drop for Fixture {
 }
 
 fn compare_node(name: &str) {
+    compare_node_errors(name, &[]);
+}
+
+fn compare_node_errors(name: &str, error_replacements: &[(&str, &str)]) {
     let case = node(name);
     let f = Fixture::new();
     for sql in case["setup"].as_array().unwrap() {
@@ -183,11 +189,18 @@ fn compare_node(name: &str) {
             other => panic!("Unknown Node call {other}"),
         };
         match expected["error"].as_str() {
-            Some(message) => assert_eq!(
-                actual.unwrap_err().to_string(),
-                message,
-                "{name} call {index}"
-            ),
+            Some(message) => {
+                let message = error_replacements
+                    .iter()
+                    .find(|(from, _)| *from == message)
+                    .map(|(_, to)| *to)
+                    .unwrap_or(message);
+                assert_eq!(
+                    actual.unwrap_err().to_string(),
+                    message,
+                    "{name} call {index}"
+                );
+            }
             None => assert_eq!(&actual.unwrap(), expected, "{name} call {index}"),
         }
         owner.shutdown().unwrap();
@@ -234,10 +247,18 @@ node_case!(
     failed_selection_errors_and_its_retry_selects,
     "edit-selection-fails-then-retried"
 );
-node_case!(
-    failed_selection_keeps_the_edit_after_the_base_changes,
-    "edit-selection-fails-then-base-changes"
-);
+#[test]
+fn failed_selection_keeps_the_edit_after_the_base_changes() {
+    // The fixture sets one quantity to 10_000, above the assignment cap, so
+    // selection refuses before the injected insert trigger.
+    compare_node_errors(
+        "edit-selection-fails-then-base-changes",
+        &[(
+            "injected selection write failure",
+            "Reconciliation row limit exceeded",
+        )],
+    );
+}
 node_case!(
     clearing_to_an_unselectable_inferred_quantity_keeps_the_edit,
     "edit-clears-to-an-unselectable-inferred-quantity"
@@ -295,7 +316,7 @@ fn requests_accept_what_node_contracts_accept() {
 
 fn cancel_while_writing(f: &Fixture, slow_event: &str, edit_committed: bool) -> Value {
     f.sql().execute_batch(&format!("CREATE TRIGGER slow_write AFTER {slow_event} BEGIN SELECT sum(n) FROM (WITH RECURSIVE n(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM n WHERE n<1000000) SELECT n FROM n); END")).unwrap();
-    let request = node("edit-selection-fails-then-base-changes")["calls"][0]["request"].clone();
+    let request = updated_body();
     let owner = f.open();
     let client = owner.working_drafts_with_policy(policy()).unwrap();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -316,8 +337,12 @@ fn cancel_while_writing(f: &Fixture, slow_event: &str, edit_committed: bool) -> 
     probe.busy_timeout(Duration::ZERO).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        let committed = f.rows("SELECT quantity_override FROM plan_draft_parts WHERE id=4")
-            == json!([{"quantity_override":10_000}]);
+        let committed = f.rows(
+            "SELECT id,included,quantity_override FROM plan_draft_parts WHERE id IN (4,5) ORDER BY id",
+        ) == json!([
+            {"id":4,"included":1,"quantity_override":null},
+            {"id":5,"included":1,"quantity_override":1}
+        ]);
         if committed == edit_committed {
             match probe.execute_batch("BEGIN IMMEDIATE") {
                 Ok(()) => probe.execute_batch("ROLLBACK").unwrap(),
@@ -360,10 +385,20 @@ fn cancellation_during_selection_keeps_the_committed_edit() {
         "INSERT ON plan_draft_required_unit_reconciliations",
         true,
     );
-    let failed = node("edit-selection-fails-then-base-changes");
-    for table in ["drafts", "parts", "reconciliations", "assignments"] {
-        assert_eq!(rows[table], failed[table], "{table}");
-    }
+    assert_eq!(
+        rows["parts"],
+        json!([
+            {"id":1,"draft_id":1,"included":1,"quantity_override":3,"quantity_effective":3},
+            {"id":2,"draft_id":1,"included":0,"quantity_override":1,"quantity_effective":1},
+            {"id":3,"draft_id":1,"included":1,"quantity_override":2,"quantity_effective":2},
+            {"id":4,"draft_id":2,"included":1,"quantity_override":null,"quantity_effective":1},
+            {"id":5,"draft_id":2,"included":1,"quantity_override":1,"quantity_effective":1},
+            {"id":6,"draft_id":2,"included":1,"quantity_override":2,"quantity_effective":2}
+        ])
+    );
+    assert_eq!(rows["reconciliations"].as_array().unwrap().len(), 1);
+    assert_eq!(rows["assignments"].as_array().unwrap().len(), 6);
+    assert!(rows["drafts"][1]["current_required_unit_reconciliation_id"].is_null());
 }
 
 #[test]
