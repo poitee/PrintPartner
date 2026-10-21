@@ -200,7 +200,9 @@ fn settings_are_atomic_and_tenant_scoped() {
 fn queue_cancellation_reply_loss_and_shutdown_drain() {
     let (path, owner, client) = fixture("queue");
     let raw = Connection::open(path.join("print-partner.db")).unwrap();
-    raw.execute_batch("CREATE TRIGGER count_admitted AFTER INSERT ON app_settings WHEN NEW.key='admitted' BEGIN INSERT INTO app_settings VALUES('test','execution-count','1') ON CONFLICT(tenant_id,key) DO UPDATE SET value=CAST(value AS INTEGER)+1; END; BEGIN IMMEDIATE;").unwrap();
+    // The writer upserts, so a replayed command takes the UPDATE path; count both.
+    let count = "BEGIN INSERT INTO app_settings VALUES('test','execution-count','1') ON CONFLICT(tenant_id,key) DO UPDATE SET value=CAST(value AS INTEGER)+1; END;";
+    raw.execute_batch(&format!("CREATE TRIGGER count_admitted_insert AFTER INSERT ON app_settings WHEN NEW.key='admitted' {count} CREATE TRIGGER count_admitted_update AFTER UPDATE ON app_settings WHEN NEW.key='admitted' {count} BEGIN IMMEDIATE;")).unwrap();
     let first = set(&client, "blocking", "yes").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !client.shared.queue.lock().unwrap().pending.is_empty() {
