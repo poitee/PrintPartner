@@ -1,5 +1,6 @@
 import { INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL, parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import { readFarmAccess } from "../lib/farm-access.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
 import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
@@ -3137,6 +3138,10 @@ export async function applyAssistantAction(
             };
             break;
           }
+        }
+        const access = readFeatureAccess(() => deps.repo, "orders");
+        if (access.kind !== "allowed") {
+          return { ok: false, status: access.kind === "invalid" ? 409 : 403, code: access.code, detail: access.error };
         }
         const created = deps.repo.transaction(() => {
           const profile = deps.repo.createProfile(name);
