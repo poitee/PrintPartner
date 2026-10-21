@@ -11,7 +11,8 @@ Node 22.23.3 is the canonical runtime, with web dependencies installed by it and
 Capture and plain `--check` exit 2 on any other Node version. `--check --additional-runtime` compares another runtime
 against the canonical golden and labels the result, but never writes it.
 The `Auth admission freshness` workflow runs the canonical check when the fixture, server, authority packages, lockfile, or `.nvmrc` change.
-The Rust freshness test uses `PP_TEST_NODE` or `node` in additional-runtime mode, so Rust CI on Node 24 keeps that coverage.
+The Rust freshness test uses `PP_TEST_NODE` or `node` in additional-runtime mode, so Linux Rust CI on Node 24 keeps that coverage.
+It is ignored on macOS, where runners intermittently reset the probe's upload with `write ECONNRESET` before the response is read.
 
 ```sh
 node --conditions=development fixtures/parity/auth-admission/generate.mjs
