@@ -1551,6 +1551,18 @@ The operation ports Node's `savePlanDraftRequiredUnitReconciliation` and the
 queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
+The expansion loop also checks cancellation once per Part. There is no timing
+target.
+
+Selection refuses a draft before it expands assignments when the sum of part
+quantities is above 230. The error is "Reconciliation row limit exceeded".
+230 is ten times the largest assignment list in the checked-in fixtures:
+`edit-selected` in `working-draft-writes-node.jsonl` stores 23 assignments.
+The constant is `storage::ASSIGNMENT_CAP`. Chad checks it against plans 14–23
+before this feature is turned on. Raise that one constant if a real plan would
+be refused. Node still expands a draft of this size. A quantity above 10,000
+on one Part is still "Required-unit target quantity is invalid", which is
+checked before the cap.
 
 - `ReconciliationRequest` has the contract's snake-case fields. It rejects
   unknown fields, a snapshot digest that is not 64 lowercase hex characters,

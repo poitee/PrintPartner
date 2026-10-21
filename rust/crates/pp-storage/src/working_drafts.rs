@@ -962,7 +962,10 @@ fn auto_select(
     // Node's selection is a separate transaction with its own busy wait.
     let admission = writer_admission::Deadline::at_dequeue();
     transact(connection, admission, cancelled, |tx| {
-        required_units::reconcile::run(tx, &command, policy)
+        required_units::reconcile::run(tx, &command, policy, &mut || {
+            ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+            Ok(())
+        })
     })
 }
 fn transact<T>(

@@ -262,11 +262,22 @@ fn basis(part: &BasePart) -> Vec<BasisRow> {
         })
         .collect()
 }
+#[cfg(test)]
 pub(super) fn reconcile(
     parts: &[DraftPart],
     inputs: &[Value],
     base: &[BasePart],
     decisions: &[Decision],
+) -> Result<Reconciled> {
+    reconcile_checked(parts, inputs, base, decisions, &mut || Ok(()))
+}
+
+pub(super) fn reconcile_checked(
+    parts: &[DraftPart],
+    inputs: &[Value],
+    base: &[BasePart],
+    decisions: &[Decision],
+    check: &mut dyn FnMut() -> Result<()>,
 ) -> Result<Reconciled> {
     let mut targets = parts
         .iter()
@@ -303,6 +314,13 @@ pub(super) fn reconcile(
             (1..=10_000).contains(&p.quantity_effective),
             "Required-unit target quantity is invalid"
         );
+    }
+    let mut assignments_needed = 0_i64;
+    for target in &targets {
+        match assignments_needed.checked_add(target.quantity_effective) {
+            Some(next) if next <= super::storage::ASSIGNMENT_CAP => assignments_needed = next,
+            _ => bail!("Reconciliation row limit exceeded"),
+        }
     }
     let mut base_ids = HashSet::new();
     let mut tokens = HashSet::new();
@@ -453,6 +471,7 @@ pub(super) fn reconcile(
     let mut rows = Vec::new();
     let mut selected = HashSet::new();
     for (target, mode) in choices {
+        check()?;
         let count = target.quantity_effective as usize;
         let mut units = match mode {
             Selection::Create => Vec::new(),
@@ -1135,6 +1154,65 @@ mod tests {
             run(&[part(21, None, 1)], &[], &[]),
             json!({"kind":"ready","assignments":[{"kind":"create","draftPartId":21,"unitIndex":0}],"surplus":[],"selectionBasis":[]})
         );
+    }
+
+    #[test]
+    fn assignment_cap_refuses_the_sum_of_quantities_before_expansion() {
+        let cap = super::super::storage::ASSIGNMENT_CAP;
+        let left = cap / 2;
+        let right = cap - left;
+        let mut checks = 0;
+        let over = reconcile_checked(
+            &[part(1, None, left), part(2, None, right + 1)],
+            &[input()],
+            &[],
+            &[],
+            &mut || {
+                checks += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(
+            over.err().unwrap().to_string(),
+            "Reconciliation row limit exceeded"
+        );
+        assert_eq!(checks, 0);
+        let ready = reconcile(
+            &[part(1, None, left), part(2, None, right)],
+            &[input()],
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            ready.result["assignments"].as_array().unwrap().len(),
+            cap as usize
+        );
+    }
+
+    #[test]
+    fn expansion_checks_cancellation_once_per_part() {
+        let mut checks = 0;
+        let error = reconcile_checked(
+            &[part(1, None, 1), part(2, None, 1), part(3, None, 1)],
+            &[input()],
+            &[],
+            &[],
+            &mut || {
+                checks += 1;
+                if checks == 2 {
+                    return Err(anyhow::anyhow!(super::super::Failure::Cancelled));
+                }
+                Ok(())
+            },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(checks, 2);
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(super::super::Failure::Cancelled)
+        ));
     }
 
     #[test]
