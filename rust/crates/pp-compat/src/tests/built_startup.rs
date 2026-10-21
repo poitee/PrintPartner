@@ -11,6 +11,13 @@ use std::{
 const STAGE: &str = "PP_COMPAT_BUILT_STARTUP_STAGE";
 const OWNER_ROOT: &str = "PP_COMPAT_BUILT_STARTUP_OWNER";
 const EVIDENCE: &str = "PP_COMPAT_BUILT_STARTUP_EVIDENCE";
+const REEXEC: &str = "PP_COMPAT_BUILT_STARTUP_REEXEC";
+const PROBE: &str = "PP_COMPAT_BUILT_STARTUP_SUBREAPER_PROBE";
+const PARENT_STATE: &str = "PP_COMPAT_BUILT_STARTUP_PARENT_STATE";
+const BUILT_TEST: &str =
+    "ticket_t_2::built_startup::ticket_t_3_drain_built_release_startup_parent_death";
+const STATE_TEST: &str =
+    "ticket_t_2::built_startup::built_startup_reexec_keeps_parent_subreaper_unchanged";
 const OWNER_TEST: &str = "ticket_t_2::built_startup::built_startup_owner_fixture";
 
 fn write_json(path: &Path, value: &Value) {
@@ -239,13 +246,98 @@ impl Drop for BuiltStartupFixture {
     }
 }
 
+fn built_startup_command() -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", BUILT_TEST, "--format=pretty", "--color=never"])
+        .env(REEXEC, "1");
+    command
+}
+
+fn subreaper_state() -> i32 {
+    let mut state = 0;
+    assert_eq!(
+        unsafe { libc::prctl(libc::PR_GET_CHILD_SUBREAPER, &mut state, 0, 0, 0) },
+        0
+    );
+    state
+}
+
+#[test]
+fn built_startup_reexec_keeps_parent_subreaper_unchanged() {
+    let Some(state) = std::env::var_os(PARENT_STATE) else {
+        for state in ["0", "1"] {
+            let scratch = Scratch::new("built-subreaper");
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", STATE_TEST, "--format=pretty", "--color=never"])
+                .env(PARENT_STATE, state)
+                .env_remove(REEXEC)
+                .env(PROBE, scratch.root.join("probe.json"))
+                .output()
+                .unwrap();
+            assert_eq!(
+                crate::tests::validate_subreaper_fixture(&output, STATE_TEST),
+                Ok(()),
+                "state {state}: {output:?}"
+            );
+        }
+        return;
+    };
+    let state: i32 = state.to_str().unwrap().parse().unwrap();
+    assert_eq!(
+        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, state, 0, 0, 0) },
+        0
+    );
+    assert_eq!(subreaper_state(), state);
+    let probe = PathBuf::from(std::env::var_os(PROBE).unwrap());
+    let skipped = built_startup_command().output().unwrap();
+    assert!(skipped.status.success());
+    assert_eq!(
+        crate::tests::validate_subreaper_fixture(&skipped, BUILT_TEST),
+        Err("isolated subreaper fixture did not pass exactly once")
+    );
+    assert!(!probe.exists(), "ignored fixture unexpectedly ran");
+    ticket_t_3_drain_built_release_startup_parent_death();
+    assert_eq!(
+        subreaper_state(),
+        state,
+        "built fixture changed parent subreaper"
+    );
+    let observed: Value = serde_json::from_slice(&std::fs::read(probe).unwrap()).unwrap();
+    assert_eq!(observed["subreaper"], 1);
+    assert_ne!(observed["pid"], std::process::id());
+}
+
 #[test]
 #[ignore = "requires full built desktop assets and proof driver manifest"]
 fn ticket_t_3_drain_built_release_startup_parent_death() {
+    if std::env::var_os(REEXEC).is_none() {
+        let output = built_startup_command()
+            .arg("--include-ignored")
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        }
+        assert_eq!(
+            crate::tests::validate_subreaper_fixture(&output, BUILT_TEST),
+            Ok(()),
+            "{output:?}"
+        );
+        return;
+    }
     assert_eq!(
         unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) },
         0
     );
+    if let Some(probe) = std::env::var_os(PROBE) {
+        write_json(
+            Path::new(&probe),
+            &json!({"pid": std::process::id(), "subreaper": subreaper_state()}),
+        );
+        return;
+    }
     let evidence = PathBuf::from(std::env::var_os(EVIDENCE).expect("evidence required"));
     let bundle = bundle();
     let assets = bundle.web_root.join("apps/web/dist");

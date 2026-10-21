@@ -13,7 +13,9 @@ pub(crate) fn parse_builder_manifest(
 }
 
 pub(crate) fn merge_builder_groups(target: &mut BuilderGroups, incoming: BuilderGroups) {
-    super::manifest::merge(target, incoming)
+    let Ok(()) = super::manifest::merge_with(target, incoming, &mut |_| {
+        Ok::<_, std::convert::Infallible>(())
+    });
 }
 
 pub(crate) type BuilderHint = super::manifest::HintRule;
@@ -155,6 +157,14 @@ impl<'a> PreparationBudget<'a> {
     #[cfg(test)]
     pub(crate) fn cancel_after_checks(&mut self, checks: usize) {
         *self.checks_until_cancel.get_mut() = checks + 1;
+    }
+    #[cfg(test)]
+    pub(crate) fn limit_visits_after(&mut self, visits: usize) {
+        self.limits.visits = self.visits.saturating_add(visits);
+    }
+    #[cfg(test)]
+    pub(crate) fn limit_comparisons_after(&mut self, work: usize) {
+        self.limits.comparison_work = self.compared.saturating_add(work);
     }
     pub fn check(&self) -> ReadResult<()> {
         #[cfg(test)]
@@ -336,11 +346,11 @@ pub enum CheckoutManifestUse {
 pub struct CommunitySlug(String);
 impl CommunitySlug {
     /// Node's `isCommunityManifestSlug`: `^[a-z0-9][a-z0-9._-]{0,63}$`, except
-    /// `kit-catalog`, which names the kit catalog in the same directory.
+    /// `kit-catalog` and `registry-index`, which name embedded catalog documents.
     pub fn parse(value: &str) -> Option<Self> {
         let bytes = value.as_bytes();
-        // ast-grep-ignore: no-writer-family-literal -- Refuses the kit catalog name as a slug; reads and writes nothing.
-        let valid = value != "kit-catalog"
+        // ast-grep-ignore: no-writer-family-literal -- Refuses embedded catalog document names as slugs; reads and writes nothing.
+        let valid = !matches!(value, "kit-catalog" | "registry-index")
             && matches!(bytes.first(), Some(b'a'..=b'z' | b'0'..=b'9'))
             && bytes.len() <= 64
             && bytes

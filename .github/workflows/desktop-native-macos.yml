@@ -3,7 +3,7 @@ name: Native macOS bundle
 on:
   workflow_dispatch:
   # Job conditions keep skipped check reports present. Hosted macOS runs on
-  # ready PRs only with the macos label. Main, merge groups, nightly and manual
+  # ready PRs only with the macos label and relevant changed paths. Main, merge groups, nightly and manual
   # runs select every macOS job, including Intel, regardless of changed paths.
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -28,6 +28,7 @@ defaults:
 
 jobs:
   changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -36,10 +37,22 @@ jobs:
       # 'true' only off-PR (push to main, nightly, dispatch).
       intel: ${{ steps.plan.outputs.intel }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed inputs
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci-path-filter.py native
       - name: Decide which macOS jobs run
         id: plan
         shell: bash
         env:
+          RELEVANT: ${{ steps.select.outputs.relevant }}
           EVENT_NAME: ${{ github.event_name }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           HAS_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'macos') }}
@@ -47,7 +60,7 @@ jobs:
           set -euo pipefail
           if [[ "$EVENT_NAME" != pull_request ]]; then
             macos=true intel=true
-          elif [[ "$HAS_LABEL" == true && "$IS_DRAFT" == false ]]; then
+          elif [[ "$HAS_LABEL" == true && "$IS_DRAFT" == false && "$RELEVANT" != false ]]; then
             macos=true intel=false
           else
             macos=false intel=false
@@ -60,7 +73,7 @@ jobs:
   # so doomed commits never burn a macOS queue slot.
   linux-precheck:
     needs: changes
-    if: ${{ needs.changes.outputs.macos == 'true' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (needs.changes.outputs.macos == 'true')
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
@@ -88,7 +101,7 @@ jobs:
 
   server-smoke:
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success')
     concurrency:
       group: native-macos-server-smoke-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -172,7 +185,7 @@ jobs:
     # Explicit architecture jobs keep both check names present even when skipped.
     name: bundle (macos-26, arm64, arm64, aarch64-apple-darwin, ee35ee364a0c626df7852d9a5bc0c5394b6440772e9...
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success')
     concurrency:
       group: native-macos-bundle-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -361,7 +374,7 @@ jobs:
     name: bundle (macos-26-intel, x86_64, x64, x86_64-apple-darwin, e5386ba6dadc3fbbdcf46c1f95b700f28caf03d...
     needs: [changes, linux-precheck]
     # Intel runs on every non-PR event, including merge groups.
-    if: ${{ !cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.changes.outputs.intel == 'true' && needs.linux-precheck.result == 'success')
     concurrency:
       group: native-macos-bundle-intel-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -381,7 +394,7 @@ jobs:
 
   macos-storage-gate:
     needs: [changes, linux-precheck]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))) && needs.changes.outputs.macos == 'true' && needs.linux-precheck.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository))
     concurrency:
       group: native-macos-storage-gate-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -441,7 +454,22 @@ jobs:
         with:
           tool: nextest@0.9.148
       - name: Test owned image cleanup and native holder reporting
-        run: python3 scripts/test_native_image_cleanup.py -v
+        env:
+          PP_NATIVE_IMAGE_EVIDENCE: ${{ runner.temp }}/native-image-evidence
+        run: |
+          python3 scripts/test_native_image_cleanup.py -v
+          for attempt in {1..10}; do
+            echo "Native holder cleanup repetition $attempt/10"
+            python3 scripts/test_native_image_cleanup.py CleanupTest.test_native_busy_image_reports_real_holder_before_force -v
+          done
+      - name: Preserve native image diagnostic receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-image-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-image-evidence/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Verify source Unicode and case regressions on macOS
         shell: bash
         run: |
@@ -454,9 +482,9 @@ jobs:
           # One archive test retains two 256 MiB copies alongside parallel fixtures.
           hdiutil create -size 4g -type SPARSE -fs 'Case-sensitive APFS' \
             -volname pp-source-fixtures "$fixture_root/fixtures.sparseimage"
-          hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
-            "$fixture_root/fixtures.sparseimage"
-          trap '
+          fixture_device=$(hdiutil attach -nobrowse -owners on -mountpoint "$fixture_mount" \
+            "$fixture_root/fixtures.sparseimage" | awk '/^\/dev\// && !device { device = $1 } END { print device }')
+          cleanup_source_fixture() {
             result=$?
             for attempt in 1 2 3; do
               if hdiutil detach "$fixture_mount"; then
@@ -468,11 +496,20 @@ jobs:
             done
             echo "Open files on owned test fixture at $fixture_mount before forced detach:"
             lsof +f -- "$fixture_mount" || echo "::warning::lsof found no holders or failed at $fixture_mount (status $?)"
-            if ! hdiutil detach -force "$fixture_mount"; then
-              echo "::warning::Could not detach owned test fixture at $fixture_mount"
-            fi
+            # A forced unmount can succeed while ejecting the backing device still returns EBUSY.
+            # The mount path is then an ordinary directory, so retry with the attached device.
+            for attempt in 1 2 3; do
+              if hdiutil detach -force "$fixture_device"; then
+                exit "$result"
+              fi
+              if [[ "$attempt" -lt 3 ]]; then
+                sleep 2
+              fi
+            done
+            echo "::warning::Could not detach owned test fixture at $fixture_mount"
             exit "$result"
-          ' EXIT
+          }
+          trap cleanup_source_fixture EXIT
           df -h "$fixture_mount"
           mkdir "$fixture_mount/tmp"
           TMPDIR="$fixture_mount/tmp" cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-source
@@ -510,7 +547,7 @@ jobs:
 
   alert-macos-main:
     needs: [changes, linux-precheck, server-smoke, bundle, bundle-intel, macos-storage-gate]
-    if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (failure() && github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from "react";
 import {
+  type HealthResponse,
+  type PlanFeatures,
   parsePlanDraftWorkspace,
   parseSavePlanChoicesRequest,
   type ApplyPlanDraftReceipt,
@@ -34,6 +36,7 @@ import {
 } from "../api/endpoints/planDrafts";
 import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
 import { capturePlanSaveCache, hydratePlanSave, includedPlanReview } from "../lib/planSaveCache";
+import { spoolmanWorkflowAccess } from "../lib/spoolmanWorkflowAccess";
 import { formatCheckoffSummary } from "../lib/checkoffProgress";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import {
@@ -663,8 +666,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
               if (!workspace && draft && edits.some(({ edit }) => edit.kind === "set_quantity" && typeof edit.value === "function")) {
                 workspace = storeWorkspace(await fetchPlanDraftWorkspace(profileId, draft.draft_id), false);
               }
-              const currentReview = queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, true)) ??
-                queryClient.getQueryData<PlanReview>(queryKeys.planReview(profileId, false)) ??
+              const currentHealth = queryClient.getQueryState<HealthResponse>(queryKeys.health);
+              const currentFeatures = queryClient.getQueryState<PlanFeatures>(queryKeys.planFeatures(profileId));
+              const { queryAllowed } = spoolmanWorkflowAccess({ profileId, health: currentHealth, plan: currentFeatures });
+              const cachedReviews = [true, false].map((includeExcluded) =>
+                queryClient.getQueryState<PlanReview>(queryKeys.planReview(profileId, includeExcluded, queryAllowed)));
+              // On a version tie keep the full Review first: the included-only one omits excluded Parts.
+              cachedReviews.sort((a, b) =>
+                (b?.data?.accepted_basis?.plan_version ?? 0) - (a?.data?.accepted_basis?.plan_version ?? 0));
+              const currentReview = cachedReviews.find((state) => state?.data)?.data ??
                 (profileId === selectedProfileId ? review : null);
               const expectedDraft = workspace?.draft ?? draft;
               const accepted = currentReview?.accepted_basis;

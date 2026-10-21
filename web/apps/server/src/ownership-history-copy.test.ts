@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -30,6 +31,7 @@ import { ownershipHistoryTables } from "./ownership-history.js";
 import { tenantExportDirectory } from "./lib/secure-path.js";
 import { inspectOwnershipExports } from "./ownership-exports.js";
 import { registerExportRoutes } from "./routes/exports.js";
+import { materializeAcceptedStlBundle } from "./services/export-stl-pack.js";
 import { ACCEPTED_PLATE_EXPORT_LIMITS, materializeAcceptedPlateExport } from "./services/accepted-plate-export-delivery.js";
 
 const roots: string[] = [];
@@ -1196,3 +1198,295 @@ it.each(["cross-plan", "manifest-mismatch", "unknown-file", "missing-plate", "ma
   expect(() => inspectOwnershipCopy(paths)).toThrow();
   await refused(paths, input);
 });
+
+function stlTreeState(root: string): Record<string, string> {
+  const state: Record<string, string> = {};
+  const visit = (path: string, relative: string) => {
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) {
+      state[relative] = "directory";
+      for (const name of readdirSync(path).sort()) {
+        if (!name.startsWith(".desktop")) visit(join(path, name), `${relative}/${name}`);
+      }
+    } else state[relative] = stat.isFile() ? hash(readFileSync(path)) : stat.isSymbolicLink() ? `symlink:${readlinkSync(path)}` : `special:${stat.mode}`;
+  };
+  visit(root, "");
+  return state;
+}
+
+async function materializeStls(root: string, tenantId: string, profileId: number,
+  options: Partial<Pick<Parameters<typeof materializeAcceptedStlBundle>[0], "selection" | "groupBy" | "filenameGrouping">> = {}, selectedUnit = false) {
+  const store = new SqliteDatabase(root); store.connect();
+  try {
+    const repository = new AppRepository(getDb(store), tenantId, store.reposDir);
+    const capture = captureAcceptedOperationalExport({ repository, profileId });
+    if (capture.kind !== "ready" && capture.kind !== "empty") return capture;
+    return await materializeAcceptedStlBundle({ capture, reposDir: store.reposDir,
+      tenantExportsDir: tenantExportDirectory(join(root, "exports"), tenantId),
+      selection: "all", groupBy: "color", roleOrder: ["primary", "accent", "clear", "opaque"], ...options,
+      unitTokens: selectedUnit && capture.kind === "ready" ? capture.export.parts.flatMap(part => part.units.map(unit => unit.token)).slice(0, 1) : [] });
+  } finally { store.close(); }
+}
+
+it.each(["color", "color_dir", "missing", "group", "color_group", "group_color", "selected", "legacy"] as const)(
+  "copies %s accepted STL publications to mapped owners and reuses them after two reopens", async mode => {
+    const paths = fixture();
+    const options = mode === "missing" ? { selection: "missing" as const }
+      : mode === "color_dir" ? { groupBy: "color_dir" as const }
+      : mode === "group" || mode === "color_group" || mode === "group_color"
+        ? { filenameGrouping: { definition: { name: "Groups", rules: [{ suffix: "a", group: "構造" }], overrides: {} }, arrangement: mode } } : {};
+    const published = await Promise.all([1, 2].map(id => materializeStls(paths.sourceDir, "default", id, options, mode === "selected")));
+    const bundleDigests = published.map(result => {
+      if (result.kind !== "materialized" || !result.bundlePath) throw new Error("Missing source STL publication");
+      return hash(readFileSync(result.bundlePath));
+    });
+    if (mode === "legacy") {
+      const exports = join(paths.sourceDir, "exports");
+      cpSync(join(exports, "tenant-default/accepted-stl"), join(exports, "accepted-stl"), { recursive: true });
+      rmSync(join(exports, "tenant-default"), { recursive: true });
+    }
+    const input = manifest(paths.sourceDir);
+    expect(input.exports).toHaveLength(4);
+    expect(input.exports.map(file => [file.profile_id, file.user_id])).toEqual([[1, "account-a"], [1, "account-a"], [2, "account-b"], [2, "account-b"]]);
+    for (const file of input.exports) {
+      expect(file.path).toMatch(/accepted-stl\/profile-[12]\/revision-[12]\/(all|missing)\/(color|color_dir)\/content-[a-f0-9]{64}\//);
+      expect(file.sha256).toBe(hash(readFileSync(join(paths.sourceDir, "exports", file.path))));
+    }
+    const before = files(paths.sourceDir);
+    await executeOwnershipCopy({ ...paths, manifest: input });
+    expect(files(paths.sourceDir)).toEqual(before);
+    for (const [index, owner] of ["account-a", "account-b"].entries()) {
+      const source = published[index];
+      if (source?.kind !== "materialized" || !source.bundlePath) throw new Error("Missing source STL publication");
+      const copied = input.exports.filter(file => file.user_id === owner).map(file => join(tenantExportDirectory(join(paths.destinationDir, "exports"), owner), file.path.replace(/^tenant-default\//, "")));
+      const inodes = copied.map(path => lstatSync(path).ino);
+      for (let restart = 0; restart < 2; restart++) {
+        const reopened = await materializeStls(paths.destinationDir, owner, index + 1, options, mode === "selected");
+        if (reopened.kind !== "materialized" || !reopened.bundlePath) throw new Error(`Copied STL unavailable ${reopened.kind}`);
+        expect(hash(readFileSync(reopened.bundlePath))).toBe(bundleDigests[index]);
+        expect(copied).toContain(reopened.bundlePath);
+        expect(copied.map(path => lstatSync(path).ino)).toEqual(inodes);
+      }
+      expect((await materializeStls(paths.destinationDir, index === 0 ? "account-b" : "account-a", index + 1)).kind).toBe("profile_not_found");
+    }
+    expect(existsSync(join(paths.destinationDir, "exports/tenant-default"))).toBe(false);
+    expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports.map(file => file.tenant_id)).toEqual(["account-a", "account-a", "account-b", "account-b"]);
+  });
+
+it.each(["cross-plan", "unknown-revision", "wrong-scope", "content-key", "selection", "grouping", "missing-zip", "missing-stl", "unknown-file", "extra-stl", "empty-directory", "symlink", "directory-symlink", "fifo", "zip-directory", "zip-symlink", "zip-fifo", "truncated-zip", "zip-entry-budget", "stl-size"])(
+  "refuses %s accepted STL export trees without publishing", async kind => {
+    const paths = fixture();
+    const publication = await materializeStls(paths.sourceDir, "default", 1);
+    if (publication.kind !== "materialized" || !publication.bundlePath) throw new Error("Missing STL publication");
+    const input = manifest(paths.sourceDir);
+    const stl = input.exports.find(file => file.path.endsWith(".stl"));
+    if (!stl) throw new Error("Missing loose STL");
+    const exports = join(paths.sourceDir, "exports");
+    const loose = join(exports, stl.path);
+    if (kind === "cross-plan") cpSync(publication.rootPath, publication.rootPath.replace("profile-1", "profile-2"), { recursive: true });
+    if (kind === "unknown-revision") cpSync(publication.rootPath, publication.rootPath.replace("revision-1", "revision-999"), { recursive: true });
+    if (kind === "wrong-scope") cpSync(publication.rootPath, publication.rootPath.replace("tenant-default", "tenant-account-a"), { recursive: true });
+    if (kind === "content-key") cpSync(publication.rootPath, publication.rootPath.replace(/content-[a-f0-9]{64}$/, "content-invalid"), { recursive: true });
+    if (kind === "selection") cpSync(publication.rootPath, publication.rootPath.replace("/all/", "/other/"), { recursive: true });
+    if (kind === "grouping") cpSync(publication.rootPath, publication.rootPath.replace("/color/", "/other/"), { recursive: true });
+    if (kind === "missing-zip") rmSync(publication.bundlePath);
+    if (kind === "missing-stl") rmSync(loose);
+    if (kind === "unknown-file") writeFileSync(join(publication.rootPath, "notes.txt"), "unexpected");
+    if (kind === "extra-stl") writeFileSync(join(loose, "../extra.stl"), "unexpected");
+    if (kind === "empty-directory") mkdirSync(join(publication.rootPath, "unused"));
+    if (kind === "symlink") { rmSync(loose); symlinkSync(join(paths.sourceDir, "repos/1/revisions/commit-2/a.stl"), loose); }
+    if (kind === "directory-symlink") symlinkSync(join(paths.sourceDir, "repos"), join(publication.rootPath, "linked"));
+    if (kind === "fifo") { rmSync(loose); execFileSync("mkfifo", [loose]); }
+    if (kind === "zip-directory") { rmSync(publication.bundlePath); mkdirSync(publication.bundlePath); }
+    if (kind === "zip-symlink") { rmSync(publication.bundlePath); symlinkSync(loose, publication.bundlePath); }
+    if (kind === "zip-fifo") { rmSync(publication.bundlePath); execFileSync("mkfifo", [publication.bundlePath]); }
+    if (kind === "truncated-zip") writeFileSync(publication.bundlePath, "invalid zip");
+    if (kind === "stl-size") writeFileSync(loose, "short STL");
+    if (kind === "zip-entry-budget") {
+      const bytes = readFileSync(publication.bundlePath);
+      const end = bytes.lastIndexOf(Buffer.from("504b0506", "hex"));
+      bytes.writeUInt16LE(10_001, end + 8); bytes.writeUInt16LE(10_001, end + 10);
+      writeFileSync(publication.bundlePath, bytes);
+    }
+    const before = stlTreeState(paths.sourceDir);
+    expect(() => inspectOwnershipCopy(paths)).toThrow(kind === "zip-entry-budget" ? /too many entries/ : undefined);
+    await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow();
+    expect(existsSync(paths.destinationDir)).toBe(false);
+    expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+    expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  });
+
+it.each(["missing", "duplicate", "digest", "profile", "owner", "changed-file"])("refuses %s accepted STL per-file claims", async kind => {
+  const paths = fixture();
+  await materializeStls(paths.sourceDir, "default", 1);
+  const input = manifest(paths.sourceDir);
+  const claim = input.exports.find(file => file.path.endsWith(".stl"));
+  if (!claim) throw new Error("Missing STL claim");
+  if (kind === "missing") input.exports.pop();
+  if (kind === "duplicate") input.exports.push({ ...claim });
+  if (kind === "digest") claim.sha256 = "0".repeat(64);
+  if (kind === "profile") claim.profile_id = 2;
+  if (kind === "owner") claim.user_id = "account-b";
+  if (kind === "changed-file") {
+    const path = join(paths.sourceDir, "exports", claim.path);
+    const bytes = readFileSync(path); bytes[0] = 0; writeFileSync(path, bytes);
+  }
+  await refused(paths, input);
+});
+
+it("copies an empty accepted STL missing publication and recreates it after reopen", async () => {
+  const paths = fixture();
+  edit(paths.sourceDir, raw => raw.exec("UPDATE print_progress SET completed=1"));
+  const options = { selection: "missing" as const };
+  const source = await materializeStls(paths.sourceDir, "default", 1, options);
+  if (source.kind !== "materialized") throw new Error(`Missing empty STL publication ${source.kind}`);
+  expect([source.bundlePath, source.fileCounts, source.warnings, readdirSync(source.rootPath)]).toEqual([null, {}, [], []]);
+  const input = manifest(paths.sourceDir);
+  expect(input.exports).toEqual([]);
+  const before = files(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(files(paths.sourceDir)).toEqual(before);
+  const relative = source.rootPath.slice(tenantExportDirectory(join(paths.sourceDir, "exports"), "default").length + 1);
+  const target = join(tenantExportDirectory(join(paths.destinationDir, "exports"), "account-a"), relative);
+  expect(existsSync(target)).toBe(false);
+  for (let restart = 0; restart < 2; restart++) {
+    const reopened = await materializeStls(paths.destinationDir, "account-a", 1, options);
+    if (reopened.kind !== "materialized") throw new Error(`Missing copied empty STL publication ${reopened.kind}`);
+    expect([reopened.rootPath, reopened.bundlePath, reopened.fileCounts, reopened.warnings, readdirSync(target)]).toEqual([target, null, {}, [], []]);
+    expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports).toEqual([]);
+  }
+});
+
+it.each([
+  { selection: "all", groupBy: "color" },
+  { selection: "all", groupBy: "color_dir" },
+  { selection: "missing", groupBy: "color" },
+  { selection: "missing", groupBy: "color_dir" },
+] as const)("copies no-plan accepted STL $selection/$groupBy publications and recreates them after two reopens", async options => {
+  const paths = fixture();
+  edit(paths.sourceDir, raw => raw.exec("INSERT INTO build_profiles (id,name) VALUES (3,'Empty Plan')"));
+  const source = await materializeStls(paths.sourceDir, "default", 3, options);
+  if (source.kind !== "materialized") throw new Error(`Missing no-plan STL publication ${source.kind}`);
+  edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); });
+  expect(source.rootPath).toMatch(new RegExp(`/accepted-stl/profile-3/empty/${options.selection}/${options.groupBy}/content-[a-f0-9]{64}$`));
+  expect([source.bundlePath, source.fileCounts, source.warnings, readdirSync(source.rootPath)]).toEqual([null, {}, [], []]);
+  const input = manifest(paths.sourceDir);
+  expect(input.exports).toEqual([]);
+  const before = stlTreeState(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  const relative = source.rootPath.slice(tenantExportDirectory(join(paths.sourceDir, "exports"), "default").length + 1);
+  const target = join(tenantExportDirectory(join(paths.destinationDir, "exports"), "account-a"), relative);
+  expect(existsSync(target)).toBe(false);
+  for (let restart = 0; restart < 2; restart++) {
+    const reopened = await materializeStls(paths.destinationDir, "account-a", 3, options);
+    if (reopened.kind !== "materialized") throw new Error(`Missing copied no-plan STL publication ${reopened.kind}`);
+    expect([reopened.rootPath, reopened.bundlePath, reopened.fileCounts, reopened.warnings, readdirSync(target)]).toEqual([target, null, {}, [], []]);
+    expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports).toEqual([]);
+    expect((await materializeStls(paths.destinationDir, "account-b", 3, options)).kind).toBe("profile_not_found");
+  }
+  expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  expect(existsSync(join(paths.destinationDir, "exports/tenant-default"))).toBe(false);
+});
+
+it.each(["nonempty-publication", "file", "directory", "symlink", "leaf-symlink", "foreign-owner", "unknown-profile", "selection", "grouping", "content-key", "revision-segment"])(
+  "refuses %s no-plan accepted STL export trees without publishing", async kind => {
+    const paths = fixture();
+    const revision = kind === "nonempty-publication" ? await materializeStls(paths.sourceDir, "default", 1) : null;
+    edit(paths.sourceDir, raw => raw.exec("INSERT INTO build_profiles (id,name) VALUES (3,'Empty Plan')"));
+    const input = manifest(paths.sourceDir);
+    const source = await materializeStls(paths.sourceDir, "default", 3);
+    if (source.kind !== "materialized") throw new Error(`Missing no-plan STL publication ${source.kind}`);
+    edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); });
+    if (kind === "nonempty-publication") {
+      if (revision?.kind !== "materialized") throw new Error("Missing nonempty STL publication");
+      cpSync(revision.rootPath, source.rootPath, { recursive: true });
+    }
+    if (kind === "file") writeFileSync(join(source.rootPath, "notes.txt"), "unexpected");
+    if (kind === "directory") mkdirSync(join(source.rootPath, "unused"));
+    if (kind === "symlink") symlinkSync(join(paths.sourceDir, "repos"), join(source.rootPath, "linked"));
+    if (kind === "leaf-symlink") {
+      rmSync(source.rootPath, { recursive: true });
+      symlinkSync(join(paths.sourceDir, "repos"), source.rootPath);
+    }
+    const invalidPath = kind === "foreign-owner" ? source.rootPath.replace("tenant-default", "tenant-account-b")
+      : kind === "unknown-profile" ? source.rootPath.replace("profile-3", "profile-999")
+      : kind === "selection" ? source.rootPath.replace("/all/", "/other/")
+      : kind === "grouping" ? source.rootPath.replace("/color/", "/other/")
+      : kind === "content-key" ? source.rootPath.replace(/content-[a-f0-9]{64}$/, "content-invalid")
+      : kind === "revision-segment" ? source.rootPath.replace("/empty/", "/unknown/") : null;
+    if (invalidPath) {
+      mkdirSync(invalidPath, { recursive: true });
+      rmSync(source.rootPath, { recursive: true });
+    }
+    const before = stlTreeState(paths.sourceDir);
+    expect(() => inspectOwnershipCopy(paths)).toThrow();
+    await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow();
+    expect(existsSync(paths.destinationDir)).toBe(false);
+    expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+    expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  });
+
+it.each([
+  { profile: 1, tenant: "account-a", segment: "revision-1" },
+  { profile: 3, tenant: "account-a", segment: "empty" },
+] as const)("leaves crash-left $segment accepted STL stages behind and copies the published tree", async ({ profile, tenant, segment }) => {
+  const paths = fixture();
+  if (profile === 3) edit(paths.sourceDir, raw => raw.exec("INSERT INTO build_profiles (id,name) VALUES (3,'Empty Plan')"));
+  const source = await materializeStls(paths.sourceDir, "default", profile);
+  if (source.kind !== "materialized") throw new Error(`Missing STL publication ${source.kind}`);
+  edit(paths.sourceDir, raw => { raw.pragma("journal_mode = DELETE"); });
+  const published = manifest(paths.sourceDir);
+  const stage = mkdtempSync(join(source.rootPath, "..", ".tmp-"));
+  cpSync(source.rootPath, stage, { recursive: true });
+  writeFileSync(join(stage, ".part-1.source"), "partial");
+  expect(stage).toMatch(new RegExp(`/accepted-stl/profile-${profile}/${segment}/all/color/\\.tmp-[A-Za-z0-9]{6}$`));
+  const input = manifest(paths.sourceDir);
+  expect(input).toEqual(published);
+  expect(input.exports.some(file => file.path.includes("/.tmp-"))).toBe(false);
+  const before = stlTreeState(paths.sourceDir);
+  await executeOwnershipCopy({ ...paths, manifest: input });
+  expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  const relative = source.rootPath.slice(tenantExportDirectory(join(paths.sourceDir, "exports"), "default").length + 1);
+  const target = join(tenantExportDirectory(join(paths.destinationDir, "exports"), tenant), relative);
+  expect(existsSync(join(target, ".."))).toBe(segment !== "empty");
+  if (segment !== "empty") expect(readdirSync(join(target, ".."))).toEqual([relative.split("/").at(-1)]);
+  for (let restart = 0; restart < 2; restart++) {
+    const reopened = await materializeStls(paths.destinationDir, tenant, profile);
+    if (reopened.kind !== "materialized") throw new Error(`Copied STL unavailable ${reopened.kind}`);
+    expect(reopened.rootPath).toBe(target);
+    expect(readdirSync(join(target, "..")).filter(name => name.startsWith(".tmp-"))).toEqual([]);
+  }
+  expect(inspectOwnershipCopy({ sourceDir: paths.destinationDir }).exports.map(file => file.path.replace(`${tenantExportDirectory("", tenant)}/`, "")))
+    .toEqual(input.exports.map(file => file.path.replace("tenant-default/", "")));
+});
+
+it.each(["stage-file", "stage-symlink", "short-name", "long-name", "unknown-revision", "wrong-scope", "unknown-profile", "selection", "grouping"])(
+  "refuses %s crash-left accepted STL stages without publishing", async kind => {
+    const paths = fixture();
+    const publication = await materializeStls(paths.sourceDir, "default", 1);
+    if (publication.kind !== "materialized") throw new Error("Missing STL publication");
+    const input = manifest(paths.sourceDir);
+    const parent = join(publication.rootPath, "..");
+    const stage = mkdtempSync(join(parent, ".tmp-"));
+    cpSync(publication.rootPath, stage, { recursive: true });
+    const moved = kind === "unknown-revision" ? stage.replace("revision-1", "revision-999")
+      : kind === "wrong-scope" ? stage.replace("tenant-default", "tenant-account-a")
+      : kind === "unknown-profile" ? stage.replace("profile-1", "profile-999")
+      : kind === "selection" ? stage.replace("/all/", "/other/")
+      : kind === "grouping" ? stage.replace("/color/", "/other/")
+      : kind === "short-name" ? join(parent, ".tmp-abc")
+      : kind === "long-name" ? join(parent, ".tmp-abcdefg") : null;
+    if (moved) {
+      cpSync(stage, moved, { recursive: true });
+      rmSync(stage, { recursive: true });
+    }
+    if (kind === "stage-file") { rmSync(stage, { recursive: true }); writeFileSync(stage, "partial"); }
+    if (kind === "stage-symlink") { rmSync(stage, { recursive: true }); symlinkSync(publication.rootPath, stage); }
+    const before = stlTreeState(paths.sourceDir);
+    expect(() => inspectOwnershipCopy(paths)).toThrow();
+    await expect(executeOwnershipCopy({ ...paths, manifest: input })).rejects.toThrow();
+    expect(existsSync(paths.destinationDir)).toBe(false);
+    expect(readdirSync(join(paths.sourceDir, "..")).filter(name => name.startsWith(".ownership-copy-"))).toEqual([]);
+    expect(stlTreeState(paths.sourceDir)).toEqual(before);
+  });

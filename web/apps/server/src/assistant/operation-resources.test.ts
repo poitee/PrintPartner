@@ -5,14 +5,19 @@ import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative, isAbsolute, sep } from "node:path";
+import { dirname, join, relative, isAbsolute, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { drizzle as drizzlePostgres } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { registerPostgresSyncQuery, unregisterPostgresSyncQuery } from "../db/sync-db-bridge.js";
+import { MAX_MCP_INLINE_FILE_BYTES } from "../services/upload-limits.js";
 import { SqliteDatabase } from "../db/client.js";
 import { AppRepository } from "../db/repository.js";
 import * as schema from "../db/schema.js";
+import * as postgresSchema from "../db/schema-pg.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy.js";
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
@@ -26,7 +31,8 @@ import { invokeAssistantTool } from "./tools.js";
 const observer = vi.hoisted(() => {
   type Access = { api: string; args: unknown[]; result?: unknown };
   // `virtual` serves a shipped-data path from a test fixture so tests never write shipped data.
-  const state: { active: boolean; files: Access[]; virtual: Map<string, string> } = { active: false, files: [], virtual: new Map() };
+  // `afterAccess` lets a trace mutate the filesystem between two calls the operation makes.
+  const state: { active: boolean; files: Access[]; virtual: Map<string, string>; afterAccess?: (access: Access) => void } = { active: false, files: [], virtual: new Map() };
   function wrap(module: object, prefix = ""): object {
     return Object.fromEntries(Object.entries(module).map(([name, value]) => {
       if (name === "default" || name === "promises") return [name, wrap(value, prefix + (name === "promises" ? "promises." : ""))];
@@ -39,6 +45,7 @@ const observer = vi.hoisted(() => {
           const result: unknown = backing === undefined ? Reflect.apply(target, receiver, args)
             : name === "realpathSync" ? args[0] : Reflect.apply(target, receiver, [backing, ...args.slice(1)]);
           access.result = result;
+          if (state.active) state.afterAccess?.(access);
           return result;
         },
         get(target, property, receiver) {
@@ -65,7 +72,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -159,6 +166,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   observer.state.active = false;
+  observer.state.afterAccess = undefined;
+  observer.state.virtual.clear();
   sqlite?.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
   fs.rmSync(userRoot, { recursive: true, force: true });
@@ -544,6 +553,534 @@ it("rejects observed reads against the empty check_hardware_interfaces declarati
   expect(entry).toEqual({ operation: "tool.check_hardware_interfaces", resources: [] });
   expect(() => expect(statements).toEqual([])).toThrow();
   expect(() => expect(observer.state.files).toEqual([])).toThrow();
+});
+
+it("traces custom filament proposal validation and coercion without storage access", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_add_custom_filament");
+  expect(entry).toEqual({ operation: "tool.propose_add_custom_filament", resources: [] });
+  const actionSchema = z.object({
+    id: z.uuid(),
+    type: z.literal("propose_add_custom_filament"),
+    plan_id: z.literal(0),
+    label: z.string(),
+    summary: z.literal("Add a named external filament without stock tracking."),
+    params: z.object({ display_name: z.string(), hex: z.string(), product_line: z.string().optional() }).strict(),
+  }).strict();
+  const contentSchema = z.object({
+    status: z.literal("proposed"),
+    note: z.literal("Not applied yet — user must confirm via Apply in the UI."),
+    action: actionSchema,
+  }).strict();
+  const valid: [Record<string, unknown>, z.infer<typeof actionSchema>["params"]][] = [
+    [{ display_name: "  Fixture PLA \n", hex: "  #aBcDeF \t" }, { display_name: "Fixture PLA", hex: "#aBcDeF" }],
+    [{ display_name: "Fixture PLA", hex: "aBcDeF", product_line: "  External PLA  " }, { display_name: "Fixture PLA", hex: "aBcDeF", product_line: "  External PLA  " }],
+    [{ display_name: 42, hex: 123456 }, { display_name: "42", hex: "123456" }],
+    [{ display_name: false, hex: "ABCDEF" }, { display_name: "false", hex: "ABCDEF" }],
+    [{ display_name: {}, hex: ["aBcDeF"] }, { display_name: "[object Object]", hex: "aBcDeF" }],
+    [{ display_name: ["Fixture", "PLA"], hex: "000000" }, { display_name: "Fixture,PLA", hex: "000000" }],
+    ...[undefined, null, false, 42, {}, [], "", "Custom"].map((product_line): [Record<string, unknown>, z.infer<typeof actionSchema>["params"]] => [
+      { display_name: "Fixture PLA", hex: "#123aBc", product_line },
+      { display_name: "Fixture PLA", hex: "#123aBc", ...(typeof product_line === "string" ? { product_line } : {}) },
+    ]),
+  ];
+  const invalid: Record<string, unknown>[] = [
+    {},
+    ...[undefined, null, "", " \n\t", []].map((display_name) => ({ display_name, hex: "#aBcDeF" })),
+    ...[undefined, null, "", " ", "abc", "#abc", "12345", "1234567", "#1234567", "##aBcDeF", "gggggg", "12 456", "0x123456", false, {}, ["abcdef", "123456"]]
+      .map((hex) => ({ display_name: "Fixture PLA", hex })),
+  ];
+  const ids = new Set<string>();
+  for (const tenantId of ["default", "tenant-b"]) {
+    for (const activePlanId of [undefined, 0, 999999]) {
+      for (const selectors of [{}, { plan_id: 999999, profile_id: 888888, source_id: sourceId, source: "Fixture" }, { plan_id: "invalid", profile_id: null, source_id: -1, source: "absent" }]) {
+        for (const [input, params] of [...valid, ...invalid.map((input): [Record<string, unknown>, undefined] => [input, undefined])]) {
+          statements = [];
+          observer.state.files = [];
+          observer.state.active = true;
+          let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+          try {
+            output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_add_custom_filament", { ...input, ...selectors }, { repo, dataDir, activePlanId }));
+          } finally { observer.state.active = false; }
+          expect(statements).toEqual([]);
+          expect(observer.state.files).toEqual([]);
+          if (!params) {
+            expect(output).toEqual({ content: JSON.stringify({ error: "display_name and a six-digit hex color are required" }) });
+            continue;
+          }
+          const content = contentSchema.parse(JSON.parse(output.content));
+          expect(content).toEqual({
+            status: "proposed",
+            note: "Not applied yet — user must confirm via Apply in the UI.",
+            action: {
+              id: content.action.id,
+              type: "propose_add_custom_filament",
+              plan_id: 0,
+              label: `add custom filament ${params.display_name}`,
+              summary: "Add a named external filament without stock tracking.",
+              params,
+            },
+          });
+          expect(output.proposedAction).toStrictEqual({ ...content.action, params: { ...params, product_line: params.product_line } });
+          expect(ids.has(content.action.id)).toBe(false);
+          ids.add(content.action.id);
+        }
+      }
+    }
+  }
+  expect(ids.size).toBe(valid.length * 18);
+});
+
+it("rejects undeclared database and file reads against the empty custom filament proposal declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("propose_add_custom_filament", { display_name: "Fixture PLA", hex: "#aBcDeF" }, { repo, dataDir });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql)))]).toEqual(["table:projects", "table:source_docs"]);
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_add_custom_filament");
+  expect(entry).toEqual({ operation: "tool.propose_add_custom_filament", resources: [] });
+  expect(() => expect(statements).toEqual([])).toThrow();
+  expect(() => expect(observer.state.files).toEqual([])).toThrow();
+});
+
+it("traces create build proposal validation, URL analysis and raw request preservation without storage access", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_create_build");
+  expect(entry).toEqual({ operation: "tool.propose_create_build", resources: [] });
+  const actionSchema = z.object({
+    id: z.uuid(),
+    type: z.literal("propose_create_build"),
+    plan_id: z.literal(0),
+    label: z.string(),
+    summary: z.literal("Create the Build and preserve the customer request verbatim."),
+    params: z.object({ name: z.string(), request: z.string(), urls: z.array(z.string()), idempotency_key: z.string().optional() }).strict(),
+  }).strict();
+  const contentSchema = z.object({
+    status: z.literal("proposed"),
+    note: z.literal("Not applied yet — user must confirm via Apply in the UI."),
+    action: actionSchema,
+  }).strict();
+  const request = "  Build a 300mm printer with USB umbilical and primary color is black.\nUse owner fixture as canonical base and vendor kit as vendor-kit overlay.  ";
+  const urls = [" https://GITHUB.com/owner/fixture/#details ", "https://example.test/vendor/kit/", "https://printables.com/model/123-fixture"];
+  const valid: [Record<string, unknown>, z.infer<typeof actionSchema>["params"]][] = [
+    [{ name: "  Fixture Build \n", request, urls: [null, 7, false, {}, ...urls] }, { name: "Fixture Build", request, urls }],
+    [{ name: 42, request: 0 }, { name: "42", request: "0", urls: [] }],
+    [{ name: false, request: true }, { name: "false", request: "true", urls: [] }],
+    [{ name: {}, request: ["Build", "fixture"] }, { name: "[object Object]", request: "Build,fixture", urls: [] }],
+    ...[undefined, null, "https://example.test", false, 42, {}, [null, 7, false, {}]].map((urls): [Record<string, unknown>, z.infer<typeof actionSchema>["params"]] => [
+      { name: "Fixture Build", request: "Build fixture", urls },
+      { name: "Fixture Build", request: "Build fixture", urls: [] },
+    ]),
+    ...[undefined, null, false, 42, {}, [], "", "  fixture-key  "].map((idempotency_key): [Record<string, unknown>, z.infer<typeof actionSchema>["params"]] => [
+      { name: "Fixture Build", request: "Build fixture", idempotency_key },
+      { name: "Fixture Build", request: "Build fixture", urls: [], ...(typeof idempotency_key === "string" ? { idempotency_key } : {}) },
+    ]),
+  ];
+  const invalid: [Record<string, unknown>, string][] = [
+    [{}, "name and request required"],
+    ...[undefined, null, "", " \n\t", []].flatMap((value): [Record<string, unknown>, string][] => [
+      [{ name: value, request: "Build fixture", urls: ["not a url"] }, "name and request required"],
+      [{ name: "Fixture Build", request: value, urls: ["not a url"] }, "name and request required"],
+    ]),
+    ...["not a url", "", "https://"].map((url): [Record<string, unknown>, string] => [
+      { name: "Fixture Build", request: "Build fixture", urls: [urls[0], url] }, "Invalid URL",
+    ]),
+    ...["file:///fixture", "ftp://example.test/fixture"].map((url): [Record<string, unknown>, string] => [
+      { name: "Fixture Build", request: "Build fixture", urls: [url] }, "Only public HTTP(S) URLs are supported",
+    ]),
+  ];
+  const ids = new Set<string>();
+  for (const tenantId of ["default", "tenant-b"]) {
+    for (const activePlanId of [undefined, 0, 999999]) {
+      for (const selectors of [{}, { plan_id: 999999, profile_id: 888888, source_id: sourceId, source: "Fixture" }, { plan_id: "invalid", profile_id: null, source_id: -1, source: "absent" }]) {
+        const cases: [Record<string, unknown>, z.infer<typeof actionSchema>["params"] | string][] = [...valid, ...invalid];
+        for (const [input, expected] of cases) {
+          statements = [];
+          observer.state.files = [];
+          observer.state.active = true;
+          let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+          try {
+            output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_create_build", { ...input, ...selectors }, { repo, dataDir, activePlanId }));
+          } finally { observer.state.active = false; }
+          expect(statements).toEqual([]);
+          expect(observer.state.files).toEqual([]);
+          if (typeof expected === "string") {
+            expect(output).toEqual({ content: JSON.stringify({ error: expected }) });
+            continue;
+          }
+          const content = contentSchema.parse(JSON.parse(output.content));
+          expect(content).toEqual({
+            status: "proposed",
+            note: "Not applied yet — user must confirm via Apply in the UI.",
+            action: {
+              id: content.action.id,
+              type: "propose_create_build",
+              plan_id: 0,
+              label: `Create Build ${expected.name}`,
+              summary: "Create the Build and preserve the customer request verbatim.",
+              params: expected,
+            },
+          });
+          expect(output.proposedAction).toStrictEqual({ ...content.action, params: { ...expected, idempotency_key: expected.idempotency_key } });
+          expect(ids.has(content.action.id)).toBe(false);
+          ids.add(content.action.id);
+        }
+      }
+    }
+  }
+  expect(ids.size).toBe(valid.length * 18);
+});
+
+it("rejects undeclared database and file reads against the empty create build proposal declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("propose_create_build", { name: "Fixture Build", request: "Build fixture" }, { repo, dataDir });
+    repo.listSources();
+    fs.readFileSync(join(root, "README.md"), "utf8");
+  } finally { observer.state.active = false; }
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql)))]).toEqual(["table:projects", "table:source_docs"]);
+  expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_create_build");
+  expect(entry).toEqual({ operation: "tool.propose_create_build", resources: [] });
+  expect(() => expect(statements).toEqual([])).toThrow();
+  expect(() => expect(observer.state.files).toEqual([])).toThrow();
+});
+
+function categoryProposal(planId: number, path: string, parent: string | null, resulting: string[]) {
+  const leaf = path.slice(path.lastIndexOf("/") + 1);
+  return {
+    status: "proposed",
+    note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: {
+      type: "propose_create_source_category", plan_id: planId,
+      label: `Add category ${path}`,
+      summary: parent ? `Add “${leaf}” as a subcategory of “${parent}”.` : `Add “${path}” as a top-level library category.`,
+      params: { path },
+    },
+    resulting_categories: resulting,
+  };
+}
+
+it("traces propose_create_source_category paths, plan dismissals and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Category plan");
+  const dismissed = repo.createProfile("Dismissed plan");
+  const otherType = repo.createProfile("Other dismissal");
+  repo.createPlanDecision({ planId: dismissed.id, actor: "user", kind: "dismissed_action", actionType: "propose_create_source_category", params: { path: "Elsewhere" } });
+  repo.createPlanDecision({ planId: otherType.id, actor: "user", kind: "dismissed_action", actionType: "propose_rename_source_category", params: { path: "Printers" } });
+  repo.createPlanDecision({ planId: plan.id, actor: "assistant", kind: "applied_action", actionType: "propose_create_source_category", params: { path: "Tools" } });
+  const foreign = tenantStorage.run("other", () => {
+    const foreignPlan = repo.createProfile("Other");
+    repo.createPlanDecision({ planId: foreignPlan.id, actor: "user", kind: "dismissed_action", actionType: "propose_create_source_category", params: { path: "Tools" } });
+    return foreignPlan;
+  });
+  const settingsBefore = sqlite.prepare("SELECT tenant_id, key, value FROM app_settings ORDER BY tenant_id, key").all();
+  const tables = ["table:app_settings", "table:build_profiles", "table:plan_decisions"];
+  const saved = ["Printers", "Printers/Core"];
+  const defaults = ["Printer kits", "Toolheads", "Probes & sensors", "Mods", "Hardware", "Other"];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_create_source_category", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    if (content.status === "proposed") {
+      const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+      expect(output.proposedAction).toEqual(action);
+      const { id: _id, ...proposal } = action;
+      return { ...content, action: proposal };
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  const required = { error: "path (or name) required" };
+  for (const input of [{}, { path: " / ", name: "  ", parent: "/" }, { path: 42, name: {}, parent: ["Printers"] }]) {
+    expect(await trace(input, [])).toEqual(required);
+  }
+  expect(await trace({ plan_id: plan.id }, ["table:build_profiles"])).toEqual(required);
+  expect(await trace({}, [], "default", plan.id)).toEqual(required);
+  for (const input of [{ path: " Printers / Frame " }, { name: "Frame", parent: "Printers" }, { path: "", name: " Frame ", parent: " printers/ " }, { path: 7, name: "Frame", parent: "Printers" }]) {
+    const path = typeof input.parent === "string" && input.parent.includes("printers") ? "printers/Frame" : "Printers/Frame";
+    expect(await trace(input, ["table:app_settings"])).toEqual(categoryProposal(0, path, path.split("/")[0]!, [...saved, path]));
+  }
+  expect(await trace({ parent: "Tools" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Tools", name: "Frame", parent: "Printers" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Tools/Hotends/Volcano" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Tools/Hotends/Volcano", "Tools/Hotends", [...saved, "Tools", "Tools/Hotends", "Tools/Hotends/Volcano"]));
+  expect(await trace({ path: "Printers/Core/Bed" }, ["table:app_settings"])).toEqual(categoryProposal(0, "Printers/Core/Bed", "Printers/Core", [...saved, "Printers/Core/Bed"]));
+  for (const path of ["printers/core", " PRINTERS "]) {
+    expect(await trace({ path, plan_id: plan.id }, ["table:app_settings", "table:build_profiles"])).toEqual({ error: `Category already exists: ${path.trim()}`, categories: saved });
+  }
+  for (const planId of [plan.id, String(plan.id), ` ${plan.id}.9 `]) {
+    expect(await trace({ path: "Tools", plan_id: planId, profile_id: foreign.id }, tables, "default", otherType.id)).toEqual(categoryProposal(plan.id, "Tools", null, [...saved, "Tools"]));
+  }
+  expect(await trace({ path: "Tools" }, ["table:app_settings", "table:plan_decisions"], "default", otherType.id)).toEqual(categoryProposal(otherType.id, "Tools", null, [...saved, "Tools"]));
+  const userDismissed = {
+    error: "user_dismissed",
+    detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
+    fingerprint: "propose_create_source_category|",
+    action_type: "propose_create_source_category",
+  };
+  for (const path of ["Elsewhere", "Tools", "Printers/Frame"]) {
+    expect(await trace({ path, plan_id: dismissed.id }, tables)).toEqual(userDismissed);
+    expect(await trace({ path }, ["table:app_settings", "table:plan_decisions"], "default", dismissed.id)).toEqual(userDismissed);
+  }
+  for (const planId of [foreign.id, 999999, 0, -1]) {
+    expect(await trace({ path: "Tools", plan_id: planId }, ["table:app_settings", "table:build_profiles"])).toEqual(categoryProposal(0, "Tools", null, [...saved, "Tools"]));
+    expect(await trace({ path: "Tools", plan_id: planId }, tables, "default", dismissed.id)).toEqual(userDismissed);
+  }
+  expect(await trace({ path: "Tools", plan_id: "invalid" }, ["table:app_settings", "table:plan_decisions"], "default", plan.id)).toEqual(categoryProposal(plan.id, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Tools" }, ["table:app_settings", "table:plan_decisions"], "default", foreign.id)).toEqual(categoryProposal(foreign.id, "Tools", null, [...saved, "Tools"]));
+  expect(await trace({ path: "Printers/Frame" }, ["table:app_settings"], "other")).toEqual(categoryProposal(0, "Printers/Frame", "Printers", [...defaults, "Printers", "Printers/Frame"]));
+  expect(await trace({ path: "mods", plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], "other")).toEqual({ error: "Category already exists: mods", categories: defaults });
+  expect(await trace({ path: "Tools", plan_id: foreign.id }, tables, "other")).toEqual(userDismissed);
+  expect(await trace({ path: "Tools" }, ["table:app_settings", "table:plan_decisions"], "other", dismissed.id)).toEqual(categoryProposal(dismissed.id, "Tools", null, [...defaults, "Tools"]));
+  for (const [table, expected] of [["build_profiles", []], ["app_settings", ["table:build_profiles"]], ["plan_decisions", ["table:app_settings", "table:build_profiles"]]] as const) {
+    sqlite.prepare(`ALTER TABLE ${table} RENAME TO unavailable_table`).run();
+    try {
+      expect(await trace({ path: "Tools", plan_id: plan.id }, [...expected])).toEqual({ error: `no such table: ${table}` });
+    } finally {
+      sqlite.prepare(`ALTER TABLE unavailable_table RENAME TO ${table}`).run();
+    }
+  }
+  expect(sqlite.prepare("SELECT tenant_id, key, value FROM app_settings ORDER BY tenant_id, key").all()).toEqual(settingsBefore);
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.propose_create_source_category");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing create source category declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(tables);
+});
+
+type CategoryTool = "propose_rename_source_category" | "propose_delete_source_category" | "propose_set_source_category";
+type SourceProposalTool = "propose_update_source" | "propose_update_source_naming" | "propose_import_source_files";
+type CategoryProbe = [string, ...unknown[]];
+const CATEGORY_TABLES = ["table:app_settings", "table:build_profiles", "table:plan_decisions", "table:projects", "table:source_docs"];
+const CATEGORY_UNION = ["file:source-workspace", ...CATEGORY_TABLES];
+const CATEGORY_SAVED = ["Printers", "Printers/Core", "Tools"];
+
+function sourceCategoryProposal(type: CategoryTool, planId: number, label: string, summary: string, params: Record<string, unknown>, resulting?: string[]) {
+  return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: { type, plan_id: planId, label, summary, params },
+    ...(resulting ? { resulting_categories: resulting } : {}),
+  };
+}
+
+async function traceCategory(tool: CategoryTool | SourceProposalTool, input: Record<string, unknown>, tables: string[], options: {
+  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
+} = {}) {
+  const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+  expect(observed).toEqual(tables);
+  expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+  const union = unions.get(tool) ?? new Set<string>();
+  for (const resource of [...observed, ...(files.length ? ["file:source-workspace"] : [])]) union.add(resource);
+  unions.set(tool, union);
+  const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  if (content.status !== "proposed") {
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+  expect(output.proposedAction).toEqual(action);
+  const { id: _id, ...proposal } = action;
+  return { ...content, action: proposal };
+}
+
+async function assertCategoryDatabaseErrors(tool: CategoryTool, input: Record<string, unknown>, repository: AppRepository, files: CategoryProbe[]) {
+  const order = tool === "propose_set_source_category"
+    ? ["build_profiles", "projects", "source_docs", "app_settings", "plan_decisions"]
+    : ["build_profiles", "app_settings", "projects", "source_docs", "plan_decisions"];
+  for (const [index, table] of order.entries()) {
+    const completed = order.slice(0, index);
+    sqlite.exec(`ALTER TABLE ${table} RENAME TO unavailable_table`);
+    try {
+      expect(await traceCategory(tool, input, completed.map((name) => `table:${name}`).sort(), { repository, files: completed.includes("source_docs") ? files : [] })).toEqual({ error: `no such table: ${table}` });
+    } finally { sqlite.exec(`ALTER TABLE unavailable_table RENAME TO ${table}`); }
+  }
+}
+
+function categoryTraceFixture(isolated: boolean) {
+  repo.saveSourceCategories(CATEGORY_SAVED);
+  sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(unsyncedId);
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  const sourceFiles: CategoryProbe[] = isolated ? [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", workspace], ["statSync", workspace]] : [];
+  const files: CategoryProbe[] = isolated ? [...sourceFiles, ["realpathSync", repos]] : [];
+  return { repository, files, sourceFiles, workspace, repos };
+}
+
+function assertCategoryDeclaration(tool: CategoryTool, isolated: boolean) {
+  expect([...unions.get(tool) ?? []].sort()).toEqual(isolated ? CATEGORY_UNION : CATEGORY_TABLES);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+  if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(CATEGORY_UNION);
+}
+
+for (const isolated of [false, true]) {
+  it(`traces propose_rename_source_category edits, validation and dismissals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const fixture = categoryTraceFixture(isolated);
+    const { repository, files } = fixture;
+    const tool = "propose_rename_source_category";
+    const plan = repo.createProfile("Rename");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    const settings = ["table:app_settings"];
+    const reads = ["table:app_settings", "table:projects", "table:source_docs"];
+    const rename = (planId = 0) => sourceCategoryProposal(tool, planId, "Rename category Printers → Machines", "Rename “Printers” to “Machines”, moving 2 category path(s) and 1 Source(s).", { path: "Printers", new_name: " Machines " }, ["Machines", "Machines/Core", "Tools"]);
+    for (const input of [{}, { path: 42 }, { path: " / " }]) expect(await traceCategory(tool, input, settings, { repository })).toEqual({ error: "path required" });
+    expect(await traceCategory(tool, { plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], { repository })).toEqual({ error: "path required" });
+    for (const [input, error] of [
+      [{ path: "missing" }, "Unknown category: missing"],
+      [{ path: "Printers", new_name: " " }, "Category names cannot be empty"],
+      [{ path: "Printers", new_name: "a/b" }, "new_name is a single name — use new_parent to move a category"],
+      [{ path: "Printers", new_parent: "Missing" }, "Unknown parent category: Missing"],
+      [{ path: "Printers", new_parent: "Printers/Core" }, "Cannot move “Printers” inside itself"],
+      [{ path: "Printers", new_name: "Tools" }, "Category already exists: Tools"],
+    ] as const) expect(await traceCategory(tool, input, settings, { repository })).toEqual({ error, categories: CATEGORY_SAVED });
+    for (const input of [{ path: " printers " }, { path: "Printers", new_name: "PRINTERS", new_parent: "" }, { path: "Printers", new_name: 7, new_parent: null }]) {
+      expect(await traceCategory(tool, input, settings, { repository, activePlanId: plan.id })).toEqual({ status: "unchanged", category: "Printers" });
+    }
+    const input = { path: " printers ", new_name: " Machines " };
+    expect(await traceCategory(tool, input, reads, { repository, files })).toEqual(rename());
+    expect(await traceCategory(tool, { path: "Printers/Core", new_parent: " tools " }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Rename category Printers/Core → Tools/Core", "Rename “Printers/Core” to “Tools/Core”, moving 1 category path(s) and 1 Source(s).", { path: "Printers/Core", new_parent: " tools " }, ["Printers", "Tools/Core", "Tools"]));
+    expect(await traceCategory(tool, { path: "Printers/Core", new_parent: "" }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Rename category Printers/Core → Core", "Rename “Printers/Core” to “Core”, moving 1 category path(s) and 1 Source(s).", { path: "Printers/Core", new_parent: "" }, ["Printers", "Core", "Tools"]));
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.9`]) expect(await traceCategory(tool, { ...input, plan_id, profile_id: foreign.id }, CATEGORY_TABLES, { repository, files, activePlanId: foreign.id })).toEqual(rename(plan.id));
+    for (const plan_id of [foreign.id, 999999, 0, -1]) {
+      expect(await traceCategory(tool, { ...input, plan_id }, ["table:app_settings", "table:build_profiles", "table:projects", "table:source_docs"], { repository, files })).toEqual(rename());
+    }
+    expect(await traceCategory(tool, { ...input, plan_id: "bad" }, [...settings, "table:plan_decisions", "table:projects", "table:source_docs"], { repository, files, activePlanId: plan.id })).toEqual(rename(plan.id));
+    expect(await traceCategory(tool, { path: "Printers", new_name: "Machines", plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Unknown category: Printers", categories: ["Printer kits", "Toolheads", "Probes & sensors", "Mods", "Hardware", "Other"] });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { path: "Elsewhere", new_name: "Ignored" } });
+    expect(await traceCategory(tool, { ...input, plan_id: plan.id }, CATEGORY_TABLES, { repository, files })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_rename_source_category|", action_type: tool });
+    await assertCategoryDatabaseErrors(tool, { ...input, plan_id: plan.id }, repository, files);
+    assertCategoryDeclaration(tool, isolated);
+    expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
+    expect(repo.getSource(sourceId)?.category).toBe("Printers/Core");
+    expect(repo.listPlanDecisions(plan.id).map((d) => d.kind)).toEqual(["dismissed_action"]);
+  });
+
+  it(`traces propose_delete_source_category destinations, errors and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files } = categoryTraceFixture(isolated);
+    const tool = "propose_delete_source_category";
+    const plan = repo.createProfile("Delete");
+    const reads = ["table:app_settings", "table:projects", "table:source_docs"];
+    for (const input of [{}, { path: null }, { path: " / " }]) expect(await traceCategory(tool, input, ["table:app_settings"], { repository })).toEqual({ error: "path required" });
+    expect(await traceCategory(tool, { plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], { repository })).toEqual({ error: "path required" });
+    for (const reassign_to of ["Missing", "Printers/Core", "Printers"]) expect(await traceCategory(tool, { path: "Printers", reassign_to }, ["table:app_settings"], { repository })).toEqual({ error: `Cannot reassign to a category that is being deleted or does not exist: ${reassign_to}`, categories: CATEGORY_SAVED });
+    expect(await traceCategory(tool, { path: "Missing" }, ["table:app_settings"], { repository })).toEqual({ error: "Unknown category: Missing", categories: CATEGORY_SAVED });
+    const input = { path: " printers / core " };
+    const deletion = (planId = 0) => sourceCategoryProposal(tool, planId, "Delete category Printers/Core", "Delete “Printers/Core” and its subcategories; 1 Source(s) move to “Printers”.", { path: "Printers/Core" }, ["Printers", "Tools"]);
+    expect(await traceCategory(tool, input, reads, { repository, files })).toEqual(deletion());
+    for (const reassign_to of [" tools ", "", null, 42]) {
+      const explicit = typeof reassign_to === "string";
+      expect(await traceCategory(tool, { ...input, reassign_to }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Delete category Printers/Core", `Delete “Printers/Core” and its subcategories; 1 Source(s) move to ${reassign_to === " tools " ? "“Tools”" : "“Printers”"}.`, { path: "Printers/Core", ...(explicit ? { reassign_to } : {}) }, ["Printers", "Tools"]));
+    }
+    expect(await traceCategory(tool, { path: "Printers" }, reads, { repository, files })).toEqual(sourceCategoryProposal(tool, 0, "Delete category Printers", "Delete “Printers” and its subcategories; 1 Source(s) move to Uncategorised.", { path: "Printers" }, ["Tools"]));
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.5`]) expect(await traceCategory(tool, { ...input, plan_id }, CATEGORY_TABLES, { repository, files })).toEqual(deletion(plan.id));
+    for (const plan_id of [999999, -1, 0]) expect(await traceCategory(tool, { ...input, plan_id }, ["table:app_settings", "table:build_profiles", "table:projects", "table:source_docs"], { repository, files })).toEqual(deletion());
+    expect(await traceCategory(tool, input, ["table:app_settings", "table:plan_decisions", "table:projects", "table:source_docs"], { repository, files, activePlanId: plan.id })).toEqual(deletion(plan.id));
+    tenantStorage.run("other", () => repo.saveSourceCategories(["Printers", "Printers/Core", "Other"]));
+    expect(await traceCategory(tool, { path: "Printers", plan_id: plan.id }, ["table:app_settings", "table:build_profiles", "table:projects", "table:source_docs"], { repository, tenantId: "other" })).toEqual(sourceCategoryProposal(tool, 0, "Delete category Printers", "Delete “Printers” and its subcategories; 0 Source(s) move to Uncategorised.", { path: "Printers" }, ["Other"]));
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { path: "Tools" } });
+    expect(await traceCategory(tool, { ...input, plan_id: plan.id }, CATEGORY_TABLES, { repository, files })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_delete_source_category|", action_type: tool });
+    repo.saveSourceCategories(["Printers", "Printers/Core"]);
+    expect(await traceCategory(tool, { path: "Printers" }, ["table:app_settings"], { repository })).toEqual({ error: "Keep at least one category", categories: ["Printers", "Printers/Core"] });
+    repo.saveSourceCategories(CATEGORY_SAVED);
+    await assertCategoryDatabaseErrors(tool, { ...input, plan_id: plan.id }, repository, files);
+    assertCategoryDeclaration(tool, isolated);
+    expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
+    expect(repo.getSource(sourceId)?.category).toBe("Printers/Core");
+    expect(repo.listPlanDecisions(plan.id).map((d) => d.kind)).toEqual(["dismissed_action"]);
+  });
+
+  it(`traces propose_set_source_category selectors, unchanged and clearing under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files, sourceFiles } = categoryTraceFixture(isolated);
+    const tool = "propose_set_source_category";
+    const plan = repo.createProfile("Set");
+    const sources = ["table:projects", "table:source_docs"];
+    const reads = ["table:app_settings", ...sources];
+    const setting = (planId = 0, category = "Tools") => sourceCategoryProposal(tool, planId, category ? "File Fixture under Tools" : "Uncategorise Fixture", category ? "Move Library Source “Fixture” from Printers/Core to “Tools”. Organizational only." : "Clear the Library category on “Fixture” (currently Printers/Core).", { source_id: sourceId, source_name: "Fixture", category });
+    for (const input of [{}, { source_name: " " }, { source_id: "bad" }, { source_id: 999999 }, { source_id: 0 }]) expect(await traceCategory(tool, input, typeof input.source_id === "number" ? ["table:projects"] : [], { repository })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { plan_id: plan.id }, ["table:build_profiles"], { repository })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { source_name: "absent" }, sources, { repository, files: [...files, ...files] })).toEqual({ error: 'Source not found: "absent". Call list_sources first.' });
+    for (const selector of [{ source_id: sourceId }, { source_id: String(sourceId), source_name: "UserLocal" }, { source_id: `${sourceId}.8` }]) expect(await traceCategory(tool, { ...selector, category: " tools " }, reads, { repository, files: sourceFiles })).toEqual(setting());
+    for (const source_name of [" Fixture ", "FIXTURE", "Fixture R2-0"]) expect(await traceCategory(tool, { source_name, category: "Tools" }, reads, { repository, files })).toEqual(setting());
+    expect(await traceCategory(tool, { source_id: 999999, source_name: "Fixture", category: "Tools" }, sources, { repository, files })).toEqual({ error: 'Source not found: "Fixture". Did you mean: "Fixture"? Call list_sources first.' });
+    expect(await traceCategory(tool, { source_id: sourceId, category: "printers / core" }, reads, { repository, files: sourceFiles, activePlanId: plan.id })).toEqual({ status: "unchanged", source: { id: sourceId, name: "Fixture" }, category: "Printers/Core" });
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Unknown" }, reads, { repository, files: sourceFiles })).toEqual({ error: 'Unknown library category: "Unknown". Call list_source_categories, or create it with propose_create_source_category.', categories: CATEGORY_SAVED });
+    for (const category of [undefined, null, 42, " / "]) expect(await traceCategory(tool, { source_id: sourceId, category }, sources, { repository, files: sourceFiles })).toEqual(setting(0, ""));
+    expect(await traceCategory(tool, { source_id: userId }, sources, { repository, files: isolated ? [["realpathSync", join(dataDir, "repos")]] : [] })).toEqual({ status: "unchanged", source: { id: userId, name: "UserLocal" }, category: null });
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.9`]) expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id }, CATEGORY_TABLES, { repository, files: sourceFiles })).toEqual(setting(plan.id));
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id: foreign.id }, ["table:app_settings", "table:build_profiles", ...sources], { repository, files: sourceFiles })).toEqual(setting());
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id: foreign.id }, CATEGORY_TABLES, { repository, files: sourceFiles, activePlanId: plan.id })).toEqual(setting(plan.id));
+    expect(await traceCategory(tool, { source_id: sourceId }, ["table:projects"], { repository, tenantId: "other" })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { source_name: "Fixture" }, sources, { repository, tenantId: "other" })).toEqual({ error: 'Source not found: "Fixture". Call list_sources first.' });
+    const foreignSource = tenantStorage.run("other", () => {
+      repo.saveSourceCategories(["Other", "Tools"]);
+      return repo.createSource({ name: "Fixture", source_kind: "local", metadata: { category: "Other" } });
+    });
+    sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(foreignSource.id);
+    expect(await traceCategory(tool, { source_id: foreignSource.id, category: "Tools" }, ["table:projects"], { repository })).toEqual({ error: "source_id or source_name required" });
+    expect(await traceCategory(tool, { source_name: "Fixture", category: "Tools", plan_id: foreign.id }, CATEGORY_TABLES, { repository, tenantId: "other" })).toEqual(sourceCategoryProposal(tool, foreign.id, "File Fixture under Tools", "Move Library Source “Fixture” from Other to “Tools”. Organizational only.", { source_id: foreignSource.id, source_name: "Fixture", category: "Tools" }));
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { source_name: "Fixture", category: "Elsewhere" } });
+    expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id: plan.id }, CATEGORY_TABLES, { repository, files: sourceFiles })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_set_source_category|source_name=Fixture", action_type: tool });
+    expect(await traceCategory(tool, { source_id: sourceId, plan_id: plan.id }, ["table:build_profiles", "table:plan_decisions", ...sources], { repository, files: sourceFiles })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_set_source_category|source_name=Fixture", action_type: tool });
+    await assertCategoryDatabaseErrors(tool, { source_id: sourceId, category: "Tools", plan_id: plan.id }, repository, sourceFiles);
+    assertCategoryDeclaration(tool, isolated);
+    expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
+    expect(repo.getSource(sourceId)?.category).toBe("Printers/Core");
+    expect(repo.listPlanDecisions(plan.id).map((d) => d.kind)).toEqual(["dismissed_action"]);
+  });
+}
+
+it.each<CategoryTool>(["propose_rename_source_category", "propose_delete_source_category", "propose_set_source_category"])("traces %s isolated missing, escaping and symlink roots without applying", async (tool) => {
+  const { repository, workspace, repos } = categoryTraceFixture(true);
+  const isSet = tool === "propose_set_source_category";
+  const input = isSet ? { source_id: sourceId, category: "Tools" } : tool === "propose_rename_source_category" ? { path: "Printers", new_name: "Machines" } : { path: "Printers" };
+  const output = isSet
+    ? sourceCategoryProposal(tool, 0, "File Fixture under Tools", "Move Library Source “Fixture” from Printers/Core to “Tools”. Organizational only.", { source_id: sourceId, source_name: "Fixture", category: "Tools" })
+    : tool === "propose_rename_source_category"
+      ? sourceCategoryProposal(tool, 0, "Rename category Printers → Machines", "Rename “Printers” to “Machines”, moving 2 category path(s) and 1 Source(s).", { path: "Printers", new_name: "Machines" }, ["Machines", "Machines/Core", "Tools"])
+      : sourceCategoryProposal(tool, 0, "Delete category Printers", "Delete “Printers” and its subcategories; 1 Source(s) move to Uncategorised.", { path: "Printers" }, ["Tools"]);
+  const probe: CategoryProbe[] = [["realpathSync", repos]];
+  const prefix: CategoryProbe[] = [...probe, ["lstatSync", workspace], ["realpathSync", workspace]];
+  const escape = join(workspace, "escape");
+  fs.symlinkSync(userRoot, escape);
+  for (const [path, calls] of [
+    [null, []], [userRoot, probe], [join(workspace, "missing"), [...prefix, ["realpathSync", join(workspace, "missing")]]],
+    [escape, [...prefix, ["realpathSync", escape]]],
+  ] satisfies [string | null, CategoryProbe[]][]) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    expect(await traceCategory(tool, input, ["table:app_settings", "table:projects", "table:source_docs"], { repository, files: [...calls, ...(isSet ? [] : probe)] })).toEqual(output);
+  }
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  fs.renameSync(workspace, `${workspace}-saved`);
+  const missing: CategoryProbe[] = [...probe, ["lstatSync", workspace]];
+  expect(await traceCategory(tool, input, ["table:app_settings", "table:projects", "table:source_docs"], { repository, files: [...missing, ...(isSet ? [] : probe)] })).toEqual(output);
+  fs.symlinkSync(userRoot, workspace);
+  expect(await traceCategory(tool, input, ["table:app_settings", "table:projects", "table:source_docs"], { repository, files: [...missing, ...(isSet ? [] : probe)] })).toEqual(output);
+  fs.unlinkSync(workspace);
+  fs.renameSync(`${workspace}-saved`, workspace);
 });
 
 it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation against its declaration", async () => {
@@ -1250,6 +1787,163 @@ it.each(["ui_open_source", "ui_open_docs"] as const)("traces %s isolated workspa
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
 });
 
+function kitFocusProposal(planId: number, params: { group_id?: string; stl_filter?: string; source_name?: string; source_id?: number }) {
+  const parts = [
+    ...(params.group_id ? [`kit option “${params.group_id}”`] : []),
+    ...(params.stl_filter ? [`STL filter “${params.stl_filter}”`] : []),
+  ];
+  return {
+    status: "proposed",
+    note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: {
+      type: "ui_focus_kit_option", plan_id: planId,
+      label: `Focus ${parts.join(" · ")}`,
+      summary: `Open Build and focus ${parts.join(" and ")}.`,
+      params: { ...params, ...(planId > 0 ? { plan_id: planId } : {}) },
+    },
+  };
+}
+
+it("traces ui_focus_kit_option selectors, proposals and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Kit focus");
+  const fallback = repo.createProfile("Fallback");
+  const foreign = tenantStorage.run("other", () => ({
+    source: repo.createSource({ name: "Fixture", source_kind: "local", local_path: userRoot }),
+    plan: repo.createProfile("Other"),
+  }));
+  const sources = ["table:projects", "table:source_docs"];
+  const tables = ["table:build_profiles", ...sources];
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, expected: string[], tenantId = "default", activePlanId?: number) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("ui_focus_kit_option", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(expected);
+    expect(observer.state.files).toEqual([]);
+    for (const resource of observed) union.add(resource);
+    const content = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+    if (content.status === "proposed") {
+      const action = z.object({ id: z.uuid() }).passthrough().parse(content.action);
+      expect(output.proposedAction).toEqual(action);
+      const { id: _id, ...proposal } = action;
+      return { ...content, action: proposal };
+    }
+    expect(output.proposedAction).toBeUndefined();
+    return content;
+  }
+  const required = { error: "group_id or stl_filter required" };
+  for (const input of [{}, { group_id: "  ", stl_filter: "\n" }, { group_id: 42, stl_filter: {} }, { source_name: "Fixture", source_id: sourceId }]) {
+    expect(await trace(input, [])).toEqual(required);
+  }
+  expect(await trace({ plan_id: plan.id, source_name: "zqxwv" }, ["table:build_profiles"])).toEqual(required);
+  expect(await trace({ group_id: " hotend " }, [])).toEqual(kitFocusProposal(0, { group_id: "hotend" }));
+  expect(await trace({ stl_filter: " bracket\nplate " }, [])).toEqual(kitFocusProposal(0, { stl_filter: "bracket\nplate" }));
+  expect(await trace({ group_id: "hotend", stl_filter: "duct" }, [])).toEqual(kitFocusProposal(0, { group_id: "hotend", stl_filter: "duct" }));
+  for (const name of [" Fixture ", "fixture", "Fix-ture", "Fixture @ v2.1", "Fixtur"]) {
+    expect(await trace({ group_id: "hotend", source_name: name }, sources)).toEqual(kitFocusProposal(0, { group_id: "hotend", source_name: name.trim() }));
+  }
+  expect(await trace({ group_id: "hotend", source_name: "Fixture", source_id: 999999 }, sources)).toEqual(kitFocusProposal(0, { group_id: "hotend", source_name: "Fixture", source_id: 999999 }));
+  expect(await trace({ group_id: "hotend", source_name: "zqxwv", source_id: sourceId }, sources)).toEqual({ error: 'Source not found: "zqxwv". Use list_sources.' });
+  expect(await trace({ group_id: "hotend", source_name: "Fixtxre" }, sources)).toEqual({ error: 'Source not found: "Fixtxre". Did you mean: "Fixture"? Use list_sources.' });
+  for (const id of [sourceId, String(sourceId), ` ${sourceId}.9 `]) {
+    expect(await trace({ group_id: "hotend", source_id: id, source_name: "  " }, sources)).toEqual(kitFocusProposal(0, { group_id: "hotend", source_id: sourceId }));
+  }
+  for (const id of [999999, foreign.source.id, 0, -1]) {
+    expect(await trace({ group_id: "hotend", source_id: id }, ["table:projects"])).toEqual({ error: "Source not found" });
+  }
+  expect(await trace({ group_id: "hotend", source_id: "invalid" }, [])).toEqual(kitFocusProposal(0, { group_id: "hotend" }));
+  for (const planId of [plan.id, String(plan.id)]) {
+    expect(await trace({ group_id: "hotend", plan_id: planId, profile_id: foreign.plan.id }, ["table:build_profiles"], "default", fallback.id)).toEqual(kitFocusProposal(plan.id, { group_id: "hotend" }));
+  }
+  expect(await trace({ group_id: "hotend", source_id: sourceId, plan_id: plan.id }, tables)).toEqual(kitFocusProposal(plan.id, { group_id: "hotend", source_id: sourceId }));
+  for (const planId of [foreign.plan.id, 999999]) {
+    expect(await trace({ group_id: "hotend", plan_id: planId }, ["table:build_profiles"])).toEqual(kitFocusProposal(0, { group_id: "hotend" }));
+    expect(await trace({ group_id: "hotend", plan_id: planId }, ["table:build_profiles"], "default", fallback.id)).toEqual(kitFocusProposal(fallback.id, { group_id: "hotend" }));
+  }
+  expect(await trace({ group_id: "hotend", plan_id: "invalid" }, [], "default", fallback.id)).toEqual(kitFocusProposal(fallback.id, { group_id: "hotend" }));
+  expect(await trace({ group_id: "hotend" }, [], "default", foreign.plan.id)).toEqual(kitFocusProposal(foreign.plan.id, { group_id: "hotend" }));
+  expect(await trace({ group_id: "hotend", source_id: foreign.source.id, plan_id: foreign.plan.id }, tables, "other")).toEqual(kitFocusProposal(foreign.plan.id, { group_id: "hotend", source_id: foreign.source.id }));
+  expect(await trace({ group_id: "hotend", source_name: "UserLocal" }, sources, "other")).toEqual({ error: 'Source not found: "UserLocal". Use list_sources.' });
+  expect(await trace({ group_id: "hotend", source_id: sourceId }, ["table:projects"], "other")).toEqual({ error: "Source not found" });
+  for (const table of ["projects", "source_docs", "build_profiles"]) {
+    sqlite.prepare(`ALTER TABLE ${table} RENAME TO unavailable_table`).run();
+    try {
+      const expected = table === "build_profiles" ? [] : ["table:build_profiles", ...(table === "source_docs" ? ["table:projects"] : [])];
+      expect(await trace({ group_id: "hotend", source_id: sourceId, plan_id: plan.id }, expected)).toEqual({ error: `no such table: ${table}` });
+    } finally {
+      sqlite.prepare(`ALTER TABLE unavailable_table RENAME TO ${table}`).run();
+    }
+  }
+  expect([...union].sort()).toEqual(tables);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.ui_focus_kit_option");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing kit option focus declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+});
+
+it("traces ui_focus_kit_option isolated workspace probes for source lookups", async () => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const escape = join(workspace, "escape");
+  fs.symlinkSync(userRoot, escape, "dir");
+  const isolatedRepo = new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM });
+  const plan = repo.createProfile("Isolated");
+  const tables = ["table:build_profiles", "table:projects", "table:source_docs"];
+  const union = new Set<string>();
+  const prefix: [string, string][] = [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace]];
+  async function trace(path: string | null, calls: [string, string][], byName = false) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      output = await invokeAssistantTool("ui_focus_kit_option", {
+        ...(byName ? { source_name: "Fixture" } : { source_id: sourceId }),
+        plan_id: plan.id, group_id: "hotend", stl_filter: "../outside.stl",
+      }, { repo: isolatedRepo });
+    } finally { observer.state.active = false; }
+    const content = z.object({ status: z.literal("proposed"), action: z.object({ id: z.uuid() }).passthrough() }).passthrough().parse(JSON.parse(output.content));
+    expect(output.proposedAction).toEqual(content.action);
+    const { id: _id, ...action } = content.action;
+    expect({ ...content, action }).toEqual(kitFocusProposal(plan.id, {
+      group_id: "hotend", stl_filter: "../outside.stl",
+      ...(byName ? { source_name: "Fixture" } : { source_id: sourceId }),
+    }));
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(calls);
+    const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql)))].sort();
+    expect(observed).toEqual(tables);
+    for (const sql of statements) expect(() => tableForObservedSelect(sql, "other")).toThrow("Unsupported SQL:");
+    for (const resource of [...observed, ...fileResources([repos], true)]) union.add(resource);
+  }
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]]);
+  await trace(join(workspace, "missing"), [...prefix, ["realpathSync", join(workspace, "missing")]]);
+  await trace(escape, [...prefix, ["realpathSync", escape]]);
+  await trace(userRoot, [["realpathSync", repos]]);
+  await trace(null, []);
+  sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id != ?").run(sourceId);
+  await trace(workspace, [...prefix, ["realpathSync", workspace], ["statSync", workspace]], true);
+  fs.rmSync(workspace, { recursive: true });
+  fs.symlinkSync(userRoot, workspace, "dir");
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]]);
+  fs.rmSync(workspace);
+  await trace(workspace, [["realpathSync", repos], ["lstatSync", workspace]]);
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let other: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { other = await tenantStorage.run("other", () => invokeAssistantTool("ui_focus_kit_option", { group_id: "hotend", source_id: sourceId }, { repo: isolatedRepo })); }
+  finally { observer.state.active = false; }
+  expect(JSON.parse(other.content)).toEqual({ error: "Source not found" });
+  expect(statements.map((sql) => tableForObservedSelect(sql, "other"))).toEqual(["table:projects"]);
+  expect(observer.state.files).toEqual([]);
+  expect([...union].sort()).toEqual(["file:source-workspace", ...tables]);
+});
+
 it.each(["trusted", "isolated"])("traces get_source_docs %s SQL, markdown, notes and revision PDF caches", async (policy) => {
   const repos = join(dataDir, "repos");
   fs.mkdirSync(repos, { recursive: true });
@@ -1792,7 +2486,7 @@ it.each(["trusted", "isolated"])("traces analyze_stl_mesh %s SQL, real meshes an
       expect(["realpathSync", "lstatSync", "statSync", "existsSync", "readFileSync"], api).toContain(api);
       const path = z.string().parse(args[0]);
       expect(args).toEqual([path]);
-      expect(path === repos || under(meshRoot, path) || (policy === "trusted" && under(userRoot, path)), `${api} ${path}`).toBe(true);
+      expect(policy === "isolated" ? path === repos || under(meshRoot, path) : under(meshRoot, path) || under(userRoot, path), `${api} ${path}`).toBe(true);
       observed.add("file:source-workspace");
     }
     expect(observer.state.files.filter(({ api }) => api === "readFileSync").map(({ args }) => args[0])).toEqual(reads);
@@ -1828,6 +2522,16 @@ it.each(["trusted", "isolated"])("traces analyze_stl_mesh %s SQL, real meshes an
     ...closed("open.stl"), triangles: 1, vertices: 3, shells_estimate: null, watertight: false, boundary_edges: 3,
   });
   expect(await trace({ source_id: sourceId, path: "invalid.stl" }, resources, [join(meshRoot, "invalid.stl")])).toEqual({ path: "invalid.stl", valid: false, error: "STL mesh could not be parsed" });
+  const raced = join(meshRoot, "raced.stl");
+  fs.writeFileSync(raced, ascii);
+  observer.state.afterAccess = ({ api, args, result }) => {
+    if (api !== "existsSync" || args[0] !== raced || result !== true) return;
+    observer.state.active = false;
+    try { fs.rmSync(raced); } finally { observer.state.active = true; }
+  };
+  expect(await trace({ source_id: sourceId, path: "raced.stl" }, resources, [raced])).toEqual({ error: `ENOENT: no such file or directory, open '${raced}'` });
+  observer.state.afterAccess = undefined;
+  expect(fs.existsSync(raced)).toBe(false);
   for (const path of ["missing.stl", "mesh-directory", "escape.stl", "escape-directory/outside.stl"]) {
     expect(await trace({ source_id: sourceId, path }, resources)).toEqual({ error: "STL path not found" });
   }
@@ -1875,6 +2579,17 @@ function resourcesForSnapshotSelect(statement: unknown, tenantId: string, planId
   return resourcesForPlanSelect(sql, tenantId);
 }
 
+function resourcesForSnapshotFiles(files: [string, ...unknown[]][], workspaceRoots: string[], catalogCandidates: string[]): string[] {
+  const resources = new Set<string>();
+  for (const [api, candidate] of files) {
+    const path = z.string().parse(candidate);
+    if (catalogCandidates.includes(path)) resources.add("file:kit-catalog");
+    else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
+    else throw new Error(`Unclassified plan snapshot path: ${api} ${path}`);
+  }
+  return [...resources];
+}
+
 async function tracePlanSnapshot({ input = {}, expected, files = [], tenantId = "default", activePlanId, planId, repository = repo, catalogDir = dataDir }: {
   input?: Record<string, unknown>; expected: string[]; files?: [string, ...unknown[]][]; tenantId?: string; activePlanId?: number; planId?: number; repository?: AppRepository; catalogDir?: string | null;
 }) {
@@ -1886,11 +2601,13 @@ async function tracePlanSnapshot({ input = {}, expected, files = [], tenantId = 
   finally { observer.state.active = false; }
   const observed = [...new Set(statements.flatMap((sql) => resourcesForSnapshotSelect(sql, tenantId, planId)))].sort();
   expect(observed).toEqual(expected);
-  expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+  const observedFiles = observer.state.files.map(({ api, args }): [string, ...unknown[]] => [api, ...args]);
+  expect(observedFiles).toEqual(files);
   const union = unions.get("get_plan_snapshot") ?? new Set<string>();
   for (const resource of observed) union.add(resource);
-  if (files.some(([api]) => api === "readFileSync")) union.add("file:kit-catalog");
-  if (files.some(([api]) => api !== "readFileSync")) union.add("file:source-workspace");
+  const catalogRoot = catalogDir ?? process.env.PRINT_PARTNER_DATA_DIR;
+  const candidates = [...(catalogRoot ? deploymentCatalogCandidates(resolve(catalogRoot)) : []), ...SHIPPED_CATALOG_CANDIDATES];
+  for (const resource of resourcesForSnapshotFiles(observedFiles, [join(dataDir, "repos"), root, userRoot], candidates)) union.add(resource);
   unions.set("get_plan_snapshot", union);
   return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
 }
@@ -1968,6 +2685,12 @@ it("traces get_plan_snapshot workspace probes and exact catalog candidates inclu
     fs.rmSync(path);
   }
   const read = (paths: string[]): [string, ...unknown[]][] => paths.map((path) => ["readFileSync", path, "utf8"]);
+  const relativeDataDir = relative(process.cwd(), dataDir);
+  expect(isAbsolute(relativeDataDir)).toBe(false);
+  fs.writeFileSync(candidates[1]!, "version: 1\n");
+  expect(await tracePlanSnapshot({ ...options, catalogDir: relativeDataDir, files: [...probes, ...read(candidates.slice(0, 2))] })).toEqual(snapshot);
+  fs.rmSync(candidates[1]!);
+  expect(await tracePlanSnapshot({ ...options, catalogDir: relativeDataDir, files: [...probes, ...read([...candidates, ...shipped.slice(0, 2)])] })).toEqual(snapshot);
   for (const [index, path] of candidates.entries()) fs.writeFileSync(path, ["[]", "[invalid", "null", "version: 1\n"][index]!);
   expect(await tracePlanSnapshot({ ...options, files: [...probes, ...read(candidates)] })).toEqual(snapshot);
   for (const path of candidates) fs.rmSync(path);
@@ -1995,6 +2718,36 @@ it("traces get_plan_snapshot workspace probes and exact catalog candidates inclu
   if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_snapshot declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(SNAPSHOT_UNION);
   expect(() => resourcesForSnapshotSelect('select * from "source_docs"', "default", plan.id)).toThrow("Unsupported SQL:");
+});
+
+it("classifies plan snapshot file reads by path and rejects unknown reads and probes", () => {
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const catalog = candidates[0]!;
+  fs.writeFileSync(catalog, '{"version":1}');
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    fs.readFileSync(join(root, "README.md"), "utf8");
+    fs.readFileSync(catalog, "utf8");
+    fs.statSync(catalog);
+  } finally { observer.state.active = false; }
+  const files = observer.state.files.map(({ api, args }): [string, ...unknown[]] => [api, ...args]);
+  expect(files).toEqual([["readFileSync", join(root, "README.md"), "utf8"], ["readFileSync", catalog, "utf8"], ["statSync", catalog]]);
+  expect(resourcesForSnapshotFiles(files.slice(0, 1), [root], candidates)).toEqual(["file:source-workspace"]);
+  expect(resourcesForSnapshotFiles(files.slice(2), [root], candidates)).toEqual(["file:kit-catalog"]);
+  expect(resourcesForSnapshotFiles(files, [root], candidates)).toEqual(["file:source-workspace", "file:kit-catalog"]);
+  for (const path of [join(dataDir, "unclassified.txt"), join(`${root}-sibling`, "README.md"), join(dirname(SHIPPED_CATALOG_CANDIDATES[0]!), "unclassified.json")]) {
+    observer.state.files = [];
+    observer.state.active = true;
+    try {
+      expect(() => fs.readFileSync(path, "utf8")).toThrow("ENOENT");
+      fs.existsSync(path);
+    } finally { observer.state.active = false; }
+    for (const { api, args } of observer.state.files) {
+      expect(() => resourcesForSnapshotFiles([[api, ...args]], [root], [...candidates, ...SHIPPED_CATALOG_CANDIDATES])).toThrow(`Unclassified plan snapshot path: ${api} ${path}`);
+    }
+    expect(observer.state.files.map(({ api }) => api)).toEqual(["readFileSync", "existsSync"]);
+  }
 });
 
 
@@ -2072,6 +2825,12 @@ it("traces get_kit_catalog real catalogs, fallbacks and tenant independence with
     fs.rmSync(path);
   }
   const shippedSummary = ["## Kit catalog (summarized)", "### Bases", "### Addon categories", ...["toolhead", "extruder", "hotend", "toolhead_electronics", "probe", "controller", "cable_routing", "z_drives"].map((id) => `- ${id} [pick_one]: —`), "- skirts_panels [pick_any]: —", "- accent [pick_any]: —", "### Stack presets"].join("\n");
+  const relativeDataDir = relative(process.cwd(), dataDir);
+  expect(isAbsolute(relativeDataDir)).toBe(false);
+  fs.writeFileSync(candidates[1]!, JSON.stringify(catalog));
+  await trace(summary, candidates.slice(0, 2), relativeDataDir);
+  fs.rmSync(candidates[1]!);
+  await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)], relativeDataDir);
   await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)]);
   for (const [index, path] of candidates.entries()) fs.writeFileSync(path, ["[]", "[invalid", "null", "[invalid"][index]!);
   await trace(shippedSummary, [...candidates, ...shipped.slice(0, 2)]);
@@ -2108,7 +2867,7 @@ const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "tabl
 const OPTION_GROUP_UNION = ["file:community-manifests", "file:path-hints", "file:source-workspace", ...OPTION_GROUP_TABLES];
 const SHIPPED_PATH_HINTS = fileURLToPath(new URL("../data/path-hints.yaml", import.meta.url));
 const COMMUNITY_MANIFEST_DIR = fileURLToPath(new URL("../data/manifests", import.meta.url));
-const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml");
+const COMMUNITY_MANIFEST = join(COMMUNITY_MANIFEST_DIR, "gre402-fixture.yaml");
 type FileCall = [string, ...unknown[]];
 
 function optionGroupSelect(statement: unknown, tenantId: string, planId?: number): string {
@@ -2127,7 +2886,7 @@ function optionGroupFileResources(files: FileCall[]): string[] {
     const path = z.string().parse(candidate);
     if (path === SHIPPED_PATH_HINTS || path === join(dataDir, "path-hints.yaml")) resources.add("file:path-hints");
     else if (path === COMMUNITY_MANIFEST_DIR && api === "realpathSync"
-      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!kit-catalog\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
+      || dirname(path) === COMMUNITY_MANIFEST_DIR && /^(?!(?:kit-catalog|registry-index)\.yaml$)[a-z0-9][a-z0-9._-]{0,63}\.yaml$/.test(path.slice(COMMUNITY_MANIFEST_DIR.length + 1))) resources.add("file:community-manifests");
     else if (workspaceRoots.some((root) => under(root, path))) resources.add("file:source-workspace");
     else throw new Error(`Unclassified option group path: ${api} ${path}`);
   }
@@ -2216,7 +2975,8 @@ for (const isolated of [false, true]) {
     const inferred = optionGroupCheckout("Inferred", true);
     fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
     fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
-    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("registry-index", inferred.id);
+    observer.state.virtual.set(COMMUNITY_MANIFEST, join(inferred.checkout, "print-partner.manifest.yaml"));
+    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-fixture", inferred.id);
     const plan = repo.createProfile("Options", declared.id);
     repo.addAddonLayer(plan.id, inferred.id);
     const empty = repo.createProfile("Empty");
@@ -2396,17 +3156,17 @@ for (const isolated of [false, true]) {
   });
 }
 
-it("traces get_plan_option_groups reserved kit-catalog slug as no community manifest", async () => {
+it.each(["kit-catalog", "registry-index"])("traces get_plan_option_groups reserved %s slug as no community manifest", async (slug) => {
   const source = optionGroupCheckout("Reserved");
   const plan = repo.createProfile("Reserved", source.id);
   const probes = optionGroupPathProbes(source, false);
   const sourceFiles = [...probes, ...probes, ...optionGroupManifestCalls(source.checkout), ...optionGroupScanCalls(source.checkout), ...probes, ...probes, ...optionGroupManifestCalls(source.checkout)];
-  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("kit-catalog", source.id);
+  sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run(slug, source.id);
   const log = vi.spyOn(getLogger(), "log");
   try {
     const output = await traceOptionGroups({ input: { plan_id: plan.id }, planId: plan.id, tables: OPTION_GROUP_TABLES, files: sourceFiles });
     expect(output).toMatchObject({ plan_id: plan.id, selections: {}, sources: [{ source_id: source.id }] });
-    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug: "kit-catalog" });
+    expect(log).toHaveBeenCalledWith("warn", "Ignoring invalid stored community manifest slug", { slug });
   } finally { log.mockRestore(); }
 });
 
@@ -2417,7 +3177,7 @@ it("classifies option group files by family roots and rejects every unknown path
     ["readFileSync", join(dataDir, "path-hints.yaml")],
     ["readFileSync", COMMUNITY_MANIFEST],
   ])).toEqual(["file:source-workspace", "file:path-hints", "file:community-manifests"]);
-  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(dataDir, "repos-other", "part.stl")]) {
+  for (const path of [join(root, "README.md"), join(dataDir, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "nested", "other.yaml"), join(COMMUNITY_MANIFEST_DIR, "INVALID.yaml"), join(COMMUNITY_MANIFEST_DIR, "kit-catalog.yaml"), join(COMMUNITY_MANIFEST_DIR, "registry-index.yaml"), join(dataDir, "repos-other", "part.stl")]) {
     expect(() => optionGroupFileResources([["readFileSync", path]])).toThrow("Unclassified option group path:");
   }
 });
@@ -2441,4 +3201,123 @@ it("pins path hints to Node's exact version 1 reader", () => {
     fs.writeFileSync(path, `${header}\nrules: []\n`);
     expect(() => inferOptionGroupsFromPaths(["gre402.stl"], dataDir)).toThrow(`${path}: version must be 1`);
   }
+});
+
+const SOURCE_PROPOSAL_TOOLS: SourceProposalTool[] = ["propose_update_source", "propose_update_source_naming", "propose_import_source_files"];
+const SOURCE_PROPOSAL_TABLES = ["table:projects", "table:source_docs"];
+const SOURCE_NAMING_PROFILE = {
+  roles: [{ id: "primary", label: "Primary", markers: [] }, { id: "accent", label: "Accent", markers: ["[a]"] }, { id: "clear", label: "Clear", markers: ["[c]"] }, { id: "opaque", label: "Opaque", markers: ["[o]"] }],
+  quantity: { regex: String.raw`[ _]x([0-9]+)\.stl$`, default: 1 },
+  slug: { strip_markers: true, strip_quantity: true }, folder_rules: [], export_role_order: ["primary", "accent", "clear", "opaque"],
+};
+
+function sourceProposal(tool: SourceProposalTool, params: Record<string, unknown>) {
+  const descriptions = {
+    propose_update_source: ["update Source Fixture", "Apply the reviewed Source metadata change."],
+    propose_update_source_naming: ["update naming for Fixture", "Apply the reviewed Source naming rules."],
+    propose_import_source_files: ["import Source files", "Publish the confirmed upload as a pinned Source revision."],
+  };
+  const [label, summary] = descriptions[tool];
+  return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.", action: { type: tool, plan_id: 0, label, summary, params } };
+}
+
+for (const isolated of [false, true]) {
+  it.each(SOURCE_PROPOSAL_TOOLS)(`traces %s proposal selectors, validation and no writes under ${isolated ? "isolated" : "trusted"} policy`, async (tool) => {
+    const { repository, sourceFiles, files: listFiles } = categoryTraceFixture(isolated);
+    const options = { repository, files: sourceFiles };
+    const sources = SOURCE_PROPOSAL_TABLES;
+    const naming = ["table:app_settings", ...sources];
+    const plan = repo.createProfile("Ignored proposal plan");
+    const valid = tool === "propose_update_source" ? { patch: { name: "Renamed", ignored: true } }
+      : tool === "propose_update_source_naming" ? { use_defaults: true } : { archive_base64: " YQ== " };
+    const params = tool === "propose_update_source" ? { source_id: sourceId, patch: { name: "Renamed" } }
+      : tool === "propose_update_source_naming" ? { source_id: sourceId, use_defaults: true } : { source_id: sourceId, archive_base64: "YQ==" };
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params });
+    const selectors = tool === "propose_import_source_files" ? [{ source_id: sourceId }, { source_id: String(sourceId) }, { source_id: `${sourceId}.9` }]
+      : [{ source_id: sourceId }, { source_id: String(sourceId) }, { source_name: " fixture " }, { source_id: "invalid", source_name: "Fixture" }];
+    for (const selector of selectors) {
+      expect(await traceCategory(tool, { ...selector, ...valid, plan_id: plan.id, profile_id: plan.id }, sources, { ...options, files: "source_name" in selector ? listFiles : sourceFiles, activePlanId: plan.id })).toEqual(sourceProposal(tool, params));
+    }
+    const required = tool === "propose_import_source_files" ? "source_id must reference an existing Source" : "source_id or source_name required";
+    for (const source_id of [undefined, null, "bad"]) expect(await traceCategory(tool, { source_id, ...valid }, [], { repository })).toEqual({ error: required });
+    expect(await traceCategory(tool, { source_id: 999999, source_name: "Fixture", ...valid }, ["table:projects"], { repository })).toEqual({ error: required });
+    expect(await traceCategory(tool, { source_id: sourceId, ...valid }, ["table:projects"], { repository, tenantId: "other" })).toEqual({ error: required });
+    if (tool !== "propose_import_source_files") {
+      expect(await traceCategory(tool, { source_name: "Absent", ...valid }, sources, { ...options, files: listFiles })).toEqual({ error: required });
+      expect(await traceCategory(tool, { source_name: "Fixture", ...valid }, sources, { repository, tenantId: "other" })).toEqual({ error: required });
+    }
+    if (tool === "propose_update_source") {
+      for (const patch of [undefined, null, 42, [], "name"]) expect(await traceCategory(tool, { source_id: sourceId, patch }, sources, options)).toEqual({ error: "patch required" });
+      for (const patch of [{}, { unsupported: true }]) expect(await traceCategory(tool, { source_id: sourceId, patch }, sources, options)).toEqual({ error: "patch has no supported fields" });
+      const patch = { name: "New", url: "https://example.test", branch: "main", tag: null, source_kind: "local", source_type: "model", role: "base", metadata: { category: "Tools" }, manifest_community_slug: "fixture" };
+      expect(await traceCategory(tool, { source_id: sourceId, patch }, sources, options)).toEqual(sourceProposal(tool, { source_id: sourceId, patch }));
+      expect(await traceCategory(tool, { source_id: sourceId, patch: { manifest_community_slug: "../escape" } }, sources, options)).toEqual({ error: "manifest_community_slug must be 1 to 64 lowercase letters, digits, dots, hyphens or underscores, starting with a letter or digit, and not kit-catalog or registry-index" });
+    } else if (tool === "propose_update_source_naming") {
+      for (const profile of [undefined, null, 42, "bad"]) expect(await traceCategory(tool, { source_id: sourceId, profile }, sources, options)).toEqual({ error: "use_defaults or profile required" });
+      expect(await traceCategory(tool, { source_id: sourceId, profile: {} }, naming, options)).toEqual(sourceProposal(tool, { source_id: sourceId, use_defaults: false, profile: SOURCE_NAMING_PROFILE }));
+      expect(await traceCategory(tool, { source_id: sourceId, profile: { quantity: { default: 2 } } }, naming, options)).toEqual(sourceProposal(tool, { source_id: sourceId, use_defaults: false, profile: { ...SOURCE_NAMING_PROFILE, quantity: { ...SOURCE_NAMING_PROFILE.quantity, default: 2 } } }));
+      expect(await traceCategory(tool, { source_id: sourceId, use_defaults: true, profile: { quantity: { default: 0 } } }, sources, options)).toEqual(sourceProposal(tool, params));
+      const invalid = await traceCategory(tool, { source_id: sourceId, profile: { quantity: { default: 0 } } }, naming, options);
+      expect(invalid).toEqual({ error: "profile.quantity.default: Too small: expected number to be >=1" });
+    } else {
+      for (const input of [{}, { archive_base64: " " }, { files: [] }, { files: {}, archive_base64: null }, { archive_base64: "YQ==", files: [{}] }]) expect(await traceCategory(tool, { source_id: sourceId, ...input }, sources, options)).toEqual({ error: "provide exactly one of archive_base64 or files" });
+      const files = [{ path: " part.stl ", content_base64: " YQ== " }];
+      expect(await traceCategory(tool, { source_id: sourceId, files }, sources, options)).toEqual(sourceProposal(tool, { source_id: sourceId, files }));
+      for (const [files, error] of [
+        [[null], "Invalid file"], [[{}], "Each file requires path and content_base64"],
+        [[{ path: "/absolute", content_base64: "YQ==" }], "File path escapes Source root"],
+        [[{ path: "dir\\..\\escape", content_base64: "YQ==" }], "File path escapes Source root"],
+        [[{ path: "part.stl", content_base64: "???" }], "content must be base64"],
+      ] satisfies [unknown[], string][]) expect(await traceCategory(tool, { source_id: sourceId, files }, sources, options)).toEqual({ error });
+      expect(await traceCategory(tool, { source_id: sourceId, archive_base64: "!" }, sources, options)).toEqual({ error: "content must be base64" });
+      const oversized = "A".repeat(Math.ceil((MAX_MCP_INLINE_FILE_BYTES + 1) * 4 / 3));
+      expect(await traceCategory(tool, { source_id: sourceId, archive_base64: oversized }, sources, options)).toEqual({ error: "upload exceeds the 64 MiB MCP limit" });
+    }
+    const order = ["projects", "source_docs", ...(tool === "propose_update_source_naming" ? ["app_settings"] : [])];
+    for (const [index, table] of order.entries()) {
+      sqlite.exec(`ALTER TABLE ${table} RENAME TO unavailable_table`);
+      try {
+        expect(await traceCategory(tool, { source_id: sourceId, ...(tool === "propose_update_source_naming" ? { profile: {} } : valid) }, order.slice(0, index).map((name) => `table:${name}`).sort(), { repository, files: index >= 2 ? sourceFiles : [] })).toEqual({ error: `no such table: ${table}` });
+      } finally { sqlite.exec(`ALTER TABLE unavailable_table RENAME TO ${table}`); }
+    }
+    const tables = tool === "propose_update_source_naming" ? naming : sources;
+    const expected = [...(isolated ? ["file:source-workspace"] : []), ...tables];
+    expect([...unions.get(tool) ?? []].sort()).toEqual(expected);
+    const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...tables]);
+  });
+}
+
+it("traces import publication capability refusal before source or upload reads", async () => {
+  const pool = new Pool({ connectionString: "postgresql://unused:unused@127.0.0.1:1/unused", connectionTimeoutMillis: 100 });
+  const postgres = drizzlePostgres(pool, { schema: postgresSchema });
+  let queries = 0;
+  registerPostgresSyncQuery(postgres, () => { queries += 1; throw new Error("Unexpected PostgreSQL read"); });
+  const repository = new AppRepository(postgres, "default", join(dataDir, "repos"));
+  try {
+    expect(await traceCategory("propose_import_source_files", { source_id: sourceId, archive_base64: "YQ==" }, [], { repository })).toEqual({ error: "Source revision publication is unavailable on experimental PostgreSQL because atomic publication transactions are not supported." });
+    expect(pool.totalCount).toBe(0);
+    expect(queries).toBe(0);
+  } finally { unregisterPostgresSyncQuery(postgres); await pool.end(); }
+});
+
+it.each(SOURCE_PROPOSAL_TOOLS)("traces %s isolated rejected workspace paths without source content reads", async (tool) => {
+  const { repository, repos, workspace } = categoryTraceFixture(true);
+  const input = tool === "propose_update_source" ? { patch: { name: "Renamed" } }
+    : tool === "propose_update_source_naming" ? { use_defaults: true } : { archive_base64: "YQ==" };
+  const params = tool === "propose_update_source" ? { source_id: sourceId, patch: { name: "Renamed" } }
+    : tool === "propose_update_source_naming" ? { source_id: sourceId, use_defaults: true } : { source_id: sourceId, archive_base64: "YQ==" };
+  for (const [path, files] of [
+    [null, []], ["", []],
+    [userRoot, [["realpathSync", repos]]],
+    [join(repos, "absent"), [["realpathSync", repos]]],
+  ] satisfies [string | null, CategoryProbe[]][]) {
+    sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(path, sourceId);
+    expect(await traceCategory(tool, { source_id: sourceId, ...input }, SOURCE_PROPOSAL_TABLES, { repository, files })).toEqual(sourceProposal(tool, params));
+  }
+  fs.rmdirSync(workspace);
+  fs.symlinkSync(userRoot, workspace, "dir");
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  expect(await traceCategory(tool, { source_id: sourceId, ...input }, SOURCE_PROPOSAL_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual(sourceProposal(tool, params));
 });

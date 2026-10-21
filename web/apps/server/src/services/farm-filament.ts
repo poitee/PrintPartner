@@ -1,4 +1,3 @@
-import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 /**
  * Farm filament + activity derivations shared by the get_farm_status /
  * get_print_stats assistant tools and the Discord morning digest.
@@ -21,6 +20,7 @@ import {
   type SpoolSummary,
   type SpoolmanSpool,
 } from "../integrations/spoolman-client.js";
+import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 
 /**
  * Resolves a filament colour id to the spools backing it.

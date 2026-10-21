@@ -381,28 +381,18 @@ fn node_upload_limits_match_the_journal_boundaries() {
             "Invalid relative path",
         ),
         (
-            "duplicate",
-            "Duplicate uploaded file path: part.stl",
-            "Duplicate file",
+            "nested_parent",
+            "File path escapes extraction directory: parts/../a.stl",
+            "Invalid relative path",
         ),
         (
-            "case_duplicate",
-            "Duplicate uploaded file path: part.stl",
-            "Duplicate file",
-        ),
-        (
-            "canonical_duplicate",
-            "Duplicate uploaded file path: parts/a.stl",
-            "Duplicate file",
-        ),
-        (
-            "canonical_case_duplicate",
-            "Duplicate uploaded file path: \\Parts\\A.stl",
-            "Duplicate file",
+            "disguised_parent",
+            "File path escapes extraction directory: ./parts//../a.stl",
+            "Invalid relative path",
         ),
     ];
     let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 13);
+    assert_eq!(cases.len(), 22);
     for case in cases {
         let id = case["id"].as_str().unwrap();
         let node = match &case["result"]["error"] {
@@ -431,6 +421,7 @@ fn node_upload_limits_match_the_journal_boundaries() {
             reserved_bytes: MAX_INPUT + 3 + 16 * 1024 * 1024,
             ..admission(id, create(id), &files)
         };
+        let before = journal.rows();
         let result = journal.admit(request, files, 0);
         match (node, result) {
             (Ok(written), Ok(operation)) => {
@@ -443,15 +434,24 @@ fn node_upload_limits_match_the_journal_boundaries() {
                     .map(|file| file.path.clone())
                     .collect();
                 assert_eq!(paths, &admitted, "{id}");
+                assert_eq!(
+                    operation.requested_digest, case["result"]["requested_digest"],
+                    "{id}"
+                );
                 admitted.sort();
                 assert_eq!(admitted, written, "{id}");
             }
             (Err(node), Err(error)) => {
+                assert_eq!(journal.rows(), before, "{id}");
                 let journal = error.to_string();
-                assert!(
-                    refused.contains(&(id, node, &journal)),
-                    "{id}: {node} / {journal}"
-                );
+                if node.starts_with("Duplicate uploaded file path: ") {
+                    assert_eq!(journal, node, "{id}");
+                } else {
+                    assert!(
+                        refused.contains(&(id, node, &journal)),
+                        "{id}: {node} / {journal}"
+                    );
+                }
             }
             (node, result) => panic!("{id}: Node {node:?}, journal {:?}", result.map(drop)),
         }
@@ -461,14 +461,61 @@ fn node_upload_limits_match_the_journal_boundaries() {
 #[test]
 fn admission_hashes_the_canonical_paths() {
     let journal = Fixture::open();
-    let supplied = vec![file("\\Parts\\a.stl", 3)];
+    let supplied = vec![file("./\\Parts//./a.stl", 3)];
     let request = admission("canonical", create("canonical"), &supplied);
     let first = journal.admit(request, supplied, 0).unwrap();
     let canonical = vec![file("Parts/a.stl", 3)];
     let digest = hash(&serde_json::to_vec(&canonical).unwrap());
     assert_eq!(first.requested_digest, digest);
-    let request = admission("canonical", create("canonical"), &canonical);
-    assert_eq!(journal.admit(request, canonical, 0).unwrap(), first);
+    let rows = journal.rows();
+    for spelling in [
+        "Parts/a.stl",
+        "./Parts/a.stl",
+        "Parts//a.stl",
+        "Parts/./a.stl",
+    ] {
+        let files = vec![file(spelling, 3)];
+        let request = admission("canonical", create("canonical"), &files);
+        assert_eq!(journal.admit(request, files, 0).unwrap(), first);
+        assert_eq!(journal.rows(), rows);
+    }
+}
+
+#[test]
+fn admission_retries_zip_aliases_with_the_same_intent() {
+    let journal = Fixture::open();
+    let files = vec![file("./\\parts//./upload.zip", 3)];
+    let request = Admission {
+        input: Input::Zip {
+            path: "./\\parts//./upload.zip".into(),
+        },
+        ..admission("zip-alias", create("zip-alias"), &files)
+    };
+    let first = journal.admit(request, files, 0).unwrap();
+    assert_eq!(
+        first.input,
+        Input::Zip {
+            path: "parts/upload.zip".into()
+        }
+    );
+    assert_eq!(first.requested_files, vec![file("parts/upload.zip", 3)]);
+    let rows = journal.rows();
+    for spelling in [
+        "parts/upload.zip",
+        "./parts/upload.zip",
+        "parts//upload.zip",
+        "parts/./upload.zip",
+    ] {
+        let files = vec![file(spelling, 3)];
+        let request = Admission {
+            input: Input::Zip {
+                path: spelling.into(),
+            },
+            ..admission("zip-alias", create("zip-alias"), &files)
+        };
+        assert_eq!(journal.admit(request, files, 0).unwrap(), first);
+        assert_eq!(journal.rows(), rows);
+    }
 }
 
 #[test]

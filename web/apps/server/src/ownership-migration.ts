@@ -12,7 +12,7 @@ import { readAcceptedPlatesInternal } from "./db/accepted-plates.js";
 import { validateOwnershipPlateComparisonBudget, validateOwnershipPlateProtection, validateOwnershipPlateTextBytes } from "./ownership-plate-history.js";
 import { openVerifiedAcceptedArtifact } from "./services/accepted-artifacts.js";
 import { ownershipHistoryTables, validateOwnershipHistory } from "./ownership-history.js";
-import { inspectOwnershipExports, ownershipExportClaimSchema, ownershipExportTarget, ownershipFileDigest, type OwnershipExport } from "./ownership-exports.js";
+import { inOwnershipStlStage, inspectOwnershipExports, ownershipExportClaimSchema, ownershipExportTarget, ownershipFileDigest, type OwnershipExport } from "./ownership-exports.js";
 import { schemaMigrations } from "./db/migrations-sqlite.js";
 import { currentSchemaVersion } from "./db/schema.js";
 import { readSchemaVersion } from "./db/upgrade-guard.js";
@@ -160,7 +160,7 @@ function productFiles(source: string, db: Database.Database, destination?: strin
 }
 function exportInventory(source: string, db: Database.Database): OwnershipExport[] {
   const root = join(source, "exports");
-  return missing(root) ? [] : inspectOwnershipExports(root, drizzle(db).select().from(schema.buildProfiles).all(), drizzle(db).select().from(schema.acceptedPlateRevisions).all());
+  return missing(root) ? [] : inspectOwnershipExports(root, drizzle(db).select().from(schema.buildProfiles).all(), drizzle(db).select().from(schema.acceptedPlateRevisions).all(), drizzle(db).select().from(schema.planRevisions).all());
 }
 function relocatedLocalPath(row: Row, source: string, destination: string): string {
   const path = z.string().parse(row.local_path);
@@ -381,8 +381,9 @@ export async function executeOwnershipCopy({ sourceDir, destinationDir, manifest
       if (copy.pragma("integrity_check", { simple: true }) !== "ok" || z.array(z.unknown()).parse(copy.pragma("foreign_key_check")).length) throw new Error("Staged database integrity failed");
     } finally { copy.close(); }
     const stagedFiles = new Map(productFileDigests(stage));
-    if (stagedFiles.size !== sourceFiles.length) throw new Error("Staged artifact inventory differs from source");
-    for (const [path, digest] of sourceFiles) {
+    const copiedFiles = sourceFiles.filter(([path]) => !(path.startsWith(`exports${sep}`) && inOwnershipStlStage(path.slice(8).split(sep).join("/"))));
+    if (stagedFiles.size !== copiedFiles.length) throw new Error("Staged artifact inventory differs from source");
+    for (const [path, digest] of copiedFiles) {
       const artifact = path.startsWith(`exports${sep}`) ? artifacts.find(artifact => artifact.path === path.slice(8).split(sep).join("/")) : undefined;
       const owner = artifact && exportOwners.get(artifact.path);
       const target = artifact && owner ? ownershipExportTarget(artifact, owner) : path;

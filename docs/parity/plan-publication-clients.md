@@ -1,11 +1,11 @@
-# Plan publication client parity cases (GRE-858)
+# Plan publication client parity cases (GRE-858, GRE-860, GRE-964)
 
 `fixtures/parity/plan-publication/clients.mjs` runs Node's real Plan Apply route
 against a temporary copy of the fixture database. Each case records the HTTP
 result, the stored `plan_apply_requests` receipt, and the actors stored on the
 accepted `plan_revisions` row. The Rust test
 `plan_publication::tests::client::client_matches_node_apply_route_keys_replay_context_and_error_text`
-replays every case and compares its stored values with these Node literals.
+replays every case and compares successful receipts and stored values with these Node literals.
 
 ## Credentials
 
@@ -37,3 +37,90 @@ without `--check`.
 A change to the API-key actor in
 `auth::authority::queries::reconciliation_actor_ref` must fail the Rust test.
 For example, `key:<key id>` or the bare tenant ID both fail.
+
+## Not-found comparison at the Rust client boundary
+
+The `other-tenant` fixture captures Node's HTTP 404 with the complete body
+`{"detail":"Plan not found","code":"profile_not_found"}`.
+The test-only `node_not_found_outcome` function accepts exactly that status and
+body, then normalizes them to `{"kind":"not_found"}`. An unrecognized status,
+body field, or body value fails the test. The assertion compares this expectation
+with the complete serialized `Outcome` returned by the real `PublicationClient`
+call through `run`.
+
+Rust's unit `Outcome::NotFound` contains no HTTP status, detail, or code.
+This comparison covers the Rust storage client boundary. It does not exercise a
+Rust HTTP response or establish Rust HTTP parity.
+
+The existing client test proves that the foreign Plan exists under `default`
+and that the caller belongs to another tenant. The separate
+`client_matches_node_not_found_contract_for_missing_plan` test uses positive
+profile ID `999999` and proves that no Plan has that ID. Both retain an existing
+draft and use the same captured Node not-found contract. The missing-Plan input
+is a Rust test case derived from the foreign-Plan fixture, not another captured
+Node response.
+
+### Draft not found under an owned Plan (GRE-964)
+
+Two captured cases reach the later `plan_drafts` lookup in
+`plan_publication::publish_in_transaction` after the requested Plan passes the
+tenant-scoped `build_profiles` lookup. Node returns HTTP 404 with the complete
+body `{"detail":"Plan draft not found","code":"draft_not_found"}` for both:
+
+- `missing-draft` requests owned Plan 1 with draft ID `999999`. The generator
+  asserts that no draft has that ID.
+- `mismatched-draft` requests a second owned Plan with draft 1, which belongs
+  to Plan 1. The generator creates the second Plan with Node's
+  `repo.createProfile` in the temporary database and records every row it adds
+  in the case's `seed` field. It asserts that the existing rows are unchanged
+  and that the second Plan has no drafts. The Rust test inserts the same `seed`
+  rows before it calls `run`.
+
+`node_not_found_outcome` accepts this body as well and normalizes it to the same
+`{"kind":"not_found"}`. The tests
+`client_matches_node_not_found_contract_for_missing_draft` and
+`client_matches_node_not_found_contract_for_mismatched_draft` prove that the
+requested Plan belongs to the caller's tenant and that the requested draft is
+absent or belongs to another Plan. The existing client matrix skips these two
+cases.
+
+Each case snapshots every SQLite table before and after `run`, including
+`plan_apply_admissions`, `sqlite_sequence`, and unrelated existing rows.
+The test reads rows directly through rusqlite and retains owned SQLite values,
+including blobs. It sorts rows by every column, compares the table names, then
+compares each table's complete rows with a case-specific assertion message.
+Existing successful publication and replay assertions remain in place.
+GRE-868 policy behavior is outside this test's scope.
+
+Run the client comparisons with this focused command from the repository root.
+The prefix selects the existing client matrix, the missing-Plan test, and both
+draft tests.
+
+```sh
+umask 022
+CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache CARGO_TARGET_DIR=/tmp/pp-gre-860-target cargo test --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib plan_publication::tests::client::client_matches_node_
+```
+
+To verify that the comparison consumes the actual result, insert this temporary
+mutation in `assert_client_not_found` after `run` returns and before serialization.
+Keep the fixture and `node_not_found_outcome` unchanged.
+
+```rust
+let outcome = match outcome {
+    Outcome::NotFound => Outcome::BuildArchived,
+    other => other,
+};
+```
+
+Run the focused command again. All four tests must fail at the complete Rust
+Outcome assertion. The messages identify `other-tenant`, `missing-plan`,
+`missing-draft`, and `mismatched-draft`. The actual
+value becomes `{"kind":"build_archived"}` while the expected value stays
+`{"kind":"not_found"}`. Remove the mutation and rerun the command to confirm all
+four tests pass. A fixture-only edit or an assertion that compares two expected
+literals does not prove that the actual Rust result reaches the assertion.
+
+To verify that the draft cases reach the `plan_drafts` lookup, temporarily
+return `Outcome::DraftChanged` instead of `Outcome::NotFound` from that lookup
+in `plan_publication.rs`. Only the two draft tests must fail, with actual value
+`{"kind":"draft_changed"}`. The Plan lookup tests must still pass.

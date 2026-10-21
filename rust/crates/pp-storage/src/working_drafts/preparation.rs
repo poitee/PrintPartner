@@ -18,6 +18,103 @@ use std::{
 thread_local! {
     pub(super) static GLOBAL_NAMING_PROJECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(super) static SOURCE_LAYER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static LAYER_NAMING_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static PATH_SORT_TEST: std::cell::RefCell<Option<PathSortProbe>> = const { std::cell::RefCell::new(None) };
+    pub(super) static HINT_PATH_VISITS: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(super) struct PathSortProbe {
+    pub remaining: usize,
+    pub cancel: bool,
+    pub comparisons: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+fn sort_paths<T>(
+    values: &mut [T],
+    key: impl Fn(&T) -> &str,
+    b: &mut PreparationBudget<'_>,
+) -> Result<()> {
+    fn merge_sort(
+        indices: &mut [usize],
+        scratch: &mut [usize],
+        compare: &mut impl FnMut(usize, usize) -> Result<std::cmp::Ordering>,
+    ) -> Result<()> {
+        if indices.len() < 2 {
+            return Ok(());
+        }
+        let middle = indices.len() / 2;
+        let (left, right) = indices.split_at_mut(middle);
+        let (left_scratch, right_scratch) = scratch.split_at_mut(middle);
+        merge_sort(left, left_scratch, compare)?;
+        merge_sort(right, right_scratch, compare)?;
+        let (mut l, mut r) = (0, 0);
+        for next in scratch.iter_mut() {
+            if r == right.len() || (l < left.len() && !compare(left[l], right[r])?.is_gt()) {
+                *next = left[l];
+                l += 1;
+            } else {
+                *next = right[r];
+                r += 1;
+            }
+        }
+        indices.copy_from_slice(scratch);
+        Ok(())
+    }
+    if values.len() < 2 {
+        return Ok(());
+    }
+    b.check()?;
+    #[cfg(test)]
+    PATH_SORT_TEST.with(|probe| {
+        if let Some(probe) = probe.borrow_mut().as_mut() {
+            probe.remaining = probe.remaining.saturating_sub(1);
+        }
+    });
+    let mut indices: Vec<usize> = (0..values.len()).collect();
+    let mut scratch = vec![0; values.len()];
+    merge_sort(&mut indices, &mut scratch, &mut |left, right| {
+        let (left, right) = (key(&values[left]), key(&values[right]));
+        let work = left.len().saturating_add(right.len());
+        #[cfg(test)]
+        PATH_SORT_TEST.with(|probe| {
+            if let Some(probe) = probe.borrow().as_ref()
+                && probe.remaining == 0
+                && probe.comparisons.load(std::sync::atomic::Ordering::Relaxed) == 0
+            {
+                if probe.cancel {
+                    b.cancel_after_checks(1);
+                } else {
+                    b.limit_comparisons_after(work);
+                }
+            }
+        });
+        b.comparison(work)?;
+        #[cfg(test)]
+        PATH_SORT_TEST.with(|probe| {
+            if let Some(probe) = probe.borrow().as_ref()
+                && probe.remaining == 0
+            {
+                probe
+                    .comparisons
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        Ok(crate::read_model::views::folder_compare(left, right))
+    })?;
+    for (destination, &source) in indices.iter().enumerate() {
+        scratch[source] = destination;
+    }
+    for i in 0..values.len() {
+        b.check()?;
+        while scratch[i] != i {
+            b.check()?;
+            let destination = scratch[i];
+            values.swap(i, destination);
+            scratch.swap(i, destination);
+        }
+    }
+    Ok(())
 }
 
 pub(super) struct Capture {
@@ -43,7 +140,7 @@ impl Capture {
 struct Layer {
     source_id: i64,
     source_layer: String,
-    naming: Arc<NamingProfile>,
+    naming: LayerNaming,
     rules: Option<Vec<String>>,
     root: Box<dyn StlRootRead>,
 }
@@ -185,7 +282,12 @@ fn project_naming(
             .unwrap_or_else(|| json!({}));
         crate::catalog::naming::merge_override(override_value, global)
     }
-    .map_err(|error| error.context(crate::catalog::CatalogFailure::InvalidStoredNaming))?;
+    .map_err(|error| {
+        let detail = error.to_string();
+        error
+            .context(crate::catalog::CatalogFailure::InvalidStoredNaming)
+            .context(detail)
+    })?;
     let bytes = serde_json::to_vec(&projected["effective"])?;
     budget.expansion(bytes.len())?;
     Ok(NamingSnapshot {
@@ -328,7 +430,7 @@ pub(super) fn capture(
         layers.push(Layer {
             source_id: id,
             source_layer: layer,
-            naming: effective,
+            naming: LayerNaming::new(effective),
             rules,
             root,
         });
@@ -350,10 +452,53 @@ fn role_name(role: crate::catalog::naming::RoleId) -> String {
     }
     .into()
 }
+/// A captured layer's naming profile with its quantity regexes compiled once,
+/// so every path the layer scans reuses them.
+pub(super) struct LayerNaming {
+    profile: Arc<NamingProfile>,
+    /// A compile error is reported when a path is parsed, as before.
+    quantity: Result<regress::Regex, regress::Error>,
+    /// `None` when `strip_quantity` is off or the derived pattern does not
+    /// compile; an invalid pattern leaves the slug unchanged.
+    strip: Option<regress::Regex>,
+}
+impl LayerNaming {
+    pub(super) fn new(profile: Arc<NamingProfile>) -> Self {
+        #[cfg(test)]
+        LAYER_NAMING_COMPILES.with(|count| count.set(count.get() + 1));
+        let regex = &profile.quantity.regex;
+        let strip = profile
+            .slug
+            .strip_quantity
+            .then(|| strip_pattern(regex).ok())
+            .flatten()
+            .and_then(|pattern| regress::Regex::with_flags(&pattern, "i").ok());
+        Self {
+            quantity: regress::Regex::with_flags(regex, "i"),
+            strip,
+            profile,
+        }
+    }
+}
+/// Turns the quantity regex into one that matches the quantity suffix of a
+/// slug, which has no `.stl` extension.
+fn strip_pattern(regex: &str) -> Result<String, regress::Error> {
+    let mut strip = trim_js(regex).to_owned();
+    strip = regress::Regex::new(r"\(\?P<\w+>")?.replace_all(&strip, "(");
+    strip = regress::Regex::new(r"\(\?:")?.replace_all(&strip, "(");
+    strip = regress::Regex::new(r"\([^?][^)]*\)")?.replace(&strip, "[0-9]+");
+    strip = regress::Regex::new(r"\\\.stl\$")?.replace(&strip, "$");
+    strip = regress::Regex::with_flags(r"\.stl$", "i")?.replace(&strip, "$");
+    Ok(strip)
+}
 fn replace_first(input: &str, pattern: &str, replacement: &str) -> String {
-    if let Ok(re) = regress::Regex::with_flags(pattern, "i")
-        && let Some(m) = re.find(input)
-    {
+    match regress::Regex::with_flags(pattern, "i") {
+        Ok(re) => replace_match(input, &re, replacement),
+        Err(_) => input.into(),
+    }
+}
+fn replace_match(input: &str, re: &regress::Regex, replacement: &str) -> String {
+    if let Some(m) = re.find(input) {
         return format!(
             "{}{}{}",
             &input[..m.range.start],
@@ -365,9 +510,10 @@ fn replace_first(input: &str, pattern: &str, replacement: &str) -> String {
 }
 pub(super) fn parse(
     path: &str,
-    profile: &NamingProfile,
+    naming: &LayerNaming,
     b: &mut PreparationBudget<'_>,
 ) -> Result<(String, String, String, f64)> {
+    let profile = &*naming.profile;
     let filename = path.rsplit('/').next().unwrap_or(path).to_owned();
     b.comparison(path.len())?;
     let lower = path.to_lowercase();
@@ -411,7 +557,10 @@ pub(super) fn parse(
         }
     }
     b.comparison(filename.len().saturating_add(profile.quantity.regex.len()))?;
-    let quantity = regress::Regex::with_flags(&profile.quantity.regex, "i")?
+    let quantity = naming
+        .quantity
+        .as_ref()
+        .map_err(|error| anyhow!(error.clone()))?
         .find(&filename)
         .and_then(|m| m.captures.first().cloned().flatten())
         .map(|r| filename[r].to_owned())
@@ -465,13 +614,9 @@ pub(super) fn parse(
             slug.len()
                 .saturating_add(profile.quantity.regex.len().saturating_mul(8)),
         )?;
-        let mut strip = trim_js(&profile.quantity.regex).to_owned();
-        strip = regress::Regex::new(r"\(\?P<\w+>")?.replace_all(&strip, "(");
-        strip = regress::Regex::new(r"\(\?:")?.replace_all(&strip, "(");
-        strip = regress::Regex::new(r"\([^?][^)]*\)")?.replace(&strip, "[0-9]+");
-        strip = regress::Regex::new(r"\\\.stl\$")?.replace(&strip, "$");
-        strip = regress::Regex::with_flags(r"\.stl$", "i")?.replace(&strip, "$");
-        slug = replace_first(&slug, &strip, "");
+        if let Some(strip) = &naming.strip {
+            slug = replace_match(&slug, strip, "");
+        }
     }
     if slug.is_empty() {
         slug = name
@@ -579,9 +724,20 @@ fn inferred(
     }
     let mut groups = Vec::new();
     for (path, group, id, label) in rules {
-        if paths.iter().try_fold(false, |found, p| -> Result<bool> {
-            Ok(found || manifest::path_matches(&path, p, b)?)
-        })? {
+        let mut matched = false;
+        for p in paths {
+            #[cfg(test)]
+            HINT_PATH_VISITS.with(|counter| {
+                if let Some(counter) = counter.borrow().as_ref() {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+            if manifest::path_matches(&path, p, b)? {
+                matched = true;
+                break;
+            }
+        }
+        if matched {
             manifest::merge(
                 &mut groups,
                 vec![(
@@ -600,10 +756,12 @@ fn inferred(
                         max: None,
                     },
                 )],
-            );
+                b,
+            )?;
         }
     }
-    manifest::merge(&mut groups, manifest::infer_siblings(paths, b)?);
+    let siblings = manifest::infer_siblings(paths, b)?;
+    manifest::merge(&mut groups, siblings, b)?;
     Ok(groups)
 }
 pub(super) fn prepare(
@@ -626,7 +784,7 @@ pub(super) fn prepare(
                     &[&tenant, &profile, &id]
                 )?
                 .is_some(),
-                "Missing accepted base"
+                "Accepted Plan revision is missing"
             );
             part_rows(
                 tx,
@@ -736,7 +894,7 @@ pub(super) fn prepare(
                 status: String::new(),
             });
         }
-        scan.sort_by(|a, z| crate::read_model::views::folder_compare(&a.key, &z.key));
+        sort_paths(&mut scan, |p| &p.key, b)?;
         let mut imported_scan = Vec::new();
         for p in &scan {
             if imported(&p.path, &layer.rules, b)? {
@@ -835,19 +993,19 @@ pub(super) fn prepare(
             b.visit(0)?;
             let path = entry.physical_relative_path.replace('\\', "/");
             if imported(&path, &rules, b)? {
-                paths.push(path);
+                b.comparison(path.len())?;
+                paths.push((path.to_lowercase(), path));
             }
         }
-        paths.sort_by(|a, z| {
-            crate::read_model::views::folder_compare(&a.to_lowercase(), &z.to_lowercase())
-        });
+        sort_paths(&mut paths, |p| &p.0, b)?;
+        let paths: Vec<_> = paths.into_iter().map(|(_, path)| path).collect();
         let declared = doc.groups;
         let resolved = if declared.is_empty() {
             inferred(&paths, reads, b)?
         } else {
             declared
         };
-        manifest::merge(&mut groups, resolved);
+        manifest::merge(&mut groups, resolved, b)?;
     }
     let manifest_sources = connection.read(|tx| source_rows(tx, tenant, profile))?;
     let mut docs = Vec::new();

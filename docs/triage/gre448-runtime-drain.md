@@ -467,10 +467,23 @@ Each of two cycles SIGKILLs only the owner PID. An unrelated `/bin/sleep` child
 of the test runner joins the backend group. The owner and backend groups must
 differ. The backend remains stopped, so it cannot handle stdin EOF. Within five
 seconds, the backend group must disappear and the peer must die by SIGKILL.
-The Linux test runner acts as a subreaper and reaps the adopted backend and
-watcher. Receipts require absent process identities and an absent group, rather
-than treating zombies as reaped. The spawn ledger must remain at one entry.
+An isolated reexecution of the exact ignored Rust test acts as a Linux
+subreaper and reaps the adopted backend and watcher. The calling test runner
+never changes its subreaper state. The child uses `--include-ignored`, and the
+GRE-826 validator requires exactly one named test to pass. On failure, the
+wrapper forwards captured stdout and stderr, preserving the proof driver
+assertion `built startup group outlived force-killed owner`. Receipts require
+absent process identities and an absent group, rather than treating zombies as
+reaped. The spawn ledger must remain at one entry.
 The fixture guard runs only after these positive assertions.
+
+The asset-free regression
+`built_startup_reexec_keeps_parent_subreaper_unchanged` runs parent states 0 and
+1 in separate test processes. Each calls the built-test wrapper across a real
+executable boundary. A probe after the child's subreaper call records its PID
+and enabled state before any assets are read. The regression requires a
+different PID, state 1 in the child, and unchanged state in each parent. It also
+rejects a launch that omits ignored-test selection.
 
 Build and run with a host-native Linux Node 24.21.0 ABI 137 binary:
 
@@ -710,3 +723,25 @@ Both rate-limit unit tests passed locally after this addition. A temporary
 with actual 98 and expected 97 bytes. Restoring the source returned both tests
 to green. The mutation was not committed. Logs are `boundary-negative.log` and
 `boundary-restored.log` in the evidence directory above.
+
+## Shared coordinator drain deadline
+
+`drain::tests::ticket_t_3_drain_coordinator_shares_one_deadline` uses a paused
+Tokio clock, a real `ShutdownGate`, and retained tracked work. The gateway
+callback starts its pending-operation timeout only when polled. The test polls
+the coordinator to establish its timers, requires Pending one millisecond before
+`MUTATION_DRAIN`, and requires `(false, false)` within that bound plus 10ms.
+Elapsed simulated time must fall within the same interval. The tracked work
+stays alive through every timing and outcome assertion. The existing two drain
+unit tests keep their admission-order and restart-disarming scope.
+
+Local `pp-core --lib` verification passed the focused test and all three drain
+unit tests with default features and with `desktop_rebuild`. Private copies
+replaced `join!` with sequential waits in each order. Both controls failed once
+at `coordinator drains exceeded one shared deadline` with exit 101. Restoring
+the private source passed once. Exact commands, raw logs, and source hashes are
+in `/tmp/gre448-shared-deadline-evidence/`. The shared production bytes stayed
+unchanged throughout both controls.
+
+This is coordinator simulation evidence. It does not prove a live Gateway or
+`CoreRuntime` shutdown, actual Mac logout, or full GRE-448 completion.

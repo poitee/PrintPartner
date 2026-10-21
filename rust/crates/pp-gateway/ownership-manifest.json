@@ -353,6 +353,173 @@
         "resources": []
       },
       {
+        "operation": "tool.propose_add_custom_filament",
+        "resources": []
+      },
+      {
+        "operation": "tool.propose_create_build",
+        "resources": []
+      },
+      {
+        "operation": "tool.propose_create_source_category",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_rename_source_category",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_delete_source_category",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_set_source_category",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_update_source",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_update_source_naming",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_import_source_files",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_job_status",
         "resources": []
       },
@@ -410,6 +577,27 @@
       },
       {
         "operation": "tool.ui_open_docs",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.ui_focus_kit_option",
         "resources": [
           {
             "kind": "table",
@@ -1031,30 +1219,21 @@
       "tool.list_build_differences",
       "tool.list_example_builds",
       "tool.propose_add_build_checklist_items",
-      "tool.propose_add_custom_filament",
       "tool.propose_add_source",
       "tool.propose_apply_plan_draft",
       "tool.propose_assign_role_filament",
-      "tool.propose_create_build",
-      "tool.propose_create_source_category",
-      "tool.propose_delete_source_category",
       "tool.propose_edit_plan_draft_parts",
       "tool.propose_exclude_replaced_parts",
       "tool.propose_import_3mf_checkoff",
       "tool.propose_import_build_inputs",
-      "tool.propose_import_source_files",
       "tool.propose_rebuild_plan",
-      "tool.propose_rename_source_category",
       "tool.propose_resolve_build_differences",
       "tool.propose_restore_snapshot",
       "tool.propose_set_build_source_roles",
       "tool.propose_set_plan_assembly",
       "tool.propose_set_plan_progress",
-      "tool.propose_set_source_category",
       "tool.propose_source_mapping",
       "tool.propose_update_build_brief",
-      "tool.propose_update_source",
-      "tool.propose_update_source_naming",
       "tool.propose_verify_printer_checkoff",
       "tool.remove_layer",
       "tool.search_plan_parts",
@@ -1062,7 +1241,6 @@
       "tool.set_source_git_ref",
       "tool.start_sync",
       "tool.suggest_source_contributions",
-      "tool.ui_focus_kit_option",
       "tool.update_kit_selections",
       "tool.web_search",
       "worker.startManagedProfileSync"

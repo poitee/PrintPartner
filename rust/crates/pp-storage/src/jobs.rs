@@ -273,9 +273,9 @@ enum TransactionDecision {
     },
 }
 #[cfg(feature = "desktop_rebuild")]
-struct CommittedRefusal {
-    job: JobRecord,
-    failure: auth::AuthorityFailure,
+pub(crate) struct CommittedRefusal {
+    pub(crate) job: JobRecord,
+    pub(crate) failure: auth::AuthorityFailure,
 }
 /// The original credential of a claimed attempt, revalidated under the
 /// current policy.
@@ -1560,8 +1560,10 @@ pub(crate) fn execute(
         )?),
         #[cfg(feature = "desktop_rebuild")]
         Command::OpenSourceSync { lease, policy } => {
-            crate::source_sync::open(&tx, &lease, policy)?;
-            TransactionDecision::Outcome(Outcome::SourceSyncOpened)
+            match crate::source_sync::open(&tx, &lease, policy)? {
+                Some(refusal) => TransactionDecision::Refused(refusal),
+                None => TransactionDecision::Outcome(Outcome::SourceSyncOpened),
+            }
         }
         #[cfg(feature = "desktop_rebuild")]
         Command::ClaimSourceSyncTarget {
@@ -2018,6 +2020,15 @@ pub(crate) fn user(
             job.cancel_requested = true;
             #[cfg(feature = "desktop_rebuild")]
             if job.kind == JobKind::Sync {
+                if job.state == PersistentState::ReconciliationRequired
+                    && job.authority_refusal.as_ref().is_some_and(|refusal| {
+                        refusal.phase == AuthorityRefusalPhase::SourceWriter
+                            && refusal.generation == job.generation - 1
+                    })
+                {
+                    save(tx, &mut job, "cancellation_requested")?;
+                    return Ok(Outcome::Job(job, LocalCommit::Committed));
+                }
                 let job = crate::source_sync::halt_job(tx, job, "cancelled", "Sync was cancelled")?;
                 return Ok(Outcome::Job(job, LocalCommit::Committed));
             }
@@ -2605,6 +2616,18 @@ fn advance(
 ) -> Result<TransactionDecision> {
     let mut job = claimed_job(tx, &lease)?;
     #[cfg(feature = "desktop_rebuild")]
+    if job.kind == JobKind::Sync {
+        match &operation {
+            WorkerOperation::BeginEffect(_)
+            | WorkerOperation::ConfirmEffect(_)
+            | WorkerOperation::Finish(_)
+            | WorkerOperation::FinishPublic { .. } => {
+                return Err(anyhow!("Sync operation belongs to its journal owner"));
+            }
+            WorkerOperation::Heartbeat | WorkerOperation::Progress(_) | WorkerOperation::Fail => {}
+        }
+    }
+    #[cfg(feature = "desktop_rebuild")]
     if let Some(refusal) = refuse_advance(tx, &mut job, &operation, policy)? {
         return Ok(TransactionDecision::Refused(refusal));
     }
@@ -2877,13 +2900,24 @@ fn refuse_advance(
         }
         _ => None,
     };
-    record_refusal(
-        tx,
-        job,
-        reason,
-        AuthorityRefusalPhase::WorkerAdvance,
-        matching_receipt,
-    )?;
+    if job.kind == JobKind::Sync {
+        let error = reason.failure().into();
+        set_sync_source_writer_authority_refusal(job, &error);
+        *job = crate::source_sync::halt_job(
+            tx,
+            job.clone(),
+            "authority_refused",
+            &format!("{error:#}"),
+        )?;
+    } else {
+        record_refusal(
+            tx,
+            job,
+            reason,
+            AuthorityRefusalPhase::WorkerAdvance,
+            matching_receipt,
+        )?;
+    }
     Ok(Some(CommittedRefusal {
         job: job.clone(),
         failure: reason.failure(),

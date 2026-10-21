@@ -8,6 +8,7 @@ import { TENANT_FEATURE_TOGGLES_CAPABILITY, type PlanFeatures } from "@print-par
 import type { PlanReview, ReviewPart } from "../../api/endpoints/planManifests";
 import { queryKeys } from "../../queries/keys";
 import { usePlanReviewQuery } from "../../queries/planReview";
+import { useRoleFilamentsQuery } from "../../queries/roleFilaments";
 import { REVIEW_PARTS_UI_STORAGE_KEY } from "../../lib/persistedReviewPartsUi";
 import PartColorDialog from "./PartColorDialog";
 import ReviewPartsSheet from "./ReviewPartsSheet";
@@ -53,6 +54,10 @@ const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientPro
 function ObservedReviewSheet({ profileId }: { profileId: number }) {
   const query = usePlanReviewQuery(profileId, { enabled: false });
   return query.data ? <ReviewPartsSheet review={query.data} planName={query.data.plan_name} /> : null;
+}
+function ObservedRoleColors() {
+  const query = useRoleFilamentsQuery(1);
+  return <>{query.data?.map((row) => <output key={row.role} aria-label={row.role}>{row.filament_display} {row.filament_hex}</output>)}</>;
 }
 
 beforeEach(() => {
@@ -195,7 +200,6 @@ it.each([false, true])("masks cached enrichment in sheet when access is denied (
 it.each([
   { filament_color_id: " spoolman:int-1:filament:2 ", spoolman_spool_id: null },
   { filament_color_id: null, spoolman_spool_id: " spoolman:int-1:spool:5 " },
-  { filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5" },
 ])("hides denied build choices and current enrichment for assignment %j", async (assignment) => {
   client.setQueryData(queryKeys.planFeatures(1), features(false));
   const roles = [
@@ -208,8 +212,45 @@ it.each([
     : fetch(input, init)));
   client.setQueryData(queryKeys.roleFilaments(1, false), roles);
   render(<PartColorDialog part={{ ...part, ...assignment }} profileId={1} onClose={vi.fn()} />, { wrapper });
-  expect(screen.queryByRole("option", { name: /^primary:/ })).toBeNull();
   await waitFor(() => expect(screen.getByRole("option", { name: "accent: Catalog Red" })).toBeDefined());
+  expect(screen.queryByRole("option", { name: /^primary:/ })).toBeNull();
   expect(screen.getByText(`Current color: ${assignment.filament_color_id?.trim() || "Unassigned"}`)).toBeDefined();
   expect(screen.queryByText("Current color: Blue")).toBeNull();
+});
+
+it.each(["allowed", "denied", "gate-off"] as const)("preserves an attached spool's catalog color when access is %s", async (access) => {
+  if (access === "gate-off") client.setQueryData(queryKeys.health, { ok: true, capabilities: [] });
+  client.setQueryData(queryKeys.planFeatures(1), features(access !== "denied"));
+  const catalogPart = {
+    ...part, filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5",
+    filament_display: "Catalog Red", filament_hex: "#ff0000",
+  };
+  client.setQueryData(queryKeys.planReview(1, false, access !== "denied"), { ...review, part_groups: [{ folder: "parts", source_layer: null, parts: [catalogPart] }] });
+  const view = render(<ObservedReviewSheet profileId={1} />, { wrapper });
+  expect(screen.getAllByText("Catalog Red").length).toBeGreaterThan(0);
+  expect(screen.queryByText("450g left") === null).toBe(access === "denied");
+  view.unmount();
+  render(<PartColorDialog part={catalogPart} profileId={1} onClose={vi.fn()} />, { wrapper });
+  expect(screen.getByText("Current color: Catalog Red")).toBeDefined();
+  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Part color" }), "custom");
+  expect(screen.getByRole("textbox", { name: "Hex color" }).getAttribute("value")).toBe("#ff0000");
+  expect(screen.getByLabelText("Pick custom color").getAttribute("value")).toBe("#ff0000");
+});
+
+it.each([false, true])("preserves attached-spool catalog role display with access=%s", async (allowed) => {
+  client.setQueryData(queryKeys.planFeatures(1), features(allowed));
+  const roles = [
+    { role: "primary", part_count: 1, filament_color_id: "catalog:red", spoolman_spool_id: "spoolman:int-1:spool:5", filament_custom_hex: null, filament_display: "Catalog Red", filament_hex: "#ff0000" },
+    { role: "accent", part_count: 1, filament_color_id: "spoolman:int-1:filament:2", spoolman_spool_id: null, filament_custom_hex: null, filament_display: "Spoolman Blue", filament_hex: "#0000ff" },
+  ];
+  const fetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => String(input).includes("/role-filaments")
+    ? Promise.resolve(new Response(JSON.stringify({ roles }), { headers: { "content-type": "application/json" } }))
+    : fetch(input, init)));
+  client.setQueryData(queryKeys.roleFilaments(1, allowed), roles);
+  render(<><ObservedRoleColors /><PartColorDialog part={part} profileId={1} onClose={vi.fn()} /></>, { wrapper });
+  await waitFor(() => expect(screen.getByLabelText("primary").textContent).toBe("Catalog Red #ff0000"));
+  await waitFor(() => expect(screen.queryByText("Loading colors…")).toBeNull());
+  expect(screen.queryByRole("option", { name: "primary: Catalog Red" }) !== null).toBe(allowed);
+  expect(screen.getByLabelText("accent").textContent).toBe(allowed ? "Spoolman Blue #0000ff" : "spoolman:int-1:filament:2 ");
 });

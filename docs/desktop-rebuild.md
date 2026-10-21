@@ -318,7 +318,12 @@ existing `KitManifest` parser. Both propagate preparation budget and cancellatio
 failures. `apply` preserves Node's document order, project filtering, selection
 defaults, explicit group membership, group bounds, and exclusion precedence.
 It accepts the shared `PreparationBudget`, charges each Part as an entry, and
-charges each pattern comparison as a visit. A comparison keeps no memory after it
+charges each pattern comparison as a visit. Option-group merging, in `apply` and
+in preparation's repository, hinted and inferred groups, charges a visit for each
+group, variant, and path it merges and for each merge's final sort, plus the
+entries each is compared against, or sorted, as `comparison_work`. `apply` copies
+each document's groups one group, variant, and path at a time, charging a visit
+before each copy. Builder observation merges the same way without a charge. A comparison keeps no memory after it
 returns, so it does not charge the document-byte cap. It charges the separate
 `comparison_work` counter instead. Before a comparison it charges the raw
 pattern UTF-16 units plus the key's UTF-8 bytes, because normalization scans
@@ -1086,18 +1091,33 @@ input version, a settled entry against a terminal job, and its quota row against
 reservation and retained bytes.
 
 Node writes supplied files with `writeUploadedFiles` and has no journal, quota or
-idempotency. `fixtures/parity/uploads/generate.mjs` records its limits, and for each
-of thirteen file sets either its refusal or the paths it wrote. The journal matches
-Node's 256 MiB and 10,000-file limits and its refusal of empty, oversized, escaping
-and duplicate inputs. Since D14 (d), admission also rewrites a backslash as `/` and
-drops leading slashes before it validates and hashes the request, and refuses names
-that differ only in case, so it admits the paths Node writes and refuses the
-duplicates Node refuses. The quota, idempotency, startup and codec cases port the
-reference `source_import_codec.rs` and its serializer fixture:
+idempotency. `fixtures/parity/uploads/generate.mjs` records its limits and, for each
+of 22 file sets, either its refusal or the paths it wrote. The journal matches
+Node's 256 MiB and 10,000-file limits and acceptance of those path cases.
+Admission rewrites backslashes as `/`, drops leading slashes, and collapses empty
+and `.` segments before validation and hashing. It preserves `..` segments for
+rejection, even when resolving them would leave a path inside the upload root.
+Duplicate detection uses the normalized path without regard to case. Its error
+matches Node's `Duplicate uploaded file path: <original spelling>` for the second
+file. Earlier parity coverage omitted empty and dot segments and mapped duplicate
+diagnostics to the generic `Duplicate file` error.
+
+Successful fixtures also record a SHA-256 digest of the input-order file metadata
+using Node's resolved paths, declared sizes, the test hash `b` repeated 64 times,
+and kind `input`. Rust compares its admitted paths and requested digest with these
+literal values. The hash is synthetic metadata, not the sparse probe file's
+content hash. Other refusal diagnostics, quota, idempotency, startup, and codec
+cases follow the reference `source_import_codec.rs` and its serializer fixture.
+These admission changes remain behind default-off `desktop_rebuild`. User-visible
+rebuild behavior also requires `PP_DESKTOP_REBUILD`.
 
 ```sh
 node fixtures/parity/uploads/generate.mjs --check
+umask 022
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test upload_journal
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test import_phases
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
 
 ### D14 uploads: import phases
@@ -1386,7 +1406,7 @@ The copy supports default rows in `build_profiles`, `projects`, `profile_layers`
 
 The tool refuses default settings other than `schema_version`, drafts, printer queues, opaque project metadata and imported-path lists, nonempty decision parameters other than `{}`, and populated decision result JSON. It also refuses stored sessions, password reset tokens, and Plan share capabilities. Share bundles contain ownership references outside the supported row graph. No startup path or HTTP endpoint invokes it.
 
-Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL and Plate export trees, older export layouts and temporary publications remain unsupported. Ownership markers, leases, `.desktop.lock`, `printpartner.lock`, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
+Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL publications under `accepted-stl/profile-<Plan id>/<revision-<id> or empty>/<all or missing>/<color or color_dir>/content-<sha256>` and accepted Plate publications under `accepted-plates/profile-<Plan id>/revision-<id>` are copied after their tree is checked against the bundle or manifest. A crashed STL export can leave its `.tmp-XXXXXX` staging directory beside the `content-*` folders. The copy checks its Plan, revision, selection and grouping like a publication, then leaves it in the source and does not copy it. Older export layouts and other temporary publications remain unsupported. Ownership markers, leases, `.desktop.lock`, `printpartner.lock`, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
 
 The staged copy suspends ten known triggers inside its transaction after checking their definitions against the current migrations. These cover Part acceptance invalidation, immutable updates for Plan revisions, Plan revision Parts, Required units, Required-unit maps and map headers, plus immutable updates for Plate revisions, Plates and Plate units and Plate head ownership updates. It restores them before validation and verifies that the complete schema matches the source. All historical revision and input digests, existing Required-unit maps and owner relationships are checked. Every supported history row must fit the production operational limit of 64 KiB across its stored text columns, measured as UTF-8 bytes in SQLite. Builds with accepted history also receive the operational text budget check for their tenant ID, name, order number, special request and archive timestamp. Ordinary mutable Builds without accepted history retain their existing supported text values. These limits are checked again after owner reassignment in staging. Current revisions require complete Required-unit maps. Retained older revisions may lack maps only when no partial mapping or created-unit state exists. Current accepted Plans must pass the production operational reader and tracked Part byte verification in both source and stage. Valid format-1 input history retains its existing `uninitialized` operational result; it is not promoted to format 2. Plans whose working Part edits or deletions cleared the accepted revision pointer are also supported when their positive Plan version and validated history remain. The retained revision numbers must form the complete sequence from 1 through the Plan version, with each revision after the first pointing to its immediate predecessor and retaining tracked publication provenance with format-2 inputs. The inferred current revision must have a complete Required-unit map, positive unique projection IDs, valid stored Part booleans and consistent quantities between 1 and 10,000. Retained progress at inferred-current Part/unit coordinates must pass the production raw-boolean and assembly/completion checks. Other historical unit coordinates retain their existing ignored status. Historical projection IDs may refer to deleted working Parts for these dirty Plans; any surviving projection must still belong to the same Plan and owner. Their retained accepted-input pointer must match the latest historical revision, including its acceptance timestamp; legacy revisions must have no input pointer. The copy preserves their null pointer, working edits and `compatibility_dirty` operational result across restart. It does not select a historical revision or repair acceptance. A zero version with history or a positive version without history causes refusal. IDs, digests, tokens, actor identities and timestamps are preserved.
 
@@ -1528,7 +1548,6 @@ check rejects this dependency if it becomes required or reachable by default.
 
 PR 2 adds the transaction entry described below. PR 3 adds `PublicationClient`,
 authenticated admission, schema installation, and writer `Envelope` dispatch.
-Temporary `expect(dead_code)` annotations now identify only PR 3 integration points.
 
 `node fixtures/parity/plan-publication/generate.mjs` regenerates literal Node
 results in `fixtures/parity/plan-publication/node.json`; `--check` detects drift.
@@ -1620,8 +1639,12 @@ index 0, whose token is dropped, and move links at indexes 1 and 2 to 0 and 1.
 
 ## D19 publication client and writer admission, GRE-612 PR 3
 
-With `desktop_rebuild`, `WriterOwner::publication` and
-`publication_with_policy` construct a `PublicationClient`. `PublicationCommand`
+With `desktop_rebuild`, `WriterOwner::publication_with_policy` validates the
+deployment's `AuthPolicy` before constructing a `PublicationClient`.
+`SingleAccountDefault` resolves sessions to tenant `default`; `AccountTenant`
+resolves sessions to the account's tenant. Both retain the account as the receipt
+actor. Invalid policy fails before queue admission or writes. The policy-less
+`publication()` helper is available only in unit tests. `PublicationCommand`
 trims keys with ECMAScript whitespace rules and admits 1 to 160 UTF-16 units.
 `normalized_http` keeps the original admitted request separate from a request
 normalized by a caller. The writer resolves the authenticated tenant and actor
@@ -1729,10 +1752,11 @@ raw UNIQUE error with `LocalScanFailure::AlreadyObserved`. D17 (c) addresses
 GRE-703 item 1 by moving the test harness onto the real migration. It also removes
 the client schema prerequisite notes for GRE-707 item 6.
 `mark_local_failure`, `revalidate_source_authority` and
-`commit_source_authority_refusal` retain their tests and integration annotations;
-this schema slice adds no production callers for them. Their callers are the
-D18 (b) Sync target failure (GRE-614) and the D14 import Phase path (GRE-610). The authority helper
-reuses `AuthorityRefusalReason::of` and saves one refusal.
+`commit_source_authority_refusal` retain their tests; this schema slice adds no
+production callers for them. GRE-610 (D14 import Phase) calls the two authority
+helpers. `mark_local_failure` keeps its `dead_code` expectation until GRE-614
+(D18 source_sync) calls it. `commit_source_authority_refusal` reuses
+`AuthorityRefusalReason::of` and saves one refusal.
 
 The Node generator now also executes the local `syncProjectById` completion and
 failure paths. Rust compares four terminal document-index results and two
@@ -1798,8 +1822,29 @@ Cancel, a worker `Fail` and a revoked original credential halt the batch. Pendin
 targets become not-run. A claimed target is kept for reconciliation, and the Job
 becomes `reconciliation_required`. Otherwise the Job is cancelled or failed. A
 revoked credential records a Source-writer refusal. Until D18 (b), a claimed
-target cannot be settled. Until D18 (c), generic Finish and effects are still
-accepted for Sync.
+target cannot be settled. GRE-854 rejects generic `Finish`, `FinishPublic`,
+`BeginEffect` and `ConfirmEffect` for Sync before authority revalidation.
+These calls leave the Job, batch, target, history and Source reservation unchanged.
+Heartbeat and progress updates remain available, and worker `Fail` still halts
+the batch. Non-Sync jobs and builds without `desktop_rebuild` keep their existing
+generic worker behavior. Target settlement remains in GRE-775 and GRE-776.
+
+GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
+Cancel marks the Job for cancellation during reconciliation. The refusal
+observation, target failure code and detail, recovery message, and generation
+remain unchanged.
+A second Cancel writes nothing. Repeating the same authority-refusal halt also
+writes nothing, including when the first halt failed the Job without a claim.
+The regression tests cancel twice and reopen storage to check the saved evidence.
+GRE-855 applies the same Source-writer refusal and batch halt during
+`open_source_sync`, heartbeat, progress and worker `Fail`. A recognized refusal
+commits before returning its typed authority error. It fences the attempt even
+before a batch exists. An existing batch halts with pending targets marked
+not-run, or requires reconciliation when claims or retained effects remain.
+Open-time refusal preserves a prior attempt's claim evidence instead of resetting
+it to pending. Unrecognized errors still roll back. Tests reopen storage to check
+that the refusal, batch and target evidence persist. Cancel preserves a completed
+worker-advance halt and its refusal evidence.
 
 The reference schema numbers Source Sync 42 because its 41 validates manifest
 columns, which main does not have. Here the 40 to 41 step installs
@@ -1812,11 +1857,21 @@ job over a missing id and a Local Source. The Rust test asserts the target order
 and Node's literal failure. Node has no durable batch, Source reservation or
 authority check. The claim-before-open, restart-recovery and ordinal tests adapt
 the reference `pp-core/tests/source_sync_local.rs` cases. The halt, refusal,
-busy-Source and bridge tests are new.
+busy-Source and bridge tests are new. The generic-worker regression checks every
+effect kind and both Finish APIs after a target claim, with the original session
+valid and revoked. It compares database snapshots and verifies that the same
+Source reservation still prevents other work.
+The non-Sync regression confirms that generic effects and Finish still work.
 
 ```sh
 node fixtures/parity/source-sync/generate.mjs --check
+umask 022
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib source_sync::
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test job_feature_admission
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --test durable_jobs
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test durable_jobs
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests
 ```
 

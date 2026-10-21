@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { readZipDirectory } from "./services/zip-directory.js";
 import { tenantExportDirectory } from "./lib/secure-path.js";
 import { isSafeRelativePath } from "./db/accepted-plan-operational-model.js";
 
@@ -13,7 +14,10 @@ export const ownershipExportClaimSchema = z.strictObject({
 });
 export type OwnershipExport = { path: string; sha256: string; profile_id: number; tenant_id: string };
 type Profile = { id: number; tenantId: string };
-type PlateRevision = { id: number; profileId: number };
+type ExportRevision = { id: number; profileId: number };
+const MAX_OWNERSHIP_STL_FILES = 10_000;
+// A crashed STL exporter leaves its mkdtemp stage beside the content folders; it was never published, so it is not copied.
+const STL_STAGE = /^\.tmp-[A-Za-z0-9]{6}$/;
 const plateManifestSchema = z.object({
   format: z.literal("accepted-plate-3mf-manifest-v1"),
   basis: z.object({ profile_id: z.number(), plate_revision_id: z.number() }),
@@ -33,7 +37,7 @@ export function ownershipFileDigest(path: string): string {
   } finally { closeSync(fd); }
 }
 
-export function inspectOwnershipExports(root: string, profiles: readonly Profile[], plateRevisions: readonly PlateRevision[]): OwnershipExport[] {
+export function inspectOwnershipExports(root: string, profiles: readonly Profile[], plateRevisions: readonly ExportRevision[], planRevisions: readonly ExportRevision[] = []): OwnershipExport[] {
   const result: OwnershipExport[] = [];
   const owner = (pieces: string[], plan: string | undefined, pattern: RegExp) => {
     const [first] = pieces;
@@ -62,9 +66,42 @@ export function inspectOwnershipExports(root: string, profiles: readonly Profile
     if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("Incomplete or unexpected accepted Plate export tree");
     for (const file of expected) result.push({ path: [...pieces, file].join("/"), sha256: ownershipFileDigest(join(path, file)), profile_id: profile.id, tenant_id: profile.tenantId });
   };
+  const stlTree = (path: string, pieces: string[], layout: string[]) => {
+    const profile = owner(pieces, layout[1], /^profile-([1-9][0-9]*)$/);
+    const stage = STL_STAGE.test(layout[5] ?? "");
+    if (!/^(all|missing)$/.test(layout[3] ?? "") || !/^(color|color_dir)$/.test(layout[4] ?? "")
+      || !(stage || /^content-[a-f0-9]{64}$/.test(layout[5] ?? ""))) throw new Error("Unsupported export artifact layout");
+    if (layout[2] === "empty" && (stage || readdirSync(path).length === 0)) return;
+    const revisionId = /^revision-([1-9][0-9]*)$/.exec(layout[2] ?? "")?.[1];
+    if (!planRevisions.some(revision => String(revision.id) === revisionId && revision.profileId === profile.id)) throw new Error("Unassigned export artifact");
+    if (stage || readdirSync(path).length === 0) return;
+    const files = new Map<string, number>();
+    const collect = (directory: string, prefix: string[]) => {
+      const entries = readdirSync(directory).sort();
+      if (entries.length === 0) throw new Error("Empty accepted STL export directory");
+      for (const name of entries) {
+        if (!isSafeRelativePath(name) || name.includes("/")) throw new Error("Unsafe export path");
+        const segments = [...prefix, name];
+        const file = join(directory, name);
+        const stat = lstatSync(file);
+        if (stat.isDirectory() && segments.length <= 2) { collect(file, segments); continue; }
+        const relative = segments.join("/");
+        if (!stat.isFile() || !(relative === "accepted-stl.zip" || (segments.length >= 2 && segments.length <= 3 && name.endsWith(".stl")))) throw new Error("Unsupported accepted STL export entry");
+        if (files.size >= MAX_OWNERSHIP_STL_FILES + 1) throw new Error("Too many accepted STL export files");
+        files.set(relative, stat.size);
+        result.push({ path: [...pieces, relative].join("/"), sha256: ownershipFileDigest(file), profile_id: profile.id, tenant_id: profile.tenantId });
+      }
+    };
+    collect(path, []);
+    if (!files.has("accepted-stl.zip")) throw new Error("Missing accepted STL bundle");
+    const entries = readZipDirectory(join(path, "accepted-stl.zip"), MAX_OWNERSHIP_STL_FILES);
+    if (entries.length === 0 || entries.length + 1 !== files.size
+      || entries.some(entry => entry.name === "accepted-stl.zip" || files.get(entry.name) !== entry.size)) throw new Error("Incomplete or unexpected accepted STL export tree");
+  };
   const walk = (path: string, pieces: string[]) => {
     const stat = lstatSync(path);
     const layout = pieces[0]?.startsWith("tenant-") === true ? pieces.slice(1) : pieces;
+    if (stat.isDirectory() && layout[0] === "accepted-stl" && layout.length === 6) return stlTree(path, pieces, layout);
     if (stat.isDirectory() && layout[0] === "accepted-plates" && layout.length === 3) return plateTree(path, pieces, layout);
     if (stat.isDirectory()) {
       for (const name of readdirSync(path).sort()) {
@@ -89,6 +126,12 @@ export function inspectOwnershipExports(root: string, profiles: readonly Profile
   if (!lstatSync(root).isDirectory()) throw new Error("Export root must be a directory");
   walk(root, []);
   return result;
+}
+
+export function inOwnershipStlStage(path: string): boolean {
+  const pieces = path.split("/");
+  const layout = pieces[0]?.startsWith("tenant-") ? pieces.slice(1) : pieces;
+  return layout[0] === "accepted-stl" && layout.length > 6 && STL_STAGE.test(layout[5] ?? "");
 }
 
 export function ownershipExportTarget(artifact: OwnershipExport, owner: string): string {

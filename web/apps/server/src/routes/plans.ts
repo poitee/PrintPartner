@@ -1,8 +1,8 @@
-import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { join } from "node:path";
 import { z } from "zod";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type {
   AcceptedProfileProgress,
   AcceptedProfileSummary,
@@ -757,6 +757,9 @@ export async function registerPlanRoutes(
       return reply.status(409).send({
         detail: acceptedStateDetail(snapshot.kind),
       });
+    }
+    if (snapshot.snapshot.profile.archivedAt) {
+      return sendAcceptedFilamentFailure(reply, { kind: "plan_archived" });
     }
     const savedDefaults = loadRoleFilamentDefaults(deps.repo, id);
     const includedParts = snapshot.snapshot.parts.filter((part) => part.included);

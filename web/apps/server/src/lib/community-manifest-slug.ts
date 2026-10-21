@@ -1,13 +1,13 @@
 /**
  * A community manifest slug names `<slug>.yaml` in the embedded manifests
- * directory, so it must be a single path segment. `kit-catalog` is reserved
- * because services/kit-catalog.ts reads `manifests/kit-catalog.yaml`.
+ * directory, so it must be a single path segment. `kit-catalog` and
+ * `registry-index` are reserved for the embedded catalog and registry index.
  */
 const COMMUNITY_MANIFEST_SLUG = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-const RESERVED_COMMUNITY_MANIFEST_SLUG = "kit-catalog";
+const RESERVED_COMMUNITY_MANIFEST_SLUGS = new Set(["kit-catalog", "registry-index"]);
 
 export const INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL =
-  "manifest_community_slug must be 1 to 64 lowercase letters, digits, dots, hyphens or underscores, starting with a letter or digit, and not kit-catalog";
+  "manifest_community_slug must be 1 to 64 lowercase letters, digits, dots, hyphens or underscores, starting with a letter or digit, and not kit-catalog or registry-index";
 
 export class InvalidCommunityManifestSlugError extends Error {
   constructor() {
@@ -17,7 +17,7 @@ export class InvalidCommunityManifestSlugError extends Error {
 }
 
 export function isCommunityManifestSlug(value: string): boolean {
-  return COMMUNITY_MANIFEST_SLUG.test(value) && value !== RESERVED_COMMUNITY_MANIFEST_SLUG;
+  return COMMUNITY_MANIFEST_SLUG.test(value) && !RESERVED_COMMUNITY_MANIFEST_SLUGS.has(value);
 }
 
 /** Trimmed slug, or null when absent or blank (no community manifest). */

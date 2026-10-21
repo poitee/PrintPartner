@@ -69,6 +69,24 @@ enum ReviewedEntry {
     GetWorkflowHelp { resources: Vec<ResourceId> },
     #[serde(rename = "tool.check_hardware_interfaces")]
     CheckHardwareInterfaces { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_add_custom_filament")]
+    ProposeAddCustomFilament { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_create_build")]
+    ProposeCreateBuild { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_create_source_category")]
+    ProposeCreateSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_rename_source_category")]
+    ProposeRenameSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_delete_source_category")]
+    ProposeDeleteSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_source_category")]
+    ProposeSetSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_source")]
+    ProposeUpdateSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_source_naming")]
+    ProposeUpdateSourceNaming { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_import_source_files")]
+    ProposeImportSourceFiles { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -101,6 +119,8 @@ enum ReviewedEntry {
     GetSourceDocs { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_docs")]
     UiOpenDocs { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_focus_kit_option")]
+    UiFocusKitOption { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_navigate")]
     UiNavigate { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_focus_stl_search")]
@@ -156,6 +176,87 @@ impl ReviewedEntry {
             Self::CheckHardwareInterfaces { resources } => {
                 ("tool.check_hardware_interfaces", resources, BTreeSet::new())
             }
+            Self::ProposeAddCustomFilament { resources } => (
+                "tool.propose_add_custom_filament",
+                resources,
+                BTreeSet::new(),
+            ),
+            Self::ProposeCreateBuild { resources } => {
+                ("tool.propose_create_build", resources, BTreeSet::new())
+            }
+            Self::ProposeCreateSourceCategory { resources } => (
+                "tool.propose_create_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                ]),
+            ),
+            Self::ProposeRenameSourceCategory { resources } => (
+                "tool.propose_rename_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeDeleteSourceCategory { resources } => (
+                "tool.propose_delete_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeSetSourceCategory { resources } => (
+                "tool.propose_set_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeUpdateSource { resources } => (
+                "tool.propose_update_source",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeUpdateSourceNaming { resources } => (
+                "tool.propose_update_source_naming",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeImportSourceFiles { resources } => (
+                "tool.propose_import_source_files",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -298,6 +399,16 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::UiFocusKitOption { resources } => (
+                "tool.ui_focus_kit_option",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::UiNavigate { resources } => (
                 "tool.ui_navigate",
                 resources,
@@ -388,6 +499,15 @@ impl Declarations {
             "tool.get_workflow_help",
             "tool.get_job_status",
             "tool.check_hardware_interfaces",
+            "tool.propose_add_custom_filament",
+            "tool.propose_create_build",
+            "tool.propose_create_source_category",
+            "tool.propose_rename_source_category",
+            "tool.propose_delete_source_category",
+            "tool.propose_set_source_category",
+            "tool.propose_update_source",
+            "tool.propose_update_source_naming",
+            "tool.propose_import_source_files",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
@@ -402,6 +522,7 @@ impl Declarations {
             "tool.ui_navigate",
             "tool.ui_open_source",
             "tool.ui_open_docs",
+            "tool.ui_focus_kit_option",
             "tool.list_sources",
             "tool.list_source_categories",
             "tool.get_source_docs",

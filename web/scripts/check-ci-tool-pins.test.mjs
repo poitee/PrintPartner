@@ -457,6 +457,13 @@ for (const [filename, name, code, optional, major = 22] of [
       assert.equal(result.stdout, summary(0, 0, 0));
     });
   }
+  test(`accept draft guard in ${filename}`, t => {
+    const data = source();
+    const guard = "github.event_name != 'pull_request' || !github.event.pull_request.draft";
+    data.jobs[name].if = data.jobs[name].if ? `(${guard}) && (${data.jobs[name].if})` : guard;
+    const result = run(t, JSON.stringify(data), [], filename);
+    assert.equal(result.status, 0, result.stderr);
+  });
   for (const version of ['22', '22.23', '22.x', 'lts/*', '^22.23.3', 'v22.23.3', '22.23.3-rc.1', '022.23.3', ...(major === 22 ? ['24.21.0'] : ['22.23.3', '24', '24.21', '24.x', '024.21.0']), '${{ inputs.node }}', 22, null]) {
     test(`reject ${filename} Node ${JSON.stringify(version)}`, t => {
       const data = source();

@@ -1,4 +1,10 @@
-"""Prove the built desktop backend listens only on its private Unix socket (Linux and macOS)."""
+"""Prove the built desktop backend listens only on its private Unix socket.
+
+Linux runs each proof in a dedicated subreaper process, which kills and reaps
+run-owned descendants even if they detach and erase their environment. macOS
+cleanup covers the backend process group and inherited run-token carriers only.
+Detached macOS descendants that erase the token are outside this cleanup claim.
+"""
 
 import argparse
 from collections import Counter, namedtuple
@@ -20,7 +26,7 @@ import sys
 import tempfile
 import time
 
-from built_backend_lifecycle import ROOT, STARTUP_SECONDS, STOP_SECONDS, group_absent, health, inherited_lock, require, write_json
+from built_backend_lifecycle import ROOT, STARTUP_SECONDS, STOP_SECONDS, group_absent, health, inherited_lock, require, run_in_subreaper, write_json
 from backend_unix_listeners import UnixListenerFound, require_private_listener, unix_listeners
 
 WINDOW_SECONDS = 4
@@ -33,7 +39,7 @@ CONTROLS = {
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 const waiting = setInterval(() => {
-  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET)) return;
+  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET + ".ready")) return;
   clearInterval(waiting);
   setTimeout(() => createServer().listen(process.env.PP_LISTENER_CONTROL_SOCKET + ".extra").unref(), 1000).unref();
 }, 50);
@@ -49,11 +55,17 @@ const grandchild = "require('node:net').createServer().listen(0, '127.0.0.1')";
 spawnSync(process.execPath, ["-e", `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}],
   { detached: true, stdio: "ignore" }).unref()`]);
 """,
+    "empty_env_detached_grandchild_listener": """
+import { spawnSync } from "node:child_process";
+const grandchild = "if (Object.keys(process.env).length) process.exit(23); require('node:net').createServer().listen(0, '127.0.0.1')";
+spawnSync(process.execPath, ["-e", `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}],
+  { detached: true, stdio: "ignore", env: {} }).unref()`]);
+""",
     "late_backend_listener": """
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 const waiting = setInterval(() => {
-  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET)) return;
+  if (!existsSync(process.env.PP_LISTENER_CONTROL_SOCKET + ".ready")) return;
   clearInterval(waiting);
   setTimeout(() => createServer().listen(0, "127.0.0.1").unref(), 1000).unref();
 }, 50);
@@ -349,7 +361,15 @@ def assert_private_socket(socket_path):
     return observed
 
 
-def run_backend(node, evidence, control=None):
+def run_backend(node, evidence, control=None, excluded_endpoints=()):
+    if sys.platform == "linux":
+        return run_in_subreaper(_run_backend, (node, evidence, control, excluded_endpoints),
+                                evidence / "descendant-cleanup.json",
+                                timeout=STARTUP_SECONDS + WINDOW_SECONDS + 4 * STOP_SECONDS)
+    return _run_backend(node, evidence, control, excluded_endpoints)
+
+
+def _run_backend(node, evidence, control, excluded_endpoints):
     evidence.mkdir()
     data = evidence / "data"
     data.mkdir(mode=0o700)
@@ -372,6 +392,8 @@ def run_backend(node, evidence, control=None):
                "--import", str(ROOT / "web/apps/server/dist/current/desktop-resolution.js"),
                str(ROOT / "web/apps/server/dist/current/desktop.js"), f"--pp-desktop-package-root={ROOT}"]
     watch = Watch(socket_path)
+    require(not set(excluded_endpoints).intersection(watch.baseline),
+            f"previous control listener entered the next backend baseline: {excluded_endpoints}")
     with (data / "printpartner.lock").open("w+b") as lock, \
             (evidence / "stdout.log").open("wb") as stdout, (evidence / "stderr.log").open("wb") as stderr:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -380,7 +402,9 @@ def run_backend(node, evidence, control=None):
                                      env=env, start_new_session=True, pass_fds=(198,))
         watch.backend = child.pid
         receipt = {"case": "built_backend_listeners", "platform": sys.platform, "pid": child.pid, "control": control,
-                   "observation": OBSERVATION[sys.platform], "baseline_endpoints": sum(watch.baseline.values())}
+                   "observation": OBSERVATION[sys.platform], "baseline_endpoints": sum(watch.baseline.values()),
+                   "excluded_previous_endpoints": [endpoint._asdict() for endpoint in excluded_endpoints],
+                   "excluded_previous_endpoints_absent": True}
         try:
             setup = {"version": 1, "data_dir": str(data), "socket_path": str(socket_path), "generation": generation,
                      "key": key, "parent_pid": os.getpid(), "port": 43123}
@@ -402,6 +426,7 @@ def run_backend(node, evidence, control=None):
             watch.poll()
             receipt["ready_unix_listeners"] = [listener._asdict() for listener in watch.last_unix]
             require(ready["authenticated"] is True and ready["data_dir"] == str(data), f"unexpected health: {ready}")
+            (runtime / "backend.sock.ready").touch()
             receipt.update(assert_private_socket(socket_path))
             receipt["exercised"] = {"/health": health(socket_path, generation, key)["authenticated"],
                                     "/api/v1/sources": signed_get(socket_path, generation, key, "/api/v1/sources")}
@@ -432,6 +457,8 @@ def run_backend(node, evidence, control=None):
             if not group_absent(child.pid):
                 os.killpg(child.pid, signal.SIGKILL)
             child.wait(timeout=5)
+            if not child.stdin.closed:
+                child.stdin.close()
             receipt.update(polls=watch.polls, killed_after_stop=kill_token_carriers(token),
                            backend_unix_listeners=[listener._asdict() for listener in watch.last_unix],
                            ignored_other_users=list(watch.other_users.values()))
@@ -448,7 +475,7 @@ def prove_control(node, evidence, control):
         while (lingering := (endpoints() - error.baseline) & error.new) and time.monotonic() < deadline:
             time.sleep(.05)
         result = {"control": control, "expected_failure": str(error), "seconds_after_ready": error.seconds_after_ready,
-                  "listeners_gone": not lingering}
+                  "listeners_gone": not lingering, "detected_endpoints": [endpoint._asdict() for endpoint in error.new]}
     except UnixListenerFound as error:
         require(control == "extra_backend_unix_listener", f"unexpected Unix listener failure: {error}")
         found = error.found
@@ -462,6 +489,9 @@ def prove_control(node, evidence, control):
         lingering = []
     else:
         raise AssertionError(f"negative control {control} unexpectedly passed")
+    if sys.platform == "linux":
+        result["descendant_cleanup"] = json.loads((evidence / control / "descendant-cleanup.json").read_text())
+        require(result["descendant_cleanup"]["children_absent"], "run-owned descendants survived cleanup")
     write_json(evidence / control / "negative-control.json", result)
     print(json.dumps(result), flush=True)
     require(result["listeners_gone"], f"negative control {control} left a listener running: {list(lingering)}")
@@ -484,6 +514,13 @@ def detached_opened(result, found, backend):
             f"grandchild listener was not detached from the backend: {found}")
 
 
+def empty_env_detached_opened(result, found, backend):
+    detached_opened(result, found, backend)
+    cleanup = result["descendant_cleanup"]
+    require(all(owner["pid"] in cleanup["killed"] and owner["pid"] in cleanup["reaped"] for owner in owners(found)),
+            f"empty-env listener was not killed and reaped by its run: {result}")
+
+
 def backend_opened_late(result, found, backend):
     require(all(owner["pid"] == backend for owner in owners(found)) and result["seconds_after_ready"] >= .9,
             f"late listener was not opened by the backend after readiness: {result}")
@@ -495,6 +532,7 @@ def hidden_from_inspection(result, found, backend):
 
 
 CONTROL_CHECKS = {"child_listener": child_opened, "detached_grandchild_listener": detached_opened,
+                  "empty_env_detached_grandchild_listener": empty_env_detached_opened,
                   "late_backend_listener": backend_opened_late, "non_dumpable_listener": hidden_from_inspection}
 
 
@@ -522,10 +560,17 @@ def main():
     prove_control(node, evidence, "extra_backend_unix_listener")
 
     for control, check in CONTROL_CHECKS.items():
-        if control == "non_dumpable_listener" and sys.platform == "darwin":
+        if control == "empty_env_detached_grandchild_listener" and sys.platform == "darwin":
+            print(json.dumps({"control": control, "skipped": "macOS cleanup covers process groups and token carriers only"}), flush=True)
+        elif control == "non_dumpable_listener" and sys.platform == "darwin":
             print(json.dumps({"control": control, "skipped": "macOS has no PR_SET_DUMPABLE"}), flush=True)
         else:
-            check(*prove_control(node, evidence, control))
+            result, found, backend = prove_control(node, evidence, control)
+            check(result, found, backend)
+            if control == "empty_env_detached_grandchild_listener":
+                excluded = [Endpoint(**endpoint) for endpoint in result["detected_endpoints"]]
+                restored = run_backend(node, evidence / "after-empty-env-control", excluded_endpoints=excluded)
+                print(json.dumps(restored), flush=True)
 
 
 if __name__ == "__main__":
