@@ -1,6 +1,6 @@
 # Accepted STL export timeout diagnosis
 
-GRE-928 remains open. This slice adds a repeatable synthetic diagnostic and local evidence. It does not establish the cause on the failing CI runner or change export behavior.
+GRE-928 remains open. The diagnostic on self-hosted PR runners showed the 10,001-unit copy phase never reached the ZIP. Identical copies now share the verified inode, and the directories that hold those names are flushed before publication.
 
 ## Reported failure
 
@@ -53,13 +53,13 @@ The diagnostic in #817 is standalone. Neither the workflow nor the regression in
 
 The 10,001-unit regression writes directly to stdout so passing-test console suppression cannot hide the records. It emits JSON prefixed with `GRE-928 accepted-STL diagnostic` at start, every 15 seconds, and from `afterEach`. It reuses the existing filesystem mock wrappers and still calls the real filesystem. Only that test activates the counters. The final event is named `test-ended`, including after failure or timeout. It records whether the export returned, threw, or was still running when cleanup began. It does not certify success. Vitest's result and the unchanged 60,000 ms deadline remain authoritative.
 
-The records include source/copy flush calls, callback errors, outstanding flushes, latency totals and maximum, and staged ZIP-source starts, consumed ends, errors and bytes. The source/copy flush wrapper does not observe the ZIP output stream's internal flush. A successful fixture observes 10,002 wrapped flush callbacks and 10,001 consumed ZIP sources. The test asserts these counts and the consumed byte count. The standalone diagnostic remains the check for the ZIP output flush and full byte/publication identity.
+The records include source/copy flush calls, callback errors, outstanding flushes, latency totals and maximum, and staged ZIP-source starts, consumed ends, errors and bytes. The source/copy flush wrapper does not observe the ZIP output stream's internal flush. Before the inode fix, a successful fixture observed 10,002 wrapped flush callbacks. The regression now expects the verified inode flush plus the directory flushes for this layout, which is 5, and still expects 10,001 consumed ZIP sources. The test asserts these counts and the consumed byte count. The standalone diagnostic remains the check for the ZIP output flush and full byte/publication identity.
 
 The first staged STL read-stream creation separates the copy phase from ZIP-through-publication. Progress before that boundary has null ZIP times. A stalled copy has outstanding flush/latency evidence; a stalled ZIP has source/byte progress. Callback latency includes worker-pool queueing and event-loop delay, so it cannot isolate device latency. Summed callback latencies overlap. Timings include logging overhead, and the final snapshot includes the test's assertions before `afterEach`.
 
 Runner name, run ID and attempt, Node version, worker-pool setting, whether TMPDIR is set, available parallelism, filesystem type, load average, event-loop delay, Linux CPU/I/O pressure, and cgroup CPU quota/stat files accompany each snapshot. Missing or unreadable Linux files produce null. For cgroup v2, the diagnostic resolves its own group from `/proc/self/cgroup` and records up to 16 ancestor quota/stat pairs beneath the conventional mount. Start/end CPU stats and pressure totals can be compared for throttling and stalls. Conventional v1 quota files are also read. Null CPU quotas do not establish an unlimited CPU allocation, because cgroup mounts and namespaces vary. These aggregate observations cannot identify individual competing jobs. The diagnostic reads only named runtime metadata and synthetic fixture storage; it never dumps environment variables, processes, plans, or credentials.
 
-This instrumentation changes no exporter code, durability, quota accounting, security checks, selection, output identity, or timeout. It adds no second export to CI. A 15-second progress record can survive a later test timeout, but a blocked event loop or killed worker may prevent any final record. Compare records from the affected runner class before choosing a production fix.
+The instrumentation adds no second export to CI. A 15-second progress record can survive a later test timeout, but a blocked event loop or killed worker may prevent any final record. Those records are what the fix below uses. The historical sections describe the exporter before that change.
 
 ## Local regression instrumentation validation
 
@@ -69,8 +69,12 @@ A fresh tmpfs scratch run passed all 27 regressions, including the large-byte ca
 
 The first full local quality command reached 1,624 passing web tests and one unchanged UI test failure. That test's `findByRole` exceeded Testing Library's one-second wait while other work was running. The bounded follow-up uses Node 22, `VITEST_MAX_WORKERS=2`, and a fresh tmpfs `TMPDIR`, with no separately launched export process alongside the test suites. CI configuration and storage remain unchanged. These local resource controls must be named with any passing result.
 
+## Fix
+
+[Web CI run 39344143774](https://github.com/poitee/PrintPartner/actions/runs/39344143774/job/118372570864) on `pp-linux-5` wrote this fixture to overlayfs (`0x794c7630`). In 60 seconds the copy phase started 3,721 flushes, at most four at a time, and never opened a ZIP source. Callbacks averaged about 50 milliseconds, so 10,002 file flushes cannot finish inside the deadline. Libuv's default pool is four, which is the same cap as the old copy batch.
+
+Each verified source is still written and flushed once. Further units are additional names for that inode. A filesystem that rejects the extra name falls back to a private flushed copy. After the names exist, the output directory and its parents in the stage are flushed, the temporary source name is removed, and the stage directory is flushed again. The ZIP still reads every published file. Quota accounting still charges each name's size. The 60-second deadline is unchanged.
+
 ## Next slice
 
-Collect the regression records from same-repository PR CI on the affected `pp-local` runner class. If those observations do not explain the phases, run the standalone diagnostic with temporary fixtures, preserving the runner filesystem and runtime. Record CPU quota, host I/O pressure, worker-pool settings and competing jobs. Compare repeated quiet and contended runs before choosing a fix. The current evidence does not distinguish slow storage from host contention on the original runner.
-
-Keep the 10,001-unit regression and its deadline, durable flushes, artifact verification, quota accounting, and publication identity. A production fix needs its own review and same-head export regressions and full applicable CI. Coordinate recovery for #783 through evidence and comments after that reviewed fix exists. Its API-key regeneration slice is outside GRE-928.
+Keep the 10,001-unit regression, its deadline, and publication identity. Recovery for #783 waits on this fix landing. Its API-key regeneration slice is outside GRE-928.

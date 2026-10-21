@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { availableParallelism, loadavg, tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
@@ -46,6 +46,7 @@ const acceptedArtifactTestHook = vi.hoisted(() => {
     failZipRead: false,
     zipReadFailures: 0,
     failFileFlush: false,
+    rejectHardLinks: false,
     holdCopyFlushes: false,
     fileFlushCalls: 0,
     pendingFlushes: new Array<() => void>(),
@@ -84,6 +85,14 @@ vi.mock("node:fs", async (importOriginal) => {
           callback(error);
         }
       });
+    },
+    linkSync(existingPath: string, newPath: string) {
+      if (acceptedArtifactTestHook.rejectHardLinks) {
+        const error = new Error("hard link unsupported") as NodeJS.ErrnoException;
+        error.code = "EOPNOTSUPP";
+        throw error;
+      }
+      return actual.linkSync(existingPath, newPath);
     },
     createReadStream(...args: Parameters<typeof actual.createReadStream>) {
       const [path, options] = args;
@@ -359,6 +368,7 @@ afterEach(() => {
   acceptedArtifactTestHook.failZipRead = false;
   acceptedArtifactTestHook.zipReadFailures = 0;
   acceptedArtifactTestHook.failFileFlush = false;
+  acceptedArtifactTestHook.rejectHardLinks = false;
   acceptedArtifactTestHook.holdCopyFlushes = false;
   acceptedArtifactTestHook.fileFlushCalls = 0;
   for (const release of acceptedArtifactTestHook.pendingFlushes.splice(0)) release();
@@ -382,6 +392,8 @@ describe("materializeAcceptedStlBundle", () => {
 
   it("drains pending copy flushes before cleaning up a quota failure", async () => {
     const paths = fixture();
+    // Private copies, and their flushes, run only when another name is refused.
+    acceptedArtifactTestHook.rejectHardLinks = true;
     acceptedArtifactTestHook.holdCopyFlushes = true;
     let settled = false;
     const failure = runWithTenantDiskQuota({
@@ -669,25 +681,33 @@ describe("materializeAcceptedStlBundle", () => {
     }));
 
     const measurement = measureLargeExport(dirname(fixturePaths.tenantExportsDir));
-    await expect(
-      materializeAcceptedStlBundle({
-        capture: capture([{ ...base, quantityEffective: units.length, units }]),
-        ...fixturePaths,
-        selection: "all",
-        groupBy: "color_dir",
-        roleOrder: ["primary", "accent", "clear", "opaque"],
-      }).then((result) => {
-        measurement.outcome = {
-          kind: "returned", resultKind: result.kind, elapsedMs: performance.now() - measurement.start,
-        };
-        return result;
-      }, (error: unknown) => {
-        measurement.outcome = { kind: "threw", elapsedMs: performance.now() - measurement.start };
-        throw error;
-      }),
-    ).resolves.toMatchObject({ kind: "materialized", fileCounts: { accent: 10_001 } });
+    const result = await materializeAcceptedStlBundle({
+      capture: capture([{ ...base, quantityEffective: units.length, units }]),
+      ...fixturePaths,
+      selection: "all",
+      groupBy: "color_dir",
+      roleOrder: ["primary", "accent", "clear", "opaque"],
+    }).then((value) => {
+      measurement.outcome = {
+        kind: "returned", resultKind: value.kind, elapsedMs: performance.now() - measurement.start,
+      };
+      return value;
+    }, (error: unknown) => {
+      measurement.outcome = { kind: "threw", elapsedMs: performance.now() - measurement.start };
+      throw error;
+    });
+    expect(result).toMatchObject({ kind: "materialized", fileCounts: { accent: 10_001 } });
+    if (result.kind !== "materialized") return;
+    const published = join(result.rootPath, "accent", "_root");
+    const first = statSync(join(published, "widget_01.stl"));
+    const second = statSync(join(published, "widget_02.stl"));
+    expect(readFileSync(join(published, "widget_01.stl"))).toEqual(Buffer.from("accepted-stl"));
+    expect(first.ino).toBe(second.ino);
+    expect(first.nlink).toBe(10_001);
+    // Source inode, accent/_root, accent, the stage before removing the source
+    // name, and the stage again after that removal.
     expect(measurement).toMatchObject({
-      flushCalls: 10_002, flushCallbacks: 10_002, flushErrors: 0, flushInflight: 0,
+      flushCalls: 5, flushCallbacks: 5, flushErrors: 0, flushInflight: 0,
       zipSources: 10_001, zipEnds: 10_001, zipErrors: 0,
       zipBytes: 10_001 * Buffer.byteLength("accepted-stl"),
     });

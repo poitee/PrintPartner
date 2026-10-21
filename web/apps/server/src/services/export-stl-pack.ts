@@ -5,6 +5,7 @@ import {
   createReadStream,
   createWriteStream,
   fsync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -16,7 +17,7 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform, type TransformCallback } from "node:stream";
@@ -40,6 +41,9 @@ import {
 
 const ROLE_ORDER = ["primary", "accent", "clear", "opaque"] as const;
 const COPY_BATCH_SIZE = 4;
+const HARD_LINK_UNSUPPORTED = new Set([
+  "EPERM", "EACCES", "EXDEV", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK",
+]);
 const flushFile = promisify(fsync);
 
 export type StlPackGroupBy = "color" | "color_dir";
@@ -212,8 +216,9 @@ async function writeVerifiedStream(
   path: string,
   createStream: () => ReturnType<typeof createReadStream>,
   expected: Readonly<{ size: number; sha256: string }>,
+  charge = true,
 ): Promise<boolean> {
-  chargeTenantDiskBytes(expected.size);
+  if (charge) chargeTenantDiskBytes(expected.size);
   const descriptor = openSync(
     path,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
@@ -251,8 +256,104 @@ function writeLease(
   });
 }
 
-function copyVerifiedStagedFile(path: string, source: string, expected: ExpectedFile): Promise<boolean> {
-  return writeVerifiedStream(path, () => createReadStream(source), expected);
+function hardLinkUnsupported(error: unknown): boolean {
+  const code = errorCode(error);
+  return code !== undefined && HARD_LINK_UNSUPPORTED.has(code);
+}
+
+function directoriesToFlush(stage: string, directory: string): string[] {
+  const chain: string[] = [];
+  let current = directory;
+  while (isUnderRoot(stage, current)) {
+    chain.push(current);
+    if (current === stage) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return chain;
+}
+
+async function flushDirectory(directory: string): Promise<void> {
+  const descriptor = openSync(
+    directory,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    await flushFile(descriptor);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "EINVAL" || code === "EBADF" || code === "ENOTSUP" || code === "EOPNOTSUPP") return;
+    throw error;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+async function flushDurableNames(stage: string, directories: readonly string[]): Promise<void> {
+  const seen = new Set<string>();
+  for (const directory of directories) {
+    for (const entry of directoriesToFlush(stage, directory)) {
+      if (seen.has(entry)) continue;
+      seen.add(entry);
+      await flushDirectory(entry);
+    }
+  }
+}
+
+// Identical copies are additional names for the verified inode. A new name is
+// durable once its directory is flushed, so a crash cannot publish a torn copy.
+async function placeVerifiedUnitFiles(input: Readonly<{
+  directory: string;
+  source: string;
+  units: readonly number[];
+  names: Set<string>;
+  folder: string;
+  part: AcceptedExportPart;
+  size: number;
+  sha256: string;
+}>): Promise<{ readonly files: readonly ExpectedFile[]; readonly linked: boolean } | null> {
+  const files = input.units.map((unit) => ({
+    relativePath: `${input.folder}/${entryName(input.part, unit, input.names)}`,
+    size: input.size,
+    sha256: input.sha256,
+  }));
+  const placed: ExpectedFile[] = [];
+  const copies: { file: ExpectedFile; charged: boolean }[] = [];
+  let allowLinks = true;
+  let linked = false;
+  for (const file of files) {
+    const target = join(input.directory, basename(file.relativePath));
+    if (!allowLinks) {
+      copies.push({ file, charged: false });
+      continue;
+    }
+    chargeTenantDiskBytes(file.size);
+    try {
+      linkSync(input.source, target);
+      placed.push(file);
+      linked = true;
+    } catch (error) {
+      if (errorCode(error) === "EEXIST") return null;
+      if (!hardLinkUnsupported(error)) throw error;
+      allowLinks = false;
+      copies.push({ file, charged: true });
+    }
+  }
+  for (let offset = 0; offset < copies.length; offset += COPY_BATCH_SIZE) {
+    const batch = copies.slice(offset, offset + COPY_BATCH_SIZE);
+    const copied = await Promise.allSettled(batch.map((entry) => writeVerifiedStream(
+      join(input.directory, basename(entry.file.relativePath)),
+      () => createReadStream(input.source),
+      entry.file,
+      !entry.charged,
+    )));
+    const rejected = copied.find((result) => result.status === "rejected");
+    if (rejected) throw rejected.reason;
+    if (copied.some((result) => result.status === "fulfilled" && !result.value)) return null;
+    placed.push(...batch.map((entry) => entry.file));
+  }
+  return { files: placed, linked };
 }
 
 function hashRegularFile(path: string): string | null {
@@ -549,6 +650,7 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
   const fileCounts: Record<string, number> = {};
   const usedNames = new Map<string, Set<string>>();
   let stage: string | null = null;
+  let linkedPublication = false;
   try {
     const tenantRoot = resolve(input.tenantExportsDir);
     mkdirSync(tenantRoot, { recursive: true, mode: 0o700 });
@@ -603,28 +705,25 @@ export async function materializeAcceptedStlBundle(input: Readonly<{
           usedNames.set(folder, names);
           const directory = join(stage, ...folder.split("/"));
           mkdirSync(directory, { recursive: true, mode: 0o700 });
-          for (let offset = 0; offset < entry.units.length; offset += COPY_BATCH_SIZE) {
-            const files = entry.units.slice(offset, offset + COPY_BATCH_SIZE).map((unit) => ({
-              relativePath: `${folder}/${entryName(entry.part, unit, names)}`,
-              size: opened.lease.size,
-              sha256: opened.lease.expectedSha256,
-            }));
-            const copied = await Promise.allSettled(files.map((file) => copyVerifiedStagedFile(
-              join(directory, basename(file.relativePath)),
-              stagedSource,
-              file,
-            )));
-            const rejected = copied.find((result) => result.status === "rejected");
-            if (rejected) throw rejected.reason;
-            if (copied.some((result) => result.status === "fulfilled" && !result.value)) {
-              return { kind: "output_failure" };
-            }
-            expected.push(...files);
-            fileCounts[role] = (fileCounts[role] ?? 0) + files.length;
-          }
+          const placed = await placeVerifiedUnitFiles({
+            directory,
+            source: stagedSource,
+            units: entry.units,
+            names,
+            folder,
+            part: entry.part,
+            size: opened.lease.size,
+            sha256: opened.lease.expectedSha256,
+          });
+          if (!placed) return { kind: "output_failure" };
+          if (placed.linked) await flushDurableNames(stage, [directory]);
+          expected.push(...placed.files);
+          fileCounts[role] = (fileCounts[role] ?? 0) + placed.files.length;
+          linkedPublication = placed.linked || linkedPublication;
         } finally {
           rmSync(stagedSource, { force: true });
         }
+        if (linkedPublication) await flushDirectory(stage);
       } finally {
         opened.lease.close();
       }
