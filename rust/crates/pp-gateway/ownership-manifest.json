@@ -528,6 +528,137 @@
         ]
       },
       {
+        "operation": "tool.propose_set_plan_progress",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "parts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_accepted_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_inputs"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_parts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_required_unit_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_required_units"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "print_progress"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "required_units"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_set_plan_assembly",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "parts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_accepted_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_inputs"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_parts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_required_unit_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_required_units"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "print_progress"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "required_units"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.propose_verify_printer_checkoff",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_job_status",
         "resources": []
       },
@@ -1238,11 +1369,8 @@
       "tool.propose_resolve_build_differences",
       "tool.propose_restore_snapshot",
       "tool.propose_set_build_source_roles",
-      "tool.propose_set_plan_assembly",
-      "tool.propose_set_plan_progress",
       "tool.propose_source_mapping",
       "tool.propose_update_build_brief",
-      "tool.propose_verify_printer_checkoff",
       "tool.remove_layer",
       "tool.search_plan_parts",
       "tool.set_base",
