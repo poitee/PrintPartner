@@ -1,4 +1,6 @@
 import json
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,6 +15,8 @@ TARGETS = (
 )
 SUBREAPER = "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced"
 RUNNER = Path(__file__).with_name("stress-group-cleanup.py")
+REPOSITORY = RUNNER.parents[2]
+OPERATING_DOC = REPOSITORY / "rust/crates/pp-compat/tests/process-group-cleanup.md"
 PASS = (
     f"test {TARGETS[0]} ... \n\nok\n"
     f"test {TARGETS[1]} ... ok\n"
@@ -20,14 +24,26 @@ PASS = (
 )
 
 
+def summary(passed):
+    return (
+        f"test result: ok. {passed} passed; 0 failed; 0 ignored; "
+        "0 measured; 0 filtered out; finished in 0.00s\n"
+    )
+
+
 class StressOutputTests(unittest.TestCase):
-    def run_output(self, output, exit_code=0, ignored=None, scope="suite"):
+    def fake_libtest(self, output, exit_code=0, ignored=None):
+        """Write a fake libtest binary; a dict output maps exact argv lists to output."""
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
+        self.root = root
         self.logs = root / "logs"
         self.calls = root / "calls.jsonl"
         binary = root / "libtest"
+        default, outputs = (output, {}) if isinstance(output, str) else (None, {
+            json.dumps(argv): text for argv, text in output
+        })
         tests = [
             *TARGETS, SUBREAPER, *(f"filler::case_{i}" for i in range(79)),
             "ignored::one", "ignored::two",
@@ -45,10 +61,17 @@ class StressOutputTests(unittest.TestCase):
             "    names = ignored if '--ignored' in sys.argv else tests\n"
             "    print('\\n'.join(name + ': test' for name in names))\n"
             "else:\n"
-            f"    print({output!r}, end='')\n"
+            f"    output = {outputs!r}.get(json.dumps(sys.argv[1:]), {default!r})\n"
+            "    if output is None:\n"
+            "        sys.exit(3)\n"
+            "    print(output, end='')\n"
             f"    sys.exit({exit_code})\n"
         )
         binary.chmod(0o700)
+        return binary
+
+    def run_output(self, output, exit_code=0, ignored=None, scope="suite"):
+        binary = self.fake_libtest(output, exit_code, ignored)
         return subprocess.run(
             [
                 sys.executable, str(RUNNER),
@@ -97,10 +120,7 @@ class StressOutputTests(unittest.TestCase):
         }
         for scope, passed in (("alone", 1), ("pair", 2), ("suite", 82)):
             with self.subTest(scope=scope):
-                output = PASS if scope == "suite" else (
-                    f"test result: ok. {passed} passed; 0 failed; 0 ignored; "
-                    "0 measured; 0 filtered out; finished in 0.00s\n"
-                )
+                output = PASS if scope == "suite" else summary(passed)
                 result = self.run_output(output, scope=scope)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(
@@ -108,6 +128,88 @@ class StressOutputTests(unittest.TestCase):
                     [["--list"], ["--list", "--ignored"], *commands[scope]],
                 )
                 self.assertEqual(len(list(self.logs.glob("*.log"))), len(commands[scope]))
+
+    def documented_commands(self, exit_code):
+        """Yield each documented soak command with fixture paths and two unloaded runs."""
+        commands = [
+            line for line in OPERATING_DOC.read_text().splitlines()
+            if line.startswith("python3 rust/scripts/stress-group-cleanup.py --binary")
+        ]
+        self.assertEqual(len(commands), 3)
+        outputs = [
+            *((["--exact", target, "--nocapture"], summary(1)) for target in TARGETS),
+            ([TARGETS[1], SUBREAPER, "--nocapture", "--test-threads=2"], summary(2)),
+            (["--nocapture", "--test-threads=12"], PASS),
+        ]
+        for command in commands:
+            binary = self.fake_libtest(outputs, exit_code=exit_code)
+            argv = [
+                str(binary) if word == "<binary>"
+                else str(self.root / word.removeprefix("<evidence>/")) if word.startswith("<evidence>/")
+                else word
+                for word in shlex.split(command)
+            ]
+            self.assertEqual(argv[:2], ["python3", "rust/scripts/stress-group-cleanup.py"])
+            scope = argv[argv.index("--scope") + 1]
+            evidence = Path(argv[argv.index("--evidence") + 1])
+            self.assertEqual(evidence, self.root / scope)
+            with self.subTest(scope=scope):
+                result = subprocess.run(
+                    [sys.executable, *argv[1:], "--runs", "2", "--burners", "0"],
+                    cwd=REPOSITORY, capture_output=True, text=True, timeout=20,
+                )
+                yield scope, evidence, result
+
+    def test_documented_stress_command_runs_fixture(self):
+        per_run = {"alone": 2, "pair": 1, "suite": 1}
+        for scope, evidence, result in self.documented_commands(exit_code=0):
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stderr, "")
+            self.assertEqual(
+                [
+                    re.sub(r"elapsed=\d+\.\ds$", "elapsed=<s>", line)
+                    for line in result.stdout.splitlines() if line.startswith("PASS ")
+                ],
+                [
+                    f"PASS scope={scope} runs={run}/2 commands_per_run={per_run[scope]} "
+                    "burners=0 elapsed=<s>"
+                    for run in (1, 2)
+                ],
+            )
+            self.assertEqual(
+                sorted(path.name for path in evidence.iterdir()),
+                [f"{run:03}-{index}.log" for run in (1, 2) for index in range(per_run[scope])],
+            )
+
+    def test_documented_stress_command_propagates_failure(self):
+        for scope, evidence, result in self.documented_commands(exit_code=101):
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("FAIL run=1 exit=101 summary_valid=True", result.stdout)
+            self.assertNotIn("PASS scope=", result.stdout)
+            self.assertEqual(
+                sorted(path.name for path in evidence.iterdir()),
+                ["001-0.log", "failure-processes.log"],
+            )
+
+    def test_self_test_with_other_arguments_is_refused_before_running(self):
+        binary = self.fake_libtest(PASS)
+        for argv in (
+            ["--self-test", "--runs", "1"],
+            ["--binary", str(binary), "--scope", "pair", "--evidence", str(self.logs), "--self-test"],
+        ):
+            with self.subTest(argv=argv):
+                result = subprocess.run(
+                    [sys.executable, "-B", str(RUNNER), *argv],
+                    capture_output=True, text=True, timeout=10,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(
+                    result.stderr,
+                    "stress-group-cleanup.py: error: --self-test must be the only argument\n",
+                )
+                self.assertFalse(self.calls.exists())
+                self.assertFalse(self.logs.exists())
 
     def test_self_test_entrypoint_preserves_unittest_failure_status(self):
         with tempfile.TemporaryDirectory() as temporary:
