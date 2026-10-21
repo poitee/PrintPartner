@@ -2055,3 +2055,23 @@ cutover. Gateway mounting belongs to D26.
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core --features desktop_rebuild
 ```
+
+### D30 catalog HTTP reads, GRE-804
+
+`pp-api` gains `catalog`, compiled only with `desktop_rebuild`.
+`CatalogHttpConfig::from_startup` keeps the router unmounted unless
+`PP_DESKTOP_REBUILD` is exactly `1` or `true`. While it is unmounted, `GET` and
+`POST /sources` answer 404 and do not open the catalog.
+
+With both gates on, `GET /sources` and `GET /sources/{id}` are served at the
+root and `/api/v1`. List returns `{ "sources": [...] }`. Detail returns that
+caller’s catalog `SourceSummary`. A missing or non-canonical id returns 404
+`Source not found`. The session cookie or one API key is required. API keys use
+the configured tenant, not a request header. The same loopback, host, and
+origin checks used by draft admission apply. Create, patch, and delete stay
+unregistered. The desktop gateway does not mount this router; D26 does.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --test catalog_http
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test catalog_http
+```
