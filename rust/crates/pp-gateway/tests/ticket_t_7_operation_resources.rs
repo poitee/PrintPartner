@@ -165,6 +165,42 @@ fn ticket_t_7_ownership_propose_import_source_files_refuses_invalid_admission_be
     assert_tool_invalid_admission("tool.propose_import_source_files");
 }
 
+#[test]
+fn ticket_t_7_ownership_list_sources_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.list_sources",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_list_sources_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.list_sources");
+}
+
+#[test]
+fn ticket_t_7_ownership_list_source_categories_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.list_source_categories",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_list_source_categories_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.list_source_categories");
+}
+
 fn assert_sqlite_tool_resources(id: &str, expected: Value) {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
     let index = admit_bundled_manifest().unwrap();
@@ -319,7 +355,12 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         index.resources_for("tool.get_workflow_help"),
         Ok(&BTreeSet::new())
     );
-    let lists = BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]);
+    let lists = BTreeSet::from([
+        Table(Projects),
+        Table(SourceDocs),
+        Table(AppSettings),
+        File(FileFamily::SourceWorkspace),
+    ]);
     assert_eq!(index.resources_for("tool.list_sources"), Ok(&lists));
     assert_eq!(
         index.resources_for("tool.list_source_categories"),

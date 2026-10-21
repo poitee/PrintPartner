@@ -236,6 +236,10 @@
           {
             "kind": "table",
             "name": "app_settings"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
           }
         ]
       },
@@ -253,6 +257,10 @@
           {
             "kind": "table",
             "name": "app_settings"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
           }
         ]
       },
