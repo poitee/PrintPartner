@@ -111,6 +111,48 @@ const plain = [
   ['root-later-keep-blank-comment', '\t\n |+1\n  \n# c'],
   ['root-later-tab-line-before-content', '\n |+3\n         \n    \n\t    \n'],
   ['root-document-end-nul', '|\n\tx\n...\u0000\n'],
+  ['root-explicit-comment', '|2\n# c\n'],
+  ['root-explicit-shallow-comment', '|3\n # c\n'],
+  ['root-explicit-document-end', '|2\n...\n'],
+  ['root-document-start-header', '|\n--- |\na: |\n'],
+  ['root-document-start-header-eof', '|\n--- |\n'],
+  ['root-document-end-header', '|\n...\n'],
+  ['root-blank-document-start-header', '|\n\n--- |\n'],
+  // A block scalar with no content at the end of the input.
+  ['map-empty-eof', 'a: |\n'],
+  ['map-empty-no-break', 'a: |'],
+  ['map-empty-folded', 'a: >\n'],
+  ['map-empty-strip', 'a: |-\n'],
+  ['map-empty-keep', 'a: |+\n'],
+  ['map-empty-spaces', 'a: |\n  \n'],
+  ['map-empty-shallow-spaces', 'a: |\n \n'],
+  ['map-empty-explicit', 'a: |2\n'],
+  ['map-empty-explicit-spaces', 'a: |2\n  \n \n'],
+  ['map-empty-comment', 'a: | # c\n'],
+  ['sequence-empty-eof', '- |\n'],
+  ['nested-empty-eof', 'a:\n  b: >\n'],
+  ['root-empty', '|\n'],
+  ['root-empty-no-break', '|'],
+  ['root-empty-spaces', '|\n  \n'],
+  ['root-empty-keep-spaces', '|+\n  \n'],
+  ['root-empty-explicit', '|2\n'],
+  ['root-empty-document', '--- |\n'],
+  // A last line of spaces with no line break after content.
+  ['map-content-last-spaces', 'a: |\n  x\n  '],
+  ['map-content-last-shallow-spaces', 'a: |\n  x\n '],
+  ['map-content-last-deep-spaces', 'a: |\n  x\n    '],
+  ['map-keep-content-last-spaces', 'a: |+\n  x\n\n  '],
+  ['map-explicit-content-last-spaces', 'a: |2\n   \n  '],
+  ['map-tab-content-last-spaces', 'a: |\n \t\n '],
+  ['root-content-last-spaces', '|\n x\n '],
+  ['root-later-content-last-spaces', '  |\r\n # c\r\n  \r\n '],
+  // Tab blank lines before the content indent.
+  ['root-explicit-tab-blanks', '|2\n\t\n\t\n'],
+  ['root-explicit-tab-blank-content', '|2\n\t\n  x\n'],
+  ['root-explicit-space-tab-blanks', '|3\n \t\n\t \n'],
+  ['map-explicit-tab-blanks', 'a: |2\n\t\n\t\n'],
+  ['map-explicit-tab-blanks-sibling', 'a: |1\n\t\n\t\nb: z\n'],
+  ['map-explicit-tab-spaces-blanks', 'a: >+2\n\t  \n  \t\n'],
   // A line that starts with a BOM.
   ['root-bom-document-start', '|1\n\uFEFF---\n'],
   ['root-content-bom-document-start', '|1\n x\n\uFEFF---\ny\n'],
@@ -132,18 +174,6 @@ const plain = [
   ['map-tab-content', 'a: |\n  x\ty\n'],
   ['map-document-end', 'a: |\n  x\n...\n'],
 ];
-// Two saphyr gaps stay out of this fixture; the README lists them.
-function saphyrGap(header, line, name) {
-  const digit = Number(header.match(/[1-9]/)[0]);
-  const indent = name === 'root' ? digit - 1 : digit;
-  const lead = line.match(/^ */)[0].length;
-  const spaces = /^ *$/.test(line);
-  // A root block scalar that ends before its first content line.
-  if (name === 'root' && !spaces && lead < indent && line !== '\tx') return true;
-  // An empty block scalar at the end of the input.
-  const ends = name === 'map-no-final-break' || (!header.includes('+') && (name === 'map-eof' || name === 'root'));
-  return spaces && lead <= indent && ends;
-}
 const cases = [];
 function add(name, source) {
   let expected;
@@ -159,7 +189,6 @@ for (const [ending, separator] of [['lf', '\n'], ['crlf', '\r\n']]) {
     for (const [lineName, line] of lines) {
       for (const [name, template] of templates) {
         if (ending !== 'lf' && (headerName !== 'literal-2' || name !== 'map-sibling')) continue;
-        if (saphyrGap(header, line, name)) continue;
         const source = template.replaceAll('H', header).replaceAll('@', line).replaceAll('\n', separator);
         add(`${ending}-${headerName}-${lineName}-${name}`, source);
       }

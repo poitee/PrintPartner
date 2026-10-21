@@ -2,6 +2,7 @@ use super::observation::{PreparationBudget, ReadFailure, ReadResult};
 use crate::manifest_text::JsText;
 use saphyr_parser::{Event, Parser, ScalarStyle, Tag};
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::LazyLock;
 
 #[derive(Clone)]
@@ -184,7 +185,11 @@ fn bom_boundary(chars: &[char], i: usize, budget: &PreparationBudget<'_>) -> Rea
     let mut line = j;
     loop {
         budget.check()?;
+        let start = j;
         while chars.get(j).is_some_and(|c| matches!(c, ' ' | '\t')) {
+            if (j - start).is_multiple_of(1024) {
+                budget.check()?;
+            }
             j += 1;
         }
         if chars.get(j) == Some(&'#') {
@@ -226,6 +231,36 @@ fn line_end(chars: &[char], start: usize, budget: &PreparationBudget<'_>) -> Rea
     Ok(end)
 }
 
+struct BlockScalar {
+    // The parent node's indent; None at a root node js-yaml indents at column 0.
+    base: Option<usize>,
+    // The content indent, once known.
+    indent: Option<usize>,
+    explicit: bool,
+    keep: bool,
+    // Output range of the header's indicators, and where its line ends.
+    indicators: Range<usize>,
+    header_end: usize,
+    // Lines read after the header, and whether any of them is content.
+    content: bool,
+    lines: usize,
+}
+
+// saphyr loads an empty block scalar at the end of the input as "\n", and
+// rejects an empty root one with an indentation indicator that a comment or
+// `...` ends. js-yaml loads one line break per kept line, so the shield writes
+// that value as a double-quoted scalar on the header line.
+fn empty_block(output: &mut String, block: &BlockScalar, lines: usize) {
+    let rest = output.split_off(block.indicators.end);
+    output.truncate(block.indicators.start);
+    output.push('"');
+    if block.keep {
+        output.push_str(&"\\n".repeat(lines));
+    }
+    output.push('"');
+    output.push_str(&rest[..block.header_end - block.indicators.end]);
+}
+
 struct FlowProperty {
     line: usize,
     // A `:` after the empty node would separate it as a mapping key.
@@ -257,9 +292,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     // The line began inside a quoted scalar, so its indent is unknown here.
     let mut quoted_line = false;
     let mut quoted_end = false;
-    // A block scalar's parent indent (None at a root node js-yaml indents at
-    // column 0) and, once known, its content indent.
-    let mut block: Option<(Option<usize>, Option<usize>)> = None;
+    let mut block: Option<BlockScalar> = None;
     // js-yaml's indent for the outermost flow collection: one past its block
     // parent, or the indent of the line the root node starts on.
     let mut flow_indent = 0usize;
@@ -299,14 +332,16 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             // Before a block scalar's first content line sets its indent, js-yaml
             // rejects a tab that sits no deeper than the scalar's parent node.
             if chars.get(i) == Some(&'\t')
-                && matches!(block, Some((Some(base), None)) if line_indent <= base)
+                && block.as_ref().is_some_and(|b| {
+                    b.indent.is_none() && b.base.is_some_and(|base| line_indent <= base)
+                })
             {
                 return invalid();
             }
             let mut block_end = false;
-            if let Some((base, required)) = block {
-                let detected = required.is_some();
-                let required = required.or_else(|| (!blank).then_some(line_indent));
+            if let Some(b) = &mut block {
+                let base = b.base;
+                let required = b.indent.or_else(|| (!blank).then_some(line_indent));
                 // js-yaml ends every block scalar at a document marker.
                 let marker = line_indent == 0
                     && (matches!(chars.get(i..i + 3), Some(['-', '-', '-'] | ['.', '.', '.']))
@@ -318,7 +353,12 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                             line_indent >= n && base.is_none_or(|b| line_indent > b)
                         }))
                 {
-                    block = Some((base, required));
+                    // js-yaml reads a whitespace-only line deeper than an
+                    // explicit indent as content.
+                    b.content |=
+                        !blank || (b.explicit && required.is_some_and(|n| line_indent > n));
+                    b.indent = required;
+                    b.lines += 1;
                     let end = line_end(&chars, i, budget)?;
                     // js-yaml counts a root indentation indicator from column 0
                     // and saphyr from column 1, and saphyr rejects a tab at
@@ -346,12 +386,24 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 }
                 // saphyr reads a comment or `---` after a root block scalar with
                 // no indicator and no content as that content.
-                let whitespace = chars[i..]
-                    .iter()
-                    .find(|c| !matches!(c, ' ' | '\t'))
-                    .is_none_or(|c| matches!(c, '\r' | '\n'));
-                if parent.is_none() && !detected && !whitespace && !(marker && chars[i] == '.') {
+                let mut end = i;
+                while chars.get(end).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                    if (end - i).is_multiple_of(1024) {
+                        budget.check()?;
+                    }
+                    end += 1;
+                }
+                let whitespace = chars.get(end).is_none_or(|c| matches!(c, '\r' | '\n'));
+                if parent.is_none()
+                    && b.indent.is_none()
+                    && !whitespace
+                    && !(marker && chars[i] == '.')
+                {
                     return invalid();
+                }
+                if parent.is_none() && !b.content {
+                    empty_block(&mut output, b, b.lines);
+                    output.push('\n');
                 }
                 block = None;
                 block_end = true;
@@ -686,6 +738,11 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             // js-yaml indents a root node from the line it starts on.
             let base = parent.or_else(|| document_indent.and_then(|n| n.checked_sub(1)));
             let mut explicit = None;
+            let indicators = chars[i + 1..end]
+                .iter()
+                .take_while(|c| c.is_ascii_digit() || matches!(c, '+' | '-'))
+                .count()
+                + 1;
             for c in &chars[i + 1..end] {
                 if let Some(n) = c.to_digit(10)
                     && n > 0
@@ -698,7 +755,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     break;
                 }
             }
-            block = Some((base, explicit));
+            let start = output.len();
             for c in &chars[i..end] {
                 output.push(*c);
                 consumed += c.len_utf8();
@@ -707,6 +764,16 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     next_check = consumed + 4096;
                 }
             }
+            block = Some(BlockScalar {
+                base,
+                indent: explicit,
+                explicit: explicit.is_some(),
+                keep: chars[i..i + indicators].contains(&'+'),
+                indicators: start..start + indicators,
+                header_end: output.len(),
+                content: false,
+                lines: 0,
+            });
             i = end;
             plain = false;
             node = false;
@@ -776,6 +843,35 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         }
         consumed += c.len_utf8();
         i += 1;
+    }
+    if let Some(b) = &block {
+        let unterminated = chars.last().is_some_and(|c| !matches!(c, '\r' | '\n'));
+        if !b.content {
+            // js-yaml skips a last line that has no line break under an explicit
+            // indent, and keeps one otherwise.
+            let lines = if b.explicit && unterminated && b.lines > 0 {
+                b.lines - 1
+            } else {
+                b.lines
+            };
+            empty_block(&mut output, b, lines);
+        } else if unterminated {
+            // After content, js-yaml adds no line break for a last line of
+            // spaces no deeper than the content indent, and saphyr does.
+            let mut spaces = 0;
+            while chars.iter().rev().nth(spaces) == Some(&' ') {
+                if spaces.is_multiple_of(1024) {
+                    budget.check()?;
+                }
+                spaces += 1;
+            }
+            if spaces > 0
+                && b.indent.is_some_and(|n| spaces <= n)
+                && matches!(chars.iter().rev().nth(spaces), Some('\r' | '\n'))
+            {
+                output.truncate(output.len() - spaces - usize::from(b.base.is_none()));
+            }
+        }
     }
     budget.check()?;
     if output.len() > source.len().saturating_mul(2) {
