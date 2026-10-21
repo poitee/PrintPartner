@@ -345,8 +345,11 @@ pub enum CheckoutManifestUse {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommunitySlug(String);
 impl CommunitySlug {
-    /// Node's `isCommunityManifestSlug`: `^[a-z0-9][a-z0-9._-]{0,63}$`, except
-    /// `kit-catalog` and `registry-index`, which name embedded catalog documents.
+    /// Node's `isCommunityManifestSlug`: `^[a-z0-9][a-z0-9._-]{0,63}$`, minus
+    /// the stems of other documents in the manifests directory, so they are
+    /// never read as community manifests. `registry-index.yaml` ships there,
+    /// and Node's kit catalog loader also looks there for a deployment-provided
+    /// `kit-catalog.yaml`.
     pub fn parse(value: &str) -> Option<Self> {
         let bytes = value.as_bytes();
         // ast-grep-ignore: no-writer-family-literal -- Refuses embedded catalog document names as slugs; reads and writes nothing.
