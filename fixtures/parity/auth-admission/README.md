@@ -1,6 +1,6 @@
 # Auth admission parity
 
-Fixes GRE-877. Seventy-seven cases use real loopback HTTP to compare auth admission.
+Refs GRE-877. Seventy-seven cases use real loopback HTTP to compare auth admission.
 They cover registration, forgot-password, login, logout, password change, seeded reset-password,
 authenticated `/auth/me`, and API-key creation, revocation, and regeneration.
 Login also covers a second Host or Origin header and each of `X-Forwarded-Host`, `X-Forwarded-For`, `X-Forwarded-Proto`, and `Forwarded`.
@@ -36,7 +36,7 @@ Each case owns disposable storage and ephemeral listeners. Cleanup runs before c
 mail drain to twenty-five seconds, and a forty-five second case budget. Body recipes retain byte length and SHA-256 rather than padding.
 Host and Origin are symbolic, so no ephemeral ports, generated IDs, tokens, cookies, or large bodies enter the golden.
 
-The final bundle adds four seeded reset-password cases, eleven `/auth/me` cases, and thirty API-key cases.
+This bundle adds four seeded reset-password cases, eleven `/auth/me` cases, and thirty API-key cases.
 `/auth/me` covers foreign Origin, cross-site `Sec-Fetch-Site`, duplicate Host and Origin, all four proxy headers,
 and allowed missing Origin on GET. Each API-key mutation covers the four basic admission recipes plus duplicate and proxy headers.
-No remaining GRE-877 admission bundle is planned.
+`GET /settings/api-keys`, the OAuth start and callback routes, and bounded-body or invalid-JSON recipes outside forgot-password remain a follow-up slice.
