@@ -48,7 +48,7 @@ jobs:
   # that need the built server: lifecycle evidence, Python drivers and smoke tests.
   runtime:
     runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
       CARGO_INCREMENTAL: '0'
@@ -111,9 +111,22 @@ jobs:
           python3 rust/scripts/check-boundaries.py --self-test 2>&1 | tee "$PP_EVIDENCE/boundaries.log"
           python3 rust/scripts/check-domain-deps.py --self-test 2>&1 | tee "$PP_EVIDENCE/domain-deps.log"
           git diff --exit-code -- rust/Cargo.lock web/package-lock.json
-      - name: Run eight real core lifecycle tests
+      # Each serial run gets its own TMPDIR, which must be empty afterwards.
+      - name: Run real core lifecycle tests and check scratch cleanup
         run: |
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
+          for features in off desktop_rebuild; do
+            args=(--manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0)
+            if [[ "$features" != off ]]; then args+=(--features "$features"); fi
+            cargo test "${args[@]}" --no-run
+            scratch="$RUNNER_TEMP/runtime-m0-scratch-$features"
+            mkdir "$scratch"
+            TMPDIR="$scratch" cargo test "${args[@]}" -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime-$features.log"
+            leftovers=$(find "$scratch" -mindepth 1 -maxdepth 1)
+            if [[ -n "$leftovers" ]]; then
+              printf 'runtime_m0 (%s) leaked scratch:\n%s\n' "$features" "$leftovers"
+              exit 1
+            fi
+          done
       - name: Prove measured compat repeated EOF cleanup
         run: |
           python3 rust/scripts/prove-measured-startup-death.py --scenario lifecycle --evidence "$PP_EVIDENCE/measured-lifecycle" 2>&1 | tee "$PP_EVIDENCE/measured-lifecycle-driver.log"

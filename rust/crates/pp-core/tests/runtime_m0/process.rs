@@ -213,8 +213,6 @@ pub fn output(command: &mut Command, bound: Duration) -> Output {
     let cleaned = child.cleanup();
     let status = child.0.wait().expect("wait for fixture after cleanup");
     drop(child);
-    assert!(cleaned, "fixture subprocess tree cleanup failed");
-    assert!(exited, "fixture subprocess timed out");
     let mut result = Output {
         status,
         stdout: Vec::new(),
@@ -224,6 +222,16 @@ pub fn output(command: &mut Command, bound: Duration) -> Output {
     stderr.rewind().unwrap();
     stdout.read_to_end(&mut result.stdout).unwrap();
     stderr.read_to_end(&mut result.stderr).unwrap();
+    let captured = format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr),
+    );
+    assert!(
+        cleaned,
+        "fixture subprocess tree cleanup failed\n{captured}"
+    );
+    assert!(exited, "fixture subprocess timed out\n{captured}");
     result
 }
 
@@ -318,6 +326,8 @@ mod tests {
             message.contains("fixture subprocess timed out"),
             "{message}"
         );
+        // The stalled fixture's libtest banner proves its output reaches the panic.
+        assert!(message.contains("running 1 test"), "{message}");
         let pids = std::fs::read_to_string(root.path().join("pids")).unwrap();
         let pids: Vec<i32> = pids
             .split_whitespace()

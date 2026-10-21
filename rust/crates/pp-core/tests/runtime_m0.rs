@@ -18,34 +18,6 @@ mod scratch;
 #[path = "runtime_m0/process.rs"]
 mod process;
 
-#[test]
-fn scratch_root_is_empty_after_runtime_tests() {
-    let (root, _) = temporary("m0-check");
-    let output = scratch::output(
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--skip",
-                "scratch_root_is_empty_after_runtime_tests",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env("TMPDIR", root.path())
-            .env("TMP", root.path())
-            .env("TEMP", root.path())
-            .env("CARGO_TARGET_TMPDIR", root.path()),
-        Duration::from_secs(1800),
-    );
-    assert!(
-        output.status.success(),
-        "runtime suite failed\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    println!("{}", String::from_utf8_lossy(&output.stdout));
-    scratch::assert_empty(root.path());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok."));
-}
-
 #[tokio::test]
 async fn scratch_cleanup_after_runtime_panic() {
     let (send, receive) = tokio::sync::oneshot::channel();

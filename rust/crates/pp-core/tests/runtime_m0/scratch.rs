@@ -114,17 +114,6 @@ fn unreadable_fixture_is_removed_after_panic() {
     assert!(!root.exists());
 }
 
-pub fn assert_empty(root: &Path) {
-    let leftovers: Vec<_> = std::fs::read_dir(root)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect();
-    assert!(
-        leftovers.is_empty(),
-        "runtime suite leaked scratch: {leftovers:?}"
-    );
-}
-
 pub struct RawDropScratch {
     directory: Option<Scratch>,
     data: PathBuf,
@@ -161,16 +150,6 @@ impl Drop for RawDropScratch {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-}
-
-#[test]
-fn leak_check_rejects_leftovers() {
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("leaked-file"), b"leak").unwrap();
-    let failure = std::panic::catch_unwind(|| assert_empty(root.path()));
-    let message = failure.unwrap_err().downcast::<String>().unwrap();
-    assert!(message.contains("runtime suite leaked scratch:"));
-    assert!(message.contains("leaked-file"));
 }
 
 // Ordinary fixtures join the owner before their TempDir unwinds. The raw Drop
