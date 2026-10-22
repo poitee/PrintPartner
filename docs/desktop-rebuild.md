@@ -1202,7 +1202,10 @@ callers. A targeted claim refused before the job's first attempt now writes the
 entry's `source_preclaim_refusals` row; one refused after an earlier attempt writes an
 `authority_refused` observation with that generation and no fence. A generic claim
 skips an import whose entry is still `admitted`, because only the owner that holds
-its input can run it.
+its input can run it. A generic claim of a recovered import, whose entry has left
+`admitted`, records that same observation for the recovered generation and no fence.
+The job journal records the refusal once, with phase `claim`, and the claim moves
+on. Retrying the generic claim writes no second observation.
 
 A job can end before its `Cleanup` phase: an authority refusal, a missing Source or
 the attempt limit fails it. `uploads::settle_terminal` then settles the entry, and

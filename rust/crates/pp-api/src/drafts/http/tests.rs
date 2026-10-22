@@ -22,6 +22,11 @@ async fn probe(Extension(principal): Extension<Principal>) -> Json<Value> {
     })
 }
 
+/// Extracts the whole body, so Axum's own extractor limit would apply here.
+async fn measure(body: Bytes) -> Json<Value> {
+    Json(json!({"len":body.len()}))
+}
+
 struct Server {
     origin: String,
     client: Client,
@@ -34,7 +39,8 @@ impl Server {
         let config = DraftHttpConfig::from_startup(&origin, "default", flag).unwrap();
         let routes = Router::new()
             .route("/plans/{id}/drafts", get(probe))
-            .route("/plans/{id}/drafts/{draft_id}/parts", patch(probe));
+            .route("/plans/{id}/drafts/{draft_id}/parts", patch(probe))
+            .route("/plans/{id}/drafts/{draft_id}/body", patch(measure));
         let service =
             admit_draft_routes(config, routes).into_make_service_with_connect_info::<SocketAddr>();
         let task = tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
@@ -252,4 +258,177 @@ async fn admission_rejects_ambiguous_credentials_hosts_and_origins() {
         raw.starts_with("HTTP/1.1 403") && raw.contains("Invalid request origin"),
         "{raw}"
     );
+}
+
+impl Server {
+    async fn body(&self, method: Method, body: reqwest::Body) -> (u16, Value) {
+        let path = match method {
+            Method::PATCH => "/plans/1/drafts/2/body",
+            _ => "/plans/1/drafts",
+        };
+        let response = self
+            .client
+            .request(method, format!("{}{path}", self.origin))
+            .header("Origin", &self.origin)
+            .header("Cookie", COOKIE)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        (status, response.json().await.unwrap_or(Value::Null))
+    }
+    /// Opens a PATCH that promises a body and never sends it.
+    async fn stall(&self) -> tokio::net::TcpStream {
+        let mut stream = tokio::net::TcpStream::connect(self.host()).await.unwrap();
+        let head = format!(
+            "PATCH /plans/1/drafts/2/parts HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\
+             Cookie: {COOKIE}\r\nContent-Length: 10\r\n\r\n",
+            self.host(),
+            self.origin
+        );
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream
+    }
+    async fn busy(&self) -> bool {
+        let (status, body) = self.send("", false, SESSION).await;
+        match status {
+            503 => {
+                assert_eq!(
+                    body,
+                    json!({"detail":"Draft service temporarily unavailable"})
+                );
+                true
+            }
+            200 => false,
+            other => panic!("unexpected {other}"),
+        }
+    }
+    /// Waits for in-flight stalls to release their permits.
+    async fn recovers(&self) {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            while self.busy().await {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn bodies_are_bounded_by_method_and_patch_limit() {
+    let s = Server::start(Some("1")).await;
+    let large = vec![b'x'; 3 * 1024 * 1024];
+    assert_eq!(
+        s.body(Method::PATCH, large.into()).await,
+        (200, json!({"len":3 * 1024 * 1024}))
+    );
+    let too_large = (413, json!({"detail":"Request body too large"}));
+    let read = vec![b'x'; 1024 * 1024 + 1];
+    assert_eq!(s.body(Method::GET, read.into()).await, too_large);
+    let edit = vec![b'x'; 8 * 1024 * 1024 + 1];
+    assert_eq!(s.body(Method::PATCH, edit.into()).await, too_large);
+    let mut stream = tokio::net::TcpStream::connect(s.host()).await.unwrap();
+    let head = format!(
+        "PATCH /plans/1/drafts/2/body HTTP/1.1\r\nHost: {}\r\nOrigin: {}\r\n\
+         Cookie: {COOKIE}\r\nTransfer-Encoding: chunked\r\n\r\n",
+        s.host(),
+        s.origin
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    let chunk = [b"100000\r\n".as_slice(), &[b'x'; 1 << 20], b"\r\n"].concat();
+    for _ in 0..9 {
+        // The server may answer and stop reading before every chunk is sent.
+        if stream.write_all(&chunk).await.is_err() {
+            break;
+        }
+    }
+    let mut response = vec![0; 1024];
+    let read = stream.read(&mut response).await.unwrap();
+    let response = String::from_utf8_lossy(&response[..read]);
+    assert!(
+        response.starts_with("HTTP/1.1 413") && response.contains("Request body too large"),
+        "{response}"
+    );
+    let target = format!("{}/plans/1/drafts?q={}", s.origin, "x".repeat(16 * 1024));
+    let response = s.client.get(target).header("Cookie", COOKIE).send().await;
+    let response = response.unwrap();
+    assert_eq!(response.status(), 414);
+    assert_eq!(
+        response.json::<Value>().await.unwrap(),
+        json!({"detail":"Request target too long"})
+    );
+}
+
+#[tokio::test]
+async fn stalled_bodies_exhaust_admission_then_release_it() {
+    let s = Server::start(Some("1")).await;
+    let mut stalls = Vec::new();
+    for _ in 0..64 {
+        stalls.push(s.stall().await);
+    }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !s.busy().await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for mut stream in stalls {
+        let mut response = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(8), stream.read_to_end(&mut response));
+        let _ = read.await.unwrap();
+        let response = String::from_utf8(response).unwrap();
+        assert!(
+            response.starts_with("HTTP/1.1 408") && response.contains("Request body timed out"),
+            "{response}"
+        );
+    }
+    s.recovers().await;
+
+    let mut stalls = Vec::new();
+    for _ in 0..64 {
+        stalls.push(s.stall().await);
+    }
+    while !s.busy().await {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    drop(stalls);
+    s.recovers().await;
+}
+
+#[tokio::test]
+async fn response_body_holds_admission_until_consumed_or_dropped() {
+    let admission = Arc::new(Semaphore::new(1));
+    for consume in [true, false] {
+        let body = Body::new(AdmittedBody {
+            body: Body::from("workspace response"),
+            _permit: admission.clone().try_acquire_owned().unwrap(),
+        });
+        assert_eq!(admission.available_permits(), 0);
+        if consume {
+            assert_eq!(to_bytes(body, 1024).await.unwrap(), "workspace response");
+        } else {
+            drop(body);
+        }
+        assert_eq!(admission.available_permits(), 1);
+    }
+}
+
+#[test]
+fn limits_can_only_be_lowered() {
+    let config = DraftHttpConfig::new("http://127.0.0.1:1", "default").unwrap();
+    let wait = Duration::from_millis(100);
+    let lowered = config.clone().with_limits(1024, Duration::ZERO).unwrap();
+    assert_eq!((lowered.body_limit, lowered.wait), (1024, Duration::ZERO));
+    assert!(config.clone().with_limits(8 * 1024 * 1024, wait).is_ok());
+    assert!(
+        config
+            .clone()
+            .with_limits(8 * 1024 * 1024 + 1, wait)
+            .is_err()
+    );
+    assert!(config.clone().with_limits(1024, wait * 2).is_err());
+    assert!(config.with_limits(0, wait).is_err());
 }

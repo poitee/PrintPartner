@@ -7,13 +7,14 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = ["pp-storage/desktop_rebuild", "dep:ryu-js"]
+desktop_rebuild = ["pp-storage/desktop_rebuild", "dep:http-body", "dep:ryu-js"]
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
 anyhow.workspace = true
 log = "=0.4.34"
 axum.workspace = true
+http-body = { version = "=1.0.1", optional = true }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -211,11 +211,12 @@ jobs:
     env:
       RUST_OS: macos
       CARGO_SCOPE: --workspace
-      # GRE-645: lifecycle groups and config deadline regression.
+      # GRE-645 skips runtime_m0, the rest of ticket_t_2::, and the config deadline test.
+      # GRE-671 runs ticket_t_2::ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap.
       NEXTEST_FILTER: >-
         not (
         binary_id(pp-core::runtime_m0)
-        | (package(pp-compat) & test(/^ticket_t_2::/))
+        | (package(pp-compat) & test(/^ticket_t_2::/) & not test(=ticket_t_2::ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap))
         | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)
         )
     timeout-minutes: 90

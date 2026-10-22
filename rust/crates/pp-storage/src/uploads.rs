@@ -497,8 +497,8 @@ impl Phase {
 enum Observed {
     /// A targeted claim refused before the job's first attempt.
     Preclaim { job_id: String, cancel: bool },
-    /// A live attempt, or a targeted claim refused after an earlier attempt,
-    /// which holds no fence.
+    /// A live attempt, or a claim refused after an earlier attempt, which
+    /// holds no fence. A generic recovered claim uses this shape too.
     Attempt {
         job_id: String,
         generation: i64,
@@ -1071,6 +1071,36 @@ pub(crate) fn record_targeted_authority_refusal(
         }
     };
     record_observation(tx, &mut op, "authority_refused", observed)?;
+    store(tx, &op)
+}
+
+/// Records a generic claim's authority refusal for a recovered supplied import,
+/// before the job records its own. The observation keeps the recovered
+/// generation and no fence, as a targeted claim does after an earlier attempt.
+/// Generation 0 is still admitted-only and is left to the job journal. A later
+/// claim finds the job terminal and writes no second observation.
+pub(crate) fn record_recovered_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &jobs::JobRecord,
+) -> Result<()> {
+    if job.generation == 0 {
+        return Ok(());
+    }
+    let Some(mut op) = bound(tx, job)? else {
+        return Ok(());
+    };
+    record_observation(
+        tx,
+        &mut op,
+        "authority_refused",
+        Observed::Attempt {
+            job_id: job.job_id.clone(),
+            generation: job.generation,
+            fence: None,
+            receipt: None,
+            cancel: job.cancel_requested,
+        },
+    )?;
     store(tx, &op)
 }
 
