@@ -1819,14 +1819,9 @@ pub(crate) fn execute(
             &observation,
         )?),
         #[cfg(feature = "desktop_rebuild")]
-        Command::AdoptSourceSyncTarget { lease, key } => {
-            TransactionDecision::Outcome(Outcome::SourceSyncSettled(crate::source_sync::adopt(
-                &tx,
-                catalog_state,
-                &lease,
-                &key,
-            )?))
-        }
+        Command::AdoptSourceSyncTarget { lease, key } => TransactionDecision::Outcome(
+            Outcome::SourceSyncSettled(crate::source_sync::adopt(&tx, &lease, &key)?),
+        ),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }

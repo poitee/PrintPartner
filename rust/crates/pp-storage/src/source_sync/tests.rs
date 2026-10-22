@@ -2622,3 +2622,56 @@ fn sync_adopt_rejects_changed_provenance() {
     assert_eq!(stored_success(&sync, &job_id), stored);
     sync.begin_work(id).unwrap().release().unwrap();
 }
+
+#[test]
+fn sync_adopt_rejects_reclaimed_attempt() {
+    let sync = Fixture::new();
+    let id = sync.source("Reclaimed");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let key = target.key().clone();
+    let settled = sync
+        .worker
+        .settle_source_sync_target(&lease, &mut target, settlement(id))
+        .unwrap();
+    let stored = stored_success(&sync, &job_id);
+    assert_eq!(
+        sync.worker
+            .adopt_source_sync_target(&lease, key.clone())
+            .unwrap(),
+        settled
+    );
+    change_job(&sync, &job_id, |job| job.lease_until = Some(now() - 1));
+    let ClaimedAttempt {
+        lease: reclaimed, ..
+    } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(reclaimed.job_id(), job_id);
+    assert_ne!(reclaimed.generation(), lease.generation());
+    let before = sync.snapshot();
+    assert_eq!(
+        refuse_adopt(&sync, &reclaimed, key, id),
+        "Sync target attempt mismatch"
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    sync.begin_work(id).unwrap().release().unwrap();
+}
+
+#[test]
+fn sync_adopt_rejects_failed_target() {
+    let sync = Fixture::new();
+    let id = sync.source("Failed");
+    sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let key = target.key().clone();
+    sync.worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    assert_eq!(
+        refuse_adopt(&sync, &lease, key, id),
+        "Sync target is not an acknowledged success"
+    );
+}

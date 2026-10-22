@@ -1064,7 +1064,6 @@ pub(crate) fn acknowledge(
 /// under mismatched provenance.
 pub(crate) fn adopt(
     tx: &Transaction<'_>,
-    _state: &State,
     lease: &AttemptLease,
     key: &SyncTargetKey,
 ) -> Result<SettledSyncTarget> {
