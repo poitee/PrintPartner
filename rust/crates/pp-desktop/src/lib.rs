@@ -6,6 +6,8 @@ use tauri::Url;
 
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_actions;
+#[cfg(feature = "desktop_rebuild")]
+pub mod origin_change;
 
 pub fn desktop_data_dir(
     explicit_data: Option<PathBuf>,
@@ -655,6 +657,7 @@ mod tests {
         ] {
             for command in [
                 "open_sponsor",
+                "sync_portable_settings",
                 "plugin:app|exit",
                 "plugin:window|close",
                 "plugin:webview|create_webview_window",
@@ -674,7 +677,9 @@ mod tests {
     #[cfg(feature = "desktop_rebuild")]
     #[test]
     fn ticket_t_68_sponsor_capability_has_only_the_bound_remote_action() {
-        crate::native_actions::verify_authority(generated_context());
+        let mut context = generated_context();
+        crate::origin_change::verify_authority(&mut context);
+        crate::native_actions::verify_authority(context);
     }
 
     #[test]

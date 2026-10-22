@@ -37,6 +37,31 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+#[cfg(feature = "desktop_rebuild")]
+fn show_origin_notice(text: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let dialog = gtk::MessageDialog::builder()
+            .title("Print Partner")
+            .text(text)
+            .message_type(gtk::MessageType::Info)
+            .buttons(gtk::ButtonsType::Ok)
+            .modal(true)
+            .build();
+        dialog.run();
+        dialog.close();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        rfd::MessageDialog::new()
+            .set_title("Print Partner")
+            .set_description(text)
+            .set_level(rfd::MessageLevel::Info)
+            .show();
+    }
+}
+
 fn show_startup_error() {
     let title = "Print Partner could not start";
     let description = "The desktop runtime or its verified resources could not start. Check that this installation is complete and that another Print Partner instance is not using its data directory.";
@@ -82,7 +107,8 @@ fn run() -> Result<u8> {
     }
     #[cfg(feature = "desktop_rebuild")]
     let builder = builder.invoke_handler(tauri::generate_handler![
-        pp_desktop::native_actions::open_sponsor
+        pp_desktop::native_actions::open_sponsor,
+        pp_desktop::origin_change::sync_portable_settings
     ]);
     let app = builder
         .build(tauri::generate_context!())
@@ -143,14 +169,43 @@ fn run() -> Result<u8> {
         .context("Desktop core startup failed")?;
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
-        let url = core.take_launch_target()?.into_url().parse()?;
+        let launch_url = core.take_launch_target()?.into_url();
         #[cfg(feature = "desktop_rebuild")]
-        let sponsor = pp_desktop::native_actions::SponsorAction::from_startup(
-            core.desktop_rebuild(),
-            origin.clone(),
-        );
+        let (sponsor, origin_bridge) = {
+            let enabled = core.desktop_rebuild().enabled();
+            let sponsor = pp_desktop::native_actions::SponsorAction::from_startup(
+                core.desktop_rebuild(),
+                origin.clone(),
+            );
+            let origin_bridge = if enabled {
+                pp_desktop::origin_change::require_fresh_bootstrap(
+                    core.origin_change(),
+                    &launch_url,
+                )
+                .context("Desktop core startup failed")?;
+                let preferences = runtime.block_on(core.handle().browser_preferences()).ok();
+                pp_desktop::origin_change::OriginBridge::enabled(
+                    origin.clone(),
+                    core.handle(),
+                    preferences.as_ref(),
+                    core.origin_change(),
+                )
+            } else {
+                pp_desktop::origin_change::OriginBridge::disabled()
+            };
+            (sponsor, origin_bridge)
+        };
+        #[cfg(feature = "desktop_rebuild")]
+        let origin_notice = origin_bridge.notice().map(str::to_owned);
+        #[cfg(not(feature = "desktop_rebuild"))]
+        let origin_notice: Option<String> = None;
+        let url = launch_url.parse()?;
         #[cfg(feature = "desktop_rebuild")]
         if let Some(capability) = sponsor.capability() {
+            app.add_capability(capability)?;
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        if let Some(capability) = origin_bridge.capability() {
             app.add_capability(capability)?;
         }
         let builder = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url));
@@ -161,7 +216,13 @@ fn run() -> Result<u8> {
             } else {
                 builder
             };
+            let builder = if let Some(script) = origin_bridge.initialization_script() {
+                builder.initialization_script(script)
+            } else {
+                builder
+            };
             app.manage(sponsor);
+            app.manage(origin_bridge);
             builder
         };
         let window = builder
@@ -181,9 +242,9 @@ fn run() -> Result<u8> {
         });
         let watch =
             build_tray(&app, core.handle(), data).context("Native tray initialization failed")?;
-        Ok((window, watch))
+        Ok((window, watch, origin_notice))
     })();
-    let (window, status_watch) = match setup {
+    let (window, status_watch, origin_notice) = match setup {
         Ok(window) => window,
         Err(error) => {
             let receipt = runtime.block_on(core.shutdown());
@@ -191,6 +252,8 @@ fn run() -> Result<u8> {
             return Err(error);
         }
     };
+    #[cfg(feature = "desktop_rebuild")]
+    let origin_notice_shown = std::sync::atomic::AtomicBool::new(false);
     let shutdown_requested = core.shutdown_requested();
     let app_handle = app.handle().clone();
     let stop_signal = runtime.spawn(async move {
@@ -207,6 +270,15 @@ fn run() -> Result<u8> {
         if matches!(event, tauri::RunEvent::Exit) {
             status_watch.abort();
         }
+        #[cfg(feature = "desktop_rebuild")]
+        if matches!(event, tauri::RunEvent::Ready)
+            && !origin_notice_shown.swap(true, std::sync::atomic::Ordering::AcqRel)
+            && let Some(notice) = origin_notice.as_deref()
+        {
+            show_origin_notice(notice);
+        }
+        #[cfg(not(feature = "desktop_rebuild"))]
+        let _ = &origin_notice;
         if cfg!(debug_assertions) && test_exit.is_some() && matches!(event, tauri::RunEvent::Ready) {
             if test_recovery_logs {
                 probe_diagnostics.view_logs(_app);
