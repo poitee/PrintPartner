@@ -1815,10 +1815,12 @@ fn measured_release_ack_deadline_excludes_verification() {
     let verified_signal = verified.clone();
     let ready_signal = ready.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
+        // Verification runs long enough that an ack budget measured from phase
+        // start would already be exhausted by the time ready appears
+        // (verified@1000ms + ready@+100ms = 1100ms > 600ms ack). The real
+        // helper starts the ack window only after verified exists.
+        std::thread::sleep(Duration::from_millis(1000));
         std::fs::write(&verified_signal, b"ok").unwrap();
-        // Ack arrives well inside the acknowledgement window (was 150ms into a
-        // 350ms budget — too tight on loaded CI hosts).
         std::thread::sleep(Duration::from_millis(100));
         std::fs::write(&ready_signal, b"ok").unwrap();
     });
@@ -1826,7 +1828,7 @@ fn measured_release_ack_deadline_excludes_verification() {
         &verified,
         &ready,
         Duration::from_secs(2),
-        Duration::from_millis(1000),
+        Duration::from_millis(600),
         || true,
     );
     let _ = std::fs::remove_dir_all(&root);
