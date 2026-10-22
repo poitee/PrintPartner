@@ -363,6 +363,7 @@ fn catalog_error(error: anyhow::Error) -> Response {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Catalog unavailable".to_owned(),
             ),
+            CatalogFailure::Conflict => (StatusCode::CONFLICT, error.to_string()),
             CatalogFailure::Input(_)
             | CatalogFailure::DuplicateName(_)
             | CatalogFailure::Referenced => (StatusCode::BAD_REQUEST, error.to_string()),
