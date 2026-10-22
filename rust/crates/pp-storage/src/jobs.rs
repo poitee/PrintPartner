@@ -236,6 +236,8 @@ pub enum Outcome {
     SourceSyncSettled(crate::source_sync::SettledSyncTarget),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncFailed(crate::source_sync::FailedSyncTarget),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncAcknowledged(crate::source_sync::AcknowledgedSyncTarget),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -265,6 +267,8 @@ enum TransactionDecision {
     SourceSyncReserved(crate::source_sync::ReservedTarget, SettingsClient),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncSettled(crate::source_sync::SettledSyncRelease),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncAcknowledged(crate::source_sync::AcknowledgedSyncRelease),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
@@ -405,6 +409,12 @@ pub(crate) enum Command {
         lease: AttemptLease,
         candidate: crate::source_sync::SyncCandidate,
         detail: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    AcknowledgeSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
+        observation: crate::source_scan::LocalScanObservation,
     },
     Retain {
         per_tenant: usize,
@@ -1143,6 +1153,35 @@ impl ServerWorkerClient {
         lease.version = failed.version;
         Ok(failed)
     }
+
+    /// Acknowledges one retained local-read failure when `observation` matches
+    /// the claim. Exact replay returns that failure and writes nothing. A
+    /// refusal writes nothing. The live token is retired after commit.
+    pub fn acknowledge_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+        target: &crate::source_sync::SyncTargetLease,
+        observation: &crate::source_scan::LocalScanObservation,
+    ) -> Result<crate::source_sync::AcknowledgedSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let acknowledged = match submit(
+            &self.storage,
+            Command::AcknowledgeSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+                observation: observation.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncAcknowledged(acknowledged) => acknowledged,
+            _ => unreachable!(),
+        };
+        lease.version = acknowledged.version;
+        Ok(acknowledged)
+    }
 }
 
 fn random() -> String {
@@ -1736,6 +1775,18 @@ pub(crate) fn execute(
             candidate,
             &detail,
         )?)),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::AcknowledgeSourceSyncTarget {
+            lease,
+            candidate,
+            observation,
+        } => TransactionDecision::SourceSyncAcknowledged(crate::source_sync::acknowledge(
+            &tx,
+            catalog_state,
+            &lease,
+            candidate,
+            &observation,
+        )?),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -1832,6 +1883,11 @@ pub(crate) fn execute(
         TransactionDecision::SourceSyncSettled(pending) => {
             catalog_state.retire_issued(&pending.proof, &pending.binding)?;
             Ok(Outcome::SourceSyncSettled(pending.settled))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::SourceSyncAcknowledged(pending) => {
+            catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+            Ok(Outcome::SourceSyncAcknowledged(pending.acknowledged))
         }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Observation {

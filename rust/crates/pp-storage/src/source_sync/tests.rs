@@ -7,6 +7,7 @@ use crate::{
         self, AuthorityRefusalPhase, AuthorityRefusalReason, ClaimedAttempt, Credential,
         ServerWorkerClient, UserOperation, WorkerAdmission, WorkerOperation,
     },
+    source_scan::LocalScanObservation,
 };
 use serde_json::Value;
 use std::{
@@ -2316,4 +2317,196 @@ fn sync_failure_does_not_replace_settled_result() {
     sync.begin_work(first).unwrap().release().unwrap();
     let busy = sync.begin_work(second).err().unwrap();
     assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+}
+
+fn refuse_acknowledge(
+    sync: &Fixture,
+    lease: &mut AttemptLease,
+    target: &SyncTargetLease,
+    observation: &LocalScanObservation,
+    source_id: i64,
+) -> String {
+    let rows = sync.snapshot();
+    let version = lease.version();
+    let error = sync
+        .worker
+        .acknowledge_source_sync_target(lease, target, observation)
+        .unwrap_err();
+    assert_eq!(lease.version(), version);
+    assert_eq!(sync.snapshot(), rows);
+    let busy = sync.begin_work(source_id).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    error.to_string()
+}
+
+fn retained_row(
+    sync: &Fixture,
+    job_id: &str,
+    ordinal: i64,
+) -> (String, String, i64, Option<String>) {
+    sync.connection()
+        .query_row(
+            "SELECT failure_code,failure_detail,reservation_acknowledged,result_json FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2",
+            (job_id, ordinal),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn sync_acknowledgement_requires_matching_observation() {
+    let sync = Fixture::new();
+    let id = sync.source("Retained");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    let observation = target.observation().clone();
+    let hold = retained_row(&sync, &job_id, 0);
+    assert_eq!(
+        hold,
+        ("local_read".into(), "disk read failed".into(), 0, None)
+    );
+    let mut wrong_path = observation.clone();
+    wrong_path.path_observation_digest = "ab".repeat(32);
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &wrong_path, id),
+        "Sync acknowledgement observation mismatch"
+    );
+    let mut wrong_version = observation.clone();
+    wrong_version.configuration_version += 1;
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &wrong_version, id),
+        "Sync acknowledgement observation mismatch"
+    );
+    let generation = target.claim_generation;
+    target.claim_generation = generation + 1;
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &observation, id),
+        "Sync target claim generation mismatch"
+    );
+    target.claim_generation = generation;
+    let held = std::mem::replace(&mut target.source_work, sync.begin_work(other).unwrap());
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &observation, id),
+        "Sync target acknowledgement mismatch"
+    );
+    std::mem::replace(&mut target.source_work, held)
+        .release()
+        .unwrap();
+    let mut stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut stale, &target, &observation, id),
+        "Stale attempt fence"
+    );
+    assert_eq!(
+        sync.connection()
+            .execute("UPDATE projects SET local_path='moved' WHERE id=?1", [id])
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &wrong_path, id),
+        "Sync acknowledgement observation mismatch"
+    );
+    assert_eq!(retained_row(&sync, &job_id, 0), hold);
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    assert_eq!(
+        metadata(&sync, id).as_deref(),
+        Some(r#"{"sync_error":"disk read failed","sync_required":true}"#)
+    );
+    let version_before = lease.version();
+    let acknowledged = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &target, &observation)
+        .unwrap();
+    assert_eq!(
+        acknowledged,
+        AcknowledgedSyncTarget {
+            key: SyncTargetKey {
+                job_id: job_id.clone(),
+                ordinal: 0,
+            },
+            failure: failed.failure,
+            progress: 100,
+            version: version_before + 1,
+        }
+    );
+    assert_eq!(
+        retained_row(&sync, &job_id, 0),
+        ("local_read".into(), "disk read failed".into(), 1, None)
+    );
+    assert_eq!(sync.job(&job_id).progress, Some(100));
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(source_row(&sync, id).1.as_deref(), Some("moved"));
+    assert!(matches!(sync.next(&mut lease), NextSyncTarget::Complete));
+    sync.begin_work(id).unwrap().release().unwrap();
+}
+
+#[test]
+fn sync_acknowledgement_replay_preserves_result() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut first_target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut first_target, settlement(first))
+        .unwrap();
+    let stored = stored_success(&sync, &job_id);
+    let second_target = local(sync.next(&mut lease));
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &second_target, "disk read failed")
+        .unwrap();
+    assert_eq!(failed.progress, 50);
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    let observation = second_target.observation().clone();
+    let acknowledged = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &second_target, &observation)
+        .unwrap();
+    assert_eq!(acknowledged.failure, failed.failure);
+    assert_eq!(acknowledged.progress, 100);
+    assert_eq!(acknowledged.key.ordinal, 1);
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(
+        retained_row(&sync, &job_id, 1),
+        ("local_read".into(), "disk read failed".into(), 1, None)
+    );
+    let after = sync.snapshot();
+    let mut wrong = observation.clone();
+    wrong.path_observation_digest = "cd".repeat(32);
+    let version = lease.version();
+    let error = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &second_target, &wrong)
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Sync acknowledgement observation mismatch"
+    );
+    assert_eq!(lease.version(), version);
+    assert_eq!(sync.snapshot(), after);
+    let again = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &second_target, &observation)
+        .unwrap();
+    assert_eq!(again, acknowledged);
+    assert_eq!(lease.version(), version);
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(sync.job(&job_id).progress, Some(100));
+    assert!(matches!(sync.next(&mut lease), NextSyncTarget::Complete));
+    sync.begin_work(first).unwrap().release().unwrap();
+    sync.begin_work(second).unwrap().release().unwrap();
 }
