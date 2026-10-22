@@ -87,4 +87,36 @@ describe("deliverPasswordResetEmail", () => {
     });
     await app.close();
   });
+
+  it("returns an allowed class when SMTP rejects the reset message", async () => {
+    const app = Fastify();
+    const jsonTransport = nodemailer.createTransport({ jsonTransport: true });
+    vi.spyOn(jsonTransport, "sendMail").mockRejectedValue(
+      Object.assign(new Error("Message failed: 550 secret-marker"), {
+        code: "EMESSAGE",
+        responseCode: 550,
+      }),
+    );
+    vi.spyOn(nodemailer, "createTransport").mockReturnValue(jsonTransport);
+    const config = {
+      ...loadConfig(),
+      smtpHost: "smtp.example.test",
+      smtpPort: 465,
+      smtpUser: null,
+      smtpPass: null,
+      smtpFrom: "Print Partner <noreply@example.test>",
+      smtpSecure: true,
+      smtpConfigured: true,
+    };
+
+    const delivery = await deliverPasswordResetEmail(config, app.log, {
+      to: "maker@example.test",
+      resetUrl: "https://print.example.test/reset-password?token=abc123",
+    });
+
+    expect(delivery).toEqual({ sent: false, errorClass: "smtp_permanent" });
+    expect(JSON.stringify(delivery)).not.toContain("secret-marker");
+    expect(JSON.stringify(delivery)).not.toContain("maker@example.test");
+    await app.close();
+  });
 });

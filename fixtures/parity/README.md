@@ -2,6 +2,10 @@
 
 Golden data captured from the TypeScript app, used as the reference for the Rust port.
 
+## auth-reset/node.json (GRE-864)
+
+`generate.mjs` drives Node's `POST /auth/forgot-password` for a known account, an unknown account, and a rejected loopback delivery. The golden records one shared public response, plus delivery counts, reset-token counts, and the mail-failure error class. Addresses and tokens stay out of the file. `rust/crates/pp-api/tests/auth_reset_parity.rs` replays the cases. See [auth-reset/README.md](auth-reset/README.md).
+
 ## custom-filaments.json (GRE-579)
 
 Golden for `web/apps/server/src/services/custom-filaments.ts`.
