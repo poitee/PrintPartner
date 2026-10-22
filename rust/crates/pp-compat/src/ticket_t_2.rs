@@ -1777,6 +1777,59 @@ fn startup_wait(limit: Duration, message: &str, mut ready: impl FnMut() -> bool)
     }
 }
 
+fn phased_startup_wait(
+    verified: &Path,
+    ready: &Path,
+    verification_timeout: Duration,
+    acknowledgement_timeout: Duration,
+    mut owner_alive: impl FnMut() -> bool,
+) {
+    startup_wait(
+        verification_timeout,
+        "measured release verification did not finish",
+        || {
+            assert!(owner_alive(), "owner exited before release verification");
+            verified.exists()
+        },
+    );
+    startup_wait(
+        acknowledgement_timeout,
+        "owner never acknowledged pending setup",
+        || {
+            assert!(owner_alive(), "owner exited before startup acknowledgement");
+            ready.exists()
+        },
+    );
+}
+
+#[test]
+fn measured_release_ack_deadline_excludes_verification() {
+    let root = std::env::temp_dir().join(format!(
+        "pp-phase-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let verified = root.join("release-verified");
+    let ready = root.join("owner-ready");
+    let verified_signal = verified.clone();
+    let ready_signal = ready.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        std::fs::write(&verified_signal, b"ok").unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        std::fs::write(&ready_signal, b"ok").unwrap();
+    });
+    phased_startup_wait(
+        &verified,
+        &ready,
+        Duration::from_secs(2),
+        Duration::from_millis(350),
+        || true,
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 struct StartupDeathFixture {
     owner: std::process::Child,
     peer: Option<std::process::Child>,
@@ -1885,6 +1938,10 @@ async fn measured_startup_owner_death_fixture() {
     let bundle = measured_startup_bundle();
     let assets = bundle.web_root.join("apps/web/dist");
     let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
+    let verified = scratch.root.join("release-verified");
+    let temporary = verified.with_extension("tmp");
+    std::fs::write(&temporary, b"ok").unwrap();
+    std::fs::rename(&temporary, &verified).unwrap();
     if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
         let executed = PathBuf::from(stage).join("web/startup-executed.json");
         if executed.exists() {
@@ -1937,6 +1994,7 @@ fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
         "ticket_t_2::startup_owner_death_fixture",
         &crate::tests::node_binary(),
         Duration::from_secs(8),
+        None,
     );
 }
 
@@ -1970,14 +2028,23 @@ fn ticket_t_3_drain_measured_release_startup_parent_death() {
     let bundle = measured_startup_bundle();
     let assets = bundle.web_root.join("apps/web/dist");
     let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
+    // Run 38941881212 timed one idle macOS verify_bundle at 10.7–19.7s. This
+    // budget also covers re-executing the helper. The 30s acknowledgement
+    // starts only after the helper publishes release-verified.
     startup_owner_death_cycles(
         "ticket_t_2::measured_startup_owner_death_fixture",
         &bundle.node,
         Duration::from_secs(30),
+        Some(Duration::from_secs(60)),
     );
 }
 
-fn startup_owner_death_cycles(helper: &str, node: &Path, startup_timeout: Duration) {
+fn startup_owner_death_cycles(
+    helper: &str,
+    node: &Path,
+    startup_timeout: Duration,
+    release_verification_timeout: Option<Duration>,
+) {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
 
     assert!(node.is_file(), "native Node executable missing");
@@ -1995,17 +2062,27 @@ fn startup_owner_death_cycles(helper: &str, node: &Path, startup_timeout: Durati
             scratch,
         };
         let ready = fixture.scratch.root.join("owner-ready");
-        startup_wait(
-            startup_timeout,
-            "owner never acknowledged pending setup",
-            || {
-                assert!(
-                    fixture.owner.try_wait().unwrap().is_none(),
-                    "owner exited before startup acknowledgement"
-                );
-                ready.exists()
-            },
-        );
+        if let Some(verification_timeout) = release_verification_timeout {
+            phased_startup_wait(
+                &fixture.scratch.root.join("release-verified"),
+                &ready,
+                verification_timeout,
+                startup_timeout,
+                || fixture.owner.try_wait().unwrap().is_none(),
+            );
+        } else {
+            startup_wait(
+                startup_timeout,
+                "owner never acknowledged pending setup",
+                || {
+                    assert!(
+                        fixture.owner.try_wait().unwrap().is_none(),
+                        "owner exited before startup acknowledgement"
+                    );
+                    ready.exists()
+                },
+            );
+        }
         let pid: u32 = std::fs::read_to_string(ready).unwrap().parse().unwrap();
         assert_eq!(recorded_pids(&fixture.scratch.pidfile()), vec![pid]);
         assert!(startup_process_live(pid));

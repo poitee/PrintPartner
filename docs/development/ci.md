@@ -122,17 +122,11 @@ These crates do not build on Windows yet. The Windows job excludes them with `--
 
 `rust (windows)` therefore does not compile the Tauri shell yet. When a port ticket's crates build and pass their tests on Windows, delete its `CARGO_SCOPE` exclusion in the same pull request.
 
-## macOS exclusions
+## macOS test filter
 
-The `NEXTEST_FILTER` value of the macOS job skips these tests. The comment above the macOS filter names the ticket for each skipped term. When a test passes on macOS, delete it from that filter in the same pull request.
+The macOS job uses `NEXTEST_FILTER: all()`. It runs `pp-core` `runtime_m0`, `pp-compat` `ticket_t_2::`, and `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it`. Linux runs the same filter. **Native macOS bundle** still runs its own selected lifecycle tests.
 
-The macOS job skips the `pp-core` `runtime_m0` binary. It skips `pp-compat` tests under `ticket_t_2::`, and it runs `ticket_t_2::ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap` (GRE-671). Linux still runs both groups in full, and **Native macOS bundle** still runs its own selected macOS lifecycle tests. GRE-645 owns the remaining lifecycle skip. On the hosted runner, one release verification takes 10 to 20 seconds, almost all of it spent walking and hashing about 42,000 dependency files. Each runtime start verifies the release once, on a blocking thread before the 32-second readiness budget starts, and hashes files in parallel. Every supervisor restart verifies again (GRE-661). The remaining skip stays until macOS runs of both groups pass (GRE-645).
-
-The filter also skips one test by name, outside those groups:
-
-| Crate | Test | Ticket | Failure |
-|-------|------|--------|---------|
-| `pp-core` | `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` | GRE-645 | It reruns the test binary with a 3-second deadline, which it misses while release verification in other tests saturates the runner. |
+GRE-645 removed the earlier group skip. Hosted run 38925272452 mounted `/Volumes/pptmp` with `apfs, local, nodev, nosuid, journaled, nobrowse` and recorded `exec /usr/bin/node` exiting 126: `/bin/sh: line 0: exec: /usr/bin/node: cannot execute: No such file or directory`. Those scripts now `exec "$NODE"` from `PP_TEST_NODE`. Run 38941881212, with `--test-threads 1`, still failed 3 of 74 because one release verification hashed about 42,203 dependency files in 10.7 to 19.7 seconds. Each start verifies once, on a blocking thread, before the 32-second readiness budget (GRE-661). Each restart verifies again after `Starting` is published. The crash-guard status fuse covers that hash plus the 30-second probe. The measured-release parent-death test starts its 30-second acknowledgement when the helper publishes `release-verified`, not when the helper process is spawned. The config test's 3-second deadline starts when the re-executed child enters. The GRE-671 backoff test never ran Node; it runs with the rest of `ticket_t_2::`.
 
 ## Other Rust workflows
 
