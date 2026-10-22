@@ -233,11 +233,7 @@ async fn password_change_matches_node_response_and_login_outcomes() {
         let cookie = cookie_for(&server, &case.session, &issued).await;
         let before = server.logins(&fixture, case).await;
         let response = server
-            .post(
-                "/auth/change-password",
-                &case.body,
-                cookie.as_deref(),
-            )
+            .post("/auth/change-password", &case.body, cookie.as_deref())
             .await;
         let change = Change {
             status: response.status().as_u16(),

@@ -511,10 +511,7 @@ async fn change(
     // nonempty invalid, expired, or revoked token refuses with 401 before 400.
     let raw = wire::cookie(&headers, "pp_session")
         .filter(|value| !value.is_empty())
-        .ok_or(Failure(
-            StatusCode::UNAUTHORIZED,
-            "Authentication required",
-        ))?;
+        .ok_or(Failure(StatusCode::UNAUTHORIZED, "Authentication required"))?;
     match invoke(
         &app.auth,
         Request::ResolveSession {
@@ -525,10 +522,7 @@ async fn change(
     {
         Outcome::User(Some(_)) => {}
         _ => {
-            return Err(Failure(
-                StatusCode::UNAUTHORIZED,
-                "Authentication required",
-            ));
+            return Err(Failure(StatusCode::UNAUTHORIZED, "Authentication required"));
         }
     }
     let value = body(input)?;
