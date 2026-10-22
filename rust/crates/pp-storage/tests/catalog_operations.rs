@@ -1231,6 +1231,42 @@ fn gre600_default_catalog_rejects_rebuild_operations() {
     }
 }
 
+#[cfg(not(feature = "desktop_rebuild"))]
+#[test]
+fn catalog_metadata_token_is_ignored_without_desktop_rebuild() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Tokenless");
+    let updated = value(
+        &client,
+        Request::Update {
+            id,
+            patch: SourcePatch {
+                metadata: Some(
+                    serde_json::from_value(json!({"custom_name": "Flag off rename"})).unwrap(),
+                ),
+                metadata_version: Some(4),
+                ..Default::default()
+            },
+        },
+    );
+    assert_eq!(updated["metadata"]["custom_name"], "Flag off rename");
+    assert!(updated.get("catalog_metadata_version").is_none());
+    let raw: String = fixture
+        .sql()
+        .query_row(
+            "SELECT metadata_json FROM projects WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let stored: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(stored["custom_name"], "Flag off rename");
+    assert!(stored.get("catalog_metadata_version").is_none());
+    owner.shutdown().unwrap();
+}
+
 #[cfg(feature = "desktop_rebuild")]
 #[test]
 fn gre600_policy_access_and_numeric_mutations_reject_foreign_sources() {
