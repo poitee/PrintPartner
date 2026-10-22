@@ -2,10 +2,10 @@ name: Rust cross-OS
 
 # Relevant PRs test Rust on Linux and Windows. Ready PRs with the macos label also
 # test macOS. PR gate keeps clippy + doctests for both feature states (macOS PRs
-# still skip desktop_rebuild=on as before). Only nextest with desktop_rebuild on
-# is skipped on pull_request (~67m on self-hosted); push/schedule/dispatch still
-# run that nextest pass. This repo has no merge queue — rebuild-on nextest is
-# post-merge coverage, not a merge_group gate.
+# still skip desktop_rebuild=on as before). nextest with desktop_rebuild on is
+# skipped only on self-hosted PR runners (pp-local Linux ~67m); Windows PRs and
+# hosted Linux still run it. push/schedule/dispatch always run both nextest
+# passes. No merge queue in this repo.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -192,9 +192,10 @@ jobs:
         timeout-minutes: 45
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER"
       - name: nextest (desktop_rebuild on)
-        # Skip the long rebuild-on nextest on PRs only. No merge queue; push to
-        # main / schedule / dispatch still run this step after merge.
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' && github.event_name != 'pull_request' }}
+        # Bound self-hosted Linux PR runtime only. Windows (and hosted Linux)
+        # PRs keep rebuild-on nextest; macOS PRs still skip it. Non-PR events
+        # always run this step.
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (github.event_name != 'pull_request' || (runner.environment != 'self-hosted' && env.RUST_OS != 'macos')) }}
         timeout-minutes: 75
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild
       # nextest does not run doctests.
