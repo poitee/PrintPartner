@@ -4,7 +4,34 @@ import {
   parseSourceNamingMetadata,
   resolveSourceCategory,
 } from "@print-partner/domain";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
+
+export const CATALOG_METADATA_VERSION = "catalog_metadata_version";
+
+export function readCatalogMetadataVersion(metadata: Record<string, unknown> | null): number {
+  const value = metadata?.[CATALOG_METADATA_VERSION];
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+export function withNextCatalogMetadataVersion(
+  metadata: Record<string, unknown>,
+  current: number,
+): Record<string, unknown> {
+  const next = { ...metadata };
+  delete next[CATALOG_METADATA_VERSION];
+  const version = current + 1;
+  if (!Number.isSafeInteger(version)) throw new Error("Catalog metadata version overflow");
+  next[CATALOG_METADATA_VERSION] = version;
+  return next;
+}
+
+function catalogMetadataForClient(metadata: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, CATALOG_METADATA_VERSION)) return metadata;
+  const next = { ...metadata };
+  delete next[CATALOG_METADATA_VERSION];
+  return next;
+}
 
 export type SourceSummaryProjectRow = {
   id: number;
@@ -44,7 +71,7 @@ export function sourceSummary(row: SourceSummaryProjectRow, docCount = 0): Sourc
   const { useDefaults } = parseSourceNamingMetadata(metadata);
   const { update_status, update_checked_at } = readSourceUpdateFields(metadata);
   const sourceKind = row.sourceKind || (row.sourceType === "local" ? "local" : "github");
-  return {
+  const summary: SourceSummary = {
     id: row.id,
     name: row.name,
     url: row.url,
@@ -66,5 +93,11 @@ export function sourceSummary(row: SourceSummaryProjectRow, docCount = 0): Sourc
     update_status,
     update_checked_at,
     doc_count: docCount,
+  };
+  if (!desktopFeaturesEnabled()) return summary;
+  return {
+    ...summary,
+    metadata: catalogMetadataForClient(metadata),
+    catalog_metadata_version: readCatalogMetadataVersion(metadata),
   };
 }

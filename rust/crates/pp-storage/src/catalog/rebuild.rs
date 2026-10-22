@@ -8,6 +8,7 @@ pub enum CatalogFailure {
     InvalidStoredNaming,
     Referenced,
     TooLarge,
+    Conflict,
 }
 impl std::fmt::Display for CatalogFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -18,6 +19,7 @@ impl std::fmt::Display for CatalogFailure {
             Self::InvalidStoredNaming => "Stored Source naming settings are invalid",
             Self::Referenced => "Source historical name is referenced and cannot be changed",
             Self::TooLarge => "Catalog request too large",
+            Self::Conflict => "Catalog metadata changed; retry from the current version",
         })
     }
 }
@@ -202,6 +204,12 @@ pub(super) fn update(
     mut patch: SourcePatch,
 ) -> Result<SourcePatch> {
     let existing = get(tx, tenant, id)?.ok_or(CatalogFailure::NotFound)?;
+    if super::metadata_guard_enabled()
+        && let Some(expected) = patch.metadata_version
+    {
+        let current = existing.catalog_metadata_version.unwrap_or(0);
+        ensure!(expected == current, CatalogFailure::Conflict);
+    }
     if let Some(name) = &patch.name {
         let name = trim(name);
         ensure!(
