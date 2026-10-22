@@ -27,6 +27,12 @@ pub enum TableId {
     PlanRevisionRequiredUnits,
     RequiredUnits,
     PrintProgress,
+    PlanDrafts,
+    PlanDraftInputs,
+    PlanDraftParts,
+    PlanDraftRequiredUnitReconciliations,
+    PlanDraftRequiredUnitDecisions,
+    PlanDraftRequiredUnitAssignments,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -107,6 +113,12 @@ enum ReviewedEntry {
     GetPrinterCheckoff { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_import_3mf_checkoff")]
     ProposeImport3mfCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_planning_state")]
+    GetBuildPlanningState { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.list_build_differences")]
+    ListBuildDifferences { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_draft")]
+    GetPlanDraft { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -169,6 +181,8 @@ impl ReviewedEntry {
         use ResourceId::{File, Table};
         use TableId::{
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
+            PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
+            PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
             PlanRevisionInputSets, PlanRevisionInputs, PlanRevisionParts,
             PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
             PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
@@ -191,6 +205,27 @@ impl ReviewedEntry {
                 Table(SourceRevisions),
                 File(FileFamily::SourceWorkspace),
             ])
+        };
+        let planning_brief = || {
+            BTreeSet::from([
+                Table(AppSettings),
+                Table(Projects),
+                Table(SourceDocs),
+                File(FileFamily::SourceWorkspace),
+            ])
+        };
+        let planning_brief_with_draft = || {
+            let mut resources = planning_brief();
+            resources.extend([
+                Table(BuildProfiles),
+                Table(PlanDrafts),
+                Table(PlanDraftInputs),
+                Table(PlanDraftParts),
+                Table(PlanDraftRequiredUnitReconciliations),
+                Table(PlanDraftRequiredUnitDecisions),
+                Table(PlanDraftRequiredUnitAssignments),
+            ]);
+            resources
         };
         let (id, resources, expected) = match self {
             Self::SourceSync {
@@ -330,6 +365,19 @@ impl ReviewedEntry {
                 expected.insert(Table(SourceDocs));
                 ("tool.propose_import_3mf_checkoff", resources, expected)
             }
+            Self::GetBuildPlanningState { resources } => (
+                "tool.get_build_planning_state",
+                resources,
+                planning_brief_with_draft(),
+            ),
+            Self::ListBuildDifferences { resources } => {
+                ("tool.list_build_differences", resources, planning_brief())
+            }
+            Self::GetPlanDraft { resources } => (
+                "tool.get_plan_draft",
+                resources,
+                planning_brief_with_draft(),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -598,6 +646,9 @@ impl Declarations {
             "tool.get_remaining",
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
+            "tool.get_build_planning_state",
+            "tool.list_build_differences",
+            "tool.get_plan_draft",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
