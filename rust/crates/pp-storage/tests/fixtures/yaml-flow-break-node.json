@@ -1,0 +1,849 @@
+[
+  {
+    "name": "accept-block-key",
+    "source": "k: [!!str\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-block-key-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-block-key-crlf",
+    "source": "k: [!!str\r\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-block-key-crlf-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\r\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-block-key-cr",
+    "source": "k: [!!str\r]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-block-key-cr-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\r]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-nested-key",
+    "source": "a:\n  b: [!!str\n]",
+    "expected": {
+      "a": {
+        "b": [
+          ""
+        ]
+      }
+    }
+  },
+  {
+    "name": "accept-nested-key-verbatim",
+    "source": "a:\n  b: [!<tag:yaml.org,2002:str>\n]",
+    "expected": {
+      "a": {
+        "b": [
+          ""
+        ]
+      }
+    }
+  },
+  {
+    "name": "accept-value-line",
+    "source": "k:\n  [!!str\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-value-line-verbatim",
+    "source": "k:\n  [!<tag:yaml.org,2002:str>\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-indented-open",
+    "source": "a:\n  [!!str\n]",
+    "expected": {
+      "a": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-indented-open-verbatim",
+    "source": "a:\n  [!<tag:yaml.org,2002:str>\n]",
+    "expected": {
+      "a": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-sequence",
+    "source": "- [!!str\n]",
+    "expected": [
+      [
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "accept-sequence-verbatim",
+    "source": "- [!<tag:yaml.org,2002:str>\n]",
+    "expected": [
+      [
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "accept-sequence-next",
+    "source": "-\n  [!!str\n]",
+    "expected": [
+      [
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "accept-sequence-next-verbatim",
+    "source": "-\n  [!<tag:yaml.org,2002:str>\n]",
+    "expected": [
+      [
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "accept-compact",
+    "source": "- - {!!str\n}",
+    "expected": [
+      [
+        {
+          "": null
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-compact-verbatim",
+    "source": "- - {!<tag:yaml.org,2002:str>\n}",
+    "expected": [
+      [
+        {
+          "": null
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-nested-seq-map",
+    "source": "- - {a: \"a\n   b\", !!str\n}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": null
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-nested-seq-map-verbatim",
+    "source": "- - {a: \"a\n   b\", !<tag:yaml.org,2002:str>\n}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": null
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-property-colon",
+    "source": "- - {a: \"a\n   b\", !!str\n:x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-property-colon-verbatim",
+    "source": "- - {a: \"a\n   b\", !<tag:yaml.org,2002:str>\n:x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-property-colon-space",
+    "source": "- - {a: \"a\n   b\", !!str\n: x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-property-colon-space-verbatim",
+    "source": "- - {a: \"a\n   b\", !<tag:yaml.org,2002:str>\n: x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-property-colon-crlf",
+    "source": "- - {a: \"a\r\n   b\", !!str\r\n:x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-property-colon-crlf-verbatim",
+    "source": "- - {a: \"a\r\n   b\", !<tag:yaml.org,2002:str>\r\n:x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-block-colon",
+    "source": "k: {!!str\n:x}",
+    "expected": {
+      "k": {
+        "": "x"
+      }
+    }
+  },
+  {
+    "name": "accept-block-colon-verbatim",
+    "source": "k: {!<tag:yaml.org,2002:str>\n:x}",
+    "expected": {
+      "k": {
+        "": "x"
+      }
+    }
+  },
+  {
+    "name": "accept-nested-colon",
+    "source": "a:\n  b: {!!str\n:x}",
+    "expected": {
+      "a": {
+        "b": {
+          "": "x"
+        }
+      }
+    }
+  },
+  {
+    "name": "accept-nested-colon-verbatim",
+    "source": "a:\n  b: {!<tag:yaml.org,2002:str>\n:x}",
+    "expected": {
+      "a": {
+        "b": {
+          "": "x"
+        }
+      }
+    }
+  },
+  {
+    "name": "accept-colon-flow",
+    "source": "k: {!!str\n:[]}",
+    "expected": {
+      "k": {
+        "": []
+      }
+    }
+  },
+  {
+    "name": "accept-colon-flow-verbatim",
+    "source": "k: {!<tag:yaml.org,2002:str>\n:[]}",
+    "expected": {
+      "k": {
+        "": []
+      }
+    }
+  },
+  {
+    "name": "accept-colon-empty",
+    "source": "k: {!!str\n:}",
+    "expected": {
+      "k": {
+        "": null
+      }
+    }
+  },
+  {
+    "name": "accept-colon-empty-verbatim",
+    "source": "k: {!<tag:yaml.org,2002:str>\n:}",
+    "expected": {
+      "k": {
+        "": null
+      }
+    }
+  },
+  {
+    "name": "accept-comma",
+    "source": "k: [!!str\n, 1]",
+    "expected": {
+      "k": [
+        "",
+        1
+      ]
+    }
+  },
+  {
+    "name": "accept-comma-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n, 1]",
+    "expected": {
+      "k": [
+        "",
+        1
+      ]
+    }
+  },
+  {
+    "name": "accept-map-comma",
+    "source": "k: {!!str\n, a: 1}",
+    "expected": {
+      "k": {
+        "": null,
+        "a": 1
+      }
+    }
+  },
+  {
+    "name": "accept-map-comma-verbatim",
+    "source": "k: {!<tag:yaml.org,2002:str>\n, a: 1}",
+    "expected": {
+      "k": {
+        "": null,
+        "a": 1
+      }
+    }
+  },
+  {
+    "name": "accept-map-value",
+    "source": "k: {a: !!str\n}",
+    "expected": {
+      "k": {
+        "a": ""
+      }
+    }
+  },
+  {
+    "name": "accept-map-value-verbatim",
+    "source": "k: {a: !<tag:yaml.org,2002:str>\n}",
+    "expected": {
+      "k": {
+        "a": ""
+      }
+    }
+  },
+  {
+    "name": "accept-seq-tag",
+    "source": "k: [!!seq\n]",
+    "expected": {
+      "k": [
+        []
+      ]
+    }
+  },
+  {
+    "name": "accept-seq-tag-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:seq>\n]",
+    "expected": {
+      "k": [
+        []
+      ]
+    }
+  },
+  {
+    "name": "accept-map-tag",
+    "source": "k: [!!map\n]",
+    "expected": {
+      "k": [
+        {}
+      ]
+    }
+  },
+  {
+    "name": "accept-map-tag-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:map>\n]",
+    "expected": {
+      "k": [
+        {}
+      ]
+    }
+  },
+  {
+    "name": "accept-null-tag",
+    "source": "k: [!!null\n]",
+    "expected": {
+      "k": [
+        null
+      ]
+    }
+  },
+  {
+    "name": "accept-null-tag-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:null>\n]",
+    "expected": {
+      "k": [
+        null
+      ]
+    }
+  },
+  {
+    "name": "accept-bare-tag",
+    "source": "k: [!\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-anchor",
+    "source": "k: [&a\n]",
+    "expected": {
+      "k": [
+        null
+      ]
+    }
+  },
+  {
+    "name": "accept-tag-anchor",
+    "source": "k: [!!str &a\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-tag-anchor-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str> &a\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-anchor-tag",
+    "source": "k: [&a !!str\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-anchor-tag-verbatim",
+    "source": "k: [&a !<tag:yaml.org,2002:str>\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-anchor-colon",
+    "source": "k: {&a\n: x}",
+    "expected": {
+      "k": {
+        "null": "x"
+      }
+    }
+  },
+  {
+    "name": "accept-explicit",
+    "source": "k: {? !!str\n: x}",
+    "expected": {
+      "k": {
+        "": "x"
+      }
+    }
+  },
+  {
+    "name": "accept-explicit-verbatim",
+    "source": "k: {? !<tag:yaml.org,2002:str>\n: x}",
+    "expected": {
+      "k": {
+        "": "x"
+      }
+    }
+  },
+  {
+    "name": "accept-deep",
+    "source": "a:\n  b:\n    [!!str\n]",
+    "expected": {
+      "a": {
+        "b": [
+          ""
+        ]
+      }
+    }
+  },
+  {
+    "name": "accept-deep-verbatim",
+    "source": "a:\n  b:\n    [!<tag:yaml.org,2002:str>\n]",
+    "expected": {
+      "a": {
+        "b": [
+          ""
+        ]
+      }
+    }
+  },
+  {
+    "name": "accept-nested-flow",
+    "source": "k: [[!!str\n]]",
+    "expected": {
+      "k": [
+        [
+          ""
+        ]
+      ]
+    }
+  },
+  {
+    "name": "accept-nested-flow-verbatim",
+    "source": "k: [[!<tag:yaml.org,2002:str>\n]]",
+    "expected": {
+      "k": [
+        [
+          ""
+        ]
+      ]
+    }
+  },
+  {
+    "name": "accept-comment",
+    "source": "k: [!!str\n# c\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-comment-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n# c\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-blank",
+    "source": "k: [!!str\n\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-blank-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-already-indented",
+    "source": "k: [!!str\n ]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-already-indented-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n ]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-root",
+    "source": "[!!str\n]",
+    "expected": [
+      ""
+    ]
+  },
+  {
+    "name": "accept-root-verbatim",
+    "source": "[!<tag:yaml.org,2002:str>\n]",
+    "expected": [
+      ""
+    ]
+  },
+  {
+    "name": "accept-root-colon",
+    "source": "{!!str\n:x}",
+    "expected": {
+      "": "x"
+    }
+  },
+  {
+    "name": "accept-root-colon-verbatim",
+    "source": "{!<tag:yaml.org,2002:str>\n:x}",
+    "expected": {
+      "": "x"
+    }
+  },
+  {
+    "name": "accept-explicit-block",
+    "source": "? k\n: [!!str\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-explicit-block-verbatim",
+    "source": "? k\n: [!<tag:yaml.org,2002:str>\n]",
+    "expected": {
+      "k": [
+        ""
+      ]
+    }
+  },
+  {
+    "name": "accept-single-quote-colon",
+    "source": "- - {a: 'a\n   b', !!str\n:x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-single-quote-colon-verbatim",
+    "source": "- - {a: 'a\n   b', !<tag:yaml.org,2002:str>\n:x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-colon-at-parent",
+    "source": "- - {a: \"a\n   b\", !!str\n  :x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "accept-colon-at-parent-verbatim",
+    "source": "- - {a: \"a\n   b\", !<tag:yaml.org,2002:str>\n  :x}",
+    "expected": [
+      [
+        {
+          "a": "a b",
+          "": "x"
+        }
+      ]
+    ]
+  },
+  {
+    "name": "refuse-short-quote",
+    "source": "- - {a: \"a\n  b\", !!str\n}",
+    "expected": null
+  },
+  {
+    "name": "refuse-short-quote-verbatim",
+    "source": "- - {a: \"a\n  b\", !<tag:yaml.org,2002:str>\n}",
+    "expected": null
+  },
+  {
+    "name": "refuse-short-quote-colon",
+    "source": "- - {a: \"a\n  b\", !!str\n:x}",
+    "expected": null
+  },
+  {
+    "name": "refuse-short-quote-colon-verbatim",
+    "source": "- - {a: \"a\n  b\", !<tag:yaml.org,2002:str>\n:x}",
+    "expected": null
+  },
+  {
+    "name": "refuse-int",
+    "source": "k: [!!int\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-int-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:int>\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-bool",
+    "source": "k: [!!bool\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-bool-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:bool>\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-float",
+    "source": "k: [!!float\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-float-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:float>\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-seq-colon",
+    "source": "k: [!!str\n:x]",
+    "expected": null
+  },
+  {
+    "name": "refuse-seq-colon-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n:x]",
+    "expected": null
+  },
+  {
+    "name": "refuse-value-colon",
+    "source": "k: {a: !!str\n:x}",
+    "expected": null
+  },
+  {
+    "name": "refuse-value-colon-verbatim",
+    "source": "k: {a: !<tag:yaml.org,2002:str>\n:x}",
+    "expected": null
+  },
+  {
+    "name": "refuse-plain",
+    "source": "k: [!!str\nx]",
+    "expected": null
+  },
+  {
+    "name": "refuse-plain-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\nx]",
+    "expected": null
+  },
+  {
+    "name": "refuse-tab",
+    "source": "k: [!!str\n\t]",
+    "expected": null
+  },
+  {
+    "name": "refuse-tab-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n\t]",
+    "expected": null
+  },
+  {
+    "name": "refuse-next-anchor",
+    "source": "k: [!!str\n&a\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-next-anchor-verbatim",
+    "source": "k: [!<tag:yaml.org,2002:str>\n&a\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-complex",
+    "source": "? [!!str\n]\n: 1",
+    "expected": null
+  },
+  {
+    "name": "refuse-complex-verbatim",
+    "source": "? [!<tag:yaml.org,2002:str>\n]\n: 1",
+    "expected": null
+  },
+  {
+    "name": "refuse-short-explicit",
+    "source": "? \"a\nb\"\n: [!!str\n]",
+    "expected": null
+  },
+  {
+    "name": "refuse-short-explicit-verbatim",
+    "source": "? \"a\nb\"\n: [!<tag:yaml.org,2002:str>\n]",
+    "expected": null
+  }
+]
