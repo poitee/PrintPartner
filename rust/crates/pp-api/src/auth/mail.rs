@@ -107,6 +107,18 @@ impl ResetMailer {
     pub fn disabled() -> Self {
         Self::new(None)
     }
+
+    /// Cleartext SMTP on 127.0.0.1 for the reset-request parity test.
+    /// The desktop binary does not call this, and it is not a product transport.
+    #[doc(hidden)]
+    pub fn loopback_cleartext_for_tests(port: u16) -> Result<Self> {
+        let from: Mailbox = "Print Partner <fixture-mailer@example.test>".parse()?;
+        let transport = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("127.0.0.1")
+            .port(port)
+            .timeout(Some(DELIVERY_TIMEOUT))
+            .build();
+        Ok(Self::new(Some((transport, from))))
+    }
     pub fn smtp(config: SmtpConfig) -> Result<Self> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let builder = match config.security {
