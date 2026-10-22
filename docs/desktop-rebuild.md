@@ -1217,6 +1217,12 @@ live attempt from `claim_import`, in one writer transaction:
 | `Fail` | no receipt | `cancelled` if the job was cancelled, otherwise `failed` |
 | `Cleanup` | `activated`, `conflict`, `failed` or `cancelled` | the reservation settles, the stored bytes stay retained, and the job ends `succeeded`, `failed` or `cancelled` |
 
+GRE-853 reuses one complete Source revision when a later import publishes the same
+upstream key, manifest, and locator. The revision keeps the first provenance; each
+import keeps its own configuration, observation, input, and producer on
+`source_revision_attempts`. An existing non-complete key returns
+`uploads::IncompleteRevisionKey` and does not replace the revision or its attempt.
+
 A cancelled attempt may only read, fail and clean up ("Import cancelled"). Every
 phase but `Read` appends a Source observation with the attempt's generation and
 fence, the receipt's revision and activation, and the cancellation flag.
