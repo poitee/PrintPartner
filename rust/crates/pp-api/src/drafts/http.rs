@@ -9,7 +9,7 @@ use axum::{
     routing::get,
 };
 use pp_storage::{
-    auth::{AuthFailure, Secret},
+    auth::{self, AuthFailure, Secret, rebuild::RebuildAuthClient},
     read_model::Credential,
     required_units::AdmissionFailure,
     working_drafts::{
@@ -301,6 +301,7 @@ type WorkerHold = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone)]
 struct App {
     client: WorkingDraftClient,
+    auth: RebuildAuthClient,
     wait: Duration,
     waiters: Arc<Semaphore>,
     #[cfg(test)]
@@ -334,11 +335,17 @@ enum ReadError {
 
 /// Mounts list and workspace reads when the startup gate is on.
 /// Storage accepts the presented credential before either handler runs.
+/// API-key reads also resolve the key so `lastUsedAt` commits as Node does.
 /// A disabled gate mounts nothing.
-pub fn draft_router(config: DraftHttpConfig, client: WorkingDraftClient) -> Router {
+pub fn draft_router(
+    config: DraftHttpConfig,
+    client: WorkingDraftClient,
+    auth: RebuildAuthClient,
+) -> Router {
     mount(
         config,
         client,
+        auth,
         #[cfg(test)]
         None,
     )
@@ -348,14 +355,16 @@ pub fn draft_router(config: DraftHttpConfig, client: WorkingDraftClient) -> Rout
 fn draft_router_with_hold(
     config: DraftHttpConfig,
     client: WorkingDraftClient,
+    auth: RebuildAuthClient,
     hold: WorkerHold,
 ) -> Router {
-    mount(config, client, Some(hold))
+    mount(config, client, auth, Some(hold))
 }
 
 fn mount(
     config: DraftHttpConfig,
     client: WorkingDraftClient,
+    auth: RebuildAuthClient,
     #[cfg(test)] hold: Option<WorkerHold>,
 ) -> Router {
     if !config.enabled {
@@ -363,6 +372,7 @@ fn mount(
     }
     let app = App {
         client,
+        auth,
         wait: config.wait,
         waiters: Arc::new(Semaphore::new(READ_PERMITS)),
         #[cfg(test)]
@@ -454,6 +464,7 @@ async fn load(
         armed: true,
     };
     let client = app.client.clone();
+    let auth = app.auth.clone();
     let wait = app.wait;
     #[cfg(test)]
     let hold = app.hold.clone();
@@ -465,6 +476,28 @@ async fn load(
         }
         if flag.load(Ordering::Acquire) {
             return Err(anyhow::Error::new(Failure::Cancelled));
+        }
+        if let PresentedCredential::ApiKey { tenant, secret } = &presented {
+            let resolved = auth
+                .submit(
+                    auth::Request::ResolveKey {
+                        tenant_id: tenant.clone(),
+                        key: Secret::new(secret.clone()),
+                    },
+                    Arc::clone(&flag),
+                    wait,
+                )?
+                .recv()
+                .map_err(|_| AuthFailure::CommitUnknown)??;
+            match resolved {
+                auth::Outcome::KeyResolved { principal, .. } => {
+                    ensure!(
+                        principal.is_some_and(|key| key.tenant_id == *tenant),
+                        AuthFailure::InvalidCredentials
+                    );
+                }
+                _ => return Err(AuthFailure::Storage.into()),
+            }
         }
         client.execute(presented.into_credential(), profile, operation, flag, wait)
     })
