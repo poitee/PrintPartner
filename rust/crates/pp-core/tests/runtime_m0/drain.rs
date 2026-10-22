@@ -11,6 +11,10 @@ use std::{fs, path::PathBuf, time::Duration};
 mod compression;
 
 async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
+    isolated_case_for(name, rebuild, Duration::from_secs(240)).await
+}
+
+async fn isolated_case_for(name: &str, rebuild: bool, limit: Duration) -> Option<PathBuf> {
     if std::env::var("PP_DRAIN_CASE").ok().as_deref() == Some(name) {
         return Some(PathBuf::from(std::env::var_os("PP_DRAIN_DATA").unwrap()));
     }
@@ -22,9 +26,9 @@ async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
         .env("PP_DRAIN_DATA", &data)
         .env("PP_DESKTOP_REBUILD", if rebuild { "1" } else { "0" })
         .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(240), child.output())
+    let output = tokio::time::timeout(limit, child.output())
         .await
-        .expect("isolated drain case exceeded four minutes")
+        .unwrap_or_else(|_| panic!("isolated drain case exceeded {limit:?}"))
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("{stdout}");
@@ -263,6 +267,79 @@ async fn ticket_t_3_drain_runtime_gateway_timeout_reports_incomplete() {
     println!(
         "{}",
         json!({"case":"gateway_timeout", "shutdown":receipt, "elapsed_ms":elapsed.as_millis()})
+    );
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_runtime_shares_one_deadline() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let Some(data) = isolated_case("ticket_t_3_drain_runtime_shares_one_deadline", false).await
+    else {
+        return;
+    };
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let child = pid(&runtime);
+    let cookie = bootstrap(&mut runtime).await;
+    let handle = runtime.handle();
+    let work = handle.track_shutdown_work().unwrap();
+    let origin = runtime.origin().to_owned();
+    let authority = origin.strip_prefix("http://").unwrap().to_owned();
+    let mut socket = tokio::net::TcpStream::connect(&authority).await.unwrap();
+    socket
+        .write_all(
+            format!(
+                "POST /plans HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nCookie: {cookie}\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !response.ends_with(b"\r\n\r\n") {
+            response.push(socket.read_u8().await.unwrap());
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(response, b"HTTP/1.1 100 Continue\r\n\r\n");
+    let started = tokio::time::Instant::now();
+    let receipt = runtime.shutdown().await;
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= MUTATION_DRAIN && elapsed < MUTATION_DRAIN + Duration::from_secs(4),
+        "live Gateway and tracked work must share one five-second deadline, got {elapsed:?}"
+    );
+    assert_eq!(
+        serde_json::to_value(&receipt).unwrap(),
+        json!({
+            "proof_class":"headless_unsigned", "tracked_idle":false, "gateway_idle":false,
+            "compat_exit":"graceful", "compat_reaped":true, "gateway_stopped":true,
+            "storage_released":false, "marker_removed":false, "runtime_removed":false,
+            "errors":["tracked_drain_timed_out", "gateway_drain_timed_out", "storage_ownership_retained"]
+        })
+    );
+    assert!(!receipt.complete());
+    assert!(pp_core::process_group_absent(child));
+    assert!(work.cancellation().is_cancelled());
+    assert!(handle.track_shutdown_work().is_err());
+    let lock = fs::File::open(data.join("printpartner.lock")).unwrap();
+    assert!(lock.try_lock_exclusive().is_err());
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .expect("timed-out drains must retain ownership");
+    assert!(
+        error.to_string().contains("Closure was not proved"),
+        "{error:#}"
+    );
+    drop(work);
+    drop(socket);
+    assert!(CoreRuntime::start(launch(data)).await.is_err());
+    println!(
+        "{}",
+        json!({"case":"shared_deadline", "shutdown":receipt, "elapsed_ms":elapsed.as_millis()})
     );
 }
 
@@ -1244,3 +1321,5 @@ async fn ticket_t_3_drain_legal_summary_representation_parity() {
         );
     }
 }
+
+include!("ticket_t_3_drain_repeated_upload.rs");

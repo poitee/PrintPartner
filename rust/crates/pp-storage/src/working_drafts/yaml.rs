@@ -850,6 +850,16 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 if !separator && !matches!(c, ',' | ']' | '}') {
                     return invalid();
                 }
+                // saphyr rejects a flow closer shallower than one column past
+                // the block key or `-`. A plain scalar in the flow can drop
+                // that extra column, so one past the parent still reaches.
+                // The closer stays on this line.
+                let required = parent.map_or(0, |column| column + 1);
+                if !node_tab && !separation_tab && line_indent < required {
+                    for _ in 0..required - line_indent {
+                        output.push(' ');
+                    }
+                }
                 shallow_flow = line_indent < flow_indent;
             }
             // js-yaml indents every other flow line at least to the collection.
@@ -1868,6 +1878,13 @@ mod tests {
     fn yaml_block_colon_matches_js_yaml() {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-block-colon-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_flow_break_matches_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-break-node.json"
         ));
     }
 

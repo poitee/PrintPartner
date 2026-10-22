@@ -9,14 +9,19 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "../../..");
-const output = join(here, "node.json");
+const stale = process.argv.includes("--stale");
+const output = join(here, stale ? "stale.json" : "node.json");
 
 if (!process.argv.includes("--probe")) {
+  const env = { ...process.env };
+  if (stale) env.PP_DESKTOP_REBUILD = "1";
+  else delete env.PP_DESKTOP_REBUILD;
   const result = JSON.parse(execFileSync(process.execPath, [
     "--conditions=development", "--import",
     pathToFileURL(join(root, "web/node_modules/tsx/dist/esm/index.mjs")).href,
     fileURLToPath(import.meta.url), "--probe",
-  ], { cwd: join(root, "web/apps/server"), encoding: "utf8" }).trim());
+    ...(stale ? ["--stale"] : []),
+  ], { cwd: join(root, "web/apps/server"), encoding: "utf8", env }).trim());
   const text = `{
   "generated": "fixtures/parity/catalog-metadata-mutations/generate.mjs",
   "seed_sql": ${JSON.stringify(result.seed_sql)},
@@ -100,6 +105,67 @@ const commands = [
   { name: "read final categories", request: { operation: "get_categories_with_tree" } },
   { name: "read final sentinel activity", request: { operation: "source_activity", limit: 100 } },
 ];
+const conflictBody = {
+  code: "catalog_metadata_conflict",
+  detail: "Catalog metadata changed; retry from the current version",
+};
+const staleCommands = [
+  {
+    name: "read implicit catalog metadata version",
+    request: { operation: "get", id: 7 },
+    assertStep(outcome) {
+      assert.equal(outcome.body.catalog_metadata_version, 0);
+      assert.equal(Object.hasOwn(outcome.body.metadata, "catalog_metadata_version"), false);
+    },
+  },
+  {
+    name: "stale token on a name edit writes nothing",
+    request: { operation: "update", id: 7, patch: { name: "Renamed fixture", metadata_version: 4 } },
+    status: 409,
+    preservesState: true,
+    assertStep(outcome) {
+      assert.deepEqual(outcome.body, conflictBody);
+    },
+  },
+  {
+    name: "matching token metadata edit bumps version",
+    request: { operation: "update", id: 7, patch: { metadata: { custom_name: "Renamed once" }, metadata_version: 0 } },
+    assertStep(outcome, state) {
+      assert.equal(outcome.body.catalog_metadata_version, 1);
+      assert.equal(outcome.body.metadata.custom_name, "Renamed once");
+      assert.equal(Object.hasOwn(outcome.body.metadata, "catalog_metadata_version"), false);
+      assert.equal(state.projects.find((row) => row.id === 7).metadata_json.catalog_metadata_version, 1);
+    },
+  },
+  {
+    name: "naming save bumps catalog metadata version",
+    request: naming(7, custom),
+    assertStep(_outcome, state) {
+      assert.equal(state.projects.find((row) => row.id === 7).metadata_json.catalog_metadata_version, 2);
+    },
+  },
+  {
+    name: "stale token metadata edit preserves rows",
+    request: { operation: "update", id: 7, patch: { metadata: { custom_name: "Should not land" }, metadata_version: 0 } },
+    status: 409,
+    preservesState: true,
+    assertStep(outcome) {
+      assert.deepEqual(outcome.body, conflictBody);
+    },
+  },
+  {
+    name: "tokenless metadata edit still overwrites",
+    request: { operation: "update", id: 7, patch: { metadata: { custom_name: "Tokenless rename" } } },
+    assertStep(outcome, state) {
+      assert.equal(outcome.body.metadata.custom_name, "Tokenless rename");
+      assert.equal(outcome.body.catalog_metadata_version, 3);
+      const row = state.projects.find((project) => project.id === 7);
+      assert.equal(row.metadata_json.catalog_metadata_version, 3);
+      assert.equal(row.metadata_json.custom_name, "Tokenless rename");
+      assert.equal(Object.hasOwn(outcome.body.metadata, "catalog_metadata_version"), false);
+    },
+  },
+];
 
 const metadata = {
   custom_name: "Keep this name", category: "Hardware/Frame",
@@ -175,6 +241,7 @@ function route(request) {
     case "save_global_naming": return { method: "PUT", url: "/settings/stl-naming", payload: { profile: request.profile } };
     case "get_global_naming": return { method: "GET", url: "/settings/stl-naming" };
     case "get": return { method: "GET", url: `/sources/${request.id}` };
+    case "update": return { method: "PATCH", url: `/sources/${request.id}`, payload: request.patch };
     case "delete": return { method: "DELETE", url: `/sources/${request.id}` };
     case "source_activity": return { method: "GET", url: `/sources/activity?limit=${request.limit}` };
     default: throw new Error(`Unsupported fixture command: ${request.operation}`);
@@ -196,12 +263,13 @@ try {
   assert.equal(initial.projects.length, 3);
   assert.equal(initial.activity.length, 2);
   const steps = [];
-  for (const { name, actor = "owner", request, reopen = false, status = 200, preservesState = false } of commands) {
+  for (const { name, actor = "owner", request, reopen = false, status = 200, preservesState = false, assertStep } of (stale ? staleCommands : commands)) {
     if (reopen) { await close(); await open(); }
     const response = await apps[actor].inject(route(request));
     const outcome = { status: response.statusCode, body: response.body === "" ? null : response.json() };
-    assert.equal(outcome.status, status, name);
+    assert.equal(outcome.status, status, `${name}: HTTP ${outcome.status} ${response.body}`);
     const state = snapshot();
+    if (assertStep) assertStep(outcome, state);
     assert.deepEqual(state.activity, initial.activity, `${name}: activity must stay intact`);
     assert.deepEqual(state.projects.filter((row) => row.tenant_id === "tenant-b"), initial.projects.filter((row) => row.tenant_id === "tenant-b"), `${name}: foreign Source must stay intact`);
     assert.deepEqual(state.settings.filter((row) => row.tenant_id === "tenant-b"), initial.settings.filter((row) => row.tenant_id === "tenant-b"), `${name}: foreign settings must stay intact`);
