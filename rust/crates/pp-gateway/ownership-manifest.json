@@ -1036,6 +1036,101 @@
             "name": "community-manifests"
           }
         ]
+      },
+      {
+        "operation": "tool.get_build_planning_state",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_drafts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_inputs"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_parts"
+          }
+        ]
+      },
+      {
+        "operation": "tool.list_build_differences",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
+        "operation": "tool.get_plan_draft",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "plan_drafts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_inputs"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_parts"
+          }
+        ]
       }
     ],
     "unresolved": [
@@ -1404,19 +1499,16 @@
       "tool.duplicate_plan",
       "tool.fetch_web_page",
       "tool.find_filament_matches",
-      "tool.get_build_planning_state",
       "tool.get_build_recipe",
       "tool.get_build_workflow",
       "tool.get_farm_status",
       "tool.get_interaction_graph",
-      "tool.get_plan_draft",
       "tool.get_plan_review",
       "tool.get_print_stats",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",
       "tool.ingest_guide_url",
       "tool.inspect_repo_tree",
-      "tool.list_build_differences",
       "tool.list_example_builds",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_source",
