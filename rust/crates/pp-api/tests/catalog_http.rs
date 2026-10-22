@@ -15,6 +15,10 @@ use std::{
 };
 
 #[cfg(feature = "desktop_rebuild")]
+#[path = "../../pp-storage/tests/common/process.rs"]
+mod child_process;
+
+#[cfg(feature = "desktop_rebuild")]
 fn policy() -> AuthPolicy {
     AuthPolicy {
         registration: RegistrationPolicy::FirstAccountOnly,
@@ -685,7 +689,7 @@ async fn catalog_patch_stale_metadata_is_conflict() {
         std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
         Some("1" | "true")
     ) {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = child_process::command(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "catalog_patch_stale_metadata_is_conflict",
