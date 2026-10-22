@@ -304,6 +304,9 @@ fn ticket_t_7_ownership_build_planning_reads_have_complete_node_owned_resources(
         json!({"kind": "table", "name": "plan_drafts"}),
         json!({"kind": "table", "name": "plan_draft_inputs"}),
         json!({"kind": "table", "name": "plan_draft_parts"}),
+        json!({"kind": "table", "name": "plan_draft_required_unit_reconciliations"}),
+        json!({"kind": "table", "name": "plan_draft_required_unit_decisions"}),
+        json!({"kind": "table", "name": "plan_draft_required_unit_assignments"}),
     ]);
     for id in ["tool.get_build_planning_state", "tool.get_plan_draft"] {
         assert_sqlite_tool_resources(id, with_draft.clone());

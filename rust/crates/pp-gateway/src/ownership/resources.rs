@@ -30,6 +30,9 @@ pub enum TableId {
     PlanDrafts,
     PlanDraftInputs,
     PlanDraftParts,
+    PlanDraftRequiredUnitReconciliations,
+    PlanDraftRequiredUnitDecisions,
+    PlanDraftRequiredUnitAssignments,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -178,10 +181,12 @@ impl ReviewedEntry {
         use ResourceId::{File, Table};
         use TableId::{
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
-            PlanDraftInputs, PlanDraftParts, PlanDrafts, PlanRevisionInputSets, PlanRevisionInputs,
-            PlanRevisionParts, PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits,
-            PlanRevisions, PlanSnapshots, PrintProgress, ProfileLayers, Projects, RequiredUnits,
-            SourceDocs, SourceNotes, SourceRevisions,
+            PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
+            PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
+            PlanRevisionInputSets, PlanRevisionInputs, PlanRevisionParts,
+            PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
+            PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
+            SourceRevisions,
         };
         let accepted_plan_operational = || {
             BTreeSet::from([
@@ -216,6 +221,9 @@ impl ReviewedEntry {
                 Table(PlanDrafts),
                 Table(PlanDraftInputs),
                 Table(PlanDraftParts),
+                Table(PlanDraftRequiredUnitReconciliations),
+                Table(PlanDraftRequiredUnitDecisions),
+                Table(PlanDraftRequiredUnitAssignments),
             ]);
             resources
         };

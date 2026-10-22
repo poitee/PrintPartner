@@ -3783,8 +3783,11 @@ const PLANNING_BRIEF_TABLES = ["table:app_settings", "table:projects", "table:so
 const PLANNING_PROFILE_TABLES = [...PLANNING_BRIEF_TABLES, "table:build_profiles"].sort();
 const PLANNING_MISSING_DRAFT_TABLES = [...PLANNING_PROFILE_TABLES, "table:plan_drafts"].sort();
 const PLANNING_DRAFT_TABLES = [...PLANNING_MISSING_DRAFT_TABLES, "table:plan_draft_inputs", "table:plan_draft_parts"].sort();
+const PLANNING_RECONCILIATION_TABLES = ["table:plan_draft_required_unit_assignments", "table:plan_draft_required_unit_decisions", "table:plan_draft_required_unit_reconciliations"];
+const RECONCILED_DRAFT_TABLES = [...PLANNING_DRAFT_TABLES, ...PLANNING_RECONCILIATION_TABLES].sort();
 const PLANNING_DECLARATION = ["file:source-workspace", ...PLANNING_BRIEF_TABLES];
 const PLANNING_DRAFT_DECLARATION = ["file:source-workspace", ...PLANNING_DRAFT_TABLES].sort();
+const RECONCILED_DRAFT_DECLARATION = ["file:source-workspace", ...RECONCILED_DRAFT_TABLES].sort();
 
 function planningSelect(statement: unknown, tenantId: string): string {
   const sql = z.string().parse(statement);
@@ -3796,8 +3799,10 @@ function planningSelect(statement: unknown, tenantId: string): string {
   }
   const match = /^select (?:(?!\bfrom\b).)+ from "([a-z_]+)" where \(?(?:(?!\bfrom\b|\bjoin\b).)+$/.exec(sql);
   const table = match?.[1];
-  const allowed = table === "build_profiles" || table === "plan_drafts" || table === "plan_draft_inputs" || table === "plan_draft_parts";
-  if (!allowed || !table || !sql.includes(`"${table}"."tenant_id" = '${tenantId}'`)) throw new Error(`Unsupported SQL: ${sql}`);
+  const allowed = table === "build_profiles" || table === "plan_drafts" || table === "plan_draft_inputs" || table === "plan_draft_parts" || table === "plan_draft_required_unit_assignments" || table === "plan_draft_required_unit_decisions" || table === "plan_draft_required_unit_reconciliations";
+  const tenantScoped = Boolean(table) && sql.includes(`"${table}"."tenant_id" = '${tenantId}'`);
+  const reconciliationLookup = /^select (?:(?!\bfrom\b).)+ from "plan_draft_required_unit_reconciliations" where \(?"plan_draft_required_unit_reconciliations"\."id" = -?(?:0|[1-9][0-9]*)(?:\.0)?\)?$/.test(sql);
+  if (!allowed || !table || (!tenantScoped && !reconciliationLookup)) throw new Error(`Unsupported SQL: ${sql}`);
   if (table === "build_profiles" && !sql.startsWith('select "id" from "build_profiles"')) throw new Error(`Unsupported SQL: ${sql}`);
   return `table:${table}`;
 }
@@ -3828,11 +3833,15 @@ async function tracePlanning(tool: PlanningTool, input: Record<string, unknown>,
   return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
 }
 
-function assertPlanningDeclaration(tool: PlanningTool, expected: string[]) {
-  expect([...unions.get(tool) ?? []].sort()).toEqual(expected);
+function declaredPlanningResources(tool: PlanningTool): string[] {
   const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === `tool.${tool}`);
   if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
-  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(expected);
+  return entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
+}
+
+function assertPlanningDeclaration(tool: PlanningTool, expected: string[]) {
+  expect([...unions.get(tool) ?? []].sort()).toEqual(expected);
+  expect(declaredPlanningResources(tool)).toEqual(expected);
 }
 
 function planningBrief(planId: number, draftId?: number) {
@@ -3908,6 +3917,10 @@ it("rejects reads outside the planning brief declaration", () => {
   expect(() => planningSelect('select "id" from "parts" where "parts"."tenant_id" = \'default\'', "default")).toThrow("Unsupported SQL:");
   expect(planningSelect('select "id" from "build_profiles" where ("build_profiles"."tenant_id" = \'default\' and "build_profiles"."id" = 1.0)', "default")).toBe("table:build_profiles");
   expect(planningSelect('select "id", "tenant_id", "profile_id" from "plan_drafts" where ("plan_drafts"."tenant_id" = \'default\' and "plan_drafts"."id" = 1.0)', "default")).toBe("table:plan_drafts");
+  expect(planningSelect('select "id", "tenant_id", "profile_id", "draft_id", "finalized_at" from "plan_draft_required_unit_reconciliations" where "plan_draft_required_unit_reconciliations"."id" = 1.0', "default")).toBe("table:plan_draft_required_unit_reconciliations");
+  expect(planningSelect('select "id" from "plan_draft_required_unit_decisions" where ("plan_draft_required_unit_decisions"."tenant_id" = \'default\' and "plan_draft_required_unit_decisions"."reconciliation_id" = 1.0) order by "plan_draft_required_unit_decisions"."target_draft_part_id" asc', "default")).toBe("table:plan_draft_required_unit_decisions");
+  expect(planningSelect('select "tenant_id" from "plan_draft_required_unit_assignments" where ("plan_draft_required_unit_assignments"."tenant_id" = \'default\' and "plan_draft_required_unit_assignments"."reconciliation_id" = 1.0)', "default")).toBe("table:plan_draft_required_unit_assignments");
+  expect(() => planningSelect('select "id" from "plan_draft_required_unit_reconciliations" where "plan_draft_required_unit_reconciliations"."tenant_id" = \'other\'', "default")).toThrow("Unsupported SQL:");
 });
 
 for (const isolated of [false, true]) {
@@ -4080,7 +4093,11 @@ for (const isolated of [false, true]) {
     expect(await tracePlanning("get_plan_draft", { plan_id: plan.id }, PLANNING_BRIEF_TABLES, { repository, files: comparedFiles })).toEqual({ draft: null, planning_phase: { kind: "preparing" } });
     expect(planningTableCount("build_profiles")).toBe(0);
     assertPlanningDeclaration("list_build_differences", PLANNING_DECLARATION);
-    for (const tool of PLANNING_DRAFT_TOOLS) assertPlanningDeclaration(tool, PLANNING_DRAFT_DECLARATION);
+    for (const tool of PLANNING_DRAFT_TOOLS) {
+      expect([...unions.get(tool) ?? []].sort()).toEqual(PLANNING_DRAFT_DECLARATION);
+      const declared = declaredPlanningResources(tool);
+      expect(PLANNING_DRAFT_DECLARATION.every((resource) => declared.includes(resource))).toBe(true);
+    }
   });
 }
 
@@ -4111,4 +4128,38 @@ it("traces planning draft clearance when an isolated workspace symlink blocks th
   expect(observer.state.files.some(({ api }) => api === "readFileSync" || api === "readdirSync")).toBe(false);
   expect(await tracePlanning("get_build_planning_state", { plan_id: plan.id }, PLANNING_BRIEF_TABLES, { repository, files })).toMatchObject({ planning_phase: { kind: "preparing" }, difference_count: 0 });
   expect(planningTableCount("plan_drafts")).toBe(0);
+});
+
+it("traces a reconciliation-selected plan draft through both planning reads", async () => {
+  const plan = repo.createProfile("Reconciled planning");
+  const draft = insertEmptyPlanDraft(plan.id);
+  const saved = repo.savePlanDraftRequiredUnitReconciliation({
+    profileId: plan.id,
+    draftId: draft.id,
+    expectedSnapshotDigest: draft.snapshotDigest,
+    decisions: [],
+    actorId: "admission",
+    idempotencyKey: "admission-reconciliation",
+  });
+  expect(saved.kind).toBe("saved");
+  if (saved.kind !== "saved") throw new Error("reconciliation was not selected");
+  savePlanningBrief(plan.id, draft.id);
+  expect(await tracePlanning("get_build_planning_state", { plan_id: plan.id }, RECONCILED_DRAFT_TABLES)).toMatchObject({
+    planning_phase: { kind: "draft", draft_id: draft.id },
+    brief: { draft_id: draft.id },
+  });
+  expect(planningTableCount("plan_draft_required_unit_reconciliations")).toBe(2);
+  expect(planningTableCount("plan_draft_required_unit_decisions")).toBe(1);
+  expect(planningTableCount("plan_draft_required_unit_assignments")).toBe(1);
+  expect(await tracePlanning("get_plan_draft", { plan_id: String(plan.id) }, RECONCILED_DRAFT_TABLES)).toEqual({
+    draft: saved.draft,
+    planning_phase: { kind: "draft", draft_id: draft.id },
+  });
+  expect(planningTableCount("plan_draft_required_unit_reconciliations")).toBe(4);
+  expect(planningTableCount("plan_draft_required_unit_decisions")).toBe(2);
+  expect(planningTableCount("plan_draft_required_unit_assignments")).toBe(2);
+  for (const tool of PLANNING_DRAFT_TOOLS) {
+    expect([...unions.get(tool) ?? []].sort()).toEqual(RECONCILED_DRAFT_TABLES);
+    expect(declaredPlanningResources(tool)).toEqual(RECONCILED_DRAFT_DECLARATION);
+  }
 });
