@@ -77,7 +77,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -4162,4 +4162,163 @@ it("traces a reconciliation-selected plan draft through both planning reads", as
     expect([...unions.get(tool) ?? []].sort()).toEqual(RECONCILED_DRAFT_TABLES);
     expect(declaredPlanningResources(tool)).toEqual(RECONCILED_DRAFT_DECLARATION);
   }
+});
+
+
+type PlanningProposalTool =
+  | "propose_update_build_brief"
+  | "propose_resolve_build_differences"
+  | "propose_set_build_source_roles"
+  | "propose_rebuild_plan"
+  | "propose_apply_plan_draft";
+const PLANNING_PROPOSAL_TOOLS = [
+  "propose_update_build_brief",
+  "propose_resolve_build_differences",
+  "propose_set_build_source_roles",
+  "propose_rebuild_plan",
+  "propose_apply_plan_draft",
+] as const satisfies readonly PlanningProposalTool[];
+const PLANNING_PROPOSAL_SETTINGS = ["table:app_settings"] as const;
+
+function planningProposalLabel(tool: PlanningProposalTool): string {
+  return tool.replace(/^propose_/, "").replaceAll("_", " ");
+}
+
+function planningProposal(tool: PlanningProposalTool, planId: number, params: Record<string, unknown>) {
+  return {
+    status: "proposed",
+    note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: {
+      id: expect.any(String),
+      type: tool,
+      plan_id: planId,
+      label: planningProposalLabel(tool),
+      summary: "Apply the confirmed Build planning change.",
+      params,
+    },
+  };
+}
+
+async function tracePlanningProposal(
+  tool: PlanningProposalTool,
+  input: Record<string, unknown>,
+  tables: string[],
+  options: { repository?: AppRepository; tenantId?: string; activePlanId?: number } = {},
+) {
+  const { repository = repo, tenantId = "default", activePlanId } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try {
+    output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId }));
+  } finally {
+    observer.state.active = false;
+  }
+  expect(statements.every((sql) => String(sql).startsWith("select "))).toBe(true);
+  const observed = [...new Set(statements.map((sql) => planningSelect(sql, tenantId)))].sort();
+  expect(observed).toEqual(tables);
+  expect(observer.state.files).toEqual([]);
+  const union = unions.get(tool) ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  unions.set(tool, union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+it("traces build planning proposal creators against the app_settings brief lookup", async () => {
+  const plan = repo.createProfile("Proposal Planning");
+  const idle = repo.createProfile("Proposal Idle");
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual([...PLANNING_PROPOSAL_SETTINGS]);
+  }
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    for (const plan_id of [undefined, null, "invalid"]) {
+      expect(await tracePlanningProposal(tool, { plan_id }, [])).toEqual({ error: "plan_id required" });
+      expect(statements).toEqual([]);
+    }
+    expect(await tracePlanningProposal(tool, { plan_id: plan.id }, [...PLANNING_PROPOSAL_SETTINGS])).toEqual({
+      error: "Build planning brief not found",
+    });
+  }
+  savePlanningBrief(plan.id);
+  const otherPlan = await tenantStorage.run("other", () => {
+    const created = repo.createProfile("Other Proposal Planning");
+    savePlanningBrief(created.id);
+    return created;
+  });
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    const baseInput =
+      tool === "propose_resolve_build_differences"
+        ? { group_id: " group-a ", rationale: " keep both " }
+        : { note: "admission" };
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(
+        await tracePlanningProposal(tool, { ...baseInput, plan_id }, [...PLANNING_PROPOSAL_SETTINGS], {
+          activePlanId: idle.id,
+        }),
+      ).toEqual(planningProposal(tool, plan.id, { ...baseInput, plan_id }));
+    }
+    expect(
+      await tracePlanningProposal(tool, baseInput, [...PLANNING_PROPOSAL_SETTINGS], { activePlanId: plan.id }),
+    ).toEqual(planningProposal(tool, plan.id, baseInput));
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: "invalid" }, [...PLANNING_PROPOSAL_SETTINGS], {
+        activePlanId: plan.id,
+      }),
+    ).toEqual(planningProposal(tool, plan.id, { ...baseInput, plan_id: "invalid" }));
+    // resolvePlanId(..., false) does not ownership-check explicit IDs; brief key miss fails closed.
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: 999999 }, [...PLANNING_PROPOSAL_SETTINGS], {
+        activePlanId: plan.id,
+      }),
+    ).toEqual({ error: "Build planning brief not found" });
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: plan.id }, [...PLANNING_PROPOSAL_SETTINGS], {
+        tenantId: "other",
+      }),
+    ).toEqual({ error: "Build planning brief not found" });
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: otherPlan.id }, [...PLANNING_PROPOSAL_SETTINGS], {
+        tenantId: "other",
+      }),
+    ).toEqual(planningProposal(tool, otherPlan.id, { ...baseInput, plan_id: otherPlan.id }));
+  }
+  expect(
+    await tracePlanningProposal(
+      "propose_resolve_build_differences",
+      { plan_id: plan.id, group_id: " ", rationale: "keep" },
+      [...PLANNING_PROPOSAL_SETTINGS],
+    ),
+  ).toEqual({ error: "group_id and rationale required" });
+  expect(
+    await tracePlanningProposal(
+      "propose_resolve_build_differences",
+      { plan_id: plan.id, group_id: "g1", rationale: "  " },
+      [...PLANNING_PROPOSAL_SETTINGS],
+    ),
+  ).toEqual({ error: "group_id and rationale required" });
+  expect(
+    await tracePlanningProposal(
+      "propose_resolve_build_differences",
+      { plan_id: plan.id },
+      [...PLANNING_PROPOSAL_SETTINGS],
+    ),
+  ).toEqual({ error: "group_id and rationale required" });
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    expect([...unions.get(tool) ?? []].sort()).toEqual([...PLANNING_PROPOSAL_SETTINGS]);
+    const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual([...PLANNING_PROPOSAL_SETTINGS]);
+  }
+  // Brief bytes unchanged — proposal creators do not apply.
+  expect(repo.getSetting(`build_planning.v1.${plan.id}`)).toBeTruthy();
+  const before = repo.getSetting(`build_planning.v1.${plan.id}`);
+  await tracePlanningProposal(
+    "propose_update_build_brief",
+    { plan_id: plan.id, requirements: [{ key: "project", value: "changed", status: "satisfied" }] },
+    [...PLANNING_PROPOSAL_SETTINGS],
+  );
+  expect(repo.getSetting(`build_planning.v1.${plan.id}`)).toBe(before);
 });
