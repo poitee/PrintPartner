@@ -1918,7 +1918,10 @@ target cannot be settled. GRE-854 rejects generic `Finish`, `FinishPublic`,
 These calls leave the Job, batch, target, history and Source reservation unchanged.
 Heartbeat and progress updates remain available, and worker `Fail` still halts
 the batch. Non-Sync jobs and builds without `desktop_rebuild` keep their existing
-generic worker behavior. Target settlement remains in GRE-775 and GRE-776.
+generic worker behavior. GRE-775 stores one successful target and releases its
+reservation. GRE-776 records one local read failure, the Source failure
+observation and progress, and leaves that reservation unacknowledged so the
+failure stays retained evidence. Acknowledging it remains GRE-777.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal

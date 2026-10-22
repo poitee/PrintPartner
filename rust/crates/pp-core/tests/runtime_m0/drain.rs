@@ -11,6 +11,10 @@ use std::{fs, path::PathBuf, time::Duration};
 mod compression;
 
 async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
+    isolated_case_for(name, rebuild, Duration::from_secs(240)).await
+}
+
+async fn isolated_case_for(name: &str, rebuild: bool, limit: Duration) -> Option<PathBuf> {
     if std::env::var("PP_DRAIN_CASE").ok().as_deref() == Some(name) {
         return Some(PathBuf::from(std::env::var_os("PP_DRAIN_DATA").unwrap()));
     }
@@ -22,9 +26,9 @@ async fn isolated_case(name: &str, rebuild: bool) -> Option<PathBuf> {
         .env("PP_DRAIN_DATA", &data)
         .env("PP_DESKTOP_REBUILD", if rebuild { "1" } else { "0" })
         .kill_on_drop(true);
-    let output = tokio::time::timeout(Duration::from_secs(240), child.output())
+    let output = tokio::time::timeout(limit, child.output())
         .await
-        .expect("isolated drain case exceeded four minutes")
+        .unwrap_or_else(|_| panic!("isolated drain case exceeded {limit:?}"))
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     println!("{stdout}");
@@ -1317,3 +1321,5 @@ async fn ticket_t_3_drain_legal_summary_representation_parity() {
         );
     }
 }
+
+include!("ticket_t_3_drain_repeated_upload.rs");

@@ -1,4 +1,4 @@
-use pp_storage::catalog::{CreateSource, SourcePatch, SourceSummary};
+use pp_storage::catalog::{CreateSource, Deletion, SourcePatch, SourceSummary};
 use serde_json::{Map, Value, json};
 
 pub(super) fn sources(rows: Vec<SourceSummary>) -> Value {
@@ -73,6 +73,34 @@ fn js_string(value: &Value) -> String {
             .collect::<Vec<_>>()
             .join(","),
         Value::Object(_) => "[object Object]".into(),
+    }
+}
+
+pub(super) enum DeletionHttp {
+    Deleted,
+    Refused { status: u16, detail: &'static str },
+}
+
+/// Node delete statuses, plus the catalog busy and reference refusals.
+pub(super) fn source_deletion(outcome: Deletion) -> DeletionHttp {
+    match outcome {
+        Deletion::Deleted { .. } => DeletionHttp::Deleted,
+        Deletion::NotFound => DeletionHttp::Refused {
+            status: 404,
+            detail: "Source not found",
+        },
+        Deletion::RetainedHistory => DeletionHttp::Refused {
+            status: 409,
+            detail: "Source has immutable revision history and cannot be deleted",
+        },
+        Deletion::Referenced => DeletionHttp::Refused {
+            status: 409,
+            detail: "Source is referenced and cannot be deleted",
+        },
+        Deletion::ActiveWork => DeletionHttp::Refused {
+            status: 409,
+            detail: "Source has active work and cannot be deleted",
+        },
     }
 }
 
