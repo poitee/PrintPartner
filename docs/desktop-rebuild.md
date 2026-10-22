@@ -1924,7 +1924,10 @@ the batch. Non-Sync jobs and builds without `desktop_rebuild` keep their existin
 generic worker behavior. GRE-775 stores one successful target and releases its
 reservation. GRE-776 records one local read failure, the Source failure
 observation and progress, and leaves that reservation unacknowledged so the
-failure stays retained evidence. Acknowledging it remains GRE-777.
+failure stays retained evidence. GRE-777 acknowledges that retained failure when
+the presented observation matches the claim. GRE-778 adopts an already-
+acknowledged successful result when the live Source observation still matches
+the claim capture, and refuses mismatched provenance without writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal

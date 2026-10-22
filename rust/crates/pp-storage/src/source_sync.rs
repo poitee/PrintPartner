@@ -1057,6 +1057,145 @@ pub(crate) fn acknowledge(
     })
 }
 
+/// Returns one already-acknowledged successful Sync target result when this
+/// attempt still owns the claim and the live Source observation matches the
+/// capture stored at claim. Writes nothing. A changed observation or a stale
+/// attempt is refused without writing, so the caller does not rerun Source work
+/// under mismatched provenance.
+pub(crate) fn adopt(
+    tx: &Transaction<'_>,
+    _state: &State,
+    lease: &AttemptLease,
+    key: &SyncTargetKey,
+) -> Result<SettledSyncTarget> {
+    let job = require_sync_job(tx, lease)?;
+    ensure!(key.job_id == job.job_id, "Sync target Job mismatch");
+    let phase: Option<String> = tx
+        .query_row(
+            "SELECT phase FROM source_sync_batches WHERE job_id=?1",
+            [&job.job_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    ensure!(phase.as_deref() == Some("open"), "Sync batch is not open");
+    let row = tx
+        .query_row(
+            "SELECT requested_source_id,state,parent_generation,attempt_worker,attempt_fence_digest,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest,result_json,result_digest,receipt_id,receipt_hash,receipt_target,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2",
+            params![key.job_id, key.ordinal],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, i64>(15)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("Sync target not found"))?;
+    let (
+        source_id,
+        target_state,
+        parent_generation,
+        worker,
+        fence,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_observation_digest,
+        path_observation_digest,
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+        acknowledged,
+    ) = row;
+    ensure!(
+        target_state == "succeeded" && acknowledged == 1,
+        "Sync target is not an acknowledged success"
+    );
+    let (
+        Some(parent_generation),
+        Some(worker),
+        Some(fence),
+        Some(configuration_version),
+        Some(authority_actor),
+        Some(authority_basis_digest),
+        Some(activation_observation_digest),
+        Some(path_observation_digest),
+        Some(result_json),
+        Some(result_digest),
+        Some(receipt_id),
+        Some(receipt_hash),
+        Some(receipt_target),
+    ) = (
+        parent_generation,
+        worker,
+        fence,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_observation_digest,
+        path_observation_digest,
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+    )
+    else {
+        return Err(anyhow!("Sync producer capture incomplete"));
+    };
+    ensure!(
+        parent_generation == job.generation
+            && worker == lease.worker()
+            && fence == digest(lease.fence()),
+        "Sync target attempt mismatch"
+    );
+    let observation =
+        crate::source_scan::project_observation(tx, &job.tenant, source_id, &authority_actor)?;
+    ensure!(
+        observation.configuration_version == configuration_version
+            && observation.authority_actor == authority_actor
+            && observation.authority_basis_digest == authority_basis_digest
+            && observation.activation_observation_digest == activation_observation_digest
+            && observation.path_observation_digest == path_observation_digest,
+        "Sync adoption provenance mismatch"
+    );
+    validate_result_provenance(
+        source_id,
+        Some(result_json.clone()),
+        Some(result_digest),
+        Some(receipt_id.clone()),
+        Some(receipt_hash.clone()),
+        Some(receipt_target.clone()),
+    )?;
+    let result: SourceScanResult = serde_json::from_str(&result_json)?;
+    Ok(SettledSyncTarget {
+        key: key.clone(),
+        source_id,
+        result,
+        receipt: ResultArtifact {
+            receipt_id,
+            content_hash: receipt_hash,
+            target: receipt_target,
+        },
+    })
+}
+
 fn ordinary_failure(tx: &Transaction<'_>, mut job: JobRecord, key: &SyncTargetKey) -> Result<Next> {
     let failure = failure(tx, key)?;
     job.progress = Some(progress(tx, &job.job_id)?);
