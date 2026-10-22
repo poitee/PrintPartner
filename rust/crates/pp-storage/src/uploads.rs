@@ -239,6 +239,17 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
     Ok(())
 }
 
+/// An upstream revision key already names a revision that is not complete.
+/// Activation returns this and writes neither that revision nor its attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IncompleteRevisionKey;
+impl std::fmt::Display for IncompleteRevisionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Incomplete revision key")
+    }
+}
+impl std::error::Error for IncompleteRevisionKey {}
+
 /// Opening storage found an import whose job and cursor show a preclaim refusal
 /// without its `source_preclaim_refusals` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1145,7 +1156,11 @@ pub(crate) fn awaits_owner_input(tx: &Transaction<'_>, job: &jobs::JobRecord) ->
 
 /// Registers the published artifact as a complete Source revision and points the
 /// Source at it if the Source still matches the admission basis. Otherwise the
-/// revision stays inactive and the import ends in conflict.
+/// revision stays inactive and the import ends in conflict. A complete revision
+/// with the same manifest and locator is reused and keeps its first provenance.
+/// Each import records its own config, observation, input, and producer binding
+/// on `source_revision_attempts`. An existing revision that is not complete
+/// returns [`IncompleteRevisionKey`] and leaves that revision and its attempt.
 fn activate(
     tx: &Transaction<'_>,
     catalog_state: &catalog::State,
@@ -1170,30 +1185,51 @@ fn activate(
         .clone()
         .ok_or_else(|| anyhow!("Missing artifact"))?;
     let now = crate::auth::catalog_timestamp();
-    tx.execute(
-        "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,source_configuration_version,activation_observation_digest,input_digest,producer_version) VALUES(?1,?2,?3,?4,?5,?6,'complete',?7,?8,?9,?10) ON CONFLICT DO NOTHING",
-        params![
-            op.tenant,
-            op.source_id,
-            artifact.upstream_key,
-            artifact.manifest_digest,
-            artifact.locator,
-            now,
-            revision.source_configuration_version,
-            revision.activation_observation_digest,
-            revision.input_digest,
-            revision.producer_version
-        ],
-    )?;
-    let (id, manifest_digest, locator, synced_at): (i64, String, String, String) = tx.query_row(
-        "SELECT id,manifest_digest,snapshot_locator,synced_at FROM source_revisions WHERE tenant_id=?1 AND project_id=?2 AND upstream_revision_key=?3 AND completeness='complete'",
-        params![op.tenant, op.source_id, artifact.upstream_key],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-    )?;
-    ensure!(
-        manifest_digest == artifact.manifest_digest && locator == artifact.locator,
-        "Accepted revision identity mismatch"
-    );
+    let existing = tx
+        .query_row(
+            "SELECT id,completeness,manifest_digest,snapshot_locator,synced_at FROM source_revisions WHERE tenant_id=?1 AND project_id=?2 AND upstream_revision_key=?3",
+            params![op.tenant, op.source_id, artifact.upstream_key],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let (id, synced_at) = match existing {
+        Some((id, completeness, manifest_digest, locator, synced_at)) => {
+            if completeness != "complete" {
+                return Err(IncompleteRevisionKey.into());
+            }
+            ensure!(
+                manifest_digest == artifact.manifest_digest && locator == artifact.locator,
+                "Accepted revision identity mismatch"
+            );
+            (id, synced_at)
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,source_configuration_version,activation_observation_digest,input_digest,producer_version) VALUES(?1,?2,?3,?4,?5,?6,'complete',?7,?8,?9,?10)",
+                params![
+                    op.tenant,
+                    op.source_id,
+                    artifact.upstream_key,
+                    artifact.manifest_digest,
+                    artifact.locator,
+                    now,
+                    revision.source_configuration_version,
+                    revision.activation_observation_digest,
+                    revision.input_digest,
+                    revision.producer_version
+                ],
+            )?;
+            (tx.last_insert_rowid(), now.clone())
+        }
+    };
     tx.execute(
         "INSERT INTO source_revision_attempts(tenant_id,operation_key,job_id,source_id,revision_id,source_configuration_version,activation_observation_digest,input_digest,producer_version,attempt_generation,attempt_fence,activated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12)",
         params![
