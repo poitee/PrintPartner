@@ -91,6 +91,29 @@ unchanged claim capture, progress 0 and the retained next claim.
 a sibling that already stores one, then fails that sibling. Progress becomes
 50 because only the acknowledged success counts.
 
+## Acknowledge one retained failure
+
+`ServerWorkerClient::acknowledge_source_sync_target` acknowledges one retained
+`local_read` failure when the worker presents the observation stored at claim
+and the current attempt still owns that target. The failure code, detail and
+result columns stay as recorded. Progress then counts the failure. The batch
+stays open. The live Source token is retired after the commit.
+
+A different observation, a stale attempt, or a reservation that is not the one
+stored on the target is refused and writes nothing. The failure stays retained,
+so the next claim still returns `RetainedFailure` and the Source stays busy.
+Moving the Source path after the failure does not change the stored
+observation. Acknowledgement still requires the claim observation.
+
+An exact replay presents that same observation again. It returns the same
+failure, progress and version, and it writes nothing. A settled sibling's
+result stays in place. After acknowledgement the next claim skips the failure,
+and another worker can take the Source.
+
+`sync_acknowledgement_requires_matching_observation` checks those refusals and
+the acknowledgement that follows. `sync_acknowledgement_replay_preserves_result`
+checks the replay, the untouched sibling result and the released Source.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
@@ -109,12 +132,22 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
   unacknowledged_failure_blocks_claim_after_restart
 ```
 
-Feature-off, settle, fail and their tables are absent. The same check covers both commands:
+Feature-off, settle, fail, acknowledge and their tables are absent. The same check covers those commands:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
 CARGO_TARGET_DIR=/persist/targets/gre-776-failed-sync-target \
 cargo test -p pp-storage --lib sync_settle_is_absent_without_desktop_rebuild
+```
+
+Acknowledge a retained failure with:
+
+```sh
+CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
+CARGO_TARGET_DIR=/persist/targets/gre-777-ack-retained-evidence \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
+  sync_acknowledgement_requires_matching_observation \
+  sync_acknowledgement_replay_preserves_result
 ```
 
 `durable_claim_returns_source_busy_after_restart` and
