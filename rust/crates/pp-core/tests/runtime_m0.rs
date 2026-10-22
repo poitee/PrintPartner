@@ -11,6 +11,11 @@ use std::{
     time::Duration,
 };
 
+// Run 38941881212: an idle macOS respawn hash took 10.7–19.7s after Starting,
+// and the 30s readiness probe starts only after that hash. A 20s wait expired
+// during the hash.
+const RESPAWN_READY_FUSE: Duration = Duration::from_secs(50);
+
 #[path = "runtime_m0/drain.rs"]
 mod drain;
 
@@ -719,7 +724,7 @@ async fn crash_guard_stops_after_five_failures_and_recovers_explicitly() {
             {
                 break pid;
             }
-            tokio::time::timeout(Duration::from_secs(20), state.changed())
+            tokio::time::timeout(RESPAWN_READY_FUSE, state.changed())
                 .await
                 .unwrap()
                 .unwrap();
@@ -746,7 +751,7 @@ async fn crash_guard_stops_after_five_failures_and_recovers_explicitly() {
         if matches!(*state.borrow(), CoreStatus::Ready { .. }) {
             break;
         }
-        tokio::time::timeout(Duration::from_secs(20), state.changed())
+        tokio::time::timeout(RESPAWN_READY_FUSE, state.changed())
             .await
             .unwrap()
             .unwrap();
@@ -977,7 +982,7 @@ async fn stable_child_resets_backoff_without_erasing_rapid_crash_escalation() {
             {
                 break pid;
             }
-            tokio::time::timeout(Duration::from_secs(20), state.changed())
+            tokio::time::timeout(RESPAWN_READY_FUSE, state.changed())
                 .await
                 .unwrap()
                 .unwrap();
