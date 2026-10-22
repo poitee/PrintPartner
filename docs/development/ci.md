@@ -39,7 +39,7 @@ Each job runs these steps in order:
 9. `cargo test --doc`, with `desktop_rebuild` off. nextest does not run doctests.
 10. `cargo test --doc`, with `desktop_rebuild` on.
 
-On macOS PRs, steps 6, 8 and 10 are skipped. Linux and Windows keep both feature states on PRs. Non-PR runs keep both states on every OS.
+On pull requests, steps 6, 8 and 10 (`desktop_rebuild` on) are skipped on every OS so the off pass gates the PR. Non-PR runs keep both feature states on every OS.
 
 The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
 
