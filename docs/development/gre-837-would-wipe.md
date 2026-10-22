@@ -14,8 +14,8 @@ A scanner full of non-`.stl` names does not reach it.
 The code remains inside the default-off `desktop_rebuild` module. Product
 callers still require the startup `DesktopRebuild` value captured from
 `PP_DESKTOP_REBUILD`. This slice does not mount a route or read that variable.
-`docs/desktop-rebuild.md` still says the outcome has no Rust counterpart; open
-PR #1003 owns that file, so this note is the updated description.
+`docs/desktop-rebuild.md` names the Rust `would_wipe` serialization and records
+that `prepare` does not return it from a scanner, matching Node.
 
 The public-client tests call `WriterOwner`'s working-draft client with a
 disposable copy of `required-units/unchanged.db`:
