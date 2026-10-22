@@ -651,13 +651,13 @@ pub(crate) fn next(
         }
         Some((name, _)) => name,
     };
-    let durably_claimed: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM source_sync_targets WHERE tenant=?1 AND requested_source_id=?2 AND state='claimed')",
+    let durably_held: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_sync_targets WHERE tenant=?1 AND requested_source_id=?2 AND (state='claimed' OR (state IN ('succeeded','failed') AND reservation_acknowledged=0)))",
         params![job.tenant, source_id],
         |row| row.get(0),
     )?;
     ensure!(
-        !durably_claimed && !state.source_busy(&job.tenant, source_id),
+        !durably_held && !state.source_busy(&job.tenant, source_id),
         SourceBusy
     );
     let token = state.next_token()?;

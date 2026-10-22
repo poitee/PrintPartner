@@ -2,9 +2,11 @@
 
 This module requires the default-off `desktop_rebuild` feature.
 
-A Local target claim checks both the live Source reservation and retained
-`claimed` targets for the same tenant and Source. Either conflict returns the
-typed `catalog::SourceBusy` error before changing the target or issuing a token.
+A Local target claim checks both the live Source reservation and any retained
+hold on that tenant and Source. A hold is a `claimed` target, or a `succeeded`
+or `failed` target whose reservation is not acknowledged. Any conflict returns
+the typed `catalog::SourceBusy` error before changing the target or issuing a
+token.
 The original batch can reset its retained claim when its recovered attempt opens.
 The competing batch can then retry. Existing Job resource admission still applies,
 including its reservations for Jobs that require reconciliation.
@@ -78,7 +80,8 @@ A refusal writes nothing. Empty or over-long detail, a changed Source
 observation, and a target that already stores a successful result are refused.
 Another target's stored result stays in place.
 
-The next claim returns `RetainedFailure` for that unacknowledged row. A
+The next claim returns `RetainedFailure` for that unacknowledged row. The same
+row blocks another Job from claiming that Source after storage is reopened. A
 completed failure already has its reservation acknowledged, as a missing or
 non-Local Source does, and the next claim skips it.
 
@@ -100,9 +103,10 @@ cargo test -p pp-storage --features desktop_rebuild --lib sync_settle_persists_o
 cargo test -p pp-storage --features desktop_rebuild --lib sync_stale_settlement_preserves_target -- --test-threads=8
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
 CARGO_TARGET_DIR=/persist/targets/gre-776-failed-sync-target \
-cargo test -p pp-storage --features desktop_rebuild --lib \
-  'sync_target_failure_records_source_observation|sync_failure_does_not_replace_settled_result' \
-  -- --test-threads=8
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
+  sync_target_failure_records_source_observation \
+  sync_failure_does_not_replace_settled_result \
+  unacknowledged_failure_blocks_claim_after_restart
 ```
 
 Feature-off, settle, fail and their tables are absent. The same check covers both commands:
@@ -118,6 +122,9 @@ cargo test -p pp-storage --lib sync_settle_is_absent_without_desktop_rebuild
 one Source. Their worker admits two Jobs per resource so the tests reach target
 claim admission. They assert the typed error, an unchanged database and lease
 version, and successful retry after the original batch releases its durable claim.
+`unacknowledged_failure_blocks_claim_after_restart` fails a claimed target, closes
+and reopens storage, then refuses the second Job's claim. The failed row stays
+as it was.
 
 The four `*_recovery_closes_sync_batch` tests cover attempt exhaustion,
 cancellation, and confirmed or unconfirmed generic effects. Each runs recovery

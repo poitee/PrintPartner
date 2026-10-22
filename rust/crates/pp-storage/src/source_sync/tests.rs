@@ -702,6 +702,81 @@ fn durable_claim_returns_source_busy_after_lease_expiry() {
     durable_claim_blocks_a_second_sync(false);
 }
 
+#[test]
+fn unacknowledged_failure_blocks_claim_after_restart() {
+    let admission = WorkerAdmission {
+        kinds: vec![(JobKind::Sync, 2)],
+        total: 2,
+        per_resource: 2,
+        ..admission()
+    };
+    let mut sync = Fixture::with_admission(admission.clone());
+    let id = sync.source("Unacknowledged failure");
+    let first_job = sync.enqueue(Some(vec![id as u64]));
+    let mut first = sync.open();
+    let target = local(sync.next(&mut first));
+    sync.worker
+        .fail_source_sync_target(&mut first, &target, "disk read failed")
+        .unwrap();
+    drop(target);
+    let failed = failed_hold(&sync, &first_job);
+    assert_eq!(
+        (
+            failed.0.as_str(),
+            failed.1.as_str(),
+            failed.2.as_str(),
+            failed.3,
+        ),
+        ("failed", "local_read", "disk read failed", 0)
+    );
+    sync = reopen_with_admission(sync, admission);
+    let ClaimedAttempt {
+        lease: resumed_first,
+        ..
+    } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(resumed_first.job_id(), first_job);
+    let second_job = enqueue_later(&sync, id);
+    let ClaimedAttempt {
+        lease: mut second, ..
+    } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(second.job_id(), second_job);
+    sync.worker.open_source_sync(&second).unwrap();
+    let before = sync.snapshot();
+    let version = second.version();
+    let error = sync
+        .worker
+        .claim_next_source_sync_target(&mut second)
+        .err()
+        .unwrap();
+    assert!(error.downcast_ref::<SourceBusy>().is_some(), "{error:#}");
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(second.version(), version);
+    assert_eq!(sync.targets(&second_job), [(id, "pending".into(), None)]);
+    assert_eq!(failed_hold(&sync, &first_job), failed);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn failed_hold(sync: &Fixture, job_id: &str) -> (String, String, String, i64, String, i64) {
+    sync.connection()
+        .query_row(
+            "SELECT state,failure_code,failure_detail,reservation_acknowledged,reservation_token,claim_generation FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [job_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
 fn terminal_recovery_closes_sync_batch(reason: &str, effect_confirmed: bool) {
     for restart in [false, true] {
         for claimed in [false, true] {
