@@ -2,23 +2,35 @@ use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
     body::{Body, Bytes, to_bytes},
-    extract::{ConnectInfo, DefaultBodyLimit, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
+    routing::get,
 };
-use serde_json::json;
+use pp_storage::{
+    auth::{AuthFailure, Secret},
+    read_model::Credential,
+    required_units::AdmissionFailure,
+    working_drafts::{
+        DraftIdentity, DraftList, Failure, Outcome, PositiveId, Request, WorkingDraftClient,
+    },
+};
+use serde_json::{Value, json};
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const ADMISSION_PERMITS: usize = 64;
+const READ_PERMITS: usize = 64;
 const TARGET_LIMIT: usize = 16 * 1024;
 const READ_BODY_LIMIT: usize = 1024 * 1024;
 const BODY_TIMEOUT: Duration = Duration::from_secs(5);
+const READ_DETAIL: &str = "Plan draft data is inconsistent";
 
 #[derive(Clone)]
 pub struct DraftHttpConfig {
@@ -135,10 +147,10 @@ async fn guard(
     if let Err((status, detail)) = admit(&config, &request) {
         return failure(status, detail);
     }
-    let Some(principal) = principal(request.headers(), &config.api_key_tenant) else {
+    let Some(presented) = principal(request.headers(), &config.api_key_tenant) else {
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
-    request.extensions_mut().insert(principal);
+    request.extensions_mut().insert(presented);
     let limit = match *request.method() {
         Method::PATCH => config.body_limit,
         _ => config.body_limit.min(READ_BODY_LIMIT),
@@ -220,7 +232,7 @@ fn admit(
         ) && origin != Some(&config.origin)
             && !matches!(
                 principal(headers, &config.api_key_tenant),
-                Some(Principal::ApiKey { .. })
+                Some(PresentedCredential::ApiKey { .. })
             ))
         || headers
             .get_all("sec-fetch-site")
@@ -234,20 +246,14 @@ fn admit(
 
 /// The one credential a draft request presented. API keys route to the
 /// configured tenant; request headers cannot select another tenant.
+/// Storage accepts it before a read handler runs.
 #[derive(Clone)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "GRE-940 read handlers convert it to a storage credential"
-    )
-)]
-enum Principal {
+enum PresentedCredential {
     Session(String),
     ApiKey { tenant: String, secret: String },
 }
 
-fn principal(headers: &HeaderMap, tenant: &str) -> Option<Principal> {
+fn principal(headers: &HeaderMap, tenant: &str) -> Option<PresentedCredential> {
     let mut session = None;
     for header in headers.get_all("cookie") {
         for item in header.to_str().ok()?.split(';') {
@@ -271,7 +277,7 @@ fn principal(headers: &HeaderMap, tenant: &str) -> Option<Principal> {
     }
     if let Some(value) = session {
         return (!value.is_empty() && value.len() <= 4096)
-            .then(|| Principal::Session(value.into()));
+            .then(|| PresentedCredential::Session(value.into()));
     }
     let key = if let Some(value) = auth {
         value.to_str().ok()?.strip_prefix("Bearer ")?
@@ -279,7 +285,7 @@ fn principal(headers: &HeaderMap, tenant: &str) -> Option<Principal> {
         custom?.to_str().ok()?
     }
     .trim();
-    (!key.is_empty() && key.len() <= 4096).then(|| Principal::ApiKey {
+    (!key.is_empty() && key.len() <= 4096).then(|| PresentedCredential::ApiKey {
         tenant: tenant.into(),
         secret: key.into(),
     })
@@ -287,6 +293,353 @@ fn principal(headers: &HeaderMap, tenant: &str) -> Option<Principal> {
 
 fn failure(status: StatusCode, detail: &str) -> Response {
     (status, Json(json!({"detail":detail}))).into_response()
+}
+
+#[cfg(test)]
+type WorkerHold = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Clone)]
+struct App {
+    client: WorkingDraftClient,
+    wait: Duration,
+    waiters: Arc<Semaphore>,
+    #[cfg(test)]
+    hold: Option<WorkerHold>,
+}
+
+/// Result of a storage read that has already accepted the credential.
+#[derive(Clone)]
+struct Authorized {
+    profile: PositiveId,
+    outcome: Arc<Outcome>,
+}
+
+struct CancelOnDrop {
+    flag: Arc<AtomicBool>,
+    armed: bool,
+}
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flag.store(true, Ordering::Release);
+        }
+    }
+}
+
+enum ReadError {
+    Busy,
+    Worker,
+    Storage(anyhow::Error),
+}
+
+/// Mounts list and workspace reads when the startup gate is on.
+/// Storage accepts the presented credential before either handler runs.
+/// A disabled gate mounts nothing.
+pub fn draft_router(config: DraftHttpConfig, client: WorkingDraftClient) -> Router {
+    mount(
+        config,
+        client,
+        #[cfg(test)]
+        None,
+    )
+}
+
+#[cfg(test)]
+fn draft_router_with_hold(
+    config: DraftHttpConfig,
+    client: WorkingDraftClient,
+    hold: WorkerHold,
+) -> Router {
+    mount(config, client, Some(hold))
+}
+
+fn mount(
+    config: DraftHttpConfig,
+    client: WorkingDraftClient,
+    #[cfg(test)] hold: Option<WorkerHold>,
+) -> Router {
+    if !config.enabled {
+        return Router::new();
+    }
+    let app = App {
+        client,
+        wait: config.wait,
+        waiters: Arc::new(Semaphore::new(READ_PERMITS)),
+        #[cfg(test)]
+        hold,
+    };
+    let routes = Router::new()
+        .route("/plans/{id}/drafts", get(list))
+        .route("/plans/{id}/drafts/{draft_id}", get(workspace))
+        .route_layer(middleware::from_fn_with_state(app, authorize));
+    admit_draft_routes(config, routes)
+}
+
+impl PresentedCredential {
+    fn into_credential(self) -> Credential {
+        match self {
+            Self::Session(value) => Credential::Session(Secret::new(value)),
+            Self::ApiKey { tenant, secret } => Credential::ApiKey {
+                routed_tenant: tenant,
+                secret: Secret::new(secret),
+            },
+        }
+    }
+}
+
+async fn authorize(
+    State(app): State<App>,
+    mut request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let Some(presented) = request.extensions_mut().remove::<PresentedCredential>() else {
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+    if !matches!(*request.method(), Method::GET | Method::HEAD) {
+        return next.run(request).await;
+    }
+    let path = request.uri().path().to_owned();
+    let Some((profile, operation)) = read_target(&path) else {
+        return invalid_request();
+    };
+    let (operation_name, draft_id) = match &operation {
+        Request::List => ("list", None),
+        Request::Read { draft_id }
+        | Request::Diff { draft_id }
+        | Request::Workspace { draft_id } => ("read", Some(*draft_id)),
+    };
+    match load(&app, presented, profile, operation).await {
+        Ok(outcome) => {
+            request.extensions_mut().insert(Authorized {
+                profile,
+                outcome: Arc::new(outcome),
+            });
+            next.run(request).await
+        }
+        Err(error) => {
+            let (class, response) = match error {
+                ReadError::Worker => ("worker_failure", internal_error()),
+                ReadError::Storage(error) => (error_class(&error), storage_failure(&error)),
+                ReadError::Busy => (
+                    "read_pool_exhausted",
+                    failure(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Draft service temporarily unavailable",
+                    ),
+                ),
+            };
+            if response.status().is_server_error() {
+                log::error!(
+                    target: "pp_api::drafts",
+                    "Draft HTTP failed; operation={operation_name} profile_id={profile:?} draft_id={draft_id:?} error_class={class}"
+                );
+            }
+            response
+        }
+    }
+}
+
+async fn load(
+    app: &App,
+    presented: PresentedCredential,
+    profile: PositiveId,
+    operation: Request,
+) -> std::result::Result<Outcome, ReadError> {
+    let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
+        return Err(ReadError::Busy);
+    };
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut cancel = CancelOnDrop {
+        flag: Arc::clone(&flag),
+        armed: true,
+    };
+    let client = app.client.clone();
+    let wait = app.wait;
+    #[cfg(test)]
+    let hold = app.hold.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        #[cfg(test)]
+        if let Some(hold) = hold {
+            hold();
+        }
+        if flag.load(Ordering::Acquire) {
+            return Err(anyhow::Error::new(Failure::Cancelled));
+        }
+        client.execute(presented.into_credential(), profile, operation, flag, wait)
+    })
+    .await;
+    cancel.armed = false;
+    match joined {
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(error)) => Err(ReadError::Storage(error)),
+        Err(_) => Err(ReadError::Worker),
+    }
+}
+
+fn read_target(path: &str) -> Option<(PositiveId, Request)> {
+    let path = path.strip_prefix("/api/v2").unwrap_or(path);
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    if parts.next()? != "plans" {
+        return None;
+    }
+    let profile = path_id(parts.next()?)?;
+    if parts.next()? != "drafts" {
+        return None;
+    }
+    match parts.next() {
+        None => parts.next().is_none().then_some((profile, Request::List)),
+        Some(draft) => {
+            let draft_id = path_id(draft)?;
+            parts
+                .next()
+                .is_none()
+                .then_some((profile, Request::Workspace { draft_id }))
+        }
+    }
+}
+
+fn path_id(value: &str) -> Option<PositiveId> {
+    PositiveId::new(value.parse().ok()?).ok()
+}
+
+async fn list(Extension(read): Extension<Authorized>) -> Response {
+    match read.outcome.as_ref() {
+        Outcome::Listed { drafts } => json_response(StatusCode::OK, listed(read.profile, drafts)),
+        Outcome::ProfileNotFound => profile_missing(),
+        _ => internal_error(),
+    }
+}
+
+async fn workspace(Extension(read): Extension<Authorized>) -> Response {
+    match read.outcome.as_ref() {
+        Outcome::Workspace { workspace } => json_response(StatusCode::OK, workspace),
+        Outcome::ProfileNotFound => profile_missing(),
+        Outcome::DraftNotFound => draft_missing(),
+        _ => internal_error(),
+    }
+}
+
+fn listed(profile: PositiveId, drafts: &DraftList) -> Value {
+    json!({
+        "profile_id": profile,
+        "drafts": drafts.iter().map(identity).collect::<Vec<_>>()
+    })
+}
+
+fn identity(draft: &DraftIdentity) -> Value {
+    json!({
+        "draft_id": draft.draft_id(),
+        "state": draft.state().as_str(),
+        "lifecycle_version": draft.lifecycle_version(),
+        "snapshot_digest": draft.snapshot_digest(),
+        "base": {
+            "revision_id": draft.base_revision_id(),
+            "plan_version": draft.base_plan_version(),
+        }
+    })
+}
+
+fn error_class(error: &anyhow::Error) -> &'static str {
+    if matches!(
+        error.downcast_ref::<Failure>(),
+        Some(Failure::CorruptOrigin)
+    ) {
+        "draft_integrity"
+    } else if error.is::<AuthFailure>() {
+        "auth_storage"
+    } else {
+        "unexpected_storage"
+    }
+}
+
+fn storage_failure(error: &anyhow::Error) -> Response {
+    if let Some(auth) = error.downcast_ref::<AuthFailure>() {
+        return match auth {
+            AuthFailure::SessionRequired
+            | AuthFailure::InvalidCredentials
+            | AuthFailure::CredentialChanged => {
+                failure(StatusCode::UNAUTHORIZED, "Authentication required")
+            }
+            AuthFailure::OwnerMappingRequired => failure(
+                StatusCode::FORBIDDEN,
+                "Explicit account owner mapping is required",
+            ),
+            AuthFailure::QueueFull => unavailable("writer_queue_full"),
+            AuthFailure::Stopped => unavailable("writer_stopped"),
+            AuthFailure::CommitUnknown => unavailable("outcome_unknown"),
+            _ => internal_error(),
+        };
+    }
+    if let Some(draft) = error.downcast_ref::<Failure>() {
+        return match draft {
+            Failure::Cancelled => unavailable("request_cancelled"),
+            Failure::QueueFull => unavailable("writer_queue_full"),
+            Failure::Stopped => unavailable("writer_stopped"),
+            Failure::OutcomeUnknown => unavailable("outcome_unknown"),
+            Failure::CorruptOrigin => internal_error(),
+        };
+    }
+    if let Some(admission) = error.downcast_ref::<AdmissionFailure>() {
+        return unavailable(match admission {
+            AdmissionFailure::Cancelled => "request_cancelled",
+            AdmissionFailure::QueueFull => "writer_queue_full",
+            AdmissionFailure::Stopped => "writer_stopped",
+            AdmissionFailure::OutcomeUnknown => "outcome_unknown",
+        });
+    }
+    match error.to_string().as_str() {
+        "Authentication required" => failure(StatusCode::UNAUTHORIZED, "Authentication required"),
+        "Cancelled before admission" => unavailable("request_cancelled"),
+        "Writer queue full" => unavailable("writer_queue_full"),
+        "Storage stopped" | "Storage stopped without read result" | "Writer admission poisoned" => {
+            unavailable("writer_stopped")
+        }
+        "Writer transaction admission deadline expired" | "database is locked" => coded(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Plan draft update is unavailable",
+            "transaction_unavailable",
+        ),
+        _ => internal_error(),
+    }
+}
+
+fn internal_error() -> Response {
+    coded(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        READ_DETAIL,
+        "internal_error",
+    )
+}
+fn profile_missing() -> Response {
+    coded(StatusCode::NOT_FOUND, "Plan not found", "profile_not_found")
+}
+fn draft_missing() -> Response {
+    coded(
+        StatusCode::NOT_FOUND,
+        "Plan draft not found",
+        "draft_not_found",
+    )
+}
+fn unavailable(code: &str) -> Response {
+    coded(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Draft service temporarily unavailable",
+        code,
+    )
+}
+fn invalid_request() -> Response {
+    coded(
+        StatusCode::BAD_REQUEST,
+        "Request is invalid",
+        "invalid_request",
+    )
+}
+fn coded(status: StatusCode, detail: &str, code: &str) -> Response {
+    json_response(status, json!({"detail": detail, "code": code}))
+}
+fn json_response(status: StatusCode, value: impl serde::Serialize) -> Response {
+    (status, Json(value)).into_response()
 }
 
 #[cfg(test)]
