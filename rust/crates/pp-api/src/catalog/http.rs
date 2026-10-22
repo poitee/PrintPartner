@@ -292,13 +292,14 @@ async fn patch_source(
     if let Some(response) = refused_local_path(&body) {
         return response;
     }
+    let patch = match wire::source_patch(&body) {
+        Ok(patch) => patch,
+        Err(detail) => return reject(StatusCode::BAD_REQUEST, detail),
+    };
     execute(
         &app,
         credentials(principal),
-        CatalogRequest::UpdateCatalogSource {
-            id,
-            patch: wire::source_patch(&body),
-        },
+        CatalogRequest::UpdateCatalogSource { id, patch },
     )
     .await
 }
@@ -398,7 +399,16 @@ fn catalog_error(error: anyhow::Error) -> Response {
             CatalogFailure::Input(_)
             | CatalogFailure::DuplicateName(_)
             | CatalogFailure::Referenced => (StatusCode::BAD_REQUEST, error.to_string()),
-            CatalogFailure::Conflict => (StatusCode::CONFLICT, failure.to_string()),
+            CatalogFailure::Conflict => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "code": "catalog_metadata_conflict",
+                        "detail": failure.to_string(),
+                    })),
+                )
+                    .into_response();
+            }
         };
         return reject(status, detail);
     }

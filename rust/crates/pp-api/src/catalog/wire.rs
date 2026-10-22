@@ -24,8 +24,9 @@ pub(super) fn source_create(body: &Value) -> CreateSource {
 }
 
 /// Patch omits null columns. An explicit null `tag` clears the stored tag.
-pub(super) fn source_patch(body: &Value) -> SourcePatch {
-    SourcePatch {
+/// `metadata_version` is a safe integer, or omitted when null or absent.
+pub(super) fn source_patch(body: &Value) -> Result<SourcePatch, &'static str> {
+    Ok(SourcePatch {
         name: text(body, "name"),
         url: text(body, "url"),
         branch: text(body, "branch"),
@@ -35,8 +36,23 @@ pub(super) fn source_patch(body: &Value) -> SourcePatch {
         source_kind: text(body, "source_kind"),
         role: text(body, "role"),
         metadata: object(body, "metadata"),
-        metadata_version: body.get("metadata_version").and_then(Value::as_i64),
+        metadata_version: metadata_version(body)?,
         ..Default::default()
+    })
+}
+
+fn metadata_version(body: &Value) -> Result<Option<i64>, &'static str> {
+    let Some(value) = body.get("metadata_version") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    match value.as_i64() {
+        Some(number) if (-9_007_199_254_740_991..=9_007_199_254_740_991).contains(&number) => {
+            Ok(Some(number))
+        }
+        _ => Err("metadata_version must be an integer"),
     }
 }
 
