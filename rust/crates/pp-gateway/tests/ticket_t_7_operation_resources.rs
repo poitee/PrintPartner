@@ -285,45 +285,6 @@ fn ticket_t_7_ownership_checkoff_reads_refuse_invalid_admission_before_effects()
     }
 }
 
-fn planning_brief_resources() -> Value {
-    json!([
-        {"kind": "table", "name": "app_settings"},
-        {"kind": "table", "name": "projects"},
-        {"kind": "table", "name": "source_docs"},
-        {"kind": "file", "name": "source-workspace"}
-    ])
-}
-
-#[test]
-fn ticket_t_7_ownership_build_planning_reads_have_complete_node_owned_resources() {
-    let brief = planning_brief_resources();
-    assert_sqlite_tool_resources("tool.list_build_differences", brief.clone());
-    let mut with_draft = brief;
-    with_draft.as_array_mut().unwrap().extend([
-        json!({"kind": "table", "name": "build_profiles"}),
-        json!({"kind": "table", "name": "plan_drafts"}),
-        json!({"kind": "table", "name": "plan_draft_inputs"}),
-        json!({"kind": "table", "name": "plan_draft_parts"}),
-        json!({"kind": "table", "name": "plan_draft_required_unit_reconciliations"}),
-        json!({"kind": "table", "name": "plan_draft_required_unit_decisions"}),
-        json!({"kind": "table", "name": "plan_draft_required_unit_assignments"}),
-    ]);
-    for id in ["tool.get_build_planning_state", "tool.get_plan_draft"] {
-        assert_sqlite_tool_resources(id, with_draft.clone());
-    }
-}
-
-#[test]
-fn ticket_t_7_ownership_build_planning_reads_refuse_invalid_admission_before_effects() {
-    for id in [
-        "tool.get_build_planning_state",
-        "tool.list_build_differences",
-        "tool.get_plan_draft",
-    ] {
-        assert_tool_invalid_admission(id);
-    }
-}
-
 #[test]
 fn ticket_t_7_ownership_list_sources_has_complete_node_owned_resources() {
     assert_sqlite_tool_resources(
@@ -642,9 +603,6 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_remaining",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
-        "tool.get_build_planning_state",
-        "tool.list_build_differences",
-        "tool.get_plan_draft",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -668,8 +626,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 45);
-    assert_eq!(unresolved.len(), 398);
+    assert_eq!(reviewed.len(), 42);
+    assert_eq!(unresolved.len(), 401);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -949,9 +907,6 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_remaining",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
-        "tool.get_build_planning_state",
-        "tool.list_build_differences",
-        "tool.get_plan_draft",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1066,15 +1021,6 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
         ),
-        (
-            "tool.propose_import_3mf_checkoff",
-            "tool.get_build_planning_state",
-        ),
-        (
-            "tool.get_build_planning_state",
-            "tool.list_build_differences",
-        ),
-        ("tool.list_build_differences", "tool.get_plan_draft"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_job_status", "tool.ui_highlight_part"),
