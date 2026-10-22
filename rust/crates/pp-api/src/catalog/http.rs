@@ -391,15 +391,10 @@ fn catalog_error(error: anyhow::Error) -> Response {
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "Catalog request too large".to_owned(),
             ),
-            CatalogFailure::Conflict => (
-                StatusCode::CONFLICT,
-                "Catalog metadata changed; retry from the current version".to_owned(),
-            ),
             CatalogFailure::InvalidStoredNaming => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Catalog unavailable".to_owned(),
             ),
-            CatalogFailure::Conflict => (StatusCode::CONFLICT, error.to_string()),
             CatalogFailure::Input(_)
             | CatalogFailure::DuplicateName(_)
             | CatalogFailure::Referenced => (StatusCode::BAD_REQUEST, error.to_string()),
