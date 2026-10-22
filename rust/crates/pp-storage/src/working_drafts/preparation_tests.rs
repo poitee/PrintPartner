@@ -1044,7 +1044,9 @@ fn recompute_reported(profile: u64, reported: &[&str], setup: &str) -> ReportedR
 #[test]
 fn would_wipe_serializes_without_a_scanner() {
     assert_eq!(
-        super::RecomputeOutcome::WouldWipe.into_json_body().into_bytes(),
+        super::RecomputeOutcome::WouldWipe
+            .into_json_body()
+            .into_bytes(),
         br#"{"kind":"would_wipe"}"#
     );
     assert_eq!(
