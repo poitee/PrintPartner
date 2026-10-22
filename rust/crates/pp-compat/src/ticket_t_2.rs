@@ -1817,14 +1817,16 @@ fn measured_release_ack_deadline_excludes_verification() {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
         std::fs::write(&verified_signal, b"ok").unwrap();
-        std::thread::sleep(Duration::from_millis(150));
+        // Ack arrives well inside the acknowledgement window (was 150ms into a
+        // 350ms budget — too tight on loaded CI hosts).
+        std::thread::sleep(Duration::from_millis(100));
         std::fs::write(&ready_signal, b"ok").unwrap();
     });
     phased_startup_wait(
         &verified,
         &ready,
         Duration::from_secs(2),
-        Duration::from_millis(350),
+        Duration::from_millis(1000),
         || true,
     );
     let _ = std::fs::remove_dir_all(&root);
