@@ -3,9 +3,9 @@ name: Rust cross-OS
 # Relevant PRs test Rust on Linux and Windows. Ready PRs with the macos label also
 # test macOS. PR gate keeps clippy + doctests for both feature states (macOS PRs
 # still skip desktop_rebuild=on as before). nextest with desktop_rebuild on is
-# skipped only on self-hosted PR runners (pp-local Linux ~67m); Windows PRs and
-# hosted Linux still run it. push/schedule/dispatch always run both nextest
-# passes. No merge queue in this repo.
+# skipped only on self-hosted Linux PR runners (pp-local ~67m). Windows PRs
+# (including pp-local-win) and hosted Linux still run it. macOS PRs skip it.
+# push/schedule/dispatch always run both nextest passes. No merge queue here.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -192,10 +192,10 @@ jobs:
         timeout-minutes: 45
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER"
       - name: nextest (desktop_rebuild on)
-        # Bound self-hosted Linux PR runtime only. Windows (and hosted Linux)
-        # PRs keep rebuild-on nextest; macOS PRs still skip it. Non-PR events
-        # always run this step.
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (github.event_name != 'pull_request' || (runner.environment != 'self-hosted' && env.RUST_OS != 'macos')) }}
+        # Bound self-hosted Linux PR runtime only (pp-local ~67m). Windows PRs
+        # keep rebuild-on nextest even when pp-local-win is self-hosted. Hosted
+        # Linux PRs keep it. macOS PRs still skip it. Non-PR events always run.
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (github.event_name != 'pull_request' || env.RUST_OS == 'windows' || (env.RUST_OS == 'linux' && runner.environment != 'self-hosted')) }}
         timeout-minutes: 75
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild
       # nextest does not run doctests.
