@@ -1031,14 +1031,20 @@ fn record_observation(
 }
 
 /// Records a targeted claim's authority refusal in the import's journal, before
-/// the job records its own refusal.
+/// the job records its own refusal. A legacy entry has no authority revision and
+/// returns before any observation is written. Revisioned entries keep the fence
+/// and observation the claim already recorded.
 pub(crate) fn record_targeted_authority_refusal(
     tx: &Transaction<'_>,
     job: &jobs::JobRecord,
 ) -> Result<()> {
-    let Some(mut op) = bound(tx, job)? else {
+    let Some(op) = bound(tx, job)? else {
         return Ok(());
     };
+    if op.authority_revision.is_none() {
+        return Ok(());
+    }
+    let mut op = op;
     let observed = if job.generation == 0 {
         let attempted: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM source_revision_attempts WHERE tenant_id=?1 AND operation_key=?2)",
