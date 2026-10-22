@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import type { SourceSummary } from "@print-partner/contracts";
 import SourcesPage from "./SourcesPage";
+import { EngineHttpError } from "../api/engineTransport";
 
 const { api, artifacts, browserFiles, createdSource } = vi.hoisted(() => {
   const createdSource: SourceSummary = {
@@ -154,6 +155,20 @@ describe("SourcesPage source creation", () => {
       });
     },
   );
+
+  it("shows shorter-path guidance and retains the Source after a stored-path refusal", async () => {
+    const detail = "stored-path-too-long: parts/part.stl would be stored at an absolute path of 1024 bytes; this system opens paths of at most 1023 bytes; use a shorter repository or folder path and retry the import";
+    artifacts.importSourceArchive.mockRejectedValue(new EngineHttpError(detail, 400, { detail }));
+    await openArchiveWizard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(detail);
+    expect(screen.getByRole("heading", { name: "Edit source" })).toBeTruthy();
+    expect(screen.getByText("models.zip")).toBeTruthy();
+    expect(api.createSource).toHaveBeenCalledTimes(1);
+    expect(artifacts.importSourceArchive).toHaveBeenCalledWith(12, expect.any(File));
+  });
 
   it("keeps the draft open when the Save-time archive picker is cancelled", async () => {
     const archive = new File(["archive"], "models.zip", { type: "application/zip" });

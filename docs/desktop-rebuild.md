@@ -160,6 +160,57 @@ and keys follow JavaScript property order. `text`, `optional_text`, and
 `join`, an array that reaches itself through an alias contributes an empty
 string, so `project: &a [*a]` coerces to `""`.
 
+#### Known differences
+
+[GRE-841](https://linear.app/greetz/issue/GRE-841/p2-working-draft-yaml-remaining-flow-key-and-verbatim-tag-parity-gaps)
+records flow-key and verbatim-tag documents that `Document::parse` and
+js-yaml 5.4.3 do not treat the same way. The parity bar in the
+[definition of done](development/definition-of-done.md) still requires a
+match on real working-draft files and on every document Node's writer
+emits. The forms below come from generated differential cases. The app
+does not write them, and a person editing a draft does not produce
+them. They stay unsupported.
+
+Rust refuses these documents. js-yaml accepts them:
+
+- An explicit empty flow key, such as `[? ]`, `[? : x]`, `[? , x]`, a
+  `?` before the end of a flow line, or `[a, ? ]`. js-yaml returns the
+  key `"null"`. `[? ]` loads as `[{"null":null}]`.
+- An empty implicit flow key, or a flow colon with no space before a
+  tab or a nested collection. `[:[]]` loads as `[{"null":[]}]`. The
+  same spacing difference includes `{:[]}`, `{a:\tx}`, `{"q":\tx}`,
+  `[a:[]]`, and a multi-line quoted flow key followed by a tab.
+- A verbatim tag with no space before the following text, such as
+  `!<tag:yaml.org,2002:str>b c1`.
+- A block `:` line after a flow value. One shape is the key `a`, a flow
+  list on the next line, a blank line, and then `: ]`.
+- A line-broken empty tagged flow entry. The text `k: [!!str`, a line
+  break, and `]` loads in js-yaml as `{"k":[""]}`.
+- A property on the line after a flow mapping, then a colon. One shape
+  is `- - {a: "a`, a continued line `   b", !!str`, and then `:x}`.
+
+Rust accepts these documents. js-yaml rejects them:
+
+- A comment with no space after a quoted key's colon, such as
+  `{"q":# c`, a newline, and `}`, the same shape inside a flow
+  sequence, and `{"q" :# c` with a space only before the colon. A space
+  before `#` is a different document. js-yaml accepts that spaced form
+  as one key whose value is null.
+- A flow `?` followed directly by `,`, `]`, or `}`. Examples are `[?]`,
+  `{?}`, `[x, ?]`, and `[!!str ?]`.
+- A tab used as the separator in block structure. Examples are a tab
+  before `- x` under a key, a tab between `-` and `:`, and a tab
+  between `:` and `!!str`.
+- A tag before an implicit key on its own line. One shape is the key
+  `a`, then a line `  !<tag:yaml.org,2002:str> &x : `. js-yaml reports
+  an unknown mapping tag.
+
+`fixtures/parity/yaml-flow-properties/` records Node's results for
+explicit empty flow keys, implicit empty flow keys, adjacent
+verbatim-tag text, a block colon after a flow collection, a multi-line
+quoted flow key followed by a tab, and a comment immediately after a
+quoted key's colon. That corpus does not assert Rust parity.
+
 The remaining D12 units are the mutating executor and preparation.
 
 ```sh
@@ -478,8 +529,11 @@ A recompute runs in three steps on the writer thread:
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
-`RecomputeOutcome::into_json_body` writes Node's result kinds. Node's
-`would_wipe` result has no Rust preparation counterpart yet.
+`RecomputeOutcome::into_json_body` writes Node's result kinds.
+`RecomputeOutcome::WouldWipe` and `RebaseOutcome::WouldWipe` both serialize
+`{"kind":"would_wipe"}`. Preparation drops a reported row whose key does not
+end in `.stl` before the `no_stls` check, matching Node's `scanRepo`. After
+that check `prepare` cannot return `would_wipe`, and Node cannot either.
 
 `WorkingDraftClient::recompute_and_select` ports Node's
 `PlanDraftWorkspaceService.recompute`. It runs the recompute above and, after
@@ -1120,6 +1174,31 @@ cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
 
+### D14 captured identifiers and payload policy
+
+GRE-766 decodes a capture identifier and the fixed file or ZIP payload policy
+behind `desktop_rebuild`. A supplied files or ZIP input stays version 1. A
+payload that carries the fixed policy decodes as version 2. `ImportClient::admit`
+still accepts only a supplied input: a captured payload does not deserialize as
+an admission, and this slice writes no captured journal row. Manifest inspection
+and captured admission stay on later D14 slices.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_payload
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
+```
+
+### D14 captured binding
+
+GRE-767 binds a captured file or ZIP payload to its actor, operation key, target,
+admission limits, and requested inventory. `CapturedInputV2::bind` stores the
+policy, target, and manifest digests. `validate` rejects a changed component.
+Repeated inputs produce the same digests. The payload decodes as version 2.
+Supplied inputs stay version 1, and `ImportClient::admit` still accepts only
+those. Refusal leaves the admitted journal row and non-database files unchanged.
+Manifest bytes and captured preflight stay later.
+
 ### D14 uploads: import phases
 
 GRE-610's fourth PR runs an admitted import through its phases, behind
@@ -1151,7 +1230,10 @@ callers. A targeted claim refused before the job's first attempt now writes the
 entry's `source_preclaim_refusals` row; one refused after an earlier attempt writes an
 `authority_refused` observation with that generation and no fence. A generic claim
 skips an import whose entry is still `admitted`, because only the owner that holds
-its input can run it.
+its input can run it. A generic claim of a recovered import, whose entry has left
+`admitted`, records that same observation for the recovered generation and no fence.
+The job journal records the refusal once, with phase `claim`, and the claim moves
+on. Retrying the generic claim writes no second observation.
 
 A job can end before its `Cleanup` phase: an authority refusal, a missing Source or
 the attempt limit fails it. `uploads::settle_terminal` then settles the entry, and
@@ -1406,7 +1488,7 @@ The copy supports default rows in `build_profiles`, `projects`, `profile_layers`
 
 The tool refuses default settings other than `schema_version`, drafts, printer queues, opaque project metadata and imported-path lists, nonempty decision parameters other than `{}`, and populated decision result JSON. It also refuses stored sessions, password reset tokens, and Plan share capabilities. Share bundles contain ownership references outside the supported row graph. No startup path or HTTP endpoint invokes it.
 
-Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL publications under `accepted-stl/profile-<Plan id>/<revision-<id> or empty>/<all or missing>/<color or color_dir>/content-<sha256>` and accepted Plate publications under `accepted-plates/profile-<Plan id>/revision-<id>` are copied after their tree is checked against the bundle or manifest. A crashed STL export can leave its `.tmp-XXXXXX` staging directory beside the `content-*` folders. The copy checks its Plan, revision, selection and grouping like a publication, then leaves it in the source and does not copy it. Older export layouts and other temporary publications remain unsupported. Ownership markers, leases, `.desktop.lock`, `printpartner.lock`, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
+Filesystem support covers regular files in `repos/<project id>` and `sources/<project id>` for known projects. Symlinks and special files cause refusal. A nonempty `projects.local_path` must be an absolute path inside `repos/<its project id>`; external paths are refused. Every Source revision must have a safe `<its project id>/revisions/...` locator and an existing regular snapshot tree. Relative part and document paths must contain no parent segments, empty segments, backslashes, or external locators. Unknown top-level artifacts and native storage cause refusal. Standard `uploads`, `upload-staging`, `staging`, `backups`, `thumbnails`, `previews`, `thumbs`, and `covers` directories are accepted only when empty. Exports support the existing `profile-<Plan id>-<slug>/checklist/checklist-<sha256>.html`, `profile-<Plan id>-<slug>/direct-3mf/direct-<16 hex digest>.3mf`, and `profile-<Plan id>-<slug>/kit/<slug>-<timestamp>-<sha256>.print-partner-kit.zip` layouts. Files can be directly under `exports` for legacy default data or under the existing tenant directory. Each file needs an `exports` manifest claim with its exact path, digest, Plan ID and named owner. The owner must agree with the Plan's explicit row claim or existing tenant; foreign exports cannot be reassigned. Omitting `exports` remains valid when no export files exist. Unmapped files, wrong scopes, unsupported layouts and target collisions fail closed. Default exports move into `tenantExportDirectory` for their mapped owner; foreign exports keep their tenant scope. There is no copied `tenant-default` fallback. The tool preserves bytes and validates content-addressed filenames, without rewriting embedded export content. Accepted STL publications under `accepted-stl/profile-<Plan id>/<revision-<id> or empty>/<all or missing>/<color or color_dir>/content-<sha256>` and accepted Plate publications under `accepted-plates/profile-<Plan id>/revision-<id>` are copied after their tree is checked against the bundle or manifest. For a nonempty STL publication, each loose file must match its `accepted-stl.zip` entry by name, size and CRC-32. An empty STL publication has no files; the copy skips it, and the export recreates it the next time it opens. A crashed STL export can leave its `.tmp-XXXXXX` staging directory beside the `content-*` folders. The copy checks its Plan, revision, selection and grouping like a publication, then leaves it in the source and does not copy it. A crashed Plate export can leave a `.revision-<id>.tmp-XXXXXX` staging directory beside `revision-<id>`. The copy checks its Plan and revision, then leaves it in the source in the same way. Older export layouts and other temporary publications remain unsupported. Ownership markers, leases, `.desktop.lock`, `printpartner.lock`, and the source desktop mapping are excluded from the copy. Socket files outside those excluded ownership paths cause refusal.
 
 The staged copy suspends ten known triggers inside its transaction after checking their definitions against the current migrations. These cover Part acceptance invalidation, immutable updates for Plan revisions, Plan revision Parts, Required units, Required-unit maps and map headers, plus immutable updates for Plate revisions, Plates and Plate units and Plate head ownership updates. It restores them before validation and verifies that the complete schema matches the source. All historical revision and input digests, existing Required-unit maps and owner relationships are checked. Every supported history row must fit the production operational limit of 64 KiB across its stored text columns, measured as UTF-8 bytes in SQLite. Builds with accepted history also receive the operational text budget check for their tenant ID, name, order number, special request and archive timestamp. Ordinary mutable Builds without accepted history retain their existing supported text values. These limits are checked again after owner reassignment in staging. Current revisions require complete Required-unit maps. Retained older revisions may lack maps only when no partial mapping or created-unit state exists. Current accepted Plans must pass the production operational reader and tracked Part byte verification in both source and stage. Valid format-1 input history retains its existing `uninitialized` operational result; it is not promoted to format 2. Plans whose working Part edits or deletions cleared the accepted revision pointer are also supported when their positive Plan version and validated history remain. The retained revision numbers must form the complete sequence from 1 through the Plan version, with each revision after the first pointing to its immediate predecessor and retaining tracked publication provenance with format-2 inputs. The inferred current revision must have a complete Required-unit map, positive unique projection IDs, valid stored Part booleans and consistent quantities between 1 and 10,000. Retained progress at inferred-current Part/unit coordinates must pass the production raw-boolean and assembly/completion checks. Other historical unit coordinates retain their existing ignored status. Historical projection IDs may refer to deleted working Parts for these dirty Plans; any surviving projection must still belong to the same Plan and owner. Their retained accepted-input pointer must match the latest historical revision, including its acceptance timestamp; legacy revisions must have no input pointer. The copy preserves their null pointer, working edits and `compatibility_dirty` operational result across restart. It does not select a historical revision or repair acceptance. A zero version with history or a positive version without history causes refusal. IDs, digests, tokens, actor identities and timestamps are preserved.
 
@@ -1500,6 +1582,18 @@ The operation ports Node's `savePlanDraftRequiredUnitReconciliation` and the
 queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
+The expansion loop also checks cancellation once per Part. There is no timing
+target.
+
+Selection refuses a draft before it expands assignments when the sum of part
+quantities is above 230. The error is "Reconciliation row limit exceeded".
+230 is ten times the largest assignment list in the checked-in fixtures:
+`edit-selected` in `working-draft-writes-node.jsonl` stores 23 assignments.
+The constant is `storage::ASSIGNMENT_CAP`. Chad checks it against plans 14–23
+before this feature is turned on. Raise that one constant if a real plan would
+be refused. Node still expands a draft of this size. A quantity above 10,000
+on one Part is still "Required-unit target quantity is invalid", which is
+checked before the cap.
 
 - `ReconciliationRequest` has the contract's snake-case fields. It rejects
   unknown fields, a snapshot digest that is not 64 lowercase hex characters,
@@ -1827,7 +1921,10 @@ target cannot be settled. GRE-854 rejects generic `Finish`, `FinishPublic`,
 These calls leave the Job, batch, target, history and Source reservation unchanged.
 Heartbeat and progress updates remain available, and worker `Fail` still halts
 the batch. Non-Sync jobs and builds without `desktop_rebuild` keep their existing
-generic worker behavior. Target settlement remains in GRE-775 and GRE-776.
+generic worker behavior. GRE-775 stores one successful target and releases its
+reservation. GRE-776 records one local read failure, the Source failure
+observation and progress, and leaves that reservation unacknowledged so the
+failure stays retained evidence. Acknowledging it remains GRE-777.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
@@ -2003,4 +2100,24 @@ cutover. Gateway mounting belongs to D26.
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core --features desktop_rebuild
+```
+
+### D30 catalog HTTP reads, GRE-804
+
+`pp-api` gains `catalog`, compiled only with `desktop_rebuild`.
+`CatalogHttpConfig::from_startup` keeps the router unmounted unless
+`PP_DESKTOP_REBUILD` is exactly `1` or `true`. While it is unmounted, `GET` and
+`POST /sources` answer 404 and do not open the catalog.
+
+With both gates on, `GET /sources` and `GET /sources/{id}` are served at the
+root and `/api/v1`. List returns `{ "sources": [...] }`. Detail returns that
+caller’s catalog `SourceSummary`. A missing or non-canonical id returns 404
+`Source not found`. The session cookie or one API key is required. API keys use
+the configured tenant, not a request header. The same loopback, host, and
+origin checks used by draft admission apply. Create, patch, and delete stay
+unregistered. The desktop gateway does not mount this router; D26 does.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --test catalog_http
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test catalog_http
 ```

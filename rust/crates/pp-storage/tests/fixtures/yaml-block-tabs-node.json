@@ -1,0 +1,338 @@
+[
+  {
+    "name": "tab-before-sequence",
+    "source": "a:\n  \t- x",
+    "expected": null
+  },
+  {
+    "name": "tab-before-sequence-crlf",
+    "source": "a:\r\n  \t- x",
+    "expected": null
+  },
+  {
+    "name": "tab-before-sequence-cr",
+    "source": "a:\r  \t- x",
+    "expected": null
+  },
+  {
+    "name": "tab-between-dash-colon",
+    "source": "- \t:",
+    "expected": null
+  },
+  {
+    "name": "tab-between-dash-colon-crlf",
+    "source": "- \t:\r\n",
+    "expected": null
+  },
+  {
+    "name": "tab-before-tag-key",
+    "source": "- :\t!!str :\t",
+    "expected": null
+  },
+  {
+    "name": "tab-before-tag-key-crlf",
+    "source": "- :\t!!str :\t\r\n",
+    "expected": null
+  },
+  {
+    "name": "tab-before-explicit",
+    "source": "a:\n  \t? x",
+    "expected": null
+  },
+  {
+    "name": "tab-before-plain-key",
+    "source": "a:\n  \tb: 1",
+    "expected": null
+  },
+  {
+    "name": "tab-between-dash-colon-value",
+    "source": "- \t: x",
+    "expected": null
+  },
+  {
+    "name": "tab-between-dashes",
+    "source": "- \t- x",
+    "expected": null
+  },
+  {
+    "name": "tab-before-quoted-key",
+    "source": "a:\n  \t\"k\": v",
+    "expected": null
+  },
+  {
+    "name": "tab-before-nested-key",
+    "source": "- :\tx : y",
+    "expected": null
+  },
+  {
+    "name": "deeper-tab-sequence",
+    "source": "a:\n    \t- x",
+    "expected": null
+  },
+  {
+    "name": "sequence-tab-sequence",
+    "source": "-\n  \t- x",
+    "expected": null
+  },
+  {
+    "name": "empty-key-tab-sequence",
+    "source": ":\t- x",
+    "expected": null
+  },
+  {
+    "name": "tab-before-flow-key",
+    "source": "a:\n  \t[a]: b",
+    "expected": null
+  },
+  {
+    "name": "tab-before-anchor-key",
+    "source": "a:\n  \t&a b: 1",
+    "expected": null
+  },
+  {
+    "name": "tab-before-plain",
+    "source": "a:\n  \tx",
+    "expected": {
+      "a": "x"
+    }
+  },
+  {
+    "name": "tab-before-dash-word",
+    "source": "a:\n  \t-x",
+    "expected": {
+      "a": "-x"
+    }
+  },
+  {
+    "name": "tab-before-flow-seq",
+    "source": "a:\n  \t[]",
+    "expected": {
+      "a": []
+    }
+  },
+  {
+    "name": "tab-before-flow-map",
+    "source": "a:\n  \t{}",
+    "expected": {
+      "a": {}
+    }
+  },
+  {
+    "name": "tab-before-quoted",
+    "source": "a:\n  \t\"q\"",
+    "expected": {
+      "a": "q"
+    }
+  },
+  {
+    "name": "tab-before-block-scalar",
+    "source": "a:\n  \t|\n    x",
+    "expected": {
+      "a": "x\n"
+    }
+  },
+  {
+    "name": "tab-before-tag-value",
+    "source": "a:\n  \t!!str x",
+    "expected": {
+      "a": "x"
+    }
+  },
+  {
+    "name": "dash-tab-plain",
+    "source": "- \tx",
+    "expected": [
+      "x"
+    ]
+  },
+  {
+    "name": "dash-tab-plain-tight",
+    "source": "-\tx",
+    "expected": [
+      "x"
+    ]
+  },
+  {
+    "name": "dash-tab-break-plain",
+    "source": "- \t\n  x",
+    "expected": [
+      "x"
+    ]
+  },
+  {
+    "name": "space-before-nested-tag",
+    "source": "- : !!str :\t",
+    "expected": [
+      {
+        "null": {
+          "": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "tab-before-tagged-plain",
+    "source": "- :\t!!str x",
+    "expected": [
+      {
+        "null": "x"
+      }
+    ]
+  },
+  {
+    "name": "block-colon-tab-plain",
+    "source": "a:\tx",
+    "expected": {
+      "a": "x"
+    }
+  },
+  {
+    "name": "block-colon-tab-plain-colon",
+    "source": "a:\tx:y",
+    "expected": {
+      "a": "x:y"
+    }
+  },
+  {
+    "name": "tab-comment-then-sequence",
+    "source": "a:\n  \t# c\n  - x",
+    "expected": {
+      "a": [
+        "x"
+      ]
+    }
+  },
+  {
+    "name": "tab-between-key-and-colon",
+    "source": "a:\n  b\t: 1",
+    "expected": {
+      "a": {
+        "b": 1
+      }
+    }
+  },
+  {
+    "name": "quoted-tab-colon-sequence",
+    "source": "\"k\"\t:\n  - x",
+    "expected": {
+      "k": [
+        "x"
+      ]
+    }
+  },
+  {
+    "name": "plain-tab-colon",
+    "source": "a\t: b",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "compact-tab-colon",
+    "source": "- b\t: 1",
+    "expected": [
+      {
+        "b": 1
+      }
+    ]
+  },
+  {
+    "name": "plain-continuation",
+    "source": "a:\n  \thello\n  world",
+    "expected": {
+      "a": "hello world"
+    }
+  },
+  {
+    "name": "empty-key-tab-plain",
+    "source": ":\tx",
+    "expected": {
+      "null": "x"
+    }
+  },
+  {
+    "name": "dash-colon-tab-plain",
+    "source": "- :\tx",
+    "expected": [
+      {
+        "null": "x"
+      }
+    ]
+  },
+  {
+    "name": "dash-tab-end",
+    "source": "- \t",
+    "expected": [
+      null
+    ]
+  },
+  {
+    "name": "colon-tab-end",
+    "source": "a:\t",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "dash-colon-tab-end",
+    "source": "- :\t",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "colon-tab-break-sequence",
+    "source": "a: \t\n  - x",
+    "expected": {
+      "a": [
+        "x"
+      ]
+    }
+  },
+  {
+    "name": "dash-tab-block-scalar",
+    "source": "- \t|\n  x",
+    "expected": [
+      "x\n"
+    ]
+  },
+  {
+    "name": "tab-before-anchor",
+    "source": "a:\n  \t&a x",
+    "expected": {
+      "a": "x"
+    }
+  },
+  {
+    "name": "flow-colon-tab",
+    "source": "{a:\tx}",
+    "expected": {
+      "a": "x"
+    }
+  },
+  {
+    "name": "ordinary-sequence",
+    "source": "a:\n  - x",
+    "expected": {
+      "a": [
+        "x"
+      ]
+    }
+  },
+  {
+    "name": "colon-in-plain",
+    "source": "a:\n  \thello:world",
+    "expected": {
+      "a": "hello:world"
+    }
+  },
+  {
+    "name": "spaces-tab-plain",
+    "source": "a:\n  \t  x",
+    "expected": {
+      "a": "x"
+    }
+  }
+]

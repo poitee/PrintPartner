@@ -24,6 +24,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: rust -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Trace ten consecutive runs of the exact paused-clock test
         shell: bash
         run: |

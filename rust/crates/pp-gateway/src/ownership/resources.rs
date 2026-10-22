@@ -21,6 +21,12 @@ pub enum TableId {
     PlanAcceptedInputSets,
     PlanRevisionInputSets,
     PlanRevisionInputs,
+    PlanRevisions,
+    PlanRevisionParts,
+    PlanRevisionRequiredUnitSets,
+    PlanRevisionRequiredUnits,
+    RequiredUnits,
+    PrintProgress,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,6 +93,20 @@ enum ReviewedEntry {
     ProposeUpdateSourceNaming { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_import_source_files")]
     ProposeImportSourceFiles { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_plan_progress")]
+    ProposeSetPlanProgress { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_plan_assembly")]
+    ProposeSetPlanAssembly { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_verify_printer_checkoff")]
+    ProposeVerifyPrinterCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_checkoff")]
+    GetPlanCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_remaining")]
+    GetRemaining { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_printer_checkoff")]
+    GetPrinterCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_import_3mf_checkoff")]
+    ProposeImport3mfCheckoff { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -149,8 +169,28 @@ impl ReviewedEntry {
         use ResourceId::{File, Table};
         use TableId::{
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
-            PlanRevisionInputSets, PlanRevisionInputs, PlanSnapshots, ProfileLayers, Projects,
-            SourceDocs, SourceNotes, SourceRevisions,
+            PlanRevisionInputSets, PlanRevisionInputs, PlanRevisionParts,
+            PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
+            PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
+            SourceRevisions,
+        };
+        let accepted_plan_operational = || {
+            BTreeSet::from([
+                Table(BuildProfiles),
+                Table(Parts),
+                Table(PlanAcceptedInputSets),
+                Table(PlanRevisionInputSets),
+                Table(PlanRevisionInputs),
+                Table(PlanRevisionParts),
+                Table(PlanRevisionRequiredUnitSets),
+                Table(PlanRevisionRequiredUnits),
+                Table(PlanRevisions),
+                Table(PrintProgress),
+                Table(Projects),
+                Table(RequiredUnits),
+                Table(SourceRevisions),
+                File(FileFamily::SourceWorkspace),
+            ])
         };
         let (id, resources, expected) = match self {
             Self::SourceSync {
@@ -257,6 +297,39 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::ProposeSetPlanProgress { resources } => (
+                "tool.propose_set_plan_progress",
+                resources,
+                accepted_plan_operational(),
+            ),
+            Self::ProposeSetPlanAssembly { resources } => (
+                "tool.propose_set_plan_assembly",
+                resources,
+                accepted_plan_operational(),
+            ),
+            Self::ProposeVerifyPrinterCheckoff { resources } => (
+                "tool.propose_verify_printer_checkoff",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::GetPlanCheckoff { resources } => (
+                "tool.get_plan_checkoff",
+                resources,
+                accepted_plan_operational(),
+            ),
+            Self::GetRemaining { resources } => {
+                ("tool.get_remaining", resources, accepted_plan_operational())
+            }
+            Self::GetPrinterCheckoff { resources } => (
+                "tool.get_printer_checkoff",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeImport3mfCheckoff { resources } => {
+                let mut expected = accepted_plan_operational();
+                expected.insert(Table(SourceDocs));
+                ("tool.propose_import_3mf_checkoff", resources, expected)
+            }
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -443,12 +516,22 @@ impl ReviewedEntry {
             Self::ListSources { resources } => (
                 "tool.list_sources",
                 resources,
-                BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]),
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
             Self::ListSourceCategories { resources } => (
                 "tool.list_source_categories",
                 resources,
-                BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]),
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
         };
         let count = resources.len();
@@ -508,6 +591,13 @@ impl Declarations {
             "tool.propose_update_source",
             "tool.propose_update_source_naming",
             "tool.propose_import_source_files",
+            "tool.propose_set_plan_progress",
+            "tool.propose_set_plan_assembly",
+            "tool.propose_verify_printer_checkoff",
+            "tool.get_plan_checkoff",
+            "tool.get_remaining",
+            "tool.get_printer_checkoff",
+            "tool.propose_import_3mf_checkoff",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

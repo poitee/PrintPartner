@@ -150,6 +150,10 @@ pub(super) struct PreparedDraftSnapshot {
     pub parts: Vec<DraftPart>,
     pub digest: String,
 }
+/// One captured scanner row. `key` is the normalized relative path.
+///
+/// Only a key ending in `.stl` is a part. Node's `scanRepo` drops every other
+/// file before it chooses `no_stls` or `would_wipe`.
 #[derive(Clone)]
 struct Scanned {
     key: String,
@@ -628,6 +632,22 @@ pub(super) fn parse(
         quantity,
     ))
 }
+fn retain_valid_scanner_entries(
+    scans: &mut [Vec<Scanned>],
+    b: &mut PreparationBudget<'_>,
+) -> Result<()> {
+    for scan in scans {
+        let mut kept = Vec::with_capacity(scan.len());
+        for part in std::mem::take(scan) {
+            b.visit(0)?;
+            if part.key.ends_with(".stl") {
+                kept.push(part);
+            }
+        }
+        *scan = kept;
+    }
+    Ok(())
+}
 fn merge(
     scans: &[Vec<Scanned>],
     prior: &HashMap<String, DraftPart>,
@@ -906,6 +926,8 @@ pub(super) fn prepare(
         inventories.push(inventory);
     }
     ensure!(!scans.is_empty(), Failure::NoLayers);
+    retain_valid_scanner_entries(&mut scans, b)?;
+    retain_valid_scanner_entries(&mut available, b)?;
     ensure!(available.iter().any(|v| !v.is_empty()), Failure::NoStls);
     let mut merged = merge(&scans, &prior, b)?;
     let selected: HashSet<_> = merged.iter().map(|p| p.key.clone()).collect();
@@ -914,6 +936,7 @@ pub(super) fn prepare(
             .into_iter()
             .filter(|p| !selected.contains(&p.key)),
     );
+    ensure!(!merged.is_empty() || prior.is_empty(), Failure::WouldWipe);
     let defaults =
         connection.read(|tx| setting(tx, tenant, &format!("role_filaments_{profile}")))?;
     if let Some(raw) = &defaults {
@@ -1155,6 +1178,7 @@ impl Default for PreparationOptions {
 pub(super) enum Failure {
     NoLayers,
     NoStls,
+    WouldWipe,
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

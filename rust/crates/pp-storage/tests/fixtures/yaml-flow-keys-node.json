@@ -1,0 +1,459 @@
+[
+  {
+    "name": "seq-empty-explicit-key",
+    "source": "[? ]",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-value",
+    "source": "[? : x]",
+    "expected": [
+      {
+        "null": "x"
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-then-item",
+    "source": "[? , x]",
+    "expected": [
+      {
+        "null": null
+      },
+      "x"
+    ]
+  },
+  {
+    "name": "seq-item-then-empty-explicit-key",
+    "source": "[a, ? ]",
+    "expected": [
+      "a",
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-two-empty-explicit-keys",
+    "source": "[? : x, ? ]",
+    "expected": [
+      {
+        "null": "x"
+      },
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-empty-value",
+    "source": "[? :]",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-break",
+    "source": "[? \n]",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-break-crlf",
+    "source": "[? \r\n]",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-leading-break",
+    "source": "[\n? ]",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-leading-break-crlf",
+    "source": "[\r\n? ]",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-empty-explicit-key-comma",
+    "source": "[? ,]",
+    "expected": [
+      {
+        "null": null
+      }
+    ]
+  },
+  {
+    "name": "seq-explicit-key-plain",
+    "source": "[? x]",
+    "expected": [
+      {
+        "x": null
+      }
+    ]
+  },
+  {
+    "name": "seq-explicit-key-list",
+    "source": "[? :[]]",
+    "expected": [
+      {
+        "null": []
+      }
+    ]
+  },
+  {
+    "name": "map-explicit-null",
+    "source": "{? : x}",
+    "expected": {
+      "null": "x"
+    }
+  },
+  {
+    "name": "map-explicit-null-break",
+    "source": "{? \n}",
+    "expected": {
+      "null": null
+    }
+  },
+  {
+    "name": "map-explicit-null-break-crlf",
+    "source": "{? \r\n}",
+    "expected": {
+      "null": null
+    }
+  },
+  {
+    "name": "seq-colon-list",
+    "source": "[:[]]",
+    "expected": [
+      {
+        "null": []
+      }
+    ]
+  },
+  {
+    "name": "map-colon-list",
+    "source": "{:[]}",
+    "expected": {
+      "null": []
+    }
+  },
+  {
+    "name": "map-plain-tab",
+    "source": "{a:\tx}",
+    "expected": {
+      "a": "x"
+    }
+  },
+  {
+    "name": "map-quoted-tab",
+    "source": "{\"q\":\tx}",
+    "expected": {
+      "q": "x"
+    }
+  },
+  {
+    "name": "seq-nested-list",
+    "source": "[a:[]]",
+    "expected": [
+      {
+        "a": []
+      }
+    ]
+  },
+  {
+    "name": "map-tab-null-key",
+    "source": "{:\tx}",
+    "expected": {
+      "null": "x"
+    }
+  },
+  {
+    "name": "map-colon-null",
+    "source": "{: }",
+    "expected": {
+      "null": null
+    }
+  },
+  {
+    "name": "map-colon-map",
+    "source": "{:{}}",
+    "expected": {
+      "null": {}
+    }
+  },
+  {
+    "name": "map-plain-colon-list",
+    "source": "{a:[]}",
+    "expected": {
+      "a": []
+    }
+  },
+  {
+    "name": "map-tab-list",
+    "source": "{a:\t[]}",
+    "expected": {
+      "a": []
+    }
+  },
+  {
+    "name": "seq-tab-list",
+    "source": "[:\t[]]",
+    "expected": [
+      {
+        "null": []
+      }
+    ]
+  },
+  {
+    "name": "seq-colon-map",
+    "source": "[:{a:1}]",
+    "expected": [
+      {
+        "null": {
+          "a:1": null
+        }
+      }
+    ]
+  },
+  {
+    "name": "block-tab-plain",
+    "source": "a:\tx",
+    "expected": {
+      "a": "x"
+    }
+  },
+  {
+    "name": "block-tab-nested",
+    "source": "a:\n  b:\tx",
+    "expected": {
+      "a": {
+        "b": "x"
+      }
+    }
+  },
+  {
+    "name": "block-tab-nested-crlf",
+    "source": "a:\r\n  b:\tx",
+    "expected": {
+      "a": {
+        "b": "x"
+      }
+    }
+  },
+  {
+    "name": "block-tab-null",
+    "source": "a:\t",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "block-tab-comment",
+    "source": "a:\t# c",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "block-key-tab",
+    "source": "project:\tx",
+    "expected": {
+      "project": "x"
+    }
+  },
+  {
+    "name": "multiline-quoted-key-tab",
+    "source": "a:\n  {\"a\n b\":\tx}",
+    "expected": {
+      "a": {
+        "a b": "x"
+      }
+    }
+  },
+  {
+    "name": "multiline-quoted-key-tab-crlf",
+    "source": "a:\r\n  {\"a\r\n b\":\tx}",
+    "expected": {
+      "a": {
+        "a b": "x"
+      }
+    }
+  },
+  {
+    "name": "verbatim-root",
+    "source": "!<tag:yaml.org,2002:str>b c1",
+    "expected": "b c1"
+  },
+  {
+    "name": "verbatim-char",
+    "source": "!<tag:yaml.org,2002:str>b",
+    "expected": "b"
+  },
+  {
+    "name": "verbatim-value",
+    "source": "v: !<tag:yaml.org,2002:str>b",
+    "expected": {
+      "v": "b"
+    }
+  },
+  {
+    "name": "verbatim-int",
+    "source": "!<tag:yaml.org,2002:int>123",
+    "expected": 123
+  },
+  {
+    "name": "verbatim-seq",
+    "source": "!<tag:yaml.org,2002:seq>[a]",
+    "expected": [
+      "a"
+    ]
+  },
+  {
+    "name": "verbatim-map",
+    "source": "!<tag:yaml.org,2002:map>{a: 1}",
+    "expected": {
+      "a": 1
+    }
+  },
+  {
+    "name": "verbatim-quoted",
+    "source": "!<tag:yaml.org,2002:str>\"b\"",
+    "expected": "b"
+  },
+  {
+    "name": "verbatim-spaced",
+    "source": "!<tag:yaml.org,2002:str> b",
+    "expected": "b"
+  },
+  {
+    "name": "comment-with-space",
+    "source": "{\"q\": # c\n}",
+    "expected": {
+      "q": null
+    }
+  },
+  {
+    "name": "comment-with-space-crlf",
+    "source": "{\"q\": # c\r\n}",
+    "expected": {
+      "q": null
+    }
+  },
+  {
+    "name": "plain-question",
+    "source": "[?x]",
+    "expected": [
+      "?x"
+    ]
+  },
+  {
+    "name": "map-plain-question",
+    "source": "{?x}",
+    "expected": {
+      "?x": null
+    }
+  },
+  {
+    "name": "dash-tab-plain",
+    "source": "- \tx",
+    "expected": [
+      "x"
+    ]
+  },
+  {
+    "name": "comment-after-colon",
+    "source": "{\"q\":# c\n}",
+    "expected": null
+  },
+  {
+    "name": "comment-after-colon-crlf",
+    "source": "{\"q\":# c\r\n}",
+    "expected": null
+  },
+  {
+    "name": "comment-space-before-colon",
+    "source": "{\"q\" :# c\n}",
+    "expected": null
+  },
+  {
+    "name": "comment-space-before-colon-crlf",
+    "source": "{\"q\" :# c\r\n}",
+    "expected": null
+  },
+  {
+    "name": "comment-no-break",
+    "source": "{\"q\":#c}",
+    "expected": null
+  },
+  {
+    "name": "comment-in-seq",
+    "source": "[\"q\":# c\n]",
+    "expected": null
+  },
+  {
+    "name": "comment-in-seq-crlf",
+    "source": "[\"q\":# c\r\n]",
+    "expected": null
+  },
+  {
+    "name": "flow-question-close",
+    "source": "[?]",
+    "expected": null
+  },
+  {
+    "name": "flow-question-map",
+    "source": "{?}",
+    "expected": null
+  },
+  {
+    "name": "flow-question-after-item",
+    "source": "[x, ?]",
+    "expected": null
+  },
+  {
+    "name": "flow-question-after-tag",
+    "source": "[!!str ?]",
+    "expected": null
+  },
+  {
+    "name": "flow-question-comma",
+    "source": "[ ?, ]",
+    "expected": null
+  },
+  {
+    "name": "flow-question-question",
+    "source": "[? ? ]",
+    "expected": null
+  },
+  {
+    "name": "block-tab-flow",
+    "source": "a:\t[]",
+    "expected": null
+  },
+  {
+    "name": "complex-explicit-key",
+    "source": "[? {a: 1}]",
+    "expected": null
+  }
+]

@@ -122,6 +122,7 @@ async fn ticket_t_12_missing_config_persists_private_port_and_reuses_it() {
         );
         return;
     }
+    child_entered();
     let fixture = Fixture::new();
     let owner = StorageLease::acquire(&fixture.0).unwrap();
     let (listener, change) = bind_origin(&owner).await.unwrap();
@@ -236,6 +237,7 @@ fn ticket_t_12_initial_publish_preserves_a_config_that_appeared_after_read() {
 #[test]
 fn ticket_t_12_fifo_config_does_not_block_startup() {
     if let Some(path) = std::env::var_os("PP_T12_FIFO_CHILD") {
+        child_entered();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -254,25 +256,139 @@ fn ticket_t_12_fifo_config_does_not_block_startup() {
     );
 }
 
+const CHILD_ENTERED: &str = "pp-origin-child-entered";
+
+fn child_entered() {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{CHILD_ENTERED}").unwrap();
+    stdout.flush().unwrap();
+}
+
+struct ReexecLimits {
+    process_start: Duration,
+    work: Duration,
+}
+
+#[derive(Debug)]
+enum ReexecError {
+    ExitedBeforeEntry(std::process::ExitStatus),
+    ProcessStart,
+    Work,
+    Failed(std::process::ExitStatus),
+}
+
 fn run_child(test: &str, environment: &str, value: &std::ffi::OsStr) {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--nocapture"])
         .env(environment, value)
+        .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            assert!(status.success(), "{test} child failed");
-            break;
+    // The 3s work clock used to start at spawn. Re-executing this binary while
+    // other tests hashed the release missed that clock before the child ran.
+    match supervise_reexec(
+        &mut child,
+        ReexecLimits {
+            process_start: Duration::from_secs(30),
+            work: Duration::from_secs(3),
+        },
+    ) {
+        Ok(()) => {}
+        Err(ReexecError::ExitedBeforeEntry(status)) => {
+            panic!("{test} child exited before entry: {status}")
         }
-        if std::time::Instant::now() >= deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!("{test} child exceeded its startup deadline");
+        Err(ReexecError::ProcessStart) => {
+            panic!("{test} child exceeded its process-start deadline")
         }
-        std::thread::sleep(Duration::from_millis(10));
+        Err(ReexecError::Work) => panic!("{test} child exceeded its startup deadline"),
+        Err(ReexecError::Failed(status)) => panic!("{test} child failed: {status}"),
     }
+}
+
+fn supervise_reexec(
+    child: &mut std::process::Child,
+    limits: ReexecLimits,
+) -> Result<(), ReexecError> {
+    use std::io::BufRead;
+    use std::sync::mpsc::{self, RecvTimeoutError};
+
+    let stdout = child.stdout.take().unwrap();
+    let (sender, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let spawned = std::time::Instant::now();
+    let mut entered = None;
+    loop {
+        let (anchor, limit) = match entered {
+            Some(instant) => (instant, limits.work),
+            None => (spawned, limits.process_start),
+        };
+        let remaining = limit.saturating_sub(anchor.elapsed());
+        if remaining.is_zero() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(match entered {
+                Some(_) => ReexecError::Work,
+                None => ReexecError::ProcessStart,
+            });
+        }
+        match lines.recv_timeout(remaining.min(Duration::from_millis(50))) {
+            Ok(line) if entered.is_none() && line == CHILD_ENTERED => {
+                entered = Some(std::time::Instant::now());
+            }
+            Ok(_) => {}
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+                if let Some(status) = child.try_wait().unwrap() {
+                    return if entered.is_none() {
+                        Err(ReexecError::ExitedBeforeEntry(status))
+                    } else if status.success() {
+                        Ok(())
+                    } else {
+                        Err(ReexecError::Failed(status))
+                    };
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reexec_work_deadline_starts_when_the_child_enters() {
+    let mut slow_start = std::process::Command::new("sh")
+        .args(["-c", "sleep 1.2; echo pp-origin-child-entered"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    supervise_reexec(
+        &mut slow_start,
+        ReexecLimits {
+            process_start: Duration::from_secs(4),
+            work: Duration::from_millis(500),
+        },
+    )
+    .unwrap();
+
+    let mut slow_work = std::process::Command::new("sh")
+        .args(["-c", "echo pp-origin-child-entered; sleep 0.8"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let error = supervise_reexec(
+        &mut slow_work,
+        ReexecLimits {
+            process_start: Duration::from_secs(4),
+            work: Duration::from_millis(300),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, ReexecError::Work), "{error:?}");
 }
 
 #[tokio::test]
@@ -758,14 +874,29 @@ async fn failed_recovery_closes_selected_listener_before_returning() {
         format!("port = {}\n", address.port()).as_bytes()
     );
     // The selected descriptor is closed, or was reused by something that
-    // cannot be bound to the held address.
+    // cannot be a stream socket bound to the held address. The socket type
+    // is part of the identity because a reused UDP socket can bind the same
+    // address and port as the held TCP listener.
     let name = |fd| {
+        let mut kind: libc::c_int = 0;
+        let mut kind_len = std::mem::size_of_val(&kind) as libc::socklen_t;
+        let kind_status = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_TYPE,
+                (&raw mut kind).cast(),
+                &mut kind_len,
+            )
+        };
         let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
         let mut len = std::mem::size_of_val(&storage) as libc::socklen_t;
         let status = unsafe { libc::getsockname(fd, (&raw mut storage).cast(), &mut len) };
-        (status == 0).then(|| {
-            unsafe { std::slice::from_raw_parts((&raw const storage).cast::<u8>(), len as usize) }
-                .to_vec()
+        (kind_status == 0 && status == 0).then(|| {
+            let bytes = unsafe {
+                std::slice::from_raw_parts((&raw const storage).cast::<u8>(), len as usize)
+            };
+            (kind, bytes.to_vec())
         })
     };
     let held_name = name(held.as_raw_fd());

@@ -42,6 +42,8 @@ mod siblings;
 #[cfg(test)]
 mod siblings_tests;
 mod yaml;
+#[cfg(test)]
+mod yaml_continuation_tests;
 
 #[derive(Clone, Debug)]
 pub enum Request {
@@ -210,6 +212,7 @@ pub enum RecomputeOutcome {
     IdempotencyConflict,
     NoLayers,
     NoStls,
+    WouldWipe,
 }
 
 /// Node's `PlanDraftWorkspaceService.recompute` result.
@@ -960,7 +963,10 @@ fn auto_select(
     // Node's selection is a separate transaction with its own busy wait.
     let admission = writer_admission::Deadline::at_dequeue();
     transact(connection, admission, cancelled, |tx| {
-        required_units::reconcile::run(tx, &command, policy)
+        required_units::reconcile::run(tx, &command, policy, &mut || {
+            ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+            Ok(())
+        })
     })
 }
 fn transact<T>(
@@ -1231,6 +1237,7 @@ fn recompute(
             return match error.downcast_ref() {
                 Some(preparation::Failure::NoLayers) => finished(RecomputeOutcome::NoLayers),
                 Some(preparation::Failure::NoStls) => finished(RecomputeOutcome::NoStls),
+                Some(preparation::Failure::WouldWipe) => finished(RecomputeOutcome::WouldWipe),
                 None => Err(error),
             };
         }
@@ -1567,6 +1574,7 @@ impl RecomputeOutcome {
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::NoLayers => "no_layers",
             Self::NoStls => "no_stls",
+            Self::WouldWipe => "would_wipe",
         };
         outcome_json_body(kind, None, &[])
     }

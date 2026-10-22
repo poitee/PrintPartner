@@ -1,15 +1,38 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render as renderView, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as renderView, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import GlobalProductionPage from "./GlobalProductionPage";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY, type PlanFeatures } from "@print-partner/contracts";
 import { queryKeys } from "../queries/keys";
 
 function render(children: ReactNode, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  queryClient.setQueryDefaults(queryKeys.health, { staleTime: Infinity, retry: false });
+  if (queryClient.getQueryData(queryKeys.health) == null) {
+    queryClient.setQueryData(queryKeys.health, { ok: true, capabilities: [] });
+  }
   return renderView(<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>);
+}
+
+function farmFeatures(farm: boolean, profileId = 7): PlanFeatures {
+  return {
+    profile_id: profileId,
+    overrides: { farm },
+    effective: {
+      farm: { enabled: farm, source: "plan" },
+      orders: { enabled: false, source: "default" },
+      bambu: { enabled: false, source: "default" },
+      spoolman: { enabled: false, source: "default" },
+    },
+  };
+}
+
+function gate(queryClient: QueryClient, plan?: PlanFeatures) {
+  queryClient.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
+  if (plan) queryClient.setQueryData(queryKeys.planFeatures(7), plan);
 }
 
 const state = vi.hoisted(() => ({
@@ -94,7 +117,10 @@ vi.mock("../components/checkoff/UnattributedPrintCard", () => ({
 }));
 
 describe("GlobalProductionPage", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
   beforeEach(() => {
     state.loading = false;
@@ -202,5 +228,127 @@ describe("GlobalProductionPage", () => {
     await waitFor(() => expect(api.fetchUnattributedPrints).toHaveBeenCalledTimes(2));
     expect(api.fetchProfile).not.toHaveBeenCalled();
     expect(api.reloadProfiles).not.toHaveBeenCalled();
+  });
+
+  it("keeps farm status when the server does not advertise feature toggles", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(queryKeys.health, { ok: true, capabilities: [] });
+    queryClient.setQueryData(queryKeys.planFeatures(7), farmFeatures(false));
+    render(
+      <MemoryRouter>
+        <GlobalProductionPage />
+      </MemoryRouter>,
+      queryClient,
+    );
+
+    expect(await screen.findByRole("button", { name: "Live printers" })).toBeTruthy();
+    expect(screen.getByText(/farm status/)).toBeTruthy();
+    expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalled();
+  });
+
+  it("hides farm status when the Plan's effective farm choice is off", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    gate(queryClient, farmFeatures(false));
+    render(
+      <MemoryRouter>
+        <GlobalProductionPage />
+      </MemoryRouter>,
+      queryClient,
+    );
+
+    expect(screen.getByRole("heading", { name: "Remaining by Build" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open Voron in Production" }).getAttribute("href")).toBe("/export?profile=7");
+    expect(screen.getByText(/6 of 30 remaining/)).toBeTruthy();
+    expect(screen.getByText(/Work packages across Builds/)).toBeTruthy();
+    expect(screen.queryByText(/farm status/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Live printers" })).toBeNull();
+    expect(screen.queryByText("Attention needed")).toBeNull();
+    expect(screen.queryByText("Printing now")).toBeNull();
+    expect(screen.queryByText("orphan.gcode")).toBeNull();
+    await waitFor(() => expect(screen.getByText("Voron")).toBeTruthy());
+    expect(api.fetchPrinterCheckoffLinks).not.toHaveBeenCalled();
+    expect(api.fetchUnattributedPrints).not.toHaveBeenCalled();
+  });
+
+  it("shows farm status when the Plan's effective farm choice is on", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    gate(queryClient, farmFeatures(true));
+    render(
+      <MemoryRouter>
+        <GlobalProductionPage />
+      </MemoryRouter>,
+      queryClient,
+    );
+
+    expect(await screen.findByRole("button", { name: "Live printers" })).toBeTruthy();
+    expect(await screen.findByText("orphan.gcode")).toBeTruthy();
+    expect(screen.getByText(/farm status/)).toBeTruthy();
+    expect(api.fetchPrinterCheckoffLinks).toHaveBeenCalled();
+    expect(api.fetchUnattributedPrints).toHaveBeenCalled();
+  });
+
+  it("hides farm status while Plan features load and after they fail", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    gate(queryClient);
+    let fail!: () => void;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/plans/7/features") {
+        return new Promise<Response>((_resolve, reject) => {
+          fail = () => reject(new Error("boom"));
+        });
+      }
+      return new Promise<Response>(() => {});
+    }));
+    render(
+      <MemoryRouter>
+        <GlobalProductionPage />
+      </MemoryRouter>,
+      queryClient,
+    );
+
+    expect(screen.queryByRole("button", { name: "Live printers" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Remaining by Build" })).toBeTruthy();
+    await vi.waitFor(() => expect(fail).toBeTypeOf("function"));
+    await act(async () => fail());
+    await vi.waitFor(() => expect(queryClient.getQueryState(queryKeys.planFeatures(7))?.status).toBe("error"));
+    expect(screen.queryByRole("button", { name: "Live printers" })).toBeNull();
+    expect(api.fetchPrinterCheckoffLinks).not.toHaveBeenCalled();
+    expect(api.fetchUnattributedPrints).not.toHaveBeenCalled();
+  });
+
+  it("hides farm status for features that belong to another Plan", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    gate(queryClient, farmFeatures(true, 8));
+    render(
+      <MemoryRouter>
+        <GlobalProductionPage />
+      </MemoryRouter>,
+      queryClient,
+    );
+
+    expect(screen.queryByRole("button", { name: "Live printers" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Open Voron in Production" })).toBeTruthy();
+    expect(api.fetchPrinterCheckoffLinks).not.toHaveBeenCalled();
+  });
+
+  it("hides farm status as soon as the Plan's farm choice is revoked", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    gate(queryClient, farmFeatures(true));
+    render(
+      <MemoryRouter>
+        <GlobalProductionPage />
+      </MemoryRouter>,
+      queryClient,
+    );
+    expect(await screen.findByRole("button", { name: "Live printers" })).toBeTruthy();
+
+    act(() => {
+      queryClient.setQueryData(queryKeys.planFeatures(7), farmFeatures(false));
+    });
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Live printers" })).toBeNull());
+    expect(screen.getByRole("heading", { name: "Remaining by Build" })).toBeTruthy();
+    expect(screen.queryByText(/farm status/)).toBeNull();
   });
 });

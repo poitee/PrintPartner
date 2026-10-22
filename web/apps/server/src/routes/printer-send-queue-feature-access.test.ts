@@ -210,10 +210,9 @@ describe("printer-send-queue Bambu HTTP feature admission", () => {
     expect(tenantStorage.run("other", () => loadPrinterSendQueue(repo))).toEqual([]);
   });
 
-  it.each(["moonraker", "prusalink"])("preserves %s queue ownership and cancellation cleanup", async (type) => {
+  it.each(["moonraker", "prusalink"])("preserves %s queue ownership and cancellation cleanup when farm is enabled", async (type) => {
     configureHost(repo, type);
-    repo.setSetting("feature_toggles", "broken");
-    repo.setSetting(`feature_toggles:plan:${profileId}`, "broken");
+    repo.setSetting("feature_toggles", '{"farm":true}');
     const reads = vi.spyOn(repo, "getSettingSnapshot");
     const response = await request(urls[1], "default", [...fields(), ["wait_for_idle", "false"], ["match", "compatible"]]);
     expect(response.statusCode).toBe(200);
@@ -229,7 +228,7 @@ describe("printer-send-queue Bambu HTTP feature admission", () => {
     expect(jobs.start).not.toHaveBeenCalled();
     expect(integrations.getStatus).not.toHaveBeenCalled();
     expect(execution.probe).not.toHaveBeenCalled();
-    expect(reads).not.toHaveBeenCalled();
+    expect(reads).toHaveBeenCalledWith("feature_toggles");
     const cancel = await app.inject({ method: "DELETE", url: `${urls[1]}/${item.id}` });
     expect(cancel.statusCode).toBe(200);
     expect(cancel.json().item.state).toBe("cancelled");
@@ -254,7 +253,7 @@ describe("printer-send-queue Bambu HTTP feature admission", () => {
     if (failure === "fleet") repo.setSetting("printer.fleet", "[]");
     if (failure === "unlinked") repo.setSetting("printer.fleet", '[{"id":"printer"}]');
     if (failure === "host") repo.setSetting("integrations", "[]");
-    repo.setSetting("feature_toggles", "broken");
+    repo.setSetting("feature_toggles", failure === "enqueue" ? '{"farm":true}' : "broken");
     const reads = vi.spyOn(repo, "getSettingSnapshot");
     const writes = vi.spyOn(repo, "setSetting");
     if (failure === "enqueue") writes.mockImplementation((key) => {
@@ -266,7 +265,7 @@ describe("printer-send-queue Bambu HTTP feature admission", () => {
     expect(response.json().detail ?? response.json().message).toBe(detail);
     cleaned(jobs.getExportsDir());
     expect(loadPrinterSendQueue(repo)).toEqual([]);
-    expect(reads).not.toHaveBeenCalled();
+    if (failure !== "enqueue") expect(reads).not.toHaveBeenCalled();
     expect(jobs.start).not.toHaveBeenCalled();
     expect(integrations.getStatus).not.toHaveBeenCalled();
     expect(execution.probe).not.toHaveBeenCalled();

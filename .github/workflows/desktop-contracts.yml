@@ -6,6 +6,7 @@ on:
     branches: [main, master, "desktop/**"]
     paths:
       - "fixtures/http/routes-inventory.json"
+      - "fixtures/parity/auth-key/**"
       - "fixtures/parity/auth-login/**"
       - "fixtures/parity/auth-registration/**"
       - "rust/**"
@@ -25,6 +26,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "fixtures/http/routes-inventory.json"
+      - "fixtures/parity/auth-key/**"
       - "fixtures/parity/auth-login/**"
       - "fixtures/parity/auth-registration/**"
       - "rust/**"
@@ -94,6 +96,7 @@ jobs:
         run: |
           case "$(node --version)" in
             v22.*)
+              node ../fixtures/parity/auth-key/generate.mjs --check
               node ../fixtures/parity/auth-login/generate.mjs --check
               node ../fixtures/parity/auth-registration/generate.mjs --check
               ;;

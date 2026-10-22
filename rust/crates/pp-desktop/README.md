@@ -8,7 +8,7 @@ PP_DEV_NODE=/absolute/path/to/node bash rust/scripts/desktop-dev.sh
 
 The command builds the trusted React assets and real compatibility server, creates a new stage, embeds its measured inventory, and starts one native window with isolated temporary data. Set `PP_DEV_DATA` to an existing development directory to keep that directory across runs. Set `PP_DEV_STAGE` to a new directory to retain its staged files. The stage command refuses to overwrite an existing directory.
 
-Closing the window hides it while core continues. The tray has Show, service status, a guarded Restart service action, and Quit. Quit and supported OS exits wait for the consuming core shutdown before the process returns. The webview receives no native commands. Navigation stays at the exact core origin and popups are denied. Existing external handoff flows need a separately validated native UX before they are accepted as working.
+Closing the window hides it while core continues. The tray has Show, service status, a guarded Restart service action, and Quit. Quit and supported OS exits wait for the consuming core shutdown before the process returns. Navigation stays at the exact core origin and popups are denied. The Sponsor action described below is the only native command available to the enabled rebuild shell. Other external handoff flows still need a validated native UX.
 
 Set `PP_DESKTOP_RECOVERY_UI=1` to add View logs and Open data folder to the native tray. This partial recovery UI defaults to off. View logs reads a bounded recent history and removes unknown events and fields before display. It remains available when the compatibility service stops. Restart service admits one request per crash-guard episode. Local crash records retain only known failure categories and numeric exit codes or signals. They contain no backend messages, paths, credentials, or panic payloads.
 
@@ -71,3 +71,29 @@ Each architecture uploads an unsigned app archive when one exists, the exact com
 These jobs cover unsigned assembly and installed resource checks. Native launch and rendered React verification remain separate gates. The existing timed lifecycle probe needs a debug build and Linux-specific isolation, so these release jobs do not run it. Signing still follows the required sequence: finish nested signing, measure nested bytes, compile Rust with that manifest, assemble without signing or binary patching, then sign the outer app and compare the nested hashes again. This workflow supplies no signing credentials and creates no release, notarization submission, or deployment. Node remains temporary compatibility code.
 
 The `Desktop runtime` workflow runs on Ubuntu 24.04 for Rust and desktop dependency changes. It generates a current-head manifest after the real desktop asset build, builds `pp-server`, runs the eight real `runtime_m0` tests, backend units and Clippy, boundary and format checks, authenticated workflow and cleanup proofs, and gateway effects, product, and streaming probes. Crate selection excludes `pp-desktop` from Linux compilation. The test fixtures require `/usr/bin/node`, so the disposable runner points that path at the pinned setup-node runtime before measurement. Logs and exact manifest bytes upload on failure. This workflow needs the gateway test files from the reviewed integration stack; the Native-only base does not contain them.
+
+## Verify the native Sponsor action
+
+The native Sponsor action supports Linux and macOS only. Windows support is deferred. Build with `--features desktop_rebuild` and enable the runtime with `PP_DESKTOP_REBUILD=1` or `true`. Both gates and a supported platform are required. Other platforms receive no Sponsor capability or bridge. The shell injects a nullary Sponsor bridge into its main document at the exact core HTTP origin. Ordinary web sessions retain the browser popup behavior. A native error displays a toast with the public Sponsors address and does not retry through a popup.
+
+The action opens only `https://github.com/sponsors/poitee` in the OS browser. JavaScript cannot supply a destination. Its remote capability grants only `allow-open-sponsor` to the `main` webview at the captured loopback host and port. The command also checks the captured runtime gate, current origin, window label, and webview label. Local application URLs and general shell, filesystem, opener, and window commands receive no permission. The browser launcher has a five-second timeout and kills its child on cancellation. A timeout cannot prove the browser failed to open. Linux `xdg-open` may remain running until the browser exits, even after opening the page. The toast therefore reports that browser opening could not be confirmed.
+
+The bridge does not prove a user gesture or distinguish same-origin child frames that can access their parent. Tauri IPC source attribution differs by platform. Linux postMessage IPC uses the webview's current URL rather than the requesting frame's URL. The guarantee is the exact bound main webview origin and Tauri's invoke-key boundary, not independent authentication of every frame.
+
+Run the unit checks from the repository root:
+
+```sh
+PP_DESKTOP_RELEASE_MANIFEST=/absolute/path/to/stage/bundle-manifest.json \
+  cargo test --locked --manifest-path rust/Cargo.toml -p pp-desktop --features desktop_rebuild --lib
+npm --prefix web run test -w @print-partner/web -- src/lib/supportLinks.test.ts
+```
+
+On Linux with WebKitWebDriver and Xvfb available, run the native click and denial verifier against a freshly built binary and stage:
+
+```sh
+dbus-run-session -- xvfb-run -a python3 rust/tests/native_sponsor.py \
+  --binary rust/target/debug/pp-desktop \
+  --stage /absolute/path/to/stage --output /tmp/gre353-sponsor-proof
+```
+
+The verifier records the browser handoff through an isolated `xdg-open` shim, so verification does not launch an external browser.

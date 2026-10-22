@@ -16,6 +16,19 @@ TESTS = (
 SUBREAPER = "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced"
 
 
+def stress_group_cleanup_self_tests():
+    import unittest
+
+    suite = unittest.defaultTestLoader.discover(
+        str(Path(__file__).resolve().parent),
+        pattern="test_stress_group_cleanup.py",
+    )
+    if suite.countTestCases() == 0:
+        print("FAIL: no stress runner self-tests found", file=sys.stderr)
+        return 1
+    return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -105,4 +118,12 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        sys.exit(stress_group_cleanup_self_tests())
+    if "--self-test" in sys.argv[1:]:
+        print(
+            f"{Path(sys.argv[0]).name}: error: --self-test must be the only argument",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     sys.exit(main())

@@ -3,6 +3,9 @@
 //! cases compare with Node's `writeUploadedFiles` (`fixtures/parity/uploads`).
 //! Node has no journal, quota or idempotency, so those cases and the codec
 //! fixture port the reference `source_import_codec.rs`.
+//! A targeted claim of a legacy entry (no authority revision) writes no Source
+//! observation. A revisioned entry still records its refusal.
+//! `CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage --features desktop_rebuild --test upload_journal legacy_targeted_refusal_writes_no_revisioned_observation`
 use pp_storage::{
     Limits, WriterOwner,
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
@@ -855,4 +858,155 @@ fn startup_refuses_an_import_missing_its_preclaim_refusal() {
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
         owner.shutdown().unwrap();
     }
+}
+
+/// Legacy entries omit the authority revision. A targeted claim must fail the
+/// job without a Source observation, and a revisioned sibling must keep its
+/// preclaim observation.
+#[test]
+fn legacy_targeted_refusal_writes_no_revisioned_observation() {
+    let Fixture {
+        root,
+        owner,
+        client,
+    } = Fixture::open();
+    let credential = session(&owner);
+    let Credential::Session(token) = &credential else {
+        unreachable!()
+    };
+    let token = Secret::new(token.expose().into());
+    let admit = |key: &str| {
+        let (request, files) = upload(key);
+        let epoch = client.accounting_epoch();
+        client
+            .admit(
+                Credential::Session(Secret::new(token.expose().into())),
+                request,
+                files,
+                0,
+                epoch,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+    };
+    let current = admit("current");
+    let legacy = admit("legacy");
+    let revision_before: String = Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .query_row(
+            "SELECT json_extract(document,'$.authority_revision') FROM source_import_operations WHERE operation_key=?1",
+            [&current.key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(current.authority_revision.is_some());
+    assert!(legacy.authority_revision.is_some());
+    Connection::open(root.join("print-partner.db"))
+        .unwrap()
+        .execute(
+            "UPDATE source_import_operations SET document=json_remove(document,'$.authority_revision','$.observation_cursor') WHERE operation_key=?1",
+            [&legacy.key],
+        )
+        .unwrap();
+    owner
+        .auth_with_policy(policy())
+        .unwrap()
+        .submit(
+            auth::Request::Logout { token },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+    let admission = WorkerAdmission {
+        kinds: JobKind::ALL.into_iter().map(|kind| (kind, 2)).collect(),
+        total: 4,
+        per_resource: 1,
+        lease_seconds: 60,
+    };
+    let worker = owner.job_worker_with_policy(policy(), admission).unwrap();
+    assert!(worker.claim_import(&current.job_id).is_err());
+    assert!(worker.claim_import(&legacy.job_id).is_err());
+    let connection = Connection::open(root.join("print-partner.db")).unwrap();
+    let count = |sql: &str, key: &str| -> i64 {
+        connection.query_row(sql, [key], |row| row.get(0)).unwrap()
+    };
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM source_preclaim_refusals WHERE operation_key=?1",
+            &current.key,
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM source_revision_observations WHERE operation_key=?1",
+            &current.key,
+        ),
+        0
+    );
+    let revision_after: String = connection
+        .query_row(
+            "SELECT json_extract(document,'$.authority_revision') FROM source_import_operations WHERE operation_key=?1",
+            [&current.key],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(revision_after, revision_before);
+    let current_refusal: (i64, String, Option<String>) = connection
+        .query_row(
+            "SELECT p.cursor, json_extract(j.document,'$._authority_refusal.phase'), json_extract(j.document,'$.fence') FROM source_preclaim_refusals p JOIN durable_jobs j ON j.id=p.job_id WHERE p.operation_key=?1",
+            [&current.key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(current_refusal, (1, "targeted_claim".into(), None));
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM source_preclaim_refusals WHERE operation_key=?1",
+            &legacy.key,
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM source_revision_observations WHERE operation_key=?1",
+            &legacy.key,
+        ),
+        0
+    );
+    let legacy_row: (Option<String>, Option<i64>, String) = connection
+        .query_row(
+            "SELECT json_extract(o.document,'$.authority_revision'), json_extract(o.document,'$.observation_cursor'), json_extract(j.document,'$._authority_refusal.phase') FROM source_import_operations o JOIN durable_jobs j ON j.id=o.job_id WHERE o.operation_key=?1",
+            [&legacy.key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(legacy_row, (None, None, "targeted_claim".into()));
+    drop((worker, client, connection));
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    let connection = Connection::open(root.join("print-partner.db")).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM source_revision_observations WHERE operation_key=?1",
+                [&legacy.key],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert!(
+        connection
+            .query_row(
+                "SELECT json_extract(document,'$.authority_revision') IS NULL AND json_extract(document,'$.observation_cursor') IS NULL FROM source_import_operations WHERE operation_key=?1",
+                [&legacy.key],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+    );
 }

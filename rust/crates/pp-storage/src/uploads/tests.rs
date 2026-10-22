@@ -1,4 +1,7 @@
-use super::{expected, validate_schema};
+use super::{
+    Admission, CaptureId, CapturedPayloadV1, Input, decode_import_input_version, expected,
+    validate_schema,
+};
 use crate::{Limits, WriterOwner, schema::SchemaReady, tests::directory};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -755,4 +758,341 @@ fn schema41_validation_rolls_back_a_drifted_existing_table() {
         "{error:#}"
     );
     assert_eq!(live_contents(&database), original);
+}
+
+#[test]
+fn capture_payload_round_trip() {
+    let identifier = "c".repeat(128);
+    let capture_id = CaptureId::new(identifier.clone()).unwrap();
+    assert_eq!(capture_id.as_str(), identifier);
+    assert_eq!(
+        serde_json::from_str::<CaptureId>(&serde_json::to_string(&capture_id).unwrap()).unwrap(),
+        capture_id
+    );
+    assert_eq!(format!("{capture_id:?}"), "CaptureId([redacted])");
+
+    let files = CapturedPayloadV1::files(vec!["models/a.stl".to_string()]);
+    let files_wire = serde_json::json!({
+        "kind": "files",
+        "paths": ["models/a.stl"],
+        "policy": {
+            "policy_version": 1,
+            "relative_paths_transition": "node_json_array_string_filter_boolean_v1",
+            "label_selection": "trimmed_relative_then_slash_filename_then_ordinal_stl_v1",
+            "backslash_boundary": "replace_with_slash_at_label_boundary_v1",
+            "canonical_paths": "source_path_nfc_case_fold_prefix_v1",
+            "max_raw_input_bytes": 268_435_456,
+            "max_prepared_bytes": 1_073_741_824,
+            "max_files": 10_000,
+            "max_multipart_parts": 10_001,
+            "max_metadata_bytes": 65_536
+        }
+    });
+    assert_eq!(serde_json::to_value(&files).unwrap(), files_wire);
+    let files_decoded: CapturedPayloadV1 = serde_json::from_value(files_wire.clone()).unwrap();
+    assert_eq!(files_decoded, files);
+    files_decoded.validate().unwrap();
+    assert_eq!(files_decoded.input_version(), 2);
+    assert_eq!(decode_import_input_version(&files_wire).unwrap(), 2);
+    assert_eq!(format!("{files:?}"), "CapturedPayloadV1([redacted])");
+
+    let zip = CapturedPayloadV1::zip("pack.zip".to_string());
+    let zip_wire = serde_json::json!({
+        "kind": "zip",
+        "path": "pack.zip",
+        "policy": {
+            "policy_version": 1,
+            "archive_labels": "nfc_at_acquisition",
+            "canonical_paths": "source_path_nfc_case_fold_prefix_v1",
+            "max_raw_input_bytes": 268_435_456,
+            "max_prepared_bytes": 1_073_741_824,
+            "max_zip_entries": 10_000
+        }
+    });
+    assert_eq!(serde_json::to_value(&zip).unwrap(), zip_wire);
+    assert_eq!(
+        serde_json::from_value::<CapturedPayloadV1>(zip_wire.clone()).unwrap(),
+        zip
+    );
+    assert_eq!(decode_import_input_version(&zip_wire).unwrap(), 2);
+
+    let supplied = serde_json::json!({"kind": "files", "paths": ["models/a.stl"]});
+    assert_eq!(decode_import_input_version(&supplied).unwrap(), 1);
+    assert_eq!(
+        serde_json::from_value::<Input>(supplied).unwrap().version(),
+        1
+    );
+    let supplied_zip = serde_json::json!({"kind": "zip", "path": "pack.zip"});
+    assert_eq!(decode_import_input_version(&supplied_zip).unwrap(), 1);
+}
+
+#[test]
+fn capture_payload_rejects_invalid_policy_and_identity() {
+    let error = CaptureId::new("").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Invalid capture identifier"),
+        "{error:#}"
+    );
+    let error = CaptureId::new("c".repeat(129)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Invalid capture identifier"),
+        "{error:#}"
+    );
+    let error = CaptureId::new("capture\ncontrol").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Invalid capture identifier"),
+        "{error:#}"
+    );
+    assert!(serde_json::from_str::<CaptureId>("\"\"").is_err());
+    assert!(serde_json::from_str::<CaptureId>("\"capture\\ncontrol\"").is_err());
+
+    let mut tampered =
+        serde_json::to_value(CapturedPayloadV1::zip("pack.zip".to_string())).unwrap();
+    tampered["policy"]["max_zip_entries"] = serde_json::json!(9_999);
+    let decoded: CapturedPayloadV1 = serde_json::from_value(tampered.clone()).unwrap();
+    let error = decoded.validate().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Unsupported capture policy"),
+        "{error:#}"
+    );
+    let error = decode_import_input_version(&tampered).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Unsupported capture policy"),
+        "{error:#}"
+    );
+
+    let mut unknown_policy =
+        serde_json::to_value(CapturedPayloadV1::files(vec!["a.stl".to_string()])).unwrap();
+    unknown_policy["policy"]["future"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<CapturedPayloadV1>(unknown_policy.clone()).is_err());
+    assert!(decode_import_input_version(&unknown_policy).is_err());
+
+    let mut unknown_label =
+        serde_json::to_value(CapturedPayloadV1::zip("pack.zip".to_string())).unwrap();
+    unknown_label["policy"]["archive_labels"] = serde_json::json!("future");
+    assert!(serde_json::from_value::<CapturedPayloadV1>(unknown_label).is_err());
+    assert!(
+        decode_import_input_version(&serde_json::json!({"kind": "future", "path": "pack.zip"}))
+            .is_err()
+    );
+
+    let captured =
+        serde_json::to_value(CapturedPayloadV1::files(vec!["models/a.stl".to_string()])).unwrap();
+    let admission = serde_json::json!({
+        "key": "captured-op",
+        "target": {"kind": "existing", "source_id": 1},
+        "input": captured,
+        "reserved_bytes": 1,
+        "max_input_bytes": 1,
+        "max_prepared_bytes": 1
+    });
+    assert!(serde_json::from_value::<Admission>(admission).is_err());
+}
+
+#[rustfmt::skip]
+mod capture_binding {
+    use super::super::{
+        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
+        Target, decode_import_input_version,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::Connection;
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+    #[derive(Clone)]
+    struct Binding {
+        id: String, actor: String, key: String, source_id: i64, create_name: Option<String>,
+        reserved: u64, max_input: u64, max_prepared: u64, path: String, size: u64, hash: String,
+        kind: String, zip: bool,
+    }
+    impl Binding {
+        fn fixed() -> Self {
+            Self {
+                id: "capture-binding".into(), actor: "physical-owner".into(), key: "bind-op".into(),
+                source_id: 7, create_name: None, reserved: 3_506_438_144, max_input: 268_435_456,
+                max_prepared: 1_073_741_824, path: "part.stl".into(), size: 3, hash: "b".repeat(64),
+                kind: "input".into(), zip: false,
+            }
+        }
+        fn target(&self) -> Target {
+            match &self.create_name {
+                Some(name) => Target::Create { metadata: Box::new(CreateSource { name: name.clone(), ..Default::default() }) },
+                None => Target::Existing { source_id: self.source_id },
+            }
+        }
+        fn limits(&self) -> AdmissionLimits {
+            AdmissionLimits { reserved_bytes: self.reserved, max_input_bytes: self.max_input, max_prepared_bytes: self.max_prepared }
+        }
+        fn files(&self) -> Vec<File> {
+            vec![File { path: self.path.clone(), size: self.size, sha256: self.hash.clone(), kind: self.kind.clone() }]
+        }
+        fn payload(&self) -> CapturedPayloadV1 {
+            if self.zip { CapturedPayloadV1::zip(self.path.clone()) } else { CapturedPayloadV1::files(vec![self.path.clone()]) }
+        }
+        fn try_capture(&self, payload: CapturedPayloadV1) -> anyhow::Result<CapturedInputV2> {
+            let (target, files) = (self.target(), self.files());
+            CapturedInputV2::bind(CaptureId::new(self.id.clone())?, payload, &self.actor, &self.key, &target, self.limits(), &files)
+        }
+        fn capture(&self) -> CapturedInputV2 { self.try_capture(self.payload()).unwrap() }
+        fn check(&self, input: &CapturedInputV2) -> anyhow::Result<()> {
+            let (target, files) = (self.target(), self.files());
+            input.validate(&self.actor, &self.key, Some(&target), self.limits(), &files)
+        }
+    }
+    fn digests(input: &CapturedInputV2) -> (String, String, String) {
+        let value = serde_json::to_value(input).unwrap();
+        let text = |name: &str| value[name].as_str().unwrap().to_string();
+        (text("policy_digest"), text("target_digest"), text("manifest_digest"))
+    }
+    fn assert_rebound(base: &Binding, changed: Binding, message: &str) {
+        let left = base.capture();
+        let (policy, target, manifest) = digests(&left);
+        let (next_policy, next_target, next_manifest) = digests(&changed.capture());
+        assert_eq!(policy, next_policy);
+        assert_ne!(manifest, next_manifest);
+        let same_target = changed.source_id == base.source_id && changed.create_name == base.create_name;
+        assert_eq!(target == next_target, same_target);
+        assert_eq!(changed.check(&left).unwrap_err().to_string(), message);
+    }
+    fn vary(base: &Binding, field: &str) -> (Binding, &'static str) {
+        let mut next = base.clone();
+        let message = match field {
+            "actor" => { next.actor = "other-actor".into(); "Capture manifest digest mismatch" }
+            "key" => { next.key = "other-op".into(); "Capture manifest digest mismatch" }
+            "source" => { next.source_id += 1; "Capture target digest mismatch" }
+            "create" => { next.create_name = Some("Other".into()); "Capture target digest mismatch" }
+            "reserved" => { next.reserved += 1; "Capture manifest digest mismatch" }
+            "max_input" => { next.max_input -= 1; "Capture manifest digest mismatch" }
+            "max_prepared" => { next.max_prepared -= 1; "Capture manifest digest mismatch" }
+            "path" => { next.path = "other.stl".into(); "Capture manifest digest mismatch" }
+            "size" => { next.size += 1; "Capture manifest digest mismatch" }
+            "hash" => { next.hash = "a".repeat(64); "Capture manifest digest mismatch" }
+            "kind" => { next.kind = "stl".into(); "Capture manifest digest mismatch" }
+            _ => unreachable!("{field}"),
+        };
+        (next, message)
+    }
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection.query_row(JOURNAL_SQL, [], |row| row.get(0)).unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { pending.push(path); continue; }
+                let name = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+    fn credential(owner: &WriterOwner) -> Credential { Credential::PhysicalOwner(owner.job_physical_owner()) }
+    fn supplied(base: &Binding) -> Admission {
+        Admission {
+            key: "supplied-op".into(),
+            target: Target::Create { metadata: Box::new(CreateSource { name: "Binding".into(), ..Default::default() }) },
+            input: Input::Files { paths: vec![base.path.clone()] },
+            reserved_bytes: base.reserved, max_input_bytes: base.max_input, max_prepared_bytes: base.max_prepared,
+        }
+    }
+    #[test]
+    fn capture_binding_is_stable() {
+        let base = Binding::fixed();
+        let bound = base.capture();
+        assert_eq!(bound, base.capture());
+        base.check(&bound).unwrap();
+        assert_eq!(format!("{bound:?}"), "CapturedInputV2 { capture_version: 1, capture_id: CaptureId([redacted]), payload: CapturedPayloadV1([redacted]), policy_digest: Sha256Digest([redacted]), target_digest: Sha256Digest([redacted]), manifest_digest: Sha256Digest([redacted]) }");
+        assert_eq!(digests(&bound), (
+            "7163d9f0439e36702b872b901c23a8f40f37683c30ce246faff1cbd666d5129a".into(),
+            "706e746ac8c566c92496ded15d60f6d59a3417439af6454f65c36fbedd7f3c60".into(),
+            "641bd6aa58d3ce758f16d274b8a2a91669b98f1f6e31ff0a03ea2efbe1bc9d88".into(),
+        ));
+        let wire = serde_json::to_value(&bound).unwrap();
+        assert_eq!(decode_import_input_version(&wire["payload"]).unwrap(), 2);
+        assert_eq!(decode_import_input_version(&serde_json::json!({"kind": "files", "paths": ["part.stl"]})).unwrap(), 1);
+        let mut other = base.clone();
+        other.id = "other-capture".into();
+        let (policy, target, manifest) = digests(&bound);
+        let (other_policy, other_target, other_manifest) = digests(&other.capture());
+        assert_eq!((policy, target), (other_policy, other_target));
+        assert_ne!(manifest, other_manifest);
+        let mut zip = base;
+        zip.zip = true;
+        zip.path = "pack.zip".into();
+        let zip_bound = zip.capture();
+        assert_eq!(zip_bound, zip.capture());
+        zip.check(&zip_bound).unwrap();
+    }
+    #[test]
+    fn capture_binding_rejects_changed_actor_target_policy_or_inventory() {
+        let root = directory("capture-binding");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }, 16 * 1024 * 1024 * 1024).unwrap();
+        let base = Binding::fixed();
+        let files = base.files();
+        let cancelled = AtomicBool::new(false);
+        let operation = client.admit(credential(&owner), supplied(&base), files.clone(), 0, client.accounting_epoch(), &cancelled).unwrap();
+        assert_eq!((operation.input_version, operation.actor.as_str(), operation.key.as_str()), (1, "physical-owner", "supplied-op"));
+        let before = journal_and_files(&root);
+        let epoch = client.accounting_epoch();
+        let file = &operation.requested_files[0];
+        let mut live = base;
+        live.key = operation.key.clone();
+        live.source_id = operation.source_id;
+        live.path = file.path.clone();
+        live.size = file.size;
+        live.hash = file.sha256.clone();
+        live.kind = file.kind.clone();
+        let bound = live.capture();
+        live.check(&bound).unwrap();
+        for field in ["actor", "key", "source", "create", "reserved", "max_input", "max_prepared", "path", "size", "hash", "kind"] {
+            let (changed, message) = vary(&live, field);
+            assert_rebound(&live, changed, message);
+        }
+        for (zip, field) in [(false, "max_files"), (true, "max_zip_entries")] {
+            let mut value = serde_json::to_value(if zip { CapturedPayloadV1::zip("pack.zip".into()) } else { CapturedPayloadV1::files(vec!["part.stl".into()]) }).unwrap();
+            value["policy"][field] = serde_json::json!(9_999);
+            assert_eq!(live.try_capture(serde_json::from_value(value).unwrap()).unwrap_err().to_string(), "Unsupported capture policy");
+        }
+        for (pointer, value, message) in [
+            ("/payload/policy/max_files", serde_json::json!(9_999), "Unsupported capture policy"),
+            ("/policy_digest", serde_json::json!("0".repeat(64)), "Capture policy digest mismatch"),
+            ("/capture_version", serde_json::json!(2), "Unsupported capture version"),
+        ] {
+            let mut wire = serde_json::to_value(&bound).unwrap();
+            *wire.pointer_mut(pointer).unwrap() = value;
+            assert_eq!(live.check(&serde_json::from_value(wire).unwrap()).unwrap_err().to_string(), message);
+        }
+        for (pointer, value) in [("/manifest_digest", serde_json::json!("zz")), ("/target_digest", serde_json::json!("A".repeat(64)))] {
+            let mut wire = serde_json::to_value(&bound).unwrap();
+            *wire.pointer_mut(pointer).unwrap() = value;
+            assert!(serde_json::from_value::<CapturedInputV2>(wire).is_err());
+        }
+        let replay = client.admit(credential(&owner), supplied(&live), files, 0, epoch, &cancelled).unwrap();
+        assert_eq!(replay, operation);
+        assert_eq!(client.accounting_epoch(), epoch);
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.get(credential(&owner), "supplied-op".into()).unwrap(), operation);
+        owner.shutdown().unwrap();
+    }
 }

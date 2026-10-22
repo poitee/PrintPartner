@@ -5,7 +5,34 @@ import type { ServerConfig } from "../config.js";
 type PasswordResetDelivery = {
   sent: boolean;
   devResetUrl?: string;
+  errorClass?:
+    | "client"
+    | "smtp_permanent"
+    | "smtp_response"
+    | "smtp_transient"
+    | "timeout"
+    | "tls"
+    | "transport";
 };
+
+function resetMailErrorClass(error: unknown): NonNullable<PasswordResetDelivery["errorClass"]> {
+  if (!error || typeof error !== "object") return "transport";
+  const record = error as Record<string, unknown>;
+  const code = typeof record.code === "string" ? record.code : "";
+  const responseCode =
+    typeof record.responseCode === "number" && Number.isFinite(record.responseCode)
+      ? record.responseCode
+      : typeof record.responseCode === "string" && /^[1-9][0-9]{2}$/.test(record.responseCode)
+        ? Number(record.responseCode)
+        : 0;
+  if (code === "ETIMEDOUT" || code === "ETIMEOUT") return "timeout";
+  if (code === "ETLS") return "tls";
+  if (responseCode >= 500) return "smtp_permanent";
+  if (responseCode >= 400) return "smtp_transient";
+  if (code === "EAUTH") return "client";
+  if (responseCode > 0) return "smtp_response";
+  return "transport";
+}
 
 export function buildPasswordResetUrl(publicOrigin: string, rawToken: string): string {
   const base = publicOrigin.replace(/\/$/, "");
@@ -51,12 +78,16 @@ export async function deliverPasswordResetEmail(
           ? { user: config.smtpUser, pass: config.smtpPass }
           : undefined,
     });
-    await transport.sendMail({
-      from: config.smtpFrom,
-      to: input.to,
-      subject,
-      text,
-    });
+    try {
+      await transport.sendMail({
+        from: config.smtpFrom,
+        to: input.to,
+        subject,
+        text,
+      });
+    } catch (error) {
+      return { sent: false, errorClass: resetMailErrorClass(error) };
+    }
     return { sent: true };
   }
 

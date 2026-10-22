@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import PrinterLiveStrip from "../components/checkoff/PrinterLiveStrip";
 import PrintersPage from "../pages/PrintersPage";
+import { queryKeys } from "./keys";
 import { printerStatusKey, usePrinterStatuses } from "./printerStatuses";
 
 const api = vi.hoisted(() => ({
@@ -87,6 +88,8 @@ describe("shared printer status polling", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
+    queryClient.setQueryDefaults(queryKeys.health, { staleTime: Infinity, retry: false });
+    queryClient.setQueryData(queryKeys.health, { ok: true, capabilities: [] });
 
     render(
       <QueryClientProvider client={queryClient}>

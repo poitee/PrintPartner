@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashSet},
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -15,6 +16,10 @@ use std::{
 
 #[cfg(test)]
 mod tests;
+
+mod captured;
+
+pub use captured::{CaptureId, CapturedPayloadV1};
 
 const COLUMNS: &str = include_str!("remote_sources/columns38.sql");
 
@@ -235,6 +240,17 @@ fn validate_journal(connection: &Connection, preclaim: bool) -> Result<()> {
     Ok(())
 }
 
+/// An upstream revision key already names a revision that is not complete.
+/// Activation returns this and writes neither that revision nor its attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IncompleteRevisionKey;
+impl std::fmt::Display for IncompleteRevisionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Incomplete revision key")
+    }
+}
+impl std::error::Error for IncompleteRevisionKey {}
+
 /// Opening storage found an import whose job and cursor show a preclaim refusal
 /// without its `source_preclaim_refusals` row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,12 +343,190 @@ pub enum Input {
 }
 
 impl Input {
+    pub fn version(&self) -> u32 {
+        match self {
+            Self::Files { .. } | Self::Zip { .. } => 1,
+        }
+    }
+
     fn requested_paths(&self) -> Vec<&str> {
         match self {
             Self::Files { paths } => paths.iter().map(String::as_str).collect(),
             Self::Zip { path } => vec![path],
         }
     }
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+struct Sha256Digest(String);
+
+impl Sha256Digest {
+    fn new(value: String) -> Result<Self> {
+        digest(&value)?;
+        Ok(Self(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for Sha256Digest {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for Sha256Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Sha256Digest([redacted])")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdmissionLimits {
+    pub reserved_bytes: u64,
+    pub max_input_bytes: u64,
+    pub max_prepared_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct CaptureManifestBindingV1<'a> {
+    manifest_version: u32,
+    capture_id: &'a CaptureId,
+    operation_key: &'a str,
+    actor: &'a str,
+    target_digest: &'a Sha256Digest,
+    input: &'a CapturedPayloadV1,
+    admission_limits: AdmissionLimits,
+    policy_digest: &'a Sha256Digest,
+    requested_files: &'a [File],
+    requested_digest: &'a Sha256Digest,
+}
+
+fn calculate_capture_binding(
+    capture_id: &CaptureId,
+    operation_key: &str,
+    actor: &str,
+    target_digest: &Sha256Digest,
+    input: &CapturedPayloadV1,
+    admission_limits: AdmissionLimits,
+    requested_files: &[File],
+) -> Result<(Sha256Digest, Sha256Digest)> {
+    let requested_digest = Sha256Digest::new(serialized_digest(&requested_files)?)?;
+    let policy_digest = input.policy_digest()?;
+    let manifest_digest = Sha256Digest::new(serialized_digest(&(
+        "pp-source-capture-binding-v1",
+        CaptureManifestBindingV1 {
+            manifest_version: 1,
+            capture_id,
+            operation_key,
+            actor,
+            target_digest,
+            input,
+            admission_limits,
+            policy_digest: &policy_digest,
+            requested_files,
+            requested_digest: &requested_digest,
+        },
+    ))?)?;
+    Ok((policy_digest, manifest_digest))
+}
+
+fn target_digest(target: &Target) -> Result<Sha256Digest> {
+    Sha256Digest::new(serialized_digest(&("pp-source-import-target-v1", target))?)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapturedInputV2 {
+    capture_version: u32,
+    capture_id: CaptureId,
+    payload: CapturedPayloadV1,
+    policy_digest: Sha256Digest,
+    target_digest: Sha256Digest,
+    manifest_digest: Sha256Digest,
+}
+
+impl CapturedInputV2 {
+    pub fn bind(
+        capture_id: CaptureId,
+        payload: CapturedPayloadV1,
+        actor: &str,
+        operation_key: &str,
+        target: &Target,
+        admission_limits: AdmissionLimits,
+        requested_files: &[File],
+    ) -> Result<Self> {
+        payload.validate()?;
+        let target_digest = target_digest(target)?;
+        let (policy_digest, manifest_digest) = calculate_capture_binding(
+            &capture_id,
+            operation_key,
+            actor,
+            &target_digest,
+            &payload,
+            admission_limits,
+            requested_files,
+        )?;
+        Ok(Self {
+            capture_version: 1,
+            capture_id,
+            payload,
+            policy_digest,
+            target_digest,
+            manifest_digest,
+        })
+    }
+
+    pub fn validate(
+        &self,
+        actor: &str,
+        operation_key: &str,
+        target: Option<&Target>,
+        admission_limits: AdmissionLimits,
+        requested_files: &[File],
+    ) -> Result<()> {
+        ensure!(self.capture_version == 1, "Unsupported capture version");
+        self.payload.validate()?;
+        let (policy_digest, manifest_digest) = calculate_capture_binding(
+            &self.capture_id,
+            operation_key,
+            actor,
+            &self.target_digest,
+            &self.payload,
+            admission_limits,
+            requested_files,
+        )?;
+        ensure!(
+            policy_digest == self.policy_digest,
+            "Capture policy digest mismatch"
+        );
+        if let Some(target) = target {
+            ensure!(
+                target_digest(target)? == self.target_digest,
+                "Capture target digest mismatch"
+            );
+        }
+        ensure!(
+            manifest_digest == self.manifest_digest,
+            "Capture manifest digest mismatch"
+        );
+        Ok(())
+    }
+}
+
+pub fn decode_import_input_version(value: &serde_json::Value) -> Result<u32> {
+    if value.get("policy").is_some() {
+        let payload: CapturedPayloadV1 = serde_json::from_value(value.clone())
+            .map_err(|error| anyhow!("Invalid captured payload: {error}"))?;
+        payload.validate()?;
+        return Ok(payload.input_version());
+    }
+    let input: Input = serde_json::from_value(value.clone())
+        .map_err(|error| anyhow!("Invalid import input: {error}"))?;
+    Ok(input.version())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -497,8 +691,8 @@ impl Phase {
 enum Observed {
     /// A targeted claim refused before the job's first attempt.
     Preclaim { job_id: String, cancel: bool },
-    /// A live attempt, or a targeted claim refused after an earlier attempt,
-    /// which holds no fence.
+    /// A live attempt, or a claim refused after an earlier attempt, which
+    /// holds no fence. A generic recovered claim uses this shape too.
     Attempt {
         job_id: String,
         generation: i64,
@@ -1031,14 +1225,20 @@ fn record_observation(
 }
 
 /// Records a targeted claim's authority refusal in the import's journal, before
-/// the job records its own refusal.
+/// the job records its own refusal. A legacy entry has no authority revision and
+/// returns before any observation is written. Revisioned entries keep the fence
+/// and observation the claim already recorded.
 pub(crate) fn record_targeted_authority_refusal(
     tx: &Transaction<'_>,
     job: &jobs::JobRecord,
 ) -> Result<()> {
-    let Some(mut op) = bound(tx, job)? else {
+    let Some(op) = bound(tx, job)? else {
         return Ok(());
     };
+    if op.authority_revision.is_none() {
+        return Ok(());
+    }
+    let mut op = op;
     let observed = if job.generation == 0 {
         let attempted: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM source_revision_attempts WHERE tenant_id=?1 AND operation_key=?2)",
@@ -1074,6 +1274,36 @@ pub(crate) fn record_targeted_authority_refusal(
     store(tx, &op)
 }
 
+/// Records a generic claim's authority refusal for a recovered supplied import,
+/// before the job records its own. The observation keeps the recovered
+/// generation and no fence, as a targeted claim does after an earlier attempt.
+/// Generation 0 is still admitted-only and is left to the job journal. A later
+/// claim finds the job terminal and writes no second observation.
+pub(crate) fn record_recovered_authority_refusal(
+    tx: &Transaction<'_>,
+    job: &jobs::JobRecord,
+) -> Result<()> {
+    if job.generation == 0 {
+        return Ok(());
+    }
+    let Some(mut op) = bound(tx, job)? else {
+        return Ok(());
+    };
+    record_observation(
+        tx,
+        &mut op,
+        "authority_refused",
+        Observed::Attempt {
+            job_id: job.job_id.clone(),
+            generation: job.generation,
+            fence: None,
+            receipt: None,
+            cancel: job.cancel_requested,
+        },
+    )?;
+    store(tx, &op)
+}
+
 /// True for a supplied import whose input only its admitting owner holds, so
 /// only that owner's targeted claim may run it.
 pub(crate) fn awaits_owner_input(tx: &Transaction<'_>, job: &jobs::JobRecord) -> Result<bool> {
@@ -1087,7 +1317,11 @@ pub(crate) fn awaits_owner_input(tx: &Transaction<'_>, job: &jobs::JobRecord) ->
 
 /// Registers the published artifact as a complete Source revision and points the
 /// Source at it if the Source still matches the admission basis. Otherwise the
-/// revision stays inactive and the import ends in conflict.
+/// revision stays inactive and the import ends in conflict. A complete revision
+/// with the same manifest and locator is reused and keeps its first provenance.
+/// Each import records its own config, observation, input, and producer binding
+/// on `source_revision_attempts`. An existing revision that is not complete
+/// returns [`IncompleteRevisionKey`] and leaves that revision and its attempt.
 fn activate(
     tx: &Transaction<'_>,
     catalog_state: &catalog::State,
@@ -1112,30 +1346,51 @@ fn activate(
         .clone()
         .ok_or_else(|| anyhow!("Missing artifact"))?;
     let now = crate::auth::catalog_timestamp();
-    tx.execute(
-        "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,source_configuration_version,activation_observation_digest,input_digest,producer_version) VALUES(?1,?2,?3,?4,?5,?6,'complete',?7,?8,?9,?10) ON CONFLICT DO NOTHING",
-        params![
-            op.tenant,
-            op.source_id,
-            artifact.upstream_key,
-            artifact.manifest_digest,
-            artifact.locator,
-            now,
-            revision.source_configuration_version,
-            revision.activation_observation_digest,
-            revision.input_digest,
-            revision.producer_version
-        ],
-    )?;
-    let (id, manifest_digest, locator, synced_at): (i64, String, String, String) = tx.query_row(
-        "SELECT id,manifest_digest,snapshot_locator,synced_at FROM source_revisions WHERE tenant_id=?1 AND project_id=?2 AND upstream_revision_key=?3 AND completeness='complete'",
-        params![op.tenant, op.source_id, artifact.upstream_key],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-    )?;
-    ensure!(
-        manifest_digest == artifact.manifest_digest && locator == artifact.locator,
-        "Accepted revision identity mismatch"
-    );
+    let existing = tx
+        .query_row(
+            "SELECT id,completeness,manifest_digest,snapshot_locator,synced_at FROM source_revisions WHERE tenant_id=?1 AND project_id=?2 AND upstream_revision_key=?3",
+            params![op.tenant, op.source_id, artifact.upstream_key],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let (id, synced_at) = match existing {
+        Some((id, completeness, manifest_digest, locator, synced_at)) => {
+            if completeness != "complete" {
+                return Err(IncompleteRevisionKey.into());
+            }
+            ensure!(
+                manifest_digest == artifact.manifest_digest && locator == artifact.locator,
+                "Accepted revision identity mismatch"
+            );
+            (id, synced_at)
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,source_configuration_version,activation_observation_digest,input_digest,producer_version) VALUES(?1,?2,?3,?4,?5,?6,'complete',?7,?8,?9,?10)",
+                params![
+                    op.tenant,
+                    op.source_id,
+                    artifact.upstream_key,
+                    artifact.manifest_digest,
+                    artifact.locator,
+                    now,
+                    revision.source_configuration_version,
+                    revision.activation_observation_digest,
+                    revision.input_digest,
+                    revision.producer_version
+                ],
+            )?;
+            (tx.last_insert_rowid(), now.clone())
+        }
+    };
     tx.execute(
         "INSERT INTO source_revision_attempts(tenant_id,operation_key,job_id,source_id,revision_id,source_configuration_version,activation_observation_digest,input_digest,producer_version,attempt_generation,attempt_fence,activated,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12)",
         params![

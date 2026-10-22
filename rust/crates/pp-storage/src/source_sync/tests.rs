@@ -7,6 +7,7 @@ use crate::{
         self, AuthorityRefusalPhase, AuthorityRefusalReason, ClaimedAttempt, Credential,
         ServerWorkerClient, UserOperation, WorkerAdmission, WorkerOperation,
     },
+    source_scan::LocalScanObservation,
 };
 use serde_json::Value;
 use std::{
@@ -42,6 +43,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_admission(admission())
+    }
+
+    fn with_admission(admission: WorkerAdmission) -> Self {
         let root = std::env::temp_dir().join(format!("pp-source-sync-{}", rand::random::<u64>()));
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
         let auth::Outcome::Session { token, .. } = owner
@@ -69,7 +74,7 @@ impl Fixture {
                 policy(),
             )
             .unwrap();
-        let worker = owner.job_worker_with_policy(policy(), admission()).unwrap();
+        let worker = owner.job_worker_with_policy(policy(), admission).unwrap();
         Self {
             owner,
             root,
@@ -591,6 +596,333 @@ fn busy_source_leaves_the_target_pending() {
     held.release().unwrap();
     assert_eq!(local(sync.next(&mut lease)).key().ordinal, 0);
     assert_eq!(sync.targets(&job_id)[0].1, "claimed");
+}
+
+fn reopen(sync: Fixture) -> Fixture {
+    reopen_with_admission(sync, admission())
+}
+
+fn reopen_with_admission(sync: Fixture, admission: WorkerAdmission) -> Fixture {
+    let Fixture {
+        owner, root, token, ..
+    } = sync;
+    owner.shutdown().unwrap();
+    let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+    let catalog = owner
+        .source_catalog_with_policy(
+            catalog::Credentials::Session(auth::Secret::new(token.clone())),
+            policy(),
+        )
+        .unwrap();
+    let worker = owner.job_worker_with_policy(policy(), admission).unwrap();
+    Fixture {
+        owner,
+        root,
+        token,
+        catalog,
+        worker,
+    }
+}
+
+fn change_job(sync: &Fixture, job_id: &str, change: impl FnOnce(&mut JobRecord)) {
+    let mut connection = sync.connection();
+    let tx = connection.transaction().unwrap();
+    let mut job = jobs::load(&tx, job_id).unwrap().unwrap();
+    change(&mut job);
+    jobs::save(&tx, &mut job, "test_recovery_setup").unwrap();
+    tx.commit().unwrap();
+}
+
+fn enqueue_later(sync: &Fixture, source_id: i64) -> String {
+    sync.user(UserOperation::Enqueue {
+        key: "later-sync".into(),
+        payload_version: 1,
+        payload: Payload::Sync {
+            project_ids: Some(vec![source_id as u64]),
+        },
+    })
+    .job_id
+}
+
+fn durable_claim_blocks_a_second_sync(restart: bool) {
+    let admission = WorkerAdmission {
+        kinds: vec![(JobKind::Sync, 2)],
+        total: 2,
+        per_resource: 2,
+        ..admission()
+    };
+    let mut sync = Fixture::with_admission(admission.clone());
+    let id = sync.source("Durably claimed");
+    let first_job = sync.enqueue(Some(vec![id as u64]));
+    let mut first = sync.open();
+    drop(local(sync.next(&mut first)));
+    if restart {
+        sync = reopen_with_admission(sync, admission);
+    } else {
+        change_job(&sync, &first_job, |job| job.lease_until = Some(now() - 1));
+    }
+    let ClaimedAttempt {
+        lease: resumed_first,
+        ..
+    } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(resumed_first.job_id(), first_job);
+    let second_job = enqueue_later(&sync, id);
+    let worker = &sync.worker;
+    let ClaimedAttempt {
+        lease: mut second, ..
+    } = worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(second.job_id(), second_job);
+    worker.open_source_sync(&second).unwrap();
+    let before = sync.snapshot();
+    let version = second.version();
+    let error = worker
+        .claim_next_source_sync_target(&mut second)
+        .err()
+        .unwrap();
+    assert!(error.downcast_ref::<SourceBusy>().is_some(), "{error:#}");
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(second.version(), version);
+    assert_eq!(sync.targets(&second_job), [(id, "pending".into(), None)]);
+    sync.worker.open_source_sync(&resumed_first).unwrap();
+    let target = local(worker.claim_next_source_sync_target(&mut second).unwrap());
+    assert_eq!(target.claim_generation, 1);
+    assert_eq!(sync.targets(&second_job), [(id, "claimed".into(), None)]);
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn durable_claim_returns_source_busy_after_restart() {
+    durable_claim_blocks_a_second_sync(true);
+}
+
+#[test]
+fn durable_claim_returns_source_busy_after_lease_expiry() {
+    durable_claim_blocks_a_second_sync(false);
+}
+
+#[test]
+fn unacknowledged_failure_blocks_claim_after_restart() {
+    let admission = WorkerAdmission {
+        kinds: vec![(JobKind::Sync, 2)],
+        total: 2,
+        per_resource: 2,
+        ..admission()
+    };
+    let mut sync = Fixture::with_admission(admission.clone());
+    let id = sync.source("Unacknowledged failure");
+    let first_job = sync.enqueue(Some(vec![id as u64]));
+    let mut first = sync.open();
+    let target = local(sync.next(&mut first));
+    sync.worker
+        .fail_source_sync_target(&mut first, &target, "disk read failed")
+        .unwrap();
+    drop(target);
+    let failed = failed_hold(&sync, &first_job);
+    assert_eq!(
+        (
+            failed.0.as_str(),
+            failed.1.as_str(),
+            failed.2.as_str(),
+            failed.3,
+        ),
+        ("failed", "local_read", "disk read failed", 0)
+    );
+    sync = reopen_with_admission(sync, admission);
+    let ClaimedAttempt {
+        lease: resumed_first,
+        ..
+    } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(resumed_first.job_id(), first_job);
+    let second_job = enqueue_later(&sync, id);
+    let ClaimedAttempt {
+        lease: mut second, ..
+    } = sync.worker.claim_kind(JobKind::Sync).unwrap().unwrap();
+    assert_eq!(second.job_id(), second_job);
+    sync.worker.open_source_sync(&second).unwrap();
+    let before = sync.snapshot();
+    let version = second.version();
+    let error = sync
+        .worker
+        .claim_next_source_sync_target(&mut second)
+        .err()
+        .unwrap();
+    assert!(error.downcast_ref::<SourceBusy>().is_some(), "{error:#}");
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(second.version(), version);
+    assert_eq!(sync.targets(&second_job), [(id, "pending".into(), None)]);
+    assert_eq!(failed_hold(&sync, &first_job), failed);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn failed_hold(sync: &Fixture, job_id: &str) -> (String, String, String, i64, String, i64) {
+    sync.connection()
+        .query_row(
+            "SELECT state,failure_code,failure_detail,reservation_acknowledged,reservation_token,claim_generation FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [job_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
+fn terminal_recovery_closes_sync_batch(reason: &str, effect_confirmed: bool) {
+    for restart in [false, true] {
+        for claimed in [false, true] {
+            let mut sync = Fixture::new();
+            let [first, second] = ["First", "Second"].map(|name| sync.source(name));
+            let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+            if reason == "attempt_limit" {
+                change_job(&sync, &job_id, |job| {
+                    job.attempt = 99;
+                    job.generation = 99;
+                });
+            }
+            let mut lease = sync.open();
+            if claimed {
+                drop(local(sync.next(&mut lease)));
+            }
+            let before = sync.job(&job_id);
+            change_job(&sync, &job_id, |job| {
+                job.lease_until = Some(now() - 1);
+                if reason == "cancelled" {
+                    job.cancel_requested = true;
+                } else if reason == "effect" {
+                    job.state = PersistentState::EffectAdmitted;
+                    job.effects.push(jobs::EffectReceipt {
+                        intent: jobs::EffectIntent {
+                            operation: jobs::EffectOperation::SourceRefresh,
+                            basis_hash: "a".repeat(64),
+                            content_hash: "b".repeat(64),
+                            target: first.to_string(),
+                        },
+                        attempt: job.attempt,
+                        generation: job.generation,
+                        confirmed: effect_confirmed,
+                        no_effect: false,
+                        receipt: effect_confirmed.then(|| jobs::ResultArtifact {
+                            receipt_id: "sync-receipt".into(),
+                            content_hash: "b".repeat(64),
+                            target: first.to_string(),
+                        }),
+                        checklist_completion: None,
+                    });
+                }
+            });
+            let effects = sync.job(&job_id).effects;
+            if restart {
+                sync = reopen(sync);
+            }
+            assert!(sync.worker.claim_kind(JobKind::Sync).unwrap().is_none());
+            let recovered = sync.job(&job_id);
+            let unresolved = claimed || reason == "effect";
+            assert_eq!(
+                recovered.state,
+                if unresolved {
+                    PersistentState::ReconciliationRequired
+                } else if reason == "cancelled" {
+                    PersistentState::Cancelled
+                } else {
+                    PersistentState::Failed
+                }
+            );
+            assert_eq!(recovered.generation, before.generation + 1);
+            assert!(recovered.fence.is_none());
+            assert!(recovered.worker.is_none());
+            assert!(recovered.lease_until.is_none());
+            assert_eq!(recovered.effects, effects);
+            let detail = match reason {
+                "attempt_limit" => "Attempt limit reached",
+                "cancelled" => "Sync was cancelled",
+                "effect" if effect_confirmed => {
+                    "Resume from confirmed receipts requires handler reconciliation"
+                }
+                "effect" => "Inspect effect receipts and reconcile explicitly",
+                _ => unreachable!(),
+            };
+            assert_eq!(recovered.recovery.as_deref(), Some(detail));
+            assert_eq!(
+                sync.targets(&job_id),
+                [
+                    if claimed {
+                        (
+                            first,
+                            "reconciliation_required".into(),
+                            Some("local_settlement".into()),
+                        )
+                    } else {
+                        (first, "not_run".into(), Some("batch_halt".into()))
+                    },
+                    (second, "not_run".into(), Some("batch_halt".into())),
+                ]
+            );
+            assert_eq!(
+                sync.batch(&job_id),
+                if unresolved {
+                    ("reconciliation_required".into(), None)
+                } else {
+                    (
+                        "halted".into(),
+                        Some(
+                            if reason == "cancelled" {
+                                "cancelled"
+                            } else {
+                                "fatal"
+                            }
+                            .into(),
+                        ),
+                    )
+                }
+            );
+            let snapshot = sync.snapshot();
+            sync = reopen(sync);
+            assert_eq!(sync.snapshot(), snapshot);
+            let later_source = sync.source("Later work");
+            let later = enqueue_later(&sync, later_source);
+            let mut lease = sync.open();
+            assert_eq!(lease.job_id(), later);
+            assert_eq!(local(sync.next(&mut lease)).claim_generation, 1);
+            assert_eq!(
+                sync.targets(&later),
+                [(later_source, "claimed".into(), None)]
+            );
+            let Fixture { owner, root, .. } = sync;
+            owner.shutdown().unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn attempt_limit_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("attempt_limit", false);
+}
+
+#[test]
+fn unconfirmed_effect_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("effect", false);
+}
+
+#[test]
+fn confirmed_effect_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("effect", true);
+}
+
+#[test]
+fn cancellation_recovery_closes_sync_batch() {
+    terminal_recovery_closes_sync_batch("cancelled", false);
 }
 
 #[test]
@@ -1159,4 +1491,1022 @@ fn claims_require_an_open_batch_and_the_live_attempt() {
     assert_eq!(error.to_string(), "Stale attempt fence");
     assert_eq!(sync.snapshot(), before);
     assert_eq!(local(sync.next(&mut lease)).key().ordinal, 0);
+}
+
+fn refuse_bind(sync: &Fixture, lease: &AttemptLease, target: &SyncTargetLease) -> String {
+    let before = sync.snapshot();
+    let error = sync
+        .worker
+        .bind_source_sync_target(lease, target)
+        .err()
+        .unwrap();
+    assert_eq!(sync.snapshot(), before);
+    error.to_string()
+}
+
+fn tamper(sync: &Fixture, sql: &str, job_id: &str) {
+    assert_eq!(sync.connection().execute(sql, [job_id]).unwrap(), 1);
+}
+
+#[test]
+fn sync_candidate_requires_claim_and_current_source_proof() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let bound = BoundSyncTarget {
+        key: SyncTargetKey {
+            job_id: job_id.clone(),
+            ordinal: 0,
+        },
+        source_id: first,
+        claim_generation: 1,
+    };
+    let before = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    assert_eq!(sync.snapshot(), before);
+
+    target.key.job_id = "other-job".into();
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target Job mismatch"
+    );
+    target.key.job_id = job_id.clone();
+    target.key.ordinal = 1;
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target is not claimed"
+    );
+    target.key.ordinal = 0;
+    target.claim_generation = 2;
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target claim generation mismatch"
+    );
+    target.claim_generation = 1;
+    let claim = sync.snapshot();
+    let fence = digest(lease.fence());
+    tamper(
+        &sync,
+        &format!(
+            "UPDATE source_sync_targets SET attempt_fence_digest='{}' WHERE job_id=?1 AND ordinal=0",
+            "b".repeat(64)
+        ),
+        &job_id,
+    );
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target attempt mismatch"
+    );
+    tamper(
+        &sync,
+        &format!(
+            "UPDATE source_sync_targets SET attempt_fence_digest='{fence}' WHERE job_id=?1 AND ordinal=0"
+        ),
+        &job_id,
+    );
+    assert_eq!(sync.snapshot(), claim);
+
+    let stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    assert_eq!(refuse_bind(&sync, &stale, &target), "Stale attempt fence");
+
+    let claimed = std::mem::replace(&mut target.source_work, sync.begin_work(other).unwrap());
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target reservation mismatch"
+    );
+    let held = sync.snapshot();
+    let set_token = |token: u64| {
+        tamper(
+            &sync,
+            &format!(
+                "UPDATE source_sync_targets SET reservation_token='{token:016x}' WHERE job_id=?1 AND ordinal=0"
+            ),
+            &job_id,
+        )
+    };
+    set_token(target.source_work.proof().unwrap().token);
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Wrong Source reservation"
+    );
+    std::mem::replace(&mut target.source_work, claimed)
+        .release()
+        .unwrap();
+    set_token(target.source_work.proof().unwrap().token);
+    assert_eq!(sync.snapshot(), held);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    target.source_work.release().unwrap();
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Lease already released"
+    );
+}
+
+#[test]
+fn sync_candidate_rejects_changed_basis() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let sealed = sync.snapshot();
+    let digest: String = sync
+        .connection()
+        .query_row(
+            "SELECT target_basis_digest FROM source_sync_batches WHERE job_id=?1",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let batch = "UPDATE source_sync_batches SET";
+    let second_target = "WHERE job_id=?1 AND ordinal=1";
+    for (change, restore, expected) in [
+        (
+            format!(
+                "{batch} target_basis_digest='{}' WHERE job_id=?1",
+                "a".repeat(64)
+            ),
+            format!("{batch} target_basis_digest='{digest}' WHERE job_id=?1"),
+            "Sync target basis mismatch",
+        ),
+        (
+            format!("UPDATE source_sync_targets SET requested_source_id={other} {second_target}"),
+            format!("UPDATE source_sync_targets SET requested_source_id={second} {second_target}"),
+            "Sync selected Sources mismatch",
+        ),
+        (
+            format!("{batch} target_count=target_count+1 WHERE job_id=?1"),
+            format!("{batch} target_count=target_count-1 WHERE job_id=?1"),
+            "Sync target count mismatch",
+        ),
+    ] {
+        tamper(&sync, &change, &job_id);
+        assert_eq!(refuse_bind(&sync, &lease, &target), expected);
+        tamper(&sync, &restore, &job_id);
+        assert_eq!(sync.snapshot(), sealed);
+    }
+
+    tamper(
+        &sync,
+        "UPDATE source_sync_batches SET phase='reconciliation_required' WHERE job_id=?1",
+        &job_id,
+    );
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync batch is not open"
+    );
+    tamper(
+        &sync,
+        "UPDATE source_sync_batches SET phase='open' WHERE job_id=?1",
+        &job_id,
+    );
+    assert_eq!(sync.snapshot(), sealed);
+
+    target.key.ordinal = 2;
+    assert_eq!(
+        refuse_bind(&sync, &lease, &target),
+        "Sync target is outside the sealed basis"
+    );
+    target.key.ordinal = 0;
+    let busy = sync.begin_work(first).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap()
+            .source_id,
+        first
+    );
+    assert_eq!(sync.snapshot(), sealed);
+}
+
+fn source_row(sync: &Fixture, id: i64) -> (i64, Option<String>, Option<i64>) {
+    sync.connection()
+        .query_row(
+            "SELECT source_configuration_version,local_path,current_source_revision_id FROM projects WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+}
+
+fn refuse_unchanged(
+    sync: &Fixture,
+    lease: &AttemptLease,
+    target: &SyncTargetLease,
+    source_id: i64,
+) -> String {
+    let rows = sync.snapshot();
+    let source = source_row(sync, source_id);
+    let error = refuse_bind(sync, lease, target);
+    assert_eq!(sync.snapshot(), rows);
+    assert_eq!(source_row(sync, source_id), source);
+    error
+}
+
+#[test]
+fn sync_candidate_content_requires_matching_revision() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let bound = BoundSyncTarget {
+        key: SyncTargetKey {
+            job_id: job_id.clone(),
+            ordinal: 0,
+        },
+        source_id: first,
+        claim_generation: 1,
+    };
+    let sealed = sync.snapshot();
+    assert_eq!(source_row(&sync, first).2, None);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    assert_eq!(sync.snapshot(), sealed);
+
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness) SELECT tenant_id,id,'candidate-revision','digest','snap','2026-10-21T00:00:00Z','complete' FROM projects WHERE id=?1",
+                [first],
+            )
+            .unwrap(),
+        1
+    );
+    tamper(
+        &sync,
+        "UPDATE projects SET current_source_revision_id=(SELECT id FROM source_revisions WHERE project_id=?1 AND upstream_revision_key='candidate-revision') WHERE id=?1",
+        &first.to_string(),
+    );
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync revision identity mismatch"
+    );
+    tamper(
+        &sync,
+        "UPDATE projects SET current_source_revision_id=NULL WHERE id=?1",
+        &first.to_string(),
+    );
+    assert_eq!(sync.snapshot(), sealed);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+
+    let result = jobs::SourceScanResult {
+        project_id: Some(other as u64),
+        stl_count: 0,
+        downloaded: 0,
+        doc_count: 0,
+        docs_downloaded: 0,
+        pdf_extract_job_id: None,
+        postprocess_warning: None,
+    };
+    let result_json = serde_json::to_string(&result).unwrap();
+    let result_digest = digest(result_json.as_bytes());
+    let receipt_id = format!("local-scan-{}", "a".repeat(32));
+    let receipt_hash = "b".repeat(64);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET result_json=?2 WHERE job_id=?1 AND ordinal=0",
+                (&job_id, &result_json),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync result capture incomplete"
+    );
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET result_digest=?2,receipt_id=?3,receipt_hash=?4,receipt_target=?5 WHERE job_id=?1 AND ordinal=0",
+                (
+                    &job_id,
+                    &result_digest,
+                    &receipt_id,
+                    &receipt_hash,
+                    format!("source:{other}"),
+                ),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync result Source mismatch"
+    );
+    tamper(
+        &sync,
+        "UPDATE source_sync_targets SET result_json=NULL,result_digest=NULL,receipt_id=NULL,receipt_hash=NULL,receipt_target=NULL WHERE job_id=?1 AND ordinal=0",
+        &job_id,
+    );
+    assert_eq!(sync.snapshot(), sealed);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+}
+
+#[test]
+fn sync_candidate_rejects_changed_configuration_or_observation() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let job_id = sync.enqueue(Some(vec![first as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let sealed = sync.snapshot();
+    let (version, path, _) = source_row(&sync, first);
+    let bound = BoundSyncTarget {
+        key: SyncTargetKey {
+            job_id: job_id.clone(),
+            ordinal: 0,
+        },
+        source_id: first,
+        claim_generation: 1,
+    };
+    let set_version = |next: i64| {
+        assert_eq!(
+            sync.connection()
+                .execute(
+                    "UPDATE projects SET source_configuration_version=?2 WHERE id=?1",
+                    (first, next),
+                )
+                .unwrap(),
+            1
+        );
+    };
+    let set_path = |next: Option<&str>| {
+        assert_eq!(
+            sync.connection()
+                .execute(
+                    "UPDATE projects SET local_path=?2 WHERE id=?1",
+                    (first, next)
+                )
+                .unwrap(),
+            1
+        );
+    };
+    set_version(version + 1);
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync Source configuration mismatch"
+    );
+    set_version(version);
+    assert_eq!(sync.snapshot(), sealed);
+    set_path(Some("moved"));
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync Source observation mismatch"
+    );
+    set_path(path.as_deref());
+    assert_eq!(sync.snapshot(), sealed);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    assert_eq!(sync.snapshot(), sealed);
+}
+
+fn settlement(source_id: i64) -> SyncSettlement {
+    SyncSettlement {
+        result: jobs::SourceScanResult {
+            project_id: Some(u64::try_from(source_id).unwrap()),
+            stl_count: 2,
+            downloaded: 1,
+            doc_count: 3,
+            docs_downloaded: 0,
+            pdf_extract_job_id: None,
+            postprocess_warning: None,
+        },
+        receipt: jobs::ResultArtifact {
+            receipt_id: format!("local-scan-{}", "ab".repeat(16)),
+            content_hash: "cd".repeat(32),
+            target: format!("source:{source_id}"),
+        },
+    }
+}
+
+fn stored_success(
+    sync: &Fixture,
+    job_id: &str,
+) -> (
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+) {
+    sync.connection()
+        .query_row(
+            "SELECT state,claim_generation,result_json,result_digest,receipt_id,receipt_hash,receipt_target,reservation_acknowledged,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [job_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
+fn refuse_settle(
+    sync: &Fixture,
+    lease: &AttemptLease,
+    target: &mut SyncTargetLease,
+    settlement: SyncSettlement,
+    source_id: i64,
+) -> String {
+    let rows = sync.snapshot();
+    let source = source_row(sync, source_id);
+    let error = sync
+        .worker
+        .settle_source_sync_target(lease, target, settlement)
+        .unwrap_err();
+    assert_eq!(sync.snapshot(), rows);
+    assert_eq!(source_row(sync, source_id), source);
+    let busy = sync.begin_work(source_id).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    error.to_string()
+}
+
+#[test]
+fn sync_settle_persists_one_result() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let token = target.source_work.proof().unwrap().token;
+    let mut other_lease = sync.begin_work(other).unwrap();
+    let before = sync.snapshot();
+    let source = source_row(&sync, first);
+    let busy = sync.begin_work(first).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    let settlement = settlement(first);
+    let settled = sync
+        .worker
+        .settle_source_sync_target(&lease, &mut target, settlement.clone())
+        .unwrap();
+    let result_json = serde_json::to_string(&settlement.result).unwrap();
+    assert_eq!(
+        settled,
+        SettledSyncTarget {
+            key: SyncTargetKey {
+                job_id: job_id.clone(),
+                ordinal: 0,
+            },
+            source_id: first,
+            result: settlement.result.clone(),
+            receipt: settlement.receipt.clone(),
+        }
+    );
+    assert_eq!(
+        stored_success(&sync, &job_id),
+        (
+            "succeeded".into(),
+            1,
+            result_json.clone(),
+            digest(result_json.as_bytes()),
+            settlement.receipt.receipt_id,
+            settlement.receipt.content_hash,
+            settlement.receipt.target,
+            1,
+            format!("{token:016x}"),
+        )
+    );
+    let after = sync.snapshot();
+    assert_eq!(after[0], before[0]);
+    assert_eq!(after[1][1], before[1][1]);
+    assert_eq!(after[2], before[2]);
+    assert_eq!(after[3], before[3]);
+    assert_eq!(source_row(&sync, first), source);
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![
+            (first, "succeeded".into(), None),
+            (second, "pending".into(), None),
+        ]
+    );
+    let still_held = sync.begin_work(other).err().unwrap();
+    assert!(
+        still_held.downcast_ref::<SourceBusy>().is_some(),
+        "{still_held:#}"
+    );
+    other_lease.release().unwrap();
+    sync.begin_work(first).unwrap().release().unwrap();
+    assert_eq!(local(sync.next(&mut lease)).key().ordinal, 1);
+}
+
+#[test]
+fn sync_stale_settlement_preserves_target() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let settlement = settlement(first);
+    let stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    let before = sync.snapshot();
+    assert_eq!(
+        refuse_settle(&sync, &stale, &mut target, settlement.clone(), first),
+        "Stale attempt fence"
+    );
+    let held = std::mem::replace(&mut target.source_work, sync.begin_work(other).unwrap());
+    assert_eq!(
+        refuse_settle(&sync, &lease, &mut target, settlement.clone(), first),
+        "Sync target reservation mismatch"
+    );
+    std::mem::replace(&mut target.source_work, held)
+        .release()
+        .unwrap();
+    let mut unnamed = settlement.clone();
+    unnamed.result.project_id = None;
+    assert_eq!(
+        refuse_settle(&sync, &lease, &mut target, unnamed, first),
+        "Sync result Source mismatch"
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(sync.targets(&job_id), vec![(first, "claimed".into(), None)]);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap()
+            .source_id,
+        first
+    );
+    assert_eq!(sync.snapshot(), before);
+}
+
+fn metadata(sync: &Fixture, id: i64) -> Option<String> {
+    sync.connection()
+        .query_row(
+            "SELECT metadata_json FROM projects WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn refuse_fail(
+    sync: &Fixture,
+    lease: &mut AttemptLease,
+    target: &SyncTargetLease,
+    source_id: i64,
+    detail: &str,
+) -> String {
+    let rows = sync.snapshot();
+    let source = metadata(sync, source_id);
+    let error = sync
+        .worker
+        .fail_source_sync_target(lease, target, detail)
+        .unwrap_err();
+    assert_eq!(sync.snapshot(), rows);
+    assert_eq!(metadata(sync, source_id), source);
+    let busy = sync.begin_work(source_id).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    error.to_string()
+}
+
+fn retained_failure(sync: &Fixture, lease: &mut AttemptLease) -> SourceSyncFailure {
+    let NextSyncTarget::RetainedFailure(failure) = sync.next(lease) else {
+        panic!("retained failure expected")
+    };
+    failure
+}
+
+#[test]
+fn sync_target_failure_records_source_observation() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE projects SET metadata_json=?1 WHERE id=?2",
+                (r#"{"keep":7}"#, first),
+            )
+            .unwrap(),
+        1
+    );
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let version = lease.version();
+    let capture: (String, String, String) = sync.connection().query_row(
+        "SELECT activation_observation_digest,path_observation_digest,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        refuse_fail(&sync, &mut lease, &target, first, ""),
+        "Invalid Local Sync failure"
+    );
+    assert_eq!(
+        refuse_fail(&sync, &mut lease, &target, first, &"x".repeat(1025)),
+        "Invalid Local Sync failure"
+    );
+    let source = source_row(&sync, first);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE projects SET local_path='moved' WHERE id=?1",
+                [first]
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_fail(&sync, &mut lease, &target, first, "disk read failed"),
+        "Sync Source observation mismatch"
+    );
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE projects SET local_path=?2 WHERE id=?1",
+                (first, source.1.clone()),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(source_row(&sync, first), source);
+    assert_eq!(metadata(&sync, first).as_deref(), Some(r#"{"keep":7}"#));
+    assert_eq!(lease.version(), version);
+    assert!(sync.job(&job_id).progress.is_none());
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    assert_eq!(
+        failed,
+        FailedSyncTarget {
+            key: SyncTargetKey {
+                job_id: job_id.clone(),
+                ordinal: 0
+            },
+            failure: SourceSyncFailure {
+                project_id: Some(first as u64),
+                name: Some("First".into()),
+                error: "disk read failed".into(),
+            },
+            progress: 0,
+            version: version + 1,
+        }
+    );
+    assert_eq!(
+        metadata(&sync, first).as_deref(),
+        Some(r#"{"keep":7,"sync_error":"disk read failed","sync_required":true}"#)
+    );
+    let still: (String, String, String) = sync.connection().query_row(
+        "SELECT activation_observation_digest,path_observation_digest,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(still, capture);
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![
+            (first, "failed".into(), Some("local_read".into())),
+            (second, "pending".into(), None),
+        ]
+    );
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    assert_eq!(lease.version(), version + 1);
+}
+
+#[test]
+fn sync_failure_does_not_replace_settled_result() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut first_target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut first_target, settlement(first))
+        .unwrap();
+    let stored = stored_success(&sync, &job_id);
+    let first_metadata = metadata(&sync, first);
+    assert!(sync.job(&job_id).progress.is_none());
+    let second_target = local(sync.next(&mut lease));
+    let mut planted = settlement(second);
+    planted.receipt.receipt_id = format!("local-scan-{}", "ef".repeat(16));
+    let result_json = serde_json::to_string(&planted.result).unwrap();
+    let result_digest = digest(result_json.as_bytes());
+    assert_eq!(
+        sync.connection().execute(
+            "UPDATE source_sync_targets SET result_json=?2,result_digest=?3,receipt_id=?4,receipt_hash=?5,receipt_target=?6 WHERE job_id=?1 AND ordinal=1",
+            (&job_id, &result_json, &result_digest, &planted.receipt.receipt_id, &planted.receipt.content_hash, &planted.receipt.target),
+        ).unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_fail(
+            &sync,
+            &mut lease,
+            &second_target,
+            second,
+            "disk read failed"
+        ),
+        "Sync target already stores a result"
+    );
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(metadata(&sync, second), None);
+    let planted_row: (String, String, String) = sync.connection().query_row(
+        "SELECT result_json,receipt_target,state FROM source_sync_targets WHERE job_id=?1 AND ordinal=1",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        planted_row,
+        (
+            result_json,
+            planted.receipt.target.clone(),
+            "claimed".into()
+        )
+    );
+    assert_eq!(
+        sync.connection().execute(
+            "UPDATE source_sync_targets SET result_json=NULL,result_digest=NULL,receipt_id=NULL,receipt_hash=NULL,receipt_target=NULL WHERE job_id=?1 AND ordinal=1",
+            [&job_id],
+        ).unwrap(),
+        1
+    );
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &second_target, "disk read failed")
+        .unwrap();
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(metadata(&sync, first), first_metadata);
+    assert_eq!(
+        metadata(&sync, second).as_deref(),
+        Some(r#"{"sync_error":"disk read failed","sync_required":true}"#)
+    );
+    assert_eq!(
+        (failed.progress, sync.job(&job_id).progress),
+        (50, Some(50))
+    );
+    assert_eq!(failed.failure.project_id, Some(second as u64));
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![
+            (first, "succeeded".into(), None),
+            (second, "failed".into(), Some("local_read".into())),
+        ]
+    );
+    let acknowledged: (i64, Option<String>) = sync.connection().query_row(
+        "SELECT reservation_acknowledged,result_json FROM source_sync_targets WHERE job_id=?1 AND ordinal=1",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(acknowledged, (0, None));
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    sync.begin_work(first).unwrap().release().unwrap();
+    let busy = sync.begin_work(second).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+}
+
+fn refuse_acknowledge(
+    sync: &Fixture,
+    lease: &mut AttemptLease,
+    target: &SyncTargetLease,
+    observation: &LocalScanObservation,
+    source_id: i64,
+) -> String {
+    let rows = sync.snapshot();
+    let version = lease.version();
+    let error = sync
+        .worker
+        .acknowledge_source_sync_target(lease, target, observation)
+        .unwrap_err();
+    assert_eq!(lease.version(), version);
+    assert_eq!(sync.snapshot(), rows);
+    let busy = sync.begin_work(source_id).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    error.to_string()
+}
+
+fn retained_row(
+    sync: &Fixture,
+    job_id: &str,
+    ordinal: i64,
+) -> (String, String, i64, Option<String>) {
+    sync.connection()
+        .query_row(
+            "SELECT failure_code,failure_detail,reservation_acknowledged,result_json FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2",
+            (job_id, ordinal),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn sync_acknowledgement_requires_matching_observation() {
+    let sync = Fixture::new();
+    let id = sync.source("Retained");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    let observation = target.observation().clone();
+    let hold = retained_row(&sync, &job_id, 0);
+    assert_eq!(
+        hold,
+        ("local_read".into(), "disk read failed".into(), 0, None)
+    );
+    let mut wrong_path = observation.clone();
+    wrong_path.path_observation_digest = "ab".repeat(32);
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &wrong_path, id),
+        "Sync acknowledgement observation mismatch"
+    );
+    let mut wrong_version = observation.clone();
+    wrong_version.configuration_version += 1;
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &wrong_version, id),
+        "Sync acknowledgement observation mismatch"
+    );
+    let generation = target.claim_generation;
+    target.claim_generation = generation + 1;
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &observation, id),
+        "Sync target claim generation mismatch"
+    );
+    target.claim_generation = generation;
+    let held = std::mem::replace(&mut target.source_work, sync.begin_work(other).unwrap());
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &observation, id),
+        "Sync target acknowledgement mismatch"
+    );
+    std::mem::replace(&mut target.source_work, held)
+        .release()
+        .unwrap();
+    let mut stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut stale, &target, &observation, id),
+        "Stale attempt fence"
+    );
+    assert_eq!(
+        sync.connection()
+            .execute("UPDATE projects SET local_path='moved' WHERE id=?1", [id])
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_acknowledge(&sync, &mut lease, &target, &wrong_path, id),
+        "Sync acknowledgement observation mismatch"
+    );
+    assert_eq!(retained_row(&sync, &job_id, 0), hold);
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    assert_eq!(
+        metadata(&sync, id).as_deref(),
+        Some(r#"{"sync_error":"disk read failed","sync_required":true}"#)
+    );
+    let version_before = lease.version();
+    let acknowledged = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &target, &observation)
+        .unwrap();
+    assert_eq!(
+        acknowledged,
+        AcknowledgedSyncTarget {
+            key: SyncTargetKey {
+                job_id: job_id.clone(),
+                ordinal: 0,
+            },
+            failure: failed.failure,
+            progress: 100,
+            version: version_before + 1,
+        }
+    );
+    assert_eq!(
+        retained_row(&sync, &job_id, 0),
+        ("local_read".into(), "disk read failed".into(), 1, None)
+    );
+    assert_eq!(sync.job(&job_id).progress, Some(100));
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(source_row(&sync, id).1.as_deref(), Some("moved"));
+    assert!(matches!(sync.next(&mut lease), NextSyncTarget::Complete));
+    sync.begin_work(id).unwrap().release().unwrap();
+}
+
+#[test]
+fn sync_acknowledgement_replay_preserves_result() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut first_target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut first_target, settlement(first))
+        .unwrap();
+    let stored = stored_success(&sync, &job_id);
+    let second_target = local(sync.next(&mut lease));
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &second_target, "disk read failed")
+        .unwrap();
+    assert_eq!(failed.progress, 50);
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    let observation = second_target.observation().clone();
+    let acknowledged = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &second_target, &observation)
+        .unwrap();
+    assert_eq!(acknowledged.failure, failed.failure);
+    assert_eq!(acknowledged.progress, 100);
+    assert_eq!(acknowledged.key.ordinal, 1);
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(
+        retained_row(&sync, &job_id, 1),
+        ("local_read".into(), "disk read failed".into(), 1, None)
+    );
+    let after = sync.snapshot();
+    let mut wrong = observation.clone();
+    wrong.path_observation_digest = "cd".repeat(32);
+    let version = lease.version();
+    let error = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &second_target, &wrong)
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Sync acknowledgement observation mismatch"
+    );
+    assert_eq!(lease.version(), version);
+    assert_eq!(sync.snapshot(), after);
+    let again = sync
+        .worker
+        .acknowledge_source_sync_target(&mut lease, &second_target, &observation)
+        .unwrap();
+    assert_eq!(again, acknowledged);
+    assert_eq!(lease.version(), version);
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(sync.job(&job_id).progress, Some(100));
+    assert!(matches!(sync.next(&mut lease), NextSyncTarget::Complete));
+    sync.begin_work(first).unwrap().release().unwrap();
+    sync.begin_work(second).unwrap().release().unwrap();
 }

@@ -35,12 +35,29 @@ type RouteDeps = {
   jobs: InProcessJobRunner;
 };
 
-function storedBambuAdmissionProblem(repo: AppRepository, items: PrinterSendQueueItem[]) {
+const QUEUE_HOSTS = new Set(["moonraker", "prusalink"]);
+
+function deniedFeature(access: { kind: "disabled" | "invalid"; error: string; code: "FEATURE_DISABLED" | "FEATURE_TOGGLES_INVALID" }) {
+  const disabled = access.kind === "disabled";
+  return {
+    status: disabled ? 403 : 500,
+    title: disabled ? "Forbidden" : "Internal Server Error",
+    detail: access.error,
+    code: access.code,
+  };
+}
+
+function storedQueueAdmissionProblem(repo: AppRepository, items: PrinterSendQueueItem[]) {
   if (!desktopFeaturesEnabled()) return null;
   const fleet = loadFleet(repo);
   for (const item of items) {
     const integrationId = fleet.find((printer) => printer.id === item.printer_id)?.integration_id?.trim();
-    if (!integrationId || getIntegrationConfig(repo, integrationId)?.type !== "bambu") continue;
+    const type = integrationId ? getIntegrationConfig(repo, integrationId)?.type : undefined;
+    if (type != null && QUEUE_HOSTS.has(type)) {
+      const farm = readFeatureAccess(() => repo, "farm", item.profile_id);
+      if (farm.kind !== "allowed") return deniedFeature(farm);
+    }
+    if (type !== "bambu") continue;
     if (item.profile_id == null) {
       return { status: 400, title: "Bad Request", detail: "Pick a plan to bind this send (profile_id required)" };
     }
@@ -48,13 +65,7 @@ function storedBambuAdmissionProblem(repo: AppRepository, items: PrinterSendQueu
       return { status: 404, title: "Not Found", detail: "Profile not found" };
     }
     const access = readFeatureAccess(() => repo, "bambu", item.profile_id);
-    if (access.kind !== "allowed") {
-      return {
-        status: access.kind === "disabled" ? 403 : 500,
-        title: access.kind === "disabled" ? "Forbidden" : "Internal Server Error",
-        detail: access.error, code: access.code,
-      };
-    }
+    if (access.kind !== "allowed") return deniedFeature(access);
   }
   return null;
 }
@@ -213,13 +224,18 @@ export async function registerPrinterSendQueueRoutes(
             });
           }
         }
-        if (integration.type !== "moonraker" && integration.type !== "prusalink") {
+        if (!QUEUE_HOSTS.has(integration.type)) {
           return sendProblem(
             reply,
             400,
             "Bad Request",
             `Queue is not supported for ${integration.type}`,
           );
+        }
+        const farm = readFeatureAccess(() => deps.repo, "farm", profileId);
+        if (farm.kind !== "allowed") {
+          const problem = deniedFeature(farm);
+          return reply.status(problem.status).send(problem);
         }
 
         const item = enqueuePrinterSend(deps.repo, {
@@ -254,11 +270,11 @@ export async function registerPrinterSendQueueRoutes(
       const body = (request.body ?? {}) as { force?: boolean };
       if (!id) return sendProblem(reply, 400, "Bad Request", "id is required");
       const item = getPrinterSendQueueItem(deps.repo, id);
-      const problem = storedBambuAdmissionProblem(deps.repo, item ? [item] : []);
+      const problem = storedQueueAdmissionProblem(deps.repo, item ? [item] : []);
       if (problem) return reply.status(problem.status).send(problem);
       await reconcileLiveSends(request.tenantId);
       const currentItem = getPrinterSendQueueItem(deps.repo, id);
-      const currentProblem = storedBambuAdmissionProblem(deps.repo, currentItem ? [currentItem] : []);
+      const currentProblem = storedQueueAdmissionProblem(deps.repo, currentItem ? [currentItem] : []);
       if (currentProblem) return reply.status(currentProblem.status).send(currentProblem);
       const result = await dispatchPrinterSendQueueItem(
         deps.repo,
@@ -307,10 +323,10 @@ export async function registerPrinterSendQueueRoutes(
       }
       const printerId =
         typeof rawPrinterId === "string" ? rawPrinterId.trim() : undefined;
-      const problem = storedBambuAdmissionProblem(deps.repo, selectPrinterSendQueueDrainItems(deps.repo, printerId));
+      const problem = storedQueueAdmissionProblem(deps.repo, selectPrinterSendQueueDrainItems(deps.repo, printerId));
       if (problem) return reply.status(problem.status).send(problem);
       await reconcileLiveSends(request.tenantId);
-      const currentProblem = storedBambuAdmissionProblem(deps.repo, selectPrinterSendQueueDrainItems(deps.repo, printerId));
+      const currentProblem = storedQueueAdmissionProblem(deps.repo, selectPrinterSendQueueDrainItems(deps.repo, printerId));
       if (currentProblem) return reply.status(currentProblem.status).send(currentProblem);
       const results = await drainPrinterSendQueue(
         deps.repo,

@@ -230,6 +230,14 @@ pub enum Outcome {
     SourceSyncOpened,
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncTarget(crate::source_sync::NextSyncTarget, i64),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncBound(crate::source_sync::BoundSyncTarget),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncSettled(crate::source_sync::SettledSyncTarget),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncFailed(crate::source_sync::FailedSyncTarget),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncAcknowledged(crate::source_sync::AcknowledgedSyncTarget),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -257,6 +265,10 @@ enum TransactionDecision {
     LocalScanReconciled(crate::source_scan::PendingLocalReconciliation),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncReserved(crate::source_sync::ReservedTarget, SettingsClient),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncSettled(crate::source_sync::SettledSyncRelease),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncAcknowledged(crate::source_sync::AcknowledgedSyncRelease),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
@@ -380,6 +392,29 @@ pub(crate) enum Command {
         lease: AttemptLease,
         policy: AuthPolicy,
         storage: SettingsClient,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    BindSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    SettleSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
+        settlement: crate::source_sync::SyncSettlement,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    FailSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
+        detail: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    AcknowledgeSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
+        observation: crate::source_scan::LocalScanObservation,
     },
     Retain {
         per_tenant: usize,
@@ -1037,6 +1072,116 @@ impl ServerWorkerClient {
             _ => unreachable!(),
         }
     }
+
+    /// Checks a claimed target against its stored claim before the worker
+    /// trusts it. A refusal changes nothing.
+    pub fn bind_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        target: &crate::source_sync::SyncTargetLease,
+    ) -> Result<crate::source_sync::BoundSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::BindSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncBound(target) => Ok(target),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Stores one successful target result and releases that target's Source
+    /// reservation. A stale attempt, or a Source proof that is not the claim's
+    /// live reservation, is refused and writes nothing.
+    pub fn settle_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        target: &mut crate::source_sync::SyncTargetLease,
+        settlement: crate::source_sync::SyncSettlement,
+    ) -> Result<crate::source_sync::SettledSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let settled = match submit(
+            &self.storage,
+            Command::SettleSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+                settlement,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncSettled(settled) => settled,
+            _ => unreachable!(),
+        };
+        target.source_work.consume_retired()?;
+        Ok(settled)
+    }
+
+    /// Records one claimed target's local read failure and the Source failure
+    /// observation. The reservation stays held. A refusal writes nothing.
+    pub fn fail_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+        target: &crate::source_sync::SyncTargetLease,
+        detail: &str,
+    ) -> Result<crate::source_sync::FailedSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let failed = match submit(
+            &self.storage,
+            Command::FailSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+                detail: detail.to_owned(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncFailed(failed) => failed,
+            _ => unreachable!(),
+        };
+        lease.version = failed.version;
+        Ok(failed)
+    }
+
+    /// Acknowledges one retained local-read failure when `observation` matches
+    /// the claim. Exact replay returns that failure and writes nothing. A
+    /// refusal writes nothing. The live token is retired after commit.
+    pub fn acknowledge_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+        target: &crate::source_sync::SyncTargetLease,
+        observation: &crate::source_scan::LocalScanObservation,
+    ) -> Result<crate::source_sync::AcknowledgedSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let acknowledged = match submit(
+            &self.storage,
+            Command::AcknowledgeSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+                observation: observation.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncAcknowledged(acknowledged) => acknowledged,
+            _ => unreachable!(),
+        };
+        lease.version = acknowledged.version;
+        Ok(acknowledged)
+    }
 }
 
 fn random() -> String {
@@ -1329,6 +1474,46 @@ fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
     }
     Ok(())
 }
+fn recover_attempt(tx: &Transaction<'_>, mut job: JobRecord) -> Result<()> {
+    let owner_cleanup = job.awaits_owner_cleanup();
+    let detail = if job.effects.iter().any(|effect| !effect.confirmed) {
+        job.state = PersistentState::ReconciliationRequired;
+        Some("Inspect effect receipts and reconcile explicitly")
+    } else if !job.effects.is_empty() {
+        job.state = PersistentState::ReconciliationRequired;
+        Some("Resume from confirmed receipts requires handler reconciliation")
+    } else if job.cancel_requested && !owner_cleanup {
+        job.state = PersistentState::Cancelled;
+        None
+    } else if job.attempt >= 100 && !owner_cleanup {
+        job.state = PersistentState::Failed;
+        Some("Attempt limit reached")
+    } else {
+        job.state = PersistentState::Queued;
+        None
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    if job.kind == JobKind::Sync {
+        let halt = if job.state == PersistentState::Cancelled {
+            Some(("cancelled", "Sync was cancelled"))
+        } else {
+            detail.map(|detail| ("fatal", detail))
+        };
+        if let Some((code, detail)) = halt {
+            crate::source_sync::halt_job(tx, job, code, detail)?;
+            return Ok(());
+        }
+    }
+    job.generation += 1;
+    job.fence = None;
+    job.worker = None;
+    job.lease_until = None;
+    if let Some(detail) = detail {
+        job.recovery = Some(detail.into());
+    }
+    save(tx, &mut job, "attempt_recovered")
+}
+
 fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
     let mut diagnostics = DocumentDiagnostics::default();
     let rows=tx.prepare("SELECT id,lease_until,state FROM durable_jobs WHERE state IN ('running','effect_admitted') OR (?1 AND state!='quarantined')")?.query_map([all],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1338,7 +1523,7 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
             [&id],
             |row| row.get(0),
         )?;
-        let Some(mut job) = decode_row(&id, &document, &mut diagnostics) else {
+        let Some(job) = decode_row(&id, &document, &mut diagnostics) else {
             quarantine(tx, &id)?;
             continue;
         };
@@ -1348,28 +1533,7 @@ fn recover_in(tx: &Transaction<'_>, all: bool) -> Result<()> {
         if !all && !lease_until.is_some_and(|until| until <= now()) {
             continue;
         }
-        // A cancelled import goes back to its owner, as `Cancel` does.
-        let owner_cleanup = job.awaits_owner_cleanup();
-        job.generation += 1;
-        job.fence = None;
-        job.worker = None;
-        job.lease_until = None;
-        if job.effects.iter().any(|effect| !effect.confirmed) {
-            job.state = PersistentState::ReconciliationRequired;
-            job.recovery = Some("Inspect effect receipts and reconcile explicitly".into());
-        } else if !job.effects.is_empty() {
-            job.state = PersistentState::ReconciliationRequired;
-            job.recovery =
-                Some("Resume from confirmed receipts requires handler reconciliation".into());
-        } else if job.cancel_requested && !owner_cleanup {
-            job.state = PersistentState::Cancelled;
-        } else if job.attempt >= 100 && !owner_cleanup {
-            job.state = PersistentState::Failed;
-            job.recovery = Some("Attempt limit reached".into());
-        } else {
-            job.state = PersistentState::Queued;
-        }
-        if let Err(error) = save(tx, &mut job, "attempt_recovered") {
+        if let Err(error) = recover_attempt(tx, job) {
             if !matches!(
                 error.downcast_ref::<JobFailure>(),
                 Some(JobFailure::JobDocTooLarge { .. })
@@ -1578,6 +1742,51 @@ pub(crate) fn execute(
                 TransactionDecision::Outcome(Outcome::SourceSyncTarget(target, version))
             }
         },
+        #[cfg(feature = "desktop_rebuild")]
+        Command::BindSourceSyncTarget { lease, candidate } => {
+            TransactionDecision::Outcome(Outcome::SourceSyncBound(crate::source_sync::bind(
+                &tx,
+                catalog_state,
+                &lease,
+                &candidate,
+            )?))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::SettleSourceSyncTarget {
+            lease,
+            candidate,
+            settlement,
+        } => TransactionDecision::SourceSyncSettled(crate::source_sync::settle(
+            &tx,
+            catalog_state,
+            &lease,
+            candidate,
+            settlement,
+        )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::FailSourceSyncTarget {
+            lease,
+            candidate,
+            detail,
+        } => TransactionDecision::Outcome(Outcome::SourceSyncFailed(crate::source_sync::fail(
+            &tx,
+            catalog_state,
+            &lease,
+            candidate,
+            &detail,
+        )?)),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::AcknowledgeSourceSyncTarget {
+            lease,
+            candidate,
+            observation,
+        } => TransactionDecision::SourceSyncAcknowledged(crate::source_sync::acknowledge(
+            &tx,
+            catalog_state,
+            &lease,
+            candidate,
+            &observation,
+        )?),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -1669,6 +1878,16 @@ pub(crate) fn execute(
         TransactionDecision::SourceSyncReserved(target, storage) => {
             let (target, version) = target.activate(catalog_state, storage)?;
             Ok(Outcome::SourceSyncTarget(target, version))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::SourceSyncSettled(pending) => {
+            catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+            Ok(Outcome::SourceSyncSettled(pending.settled))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::SourceSyncAcknowledged(pending) => {
+            catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+            Ok(Outcome::SourceSyncAcknowledged(pending.acknowledged))
         }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Observation {
@@ -2299,6 +2518,8 @@ fn claim(
                 if let Some(reason) = refusal {
                     if filter.job_id.is_some() {
                         crate::uploads::record_targeted_authority_refusal(tx, &job)?;
+                    } else if job.kind == JobKind::SuppliedSourceImport {
+                        crate::uploads::record_recovered_authority_refusal(tx, &job)?;
                     }
                     let phase = if filter.job_id.is_some() {
                         AuthorityRefusalPhase::TargetedClaim
@@ -3943,5 +4164,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(not(feature = "desktop_rebuild"))]
+    #[test]
+    fn sync_settle_is_absent_without_desktop_rebuild() {
+        let root =
+            std::env::temp_dir().join(format!("pp-sync-settle-off-{}", rand::random::<u64>()));
+        let (owner, ready) = crate::WriterOwner::open(&root, crate::Limits::default()).unwrap();
+        assert_eq!(ready.version, 35);
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let tables: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name LIKE 'source_sync_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        owner.shutdown().unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 }

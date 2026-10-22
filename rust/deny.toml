@@ -78,7 +78,7 @@ exceptions = [
     { crate = "pp-storage", allow = ["AGPL-3.0-only"] },
     # Mozilla CA data used by lettre's TLS trust roots. Section 2.1 requires the
     # agreement with shared data; its full text ships in THIRD_PARTY_NOTICES.md.
-    { crate = "webpki-roots@1.0.9", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "webpki-roots@1.0.10", allow = ["CDLA-Permissive-2.0"] },
 ]
 
 [bans]

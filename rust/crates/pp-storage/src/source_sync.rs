@@ -1,7 +1,12 @@
 use crate::{
     SettingsClient,
-    catalog::{SourceBinding, SourceBusy, SourceWorkLease, State},
-    jobs::{AttemptLease, JobKind, JobRecord, Payload, PersistentState, SourceSyncFailure},
+    catalog::{
+        IssuedTokenState, SourceBinding, SourceBusy, SourceWorkLease, SourceWorkProof, State,
+    },
+    jobs::{
+        AttemptLease, JobKind, JobRecord, Payload, PersistentState, ResultArtifact,
+        SourceScanResult, SourceSyncFailure,
+    },
     source_scan::LocalScanObservation,
 };
 use anyhow::{Result, anyhow, ensure};
@@ -19,10 +24,8 @@ pub struct SyncTargetKey {
 /// is released or dropped.
 pub struct SyncTargetLease {
     pub(crate) key: SyncTargetKey,
-    #[cfg_attr(not(test), expect(dead_code, reason = "D18 (b) settles with this"))]
     pub(crate) source_work: SourceWorkLease,
     pub(crate) observation: LocalScanObservation,
-    #[cfg_attr(not(test), expect(dead_code, reason = "D18 (b) settles with this"))]
     pub(crate) claim_generation: i64,
 }
 
@@ -34,12 +37,89 @@ impl SyncTargetLease {
     pub fn observation(&self) -> &LocalScanObservation {
         &self.observation
     }
+
+    pub(crate) fn candidate(&self) -> Result<SyncCandidate> {
+        Ok(SyncCandidate {
+            key: self.key.clone(),
+            claim_generation: self.claim_generation,
+            proof: self.source_work.proof()?,
+        })
+    }
+}
+
+/// What a worker presents for binding: the target it claimed, the claim
+/// generation it saw and the reservation it holds.
+pub(crate) struct SyncCandidate {
+    key: SyncTargetKey,
+    claim_generation: i64,
+    proof: SourceWorkProof,
+}
+
+/// A claimed target whose held reservation, attempt, sealed basis and recorded
+/// content still match. Binding checks that content and writes nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundSyncTarget {
+    pub(crate) key: SyncTargetKey,
+    pub(crate) source_id: i64,
+    pub(crate) claim_generation: i64,
+}
+
+/// The successful result a worker stores for one claimed target.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SyncSettlement {
+    pub result: SourceScanResult,
+    pub receipt: ResultArtifact,
+}
+
+/// One target whose successful result is stored and whose reservation the
+/// writer has retired.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SettledSyncTarget {
+    pub(crate) key: SyncTargetKey,
+    pub(crate) source_id: i64,
+    pub(crate) result: SourceScanResult,
+    pub(crate) receipt: ResultArtifact,
+}
+
+pub(crate) struct SettledSyncRelease {
+    pub(crate) settled: SettledSyncTarget,
+    pub(crate) proof: SourceWorkProof,
+    pub(crate) binding: SourceBinding,
+}
+
+/// One claimed target whose local read failure is stored. The reservation is
+/// still held, so the failure does not count as completed progress.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FailedSyncTarget {
+    pub(crate) key: SyncTargetKey,
+    pub(crate) failure: SourceSyncFailure,
+    pub(crate) progress: u8,
+    pub(crate) version: i64,
+}
+
+/// One retained failure whose reservation is acknowledged. The stored failure
+/// is unchanged. An exact replay returns this same value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AcknowledgedSyncTarget {
+    pub(crate) key: SyncTargetKey,
+    pub(crate) failure: SourceSyncFailure,
+    pub(crate) progress: u8,
+    pub(crate) version: i64,
+}
+
+pub(crate) struct AcknowledgedSyncRelease {
+    pub(crate) acknowledged: AcknowledgedSyncTarget,
+    pub(crate) proof: SourceWorkProof,
+    pub(crate) binding: SourceBinding,
 }
 
 pub enum NextSyncTarget {
     Local(SyncTargetLease),
     /// The target failed before any reservation and needs no settlement.
     OrdinaryFailure(SourceSyncFailure),
+    /// A local read failure whose reservation is still held. It is not a
+    /// completed failure, and the following target stays pending.
+    RetainedFailure(SourceSyncFailure),
     Halted,
     Complete,
 }
@@ -91,6 +171,21 @@ fn digest(bytes: impl AsRef<[u8]>) -> String {
 fn token_text(token: u64) -> Result<String> {
     ensure!(token != 0, "Invalid Source reservation token");
     Ok(format!("{token:016x}"))
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_receipt_id(value: &str) -> bool {
+    value.len() == 43
+        && value.starts_with("local-scan-")
+        && value[11..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn basis_digest(tenant: &str, selection_kind: &str, source_ids: &[i64]) -> Result<String> {
@@ -169,6 +264,139 @@ fn validate_basis(tx: &Transaction<'_>, job: &JobRecord) -> Result<Vec<i64>> {
         "Sync target basis mismatch"
     );
     Ok(source_ids)
+}
+
+/// Checks one bound candidate against the sealed basis and its recorded content.
+fn validate_target(tx: &Transaction<'_>, job: &JobRecord, bound: &BoundSyncTarget) -> Result<()> {
+    let source_ids = validate_basis(tx, job)?;
+    validate_target_in_basis(tx, job, bound, &source_ids)
+}
+
+/// Checks revision identity, Source configuration, observation and result
+/// provenance for a candidate already placed in the sealed basis.
+fn validate_target_in_basis(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    bound: &BoundSyncTarget,
+    source_ids: &[i64],
+) -> Result<()> {
+    ensure!(bound.key.job_id == job.job_id, "Sync target Job mismatch");
+    let source_id = *source_ids
+        .get(usize::try_from(bound.key.ordinal)?)
+        .ok_or_else(|| anyhow!("Sync target is outside the sealed basis"))?;
+    ensure!(source_id == bound.source_id, "Sync target Source mismatch");
+    let (
+        claim_generation,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_observation_digest,
+        path_observation_digest,
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+    ) = tx.query_row(
+        "SELECT claim_generation,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest,result_json,result_digest,receipt_id,receipt_hash,receipt_target FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2 AND state='claimed'",
+        params![bound.key.job_id, bound.key.ordinal],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+            ))
+        },
+    )?;
+    ensure!(
+        claim_generation == bound.claim_generation,
+        "Sync target claim generation mismatch"
+    );
+    let observation =
+        crate::source_scan::project_observation(tx, &job.tenant, source_id, &authority_actor)?;
+    ensure!(
+        observation.configuration_version == configuration_version,
+        "Sync Source configuration mismatch"
+    );
+    ensure!(
+        observation.authority_actor == authority_actor
+            && observation.authority_basis_digest == authority_basis_digest
+            && observation.path_observation_digest == path_observation_digest,
+        "Sync Source observation mismatch"
+    );
+    ensure!(
+        observation.activation_observation_digest == activation_observation_digest,
+        "Sync revision identity mismatch"
+    );
+    validate_result_provenance(
+        source_id,
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+    )
+}
+
+fn validate_result_provenance(
+    source_id: i64,
+    result_json: Option<String>,
+    result_digest: Option<String>,
+    receipt_id: Option<String>,
+    receipt_hash: Option<String>,
+    receipt_target: Option<String>,
+) -> Result<()> {
+    if result_json.is_none()
+        && result_digest.is_none()
+        && receipt_id.is_none()
+        && receipt_hash.is_none()
+        && receipt_target.is_none()
+    {
+        return Ok(());
+    }
+    let (
+        Some(result_json),
+        Some(result_digest),
+        Some(receipt_id),
+        Some(receipt_hash),
+        Some(receipt_target),
+    ) = (
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+    )
+    else {
+        return Err(anyhow!("Sync result capture incomplete"));
+    };
+    ensure!(valid_digest(&result_digest), "Invalid Sync result digest");
+    ensure!(valid_digest(&receipt_hash), "Invalid Sync receipt digest");
+    ensure!(valid_receipt_id(&receipt_id), "Invalid Local receipt ID");
+    let result: SourceScanResult = serde_json::from_str(&result_json)?;
+    let canonical = serde_json::to_string(&result)?;
+    ensure!(result_json == canonical, "Sync result is not canonical");
+    ensure!(
+        digest(canonical.as_bytes()) == result_digest,
+        "Sync result digest mismatch"
+    );
+    ensure!(
+        result.project_id == u64::try_from(source_id).ok(),
+        "Sync result Source mismatch"
+    );
+    ensure!(
+        receipt_target == format!("source:{source_id}"),
+        "Sync receipt Source mismatch"
+    );
+    Ok(())
 }
 
 /// Seals the batch's targets on first open. A later attempt revalidates the
@@ -381,16 +609,34 @@ pub(crate) fn next(
         )
         .optional()?;
     ensure!(phase.as_deref() == Some("open"), "Sync batch is not open");
-    let row: Option<(i64, i64, String, i64)> = tx
+    let row: Option<(i64, i64, String, i64, i64)> = tx
         .query_row(
-            "SELECT ordinal,requested_source_id,state,claim_generation FROM source_sync_targets WHERE job_id=?1 AND NOT (state IN ('succeeded','failed') AND reservation_acknowledged=1) ORDER BY ordinal LIMIT 1",
+            "SELECT ordinal,requested_source_id,state,claim_generation,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND NOT (state IN ('succeeded','failed') AND reservation_acknowledged=1) ORDER BY ordinal LIMIT 1",
             [&job.job_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((ordinal, source_id, target_state, claim_generation)) = row else {
+    let Some((ordinal, source_id, target_state, claim_generation, acknowledged)) = row else {
         return Ok(Next::Done(NextSyncTarget::Complete, job.state_version));
     };
+    if target_state == "failed" && acknowledged == 0 {
+        let key = SyncTargetKey {
+            job_id: job.job_id,
+            ordinal: u32::try_from(ordinal)?,
+        };
+        return Ok(Next::Done(
+            NextSyncTarget::RetainedFailure(failure(tx, &key)?),
+            job.state_version,
+        ));
+    }
     ensure!(
         target_state == "pending",
         "Prior Sync target is not pending"
@@ -423,7 +669,15 @@ pub(crate) fn next(
         }
         Some((name, _)) => name,
     };
-    ensure!(!state.source_busy(&job.tenant, source_id), SourceBusy);
+    let durably_held: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_sync_targets WHERE tenant=?1 AND requested_source_id=?2 AND (state='claimed' OR (state IN ('succeeded','failed') AND reservation_acknowledged=0)))",
+        params![job.tenant, source_id],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        !durably_held && !state.source_busy(&job.tenant, source_id),
+        SourceBusy
+    );
     let token = state.next_token()?;
     let observation =
         crate::source_scan::project_observation(tx, &job.tenant, source_id, authority.subject())?;
@@ -461,6 +715,346 @@ pub(crate) fn next(
         },
         version: job.state_version,
     }))
+}
+
+/// Binds a candidate to its stored claim, then checks its content against the
+/// recorded basis. The attempt must be live, the batch open and its sealed
+/// basis intact, the target claimed by this attempt at the candidate's
+/// generation, and the held token the one recorded and still live for the
+/// target's Source. Content must keep the recorded Source configuration,
+/// observation and revision, and any result must carry that Source's
+/// provenance. Writes nothing.
+pub(crate) fn bind(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    candidate: &SyncCandidate,
+) -> Result<BoundSyncTarget> {
+    let job = require_sync_job(tx, lease)?;
+    let key = &candidate.key;
+    ensure!(key.job_id == job.job_id, "Sync target Job mismatch");
+    ensure!(!job.cancel_requested, "Sync was cancelled");
+    let phase: Option<String> = tx
+        .query_row(
+            "SELECT phase FROM source_sync_batches WHERE job_id=?1",
+            [&job.job_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    ensure!(phase.as_deref() == Some("open"), "Sync batch is not open");
+    let source_id = *validate_basis(tx, &job)?
+        .get(usize::try_from(key.ordinal)?)
+        .ok_or_else(|| anyhow!("Sync target is outside the sealed basis"))?;
+    type Claim = (
+        String,
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let (target_state, claim_generation, parent_generation, worker, fence, incarnation, token): Claim = tx.query_row(
+        "SELECT state,claim_generation,parent_generation,attempt_worker,attempt_fence_digest,reservation_incarnation,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2",
+        params![key.job_id, key.ordinal],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+    )?;
+    ensure!(target_state == "claimed", "Sync target is not claimed");
+    ensure!(
+        claim_generation == candidate.claim_generation,
+        "Sync target claim generation mismatch"
+    );
+    ensure!(
+        parent_generation == Some(job.generation)
+            && worker.as_deref() == Some(lease.worker())
+            && fence == Some(digest(lease.fence())),
+        "Sync target attempt mismatch"
+    );
+    let proof = &candidate.proof;
+    ensure!(
+        incarnation.as_deref() == Some(proof.incarnation.as_str())
+            && token == Some(token_text(proof.token)?),
+        "Sync target reservation mismatch"
+    );
+    crate::source_scan::require_live_reservation(
+        state,
+        proof,
+        &SourceBinding {
+            tenant: job.tenant.clone(),
+            id: source_id,
+        },
+    )?;
+    let bound = BoundSyncTarget {
+        key: key.clone(),
+        source_id,
+        claim_generation,
+    };
+    validate_target(tx, &job, &bound)?;
+    Ok(bound)
+}
+
+/// Stores one successful result for a claimed target and marks that
+/// reservation released. The attempt and the held Source proof must still be
+/// the claim's. A refusal writes nothing. The Job row and the batch stay as
+/// they were; the live token is retired only after this write commits.
+pub(crate) fn settle(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    candidate: SyncCandidate,
+    settlement: SyncSettlement,
+) -> Result<SettledSyncRelease> {
+    let bound = bind(tx, state, lease, &candidate)?;
+    let SyncSettlement { result, receipt } = settlement;
+    let result_json = serde_json::to_string(&result)?;
+    let result_digest = digest(result_json.as_bytes());
+    validate_result_provenance(
+        bound.source_id,
+        Some(result_json.clone()),
+        Some(result_digest.clone()),
+        Some(receipt.receipt_id.clone()),
+        Some(receipt.content_hash.clone()),
+        Some(receipt.target.clone()),
+    )?;
+    ensure!(
+        tx.execute(
+            "UPDATE source_sync_targets SET state='succeeded',result_json=?3,result_digest=?4,receipt_id=?5,receipt_hash=?6,receipt_target=?7,reservation_acknowledged=1,updated_at=?8 WHERE job_id=?1 AND ordinal=?2 AND state='claimed' AND result_json IS NULL AND result_digest IS NULL AND receipt_id IS NULL AND receipt_hash IS NULL AND receipt_target IS NULL",
+            params![
+                bound.key.job_id,
+                bound.key.ordinal,
+                result_json,
+                result_digest,
+                receipt.receipt_id,
+                receipt.content_hash,
+                receipt.target,
+                now(),
+            ],
+        )? == 1,
+        "Sync target settlement changed"
+    );
+    let proof = candidate.proof;
+    let binding = SourceBinding {
+        tenant: lease.tenant().to_owned(),
+        id: bound.source_id,
+    };
+    Ok(SettledSyncRelease {
+        settled: SettledSyncTarget {
+            key: bound.key,
+            source_id: bound.source_id,
+            result,
+            receipt,
+        },
+        proof,
+        binding,
+    })
+}
+
+/// Records a local read failure for one claimed target and the Source failure
+/// observation. The reservation stays held and unacknowledged, so progress
+/// does not count this target. A refusal, including a target that already
+/// stores a successful result, writes nothing.
+pub(crate) fn fail(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    candidate: SyncCandidate,
+    detail: &str,
+) -> Result<FailedSyncTarget> {
+    ensure!(
+        !detail.is_empty() && detail.len() <= 1024,
+        "Invalid Local Sync failure"
+    );
+    let bound = bind(tx, state, lease, &candidate)?;
+    let stores_result: bool = tx.query_row(
+        "SELECT result_json IS NOT NULL OR result_digest IS NOT NULL OR receipt_id IS NOT NULL OR receipt_hash IS NOT NULL OR receipt_target IS NOT NULL FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2 AND state='claimed'",
+        params![bound.key.job_id, bound.key.ordinal],
+        |row| row.get(0),
+    )?;
+    ensure!(!stores_result, "Sync target already stores a result");
+    crate::source_scan::mark_local_failure(tx, lease.tenant(), bound.source_id, detail)?;
+    ensure!(
+        tx.execute(
+            "UPDATE source_sync_targets SET state='failed',failure_code='local_read',failure_detail=?3,updated_at=?4 WHERE job_id=?1 AND ordinal=?2 AND state='claimed' AND reservation_acknowledged=0 AND result_json IS NULL AND result_digest IS NULL AND receipt_id IS NULL AND receipt_hash IS NULL AND receipt_target IS NULL",
+            params![bound.key.job_id, bound.key.ordinal, detail, now()],
+        )? == 1,
+        "Sync target failure changed"
+    );
+    let failure = failure(tx, &bound.key)?;
+    let mut job = require_sync_job(tx, lease)?;
+    let recorded = progress(tx, &job.job_id)?;
+    job.progress = Some(recorded);
+    crate::jobs::save(tx, &mut job, "source_sync_progress")?;
+    Ok(FailedSyncTarget {
+        key: bound.key,
+        failure,
+        progress: recorded,
+        version: job.state_version,
+    })
+}
+
+/// Acknowledges one retained local-read failure when the presented observation
+/// is the claim's and this attempt still owns the target. The stored failure
+/// stays in place. Exact replay returns it and writes nothing. Any other
+/// refusal writes nothing. The caller retires the live token after commit.
+pub(crate) fn acknowledge(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    candidate: SyncCandidate,
+    observation: &LocalScanObservation,
+) -> Result<AcknowledgedSyncRelease> {
+    let SyncCandidate {
+        key,
+        claim_generation: presented_generation,
+        proof,
+    } = candidate;
+    let mut job = require_sync_job(tx, lease)?;
+    ensure!(key.job_id == job.job_id, "Sync target Job mismatch");
+    let phase: Option<String> = tx
+        .query_row(
+            "SELECT phase FROM source_sync_batches WHERE job_id=?1",
+            [&job.job_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    ensure!(phase.as_deref() == Some("open"), "Sync batch is not open");
+    let row = tx
+        .query_row(
+            "SELECT requested_source_id,state,claim_generation,parent_generation,attempt_worker,attempt_fence_digest,reservation_incarnation,reservation_token,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2",
+            params![key.job_id, key.ordinal],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, i64>(13)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("Sync target not found"))?;
+    let (
+        source_id,
+        target_state,
+        claim_generation,
+        parent_generation,
+        worker,
+        fence,
+        incarnation,
+        token,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_observation_digest,
+        path_observation_digest,
+        acknowledged,
+    ) = row;
+    ensure!(
+        target_state == "failed",
+        "Sync target is not retained evidence"
+    );
+    let (
+        Some(parent_generation),
+        Some(worker),
+        Some(fence),
+        Some(incarnation),
+        Some(token),
+        Some(configuration_version),
+        Some(authority_actor),
+        Some(authority_basis_digest),
+        Some(activation_observation_digest),
+        Some(path_observation_digest),
+    ) = (
+        parent_generation,
+        worker,
+        fence,
+        incarnation,
+        token,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_observation_digest,
+        path_observation_digest,
+    )
+    else {
+        return Err(anyhow!("Sync producer capture incomplete"));
+    };
+    ensure!(
+        claim_generation == presented_generation,
+        "Sync target claim generation mismatch"
+    );
+    ensure!(
+        parent_generation == job.generation
+            && worker == lease.worker()
+            && fence == digest(lease.fence()),
+        "Sync target attempt mismatch"
+    );
+    ensure!(
+        incarnation == proof.incarnation && token == token_text(proof.token)?,
+        "Sync target acknowledgement mismatch"
+    );
+    ensure!(
+        observation.source_id() == source_id
+            && observation.configuration_version == configuration_version
+            && observation.authority_actor == authority_actor
+            && observation.authority_basis_digest == authority_basis_digest
+            && observation.activation_observation_digest == activation_observation_digest
+            && observation.path_observation_digest == path_observation_digest,
+        "Sync acknowledgement observation mismatch"
+    );
+    let binding = SourceBinding {
+        tenant: job.tenant.clone(),
+        id: source_id,
+    };
+    let live = match state.classify_issued(&proof.incarnation, proof.token) {
+        IssuedTokenState::Active(actual) if actual == &binding => true,
+        IssuedTokenState::Retired => false,
+        IssuedTokenState::Active(_)
+        | IssuedTokenState::NeverIssued
+        | IssuedTokenState::WrongIncarnation => {
+            return Err(anyhow!("Sync target acknowledgement mismatch"));
+        }
+    };
+    ensure!(
+        acknowledged == 1 || live,
+        "Sync target acknowledgement mismatch"
+    );
+    let failure = failure(tx, &key)?;
+    let (recorded, version) = if acknowledged == 0 {
+        ensure!(
+            tx.execute(
+                "UPDATE source_sync_targets SET reservation_acknowledged=1,updated_at=?3 WHERE job_id=?1 AND ordinal=?2 AND state='failed' AND reservation_acknowledged=0",
+                params![key.job_id, key.ordinal, now()],
+            )? == 1,
+            "Sync target acknowledgement changed"
+        );
+        let recorded = progress(tx, &job.job_id)?;
+        job.progress = Some(recorded);
+        crate::jobs::save(tx, &mut job, "source_sync_acknowledged")?;
+        (recorded, job.state_version)
+    } else {
+        (progress(tx, &job.job_id)?, job.state_version)
+    };
+    Ok(AcknowledgedSyncRelease {
+        acknowledged: AcknowledgedSyncTarget {
+            key,
+            failure,
+            progress: recorded,
+            version,
+        },
+        proof,
+        binding,
+    })
 }
 
 fn ordinary_failure(tx: &Transaction<'_>, mut job: JobRecord, key: &SyncTargetKey) -> Result<Next> {

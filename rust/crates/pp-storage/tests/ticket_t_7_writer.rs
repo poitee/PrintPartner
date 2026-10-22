@@ -560,6 +560,34 @@ fn ticket_t_7_writer_busy_timeout_survives_a_delayed_reply_collector() {
     assert_busy_timeout_and_killed_transaction_rollback(Duration::from_millis(10_200));
 }
 
+fn assert_write_lock_released(dir: &Path, bound: Duration) {
+    let connection = rusqlite::Connection::open(dir.join("print-partner.db")).unwrap();
+    connection.busy_timeout(Duration::ZERO).unwrap();
+    let started = std::time::Instant::now();
+    let released = loop {
+        match connection.execute_batch("BEGIN IMMEDIATE") {
+            Ok(()) => break started.elapsed(),
+            Err(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::DatabaseBusy =>
+            {
+                let waited = started.elapsed();
+                assert!(
+                    waited < bound,
+                    "killed transaction kept the write lock for {waited:?}"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("{error:#}"),
+        }
+    };
+    connection.execute_batch("ROLLBACK").unwrap();
+    assert!(
+        released < bound,
+        "killed transaction kept the write lock for {released:?}"
+    );
+    eprintln!("killed transaction released the write lock after {released:?}");
+}
+
 fn assert_busy_timeout_and_killed_transaction_rollback(collect_after: Duration) {
     let dir = temp_dir("contend-kill");
     let (owner, _) = WriterOwner::open(&dir, Limits::default()).unwrap();
@@ -594,17 +622,14 @@ fn assert_busy_timeout_and_killed_transaction_rollback(collect_after: Duration) 
 
     assert_eq!(read_setting(&owner, "rust-write"), SettingSnapshot::Missing);
 
-    let started = std::time::Instant::now();
+    // The 2s bar is lock release. The later submit's synchronous=FULL commit
+    // stays inside the caller's 5s wait and is not part of this measurement.
+    assert_write_lock_released(&dir, Duration::from_secs(2));
     assert!(
         submit(&owner, transfer_setting("rust-write", "after-kill"))
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
             .unwrap()
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "killed transaction kept the write lock for {:?}",
-        started.elapsed()
     );
     assert_eq!(
         read_setting(&owner, "transfer-debit"),

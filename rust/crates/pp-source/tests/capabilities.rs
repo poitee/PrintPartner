@@ -57,6 +57,52 @@ fn budget() -> ArtifactBudget {
 }
 
 #[test]
+fn configured_repository_roots_reject_non_normalized_spellings() {
+    let fixture = Fixture::new();
+    for spelling in [
+        format!("{}/./repos", fixture.0.display()),
+        format!("{}//repos", fixture.0.display()),
+        format!("{}/repos/", fixture.0.display()),
+        format!("{}/repos/.", fixture.0.display()),
+        format!("/{}/repos", fixture.0.display()),
+        format!("{}/missing/./repos", fixture.0.display()),
+    ] {
+        let result = TenantRepos::open("tenant-fixture".into(), std::path::Path::new(&spelling));
+        assert!(
+            matches!(result, Err(pp_source::Error::UnsafePath)),
+            "configured root must reject {spelling:?} as unsafe-path"
+        );
+    }
+}
+
+#[test]
+fn configured_repository_roots_accept_normalized_utf8_and_filesystem_root() {
+    TenantRepos::open("tenant-fixture".into(), std::path::Path::new("/")).unwrap();
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    for name in ["repos", "répos"] {
+        let root = fixture.0.join(name);
+        if name != "repos" {
+            fs::create_dir(&root).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
+        let mut source = repos.source(42).unwrap();
+        assert_eq!(
+            source
+                .materialize(request(), &input, budget())
+                .unwrap()
+                .publication,
+            Publication::Created
+        );
+        assert_eq!(
+            fs::read(root.join("42/revisions/caller-uuid/part.stl")).unwrap(),
+            b"solid bytes"
+        );
+    }
+}
+
+#[test]
 fn searchable_ancestor_without_read_access_allows_publication_and_reuse() {
     let fixture = Fixture::new();
     struct RestorePermissions<'a>(&'a std::path::Path, fs::Permissions);
@@ -321,9 +367,11 @@ fn published_paths_stop_one_byte_short_of_path_max() {
         4096
     };
     let fixture = Fixture::new();
+    let root = fixture.0.join("répos");
+    fs::rename(fixture.0.join("repos"), &root).unwrap();
     // Revision keys "fits" and "fits2" give the same file stored paths one
     // byte apart.
-    let prefix = fixture.0.join("repos/42/revisions/fits/");
+    let prefix = root.join("42/revisions/fits/");
     let mut label = String::new();
     while path_max - 1 - prefix.as_os_str().len() - label.len() > 250 {
         label.push_str(&"d".repeat(99));
@@ -338,7 +386,8 @@ fn published_paths_stop_one_byte_short_of_path_max() {
     let mut req = request();
     req.files[0].path = SourcePath::try_from(label.clone()).unwrap();
     let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
-    let mut source = fixture.repos().source(42).unwrap();
+    let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
+    let mut source = repos.source(42).unwrap();
 
     req.upstream_revision_key = "fits2".into();
     let error = source
@@ -349,12 +398,13 @@ fn published_paths_stop_one_byte_short_of_path_max() {
         error.to_string(),
         format!(
             "stored-path-too-long: {label} would be stored at an absolute path of {} bytes; \
-             this system opens paths of at most {} bytes",
+             this system opens paths of at most {} bytes; \
+             use a shorter repository or folder path and retry the import",
             path_max,
             path_max - 1
         )
     );
-    let revisions = fixture.0.join("repos/42/revisions");
+    let revisions = root.join("42/revisions");
     assert!(!revisions.join("fits2").exists());
     assert!(!revisions.join(".pp-source-candidate").exists());
 
@@ -398,7 +448,8 @@ fn published_manifest_also_stops_one_byte_short_of_path_max() {
         error.to_string(),
         format!(
             "stored-path-too-long: {} would be stored at an absolute path of {path_max} \
-             bytes; this system opens paths of at most {} bytes",
+             bytes; this system opens paths of at most {} bytes; \
+             use a shorter repository or folder path and retry the import",
             pp_source::MANIFEST,
             path_max - 1
         )

@@ -433,15 +433,23 @@ mod inspected_merge_tests {
             });
             assert!(matches!(outcome, Err(ReadFailure::Cancelled)));
             assert_eq!(calls, expected[..=stop]);
+        }
 
+        // Each lookup checks cancellation in `visit` and again in `comparison`.
+        for checks in 0..=expected.len() * 2 {
             let cancelled = AtomicBool::new(false);
             let mut budget =
                 PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
-            budget.cancel_after_checks(stop * 2);
-            assert!(matches!(
-                merge(&mut target.clone(), incoming.clone(), &mut budget),
-                Err(ReadFailure::Cancelled)
-            ));
+            budget.cancel_after_checks(checks);
+            let outcome = merge(&mut target.clone(), incoming.clone(), &mut budget);
+            if checks < expected.len() * 2 {
+                assert!(
+                    matches!(outcome, Err(ReadFailure::Cancelled)),
+                    "cancel after {checks} checks: {outcome:?}"
+                );
+            } else {
+                outcome.unwrap();
+            }
         }
         result
     }

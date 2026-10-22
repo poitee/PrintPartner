@@ -294,10 +294,6 @@ fn mark_source_synced(
     Ok(())
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "GRE-614 (D18 source_sync) calls this")
-)]
 pub(crate) fn mark_local_failure(
     tx: &Transaction<'_>,
     tenant: &str,

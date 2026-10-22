@@ -3,7 +3,12 @@
 //! one call and has no journal, attempts or Source observations, so these cases
 //! port the reference `source_import_operation.rs` storage assertions.
 //! Fail and Cleanup retries adopt only a matching last attempt observation,
-//! after Source proof and authority checks. Run these regressions with
+//! after Source proof and authority checks. A generic claim of a recovered
+//! import records one `authority_refused` Source observation and does not
+//! record another when the claim is retried. Two complete imports of one
+//! revision key share that revision and keep each import's attempt bindings.
+//! An existing revision that is not complete is refused without changing the
+//! revision or its attempt. Run these regressions with
 //! `cargo test -p pp-storage --features desktop_rebuild --test import_phases`.
 use pp_storage::{
     Limits, WriterOwner,
@@ -19,11 +24,11 @@ use pp_storage::{
         WorkerAdmission,
     },
     uploads::{
-        Admission, Artifact, File, ImportClient, Input, Operation, OwnedInput, Phase,
-        Postprocessing, State, Target,
+        Admission, Artifact, File, ImportClient, IncompleteRevisionKey, Input, Operation,
+        OwnedInput, Phase, Postprocessing, SourceAuthorityRevision, State, Target,
     },
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
@@ -333,6 +338,24 @@ impl Fixture {
             .collect::<rusqlite::Result<_>>()
             .unwrap()
     }
+
+    fn refusal_events(&self, op: &Operation) -> i64 {
+        self.connection()
+            .query_row(
+                "SELECT COUNT(*) FROM durable_job_history WHERE job_id=?1 AND event='authority_refused'",
+                [&op.job_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn preclaim_rows(&self) -> i64 {
+        self.connection()
+            .query_row("SELECT COUNT(*) FROM source_preclaim_refusals", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
 }
 
 type Observation = (
@@ -360,6 +383,43 @@ fn owned(op: &Operation) -> Phase {
         digest: op.requested_digest.clone(),
         files: op.requested_files.clone(),
     })
+}
+
+fn admit_files(
+    fixture: &Fixture,
+    credential: Credential,
+    key: &str,
+    target: Target,
+    files: Vec<File>,
+) -> Operation {
+    let paths = files.iter().map(|file| file.path.clone()).collect();
+    fixture
+        .imports
+        .admit(
+            credential,
+            Admission {
+                key: key.into(),
+                target,
+                input: Input::Files { paths },
+                reserved_bytes: RESERVED,
+                max_input_bytes: 268_435_456,
+                max_prepared_bytes: 1_073_741_824,
+            },
+            files,
+            0,
+            fixture.imports.accounting_epoch(),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+}
+
+fn activate_import(fixture: &Fixture, op: &Operation) -> Operation {
+    let claim = fixture.claim(op);
+    fixture.phase(&claim, owned(op)).unwrap();
+    fixture.phase(&claim, published(op)).unwrap();
+    let activated = fixture.phase(&claim, Phase::Activate).unwrap();
+    fixture.phase(&claim, Phase::Cleanup).unwrap();
+    activated
 }
 
 fn published(op: &Operation) -> Phase {
@@ -691,6 +751,287 @@ fn phases_carry_an_admitted_import_to_a_settled_activation() {
 }
 
 #[test]
+fn complete_imports_share_one_revision_and_keep_each_attempt() {
+    let fixture = Fixture::open();
+    let first = admit_files(
+        &fixture,
+        fixture.physical(),
+        "first-complete",
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: "shared-revision".into(),
+                source_kind: Some("local".into()),
+                source_type: Some("local".into()),
+                ..Default::default()
+            }),
+        },
+        vec![file("part.stl", "input", 'a')],
+    );
+    let activated = activate_import(&fixture, &first);
+    let revision_id = activated.receipt.unwrap().revision_id;
+    let revision_before = revision_evidence(&fixture, revision_id);
+    fixture
+        .connection()
+        .execute(
+            "UPDATE projects SET source_configuration_version=source_configuration_version+1 WHERE id=?1",
+            [first.source_id],
+        )
+        .unwrap();
+    let second = admit_files(
+        &fixture,
+        fixture.physical(),
+        "second-complete",
+        Target::Existing {
+            source_id: first.source_id,
+        },
+        vec![file("other.stl", "input", 'b')],
+    );
+    let again = activate_import(&fixture, &second);
+    let receipt = again.receipt.unwrap();
+    assert_eq!(receipt.revision_id, revision_id);
+    assert_eq!(revision_evidence(&fixture, revision_id), revision_before);
+    let first_binding = first.authority_revision.unwrap();
+    let second_binding = second.authority_revision.unwrap();
+    assert_ne!(
+        (
+            first_binding.source_configuration_version,
+            first_binding.activation_observation_digest.clone(),
+            first_binding.input_digest.clone(),
+        ),
+        (
+            second_binding.source_configuration_version,
+            second_binding.activation_observation_digest.clone(),
+            second_binding.input_digest.clone(),
+        )
+    );
+    assert_eq!(
+        attempt_binding(&fixture, &first.key),
+        binding_of(revision_id, &first_binding)
+    );
+    assert_eq!(
+        attempt_binding(&fixture, &second.key),
+        binding_of(revision_id, &second_binding)
+    );
+    assert_eq!(
+        revision_binding(&fixture, revision_id),
+        binding_of(revision_id, &first_binding)
+    );
+    let artifacts: i64 = fixture
+        .connection()
+        .query_row(
+            "SELECT COUNT(*) FROM source_revision_artifacts WHERE revision_id=?1",
+            [revision_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(artifacts, 2);
+}
+
+#[test]
+fn an_incomplete_revision_key_is_refused_without_replacing_evidence() {
+    let fixture = Fixture::open();
+    let host = fixture.admit(fixture.physical(), "incomplete-host");
+    let upstream = "c".repeat(64);
+    seed_incomplete(&fixture, &host, &upstream);
+    let revision_before = revision_evidence_for_key(&fixture, host.source_id, &upstream);
+    let attempt_before = attempt_evidence(&fixture, "seeded-incomplete");
+    let op = admit_files(
+        &fixture,
+        fixture.physical(),
+        "incomplete-reuse",
+        Target::Existing {
+            source_id: host.source_id,
+        },
+        vec![file("part.stl", "input", 'a')],
+    );
+    let claim = fixture.claim(&op);
+    fixture.phase(&claim, owned(&op)).unwrap();
+    fixture.phase(&claim, published(&op)).unwrap();
+    let before = fixture.snapshot();
+    let error = fixture.phase(&claim, Phase::Activate).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<IncompleteRevisionKey>(),
+        Some(&IncompleteRevisionKey),
+        "{error:#}"
+    );
+    assert_eq!(error.to_string(), "Incomplete revision key");
+    assert_eq!(fixture.snapshot(), before);
+    assert_eq!(
+        revision_evidence_for_key(&fixture, host.source_id, &upstream),
+        revision_before
+    );
+    assert_eq!(
+        attempt_evidence(&fixture, "seeded-incomplete"),
+        attempt_before
+    );
+    assert_eq!(
+        fixture.phase(&claim, Phase::Read).unwrap().state,
+        State::Published
+    );
+}
+
+#[test]
+fn a_complete_revision_with_different_content_keeps_its_evidence() {
+    let fixture = Fixture::open();
+    let host = fixture.admit(fixture.physical(), "mismatch-host");
+    let upstream = "c".repeat(64);
+    seed_complete_conflict(&fixture, &host, &upstream);
+    let revision_before = revision_evidence_for_key(&fixture, host.source_id, &upstream);
+    let attempt_before = attempt_evidence(&fixture, "seeded-complete");
+    let op = admit_files(
+        &fixture,
+        fixture.physical(),
+        "mismatch-reuse",
+        Target::Existing {
+            source_id: host.source_id,
+        },
+        vec![file("part.stl", "input", 'a')],
+    );
+    let claim = fixture.claim(&op);
+    fixture.phase(&claim, owned(&op)).unwrap();
+    fixture.phase(&claim, published(&op)).unwrap();
+    let before = fixture.snapshot();
+    let error = fixture.phase(&claim, Phase::Activate).unwrap_err();
+    assert_eq!(error.to_string(), "Accepted revision identity mismatch");
+    assert!(error.downcast_ref::<IncompleteRevisionKey>().is_none());
+    assert_eq!(fixture.snapshot(), before);
+    assert_eq!(
+        revision_evidence_for_key(&fixture, host.source_id, &upstream),
+        revision_before
+    );
+    assert_eq!(
+        attempt_evidence(&fixture, "seeded-complete"),
+        attempt_before
+    );
+}
+
+fn binding_of(
+    revision_id: i64,
+    revision: &SourceAuthorityRevision,
+) -> (i64, i64, String, String, String) {
+    (
+        revision_id,
+        revision.source_configuration_version,
+        revision.activation_observation_digest.clone(),
+        revision.input_digest.clone(),
+        revision.producer_version.clone(),
+    )
+}
+
+fn attempt_binding(fixture: &Fixture, key: &str) -> (i64, i64, String, String, String) {
+    fixture
+        .connection()
+        .query_row(
+            "SELECT revision_id,source_configuration_version,activation_observation_digest,input_digest,producer_version FROM source_revision_attempts WHERE operation_key=?1",
+            [key],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap()
+}
+
+fn revision_binding(fixture: &Fixture, id: i64) -> (i64, i64, String, String, String) {
+    fixture
+        .connection()
+        .query_row(
+            "SELECT id,source_configuration_version,activation_observation_digest,input_digest,producer_version FROM source_revisions WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap()
+}
+
+fn revision_evidence(fixture: &Fixture, id: i64) -> String {
+    fixture
+        .connection()
+        .query_row(
+            "SELECT completeness||':'||manifest_digest||':'||snapshot_locator||':'||synced_at||':'||source_configuration_version||':'||activation_observation_digest||':'||input_digest||':'||producer_version FROM source_revisions WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn revision_evidence_for_key(fixture: &Fixture, source_id: i64, key: &str) -> String {
+    fixture
+        .connection()
+        .query_row(
+            "SELECT id||':'||completeness||':'||manifest_digest||':'||snapshot_locator||':'||synced_at||':'||source_configuration_version||':'||activation_observation_digest||':'||input_digest||':'||producer_version FROM source_revisions WHERE project_id=?1 AND upstream_revision_key=?2",
+            params![source_id, key],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn attempt_evidence(fixture: &Fixture, key: &str) -> String {
+    fixture
+        .connection()
+        .query_row(
+            "SELECT revision_id||':'||source_configuration_version||':'||activation_observation_digest||':'||input_digest||':'||producer_version||':'||attempt_generation||':'||attempt_fence||':'||activated FROM source_revision_attempts WHERE operation_key=?1",
+            [key],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn seed_complete_conflict(fixture: &Fixture, host: &Operation, upstream: &str) {
+    seed_revision(fixture, host, upstream, "complete", "seeded-complete");
+}
+
+fn seed_incomplete(fixture: &Fixture, host: &Operation, upstream: &str) {
+    seed_revision(fixture, host, upstream, "partial", "seeded-incomplete");
+}
+
+fn seed_revision(
+    fixture: &Fixture,
+    host: &Operation,
+    upstream: &str,
+    completeness: &str,
+    operation_key: &str,
+) {
+    let connection = fixture.connection();
+    let tenant: String = connection
+        .query_row(
+            "SELECT tenant_id FROM projects WHERE id=?1",
+            [host.source_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA ignore_check_constraints=ON")
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,source_configuration_version,activation_observation_digest,input_digest,producer_version) VALUES(?1,?2,?3,?4,?5,'2026-01-01T00:00:00.000Z',?6,4,?7,?8,'seeded-producer')",
+            params![
+                tenant,
+                host.source_id,
+                upstream,
+                "a".repeat(64),
+                format!("{}/revisions/{upstream}", host.source_id),
+                completeness,
+                "b".repeat(64),
+                "c".repeat(64),
+            ],
+        )
+        .unwrap();
+    let revision_id = connection.last_insert_rowid();
+    connection
+        .execute(
+            "INSERT INTO source_revision_attempts(tenant_id,operation_key,job_id,source_id,revision_id,source_configuration_version,activation_observation_digest,input_digest,producer_version,attempt_generation,attempt_fence,activated,created_at) VALUES(?1,?2,?3,?4,?5,4,?6,?7,'seeded-producer',1,'seed-fence',0,'2026-01-01T00:00:00.000Z')",
+            params![
+                tenant,
+                operation_key,
+                "d".repeat(64),
+                host.source_id,
+                revision_id,
+                "b".repeat(64),
+                "c".repeat(64),
+            ],
+        )
+        .unwrap();
+}
+
+#[test]
 fn a_changed_source_conflicts_and_a_cancelled_import_settles_as_cancelled() {
     let fixture = Fixture::open();
     let op = fixture.admit(fixture.physical(), "conflict");
@@ -868,6 +1209,60 @@ fn a_targeted_refusal_after_an_attempt_records_its_prior_generation() {
         (3, "authority_refused".into(), 2, None, None, None, false)
     );
     fixture.reopen();
+}
+
+#[test]
+fn a_revoked_credential_on_generic_recovery_records_one_authority_refusal() {
+    let fixture = Fixture::open();
+    let token = fixture.register();
+    let op = fixture.admit(
+        Credential::Session(Secret::new(token.clone())),
+        "generic-recovery",
+    );
+    let lease = fixture.claim(&op);
+    fixture.phase(&lease, owned(&op)).unwrap();
+    let fixture = fixture.reopen();
+    let recovered: i64 = fixture
+        .connection()
+        .query_row(
+            "SELECT generation FROM durable_jobs WHERE id=?1",
+            [&op.job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    fixture.logout(&token);
+    assert!(fixture.worker.claim().unwrap().is_none());
+    assert_eq!(
+        fixture.job(&op),
+        ("failed".into(), Some("claim".into()), recovered + 1)
+    );
+    assert_eq!(fixture.refusal_events(&op), 1);
+    let refusal = (
+        2,
+        "authority_refused".into(),
+        recovered,
+        None,
+        None,
+        None,
+        false,
+    );
+    assert_eq!(fixture.observations(&op)[1], refusal);
+    assert_eq!(fixture.preclaim_rows(), 0);
+    assert!(fixture.worker.claim().unwrap().is_none());
+    assert!(
+        fixture
+            .worker
+            .claim_kind(JobKind::SuppliedSourceImport)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(fixture.refusal_events(&op), 1);
+    assert_eq!(fixture.observations(&op)[1], refusal);
+    assert_eq!(fixture.observations(&op).len(), 2);
+    let fixture = fixture.reopen();
+    assert_eq!(fixture.refusal_events(&op), 1);
+    assert_eq!(fixture.observations(&op)[1], refusal);
+    assert_eq!(fixture.observations(&op).len(), 2);
 }
 
 #[test]

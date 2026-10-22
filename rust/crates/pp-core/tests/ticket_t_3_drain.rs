@@ -291,7 +291,11 @@ mod scratch;
 
 #[test]
 fn scratch_root_is_empty_after_drain_tests() {
-    scratch::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_drain_tests"]);
+    scratch::assert_test_run_clean(&[
+        "--skip",
+        "scratch_root_is_empty_after_drain_tests",
+        "--test-threads=1",
+    ]);
 }
 
 #[tokio::test]

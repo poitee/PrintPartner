@@ -4,6 +4,9 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tauri::Url;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod native_actions;
+
 pub fn desktop_data_dir(
     explicit_data: Option<PathBuf>,
     home: impl FnOnce() -> Result<PathBuf>,
@@ -651,6 +654,7 @@ mod tests {
             },
         ] {
             for command in [
+                "open_sponsor",
                 "plugin:app|exit",
                 "plugin:window|close",
                 "plugin:webview|create_webview_window",
@@ -665,6 +669,12 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(feature = "desktop_rebuild")]
+    #[test]
+    fn ticket_t_68_sponsor_capability_has_only_the_bound_remote_action() {
+        crate::native_actions::verify_authority(generated_context());
     }
 
     #[test]

@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, isAbsolute, resolve, sep } from "node:path";
+import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { drizzle as drizzlePostgres } from "drizzle-orm/node-postgres";
@@ -21,6 +22,8 @@ import * as postgresSchema from "../db/schema-pg.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
 import { ISOLATED_SOURCE_FILESYSTEM } from "../services/source-filesystem-policy.js";
 import { digestEffectiveNaming } from "../services/plan-freshness.js";
+import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
+import { acceptPlanForTest } from "../test/accept-plan.js";
 import { createJobRunner } from "../services/job-runner.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { getLogger } from "../services/logger.js";
@@ -72,7 +75,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -246,7 +249,9 @@ it("traces all three pinned tools against independent unions and the admitted de
     .filter((entry) => TOOL_IDS.some((id) => entry.operation === `tool.${id}`));
   expect(reviewed.map((entry) => entry.operation).sort()).toEqual(TOOL_IDS.map((id) => `tool.${id}`).sort());
   for (const entry of reviewed) {
-    expect([...unions.get(entry.operation.slice(5)) ?? []].sort()).toEqual(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort());
+    const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`);
+    const trusted = entry.operation === "tool.read_source_file" ? declared : declared.filter((resource) => resource !== "file:source-workspace");
+    expect([...unions.get(entry.operation.slice(5)) ?? []].sort()).toEqual(trusted.sort());
   }
   sqlite.exec("DELETE FROM source_docs; DELETE FROM projects; DELETE FROM app_settings WHERE key = 'source_categories'");
   const empty = await invoke("list_source_categories", {}, TABLES);
@@ -874,7 +879,7 @@ function sourceCategoryProposal(type: CategoryTool, planId: number, label: strin
   };
 }
 
-async function traceCategory(tool: CategoryTool | SourceProposalTool, input: Record<string, unknown>, tables: string[], options: {
+async function traceCategory(tool: CategoryTool | SourceProposalTool | "list_sources" | "list_source_categories", input: Record<string, unknown>, tables: string[], options: {
   repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
 } = {}) {
   const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
@@ -914,6 +919,27 @@ async function assertCategoryDatabaseErrors(tool: CategoryTool, input: Record<st
       expect(await traceCategory(tool, input, completed.map((name) => `table:${name}`).sort(), { repository, files: completed.includes("source_docs") ? files : [] })).toEqual({ error: `no such table: ${table}` });
     } finally { sqlite.exec(`ALTER TABLE unavailable_table RENAME TO ${table}`); }
   }
+}
+
+async function assertCategoryDismissalControls(tool: CategoryTool, input: Record<string, unknown>, proposal: (planId: number) => unknown, repository: AppRepository, files: CategoryProbe[]) {
+  const elsewhere = repo.createProfile("Dismissed elsewhere");
+  const control = repo.createProfile("Dismissal controls");
+  const params = tool === "propose_set_source_category" ? { source_name: "Fixture" } : { path: "Printers" };
+  const otherType = tool === "propose_set_source_category" ? "propose_rename_source_category" : "propose_set_source_category";
+  repo.createPlanDecision({ planId: elsewhere.id, actor: "user", kind: "dismissed_action", actionType: tool, params });
+  repo.createPlanDecision({ planId: control.id, actor: "user", kind: "dismissed_action", actionType: otherType, params });
+  repo.createPlanDecision({ planId: control.id, actor: "assistant", kind: "applied_action", actionType: tool, params });
+  const foreign = tenantStorage.run("other", () => {
+    const plan = repo.createProfile("Foreign dismissal");
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params });
+    return plan;
+  });
+  expect(await traceCategory(tool, { ...input, plan_id: control.id }, CATEGORY_TABLES, { repository, files, activePlanId: elsewhere.id })).toEqual(proposal(control.id));
+  const active = ["table:app_settings", "table:plan_decisions", "table:projects", "table:source_docs"];
+  expect(await traceCategory(tool, input, active, { repository, files, activePlanId: control.id })).toEqual(proposal(control.id));
+  expect(await traceCategory(tool, input, active, { repository, files, activePlanId: foreign.id })).toEqual(proposal(foreign.id));
+  expect(await traceCategory(tool, { ...input, plan_id: elsewhere.id }, CATEGORY_TABLES, { repository, files })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: tool === "propose_set_source_category" ? `${tool}|source_name=Fixture` : `${tool}|`, action_type: tool });
+  expect(repo.listPlanDecisions(control.id).map((d) => d.kind).sort()).toEqual(["applied_action", "dismissed_action"]);
 }
 
 function categoryTraceFixture(isolated: boolean) {
@@ -969,6 +995,7 @@ for (const isolated of [false, true]) {
     }
     expect(await traceCategory(tool, { ...input, plan_id: "bad" }, [...settings, "table:plan_decisions", "table:projects", "table:source_docs"], { repository, files, activePlanId: plan.id })).toEqual(rename(plan.id));
     expect(await traceCategory(tool, { path: "Printers", new_name: "Machines", plan_id: plan.id }, ["table:app_settings", "table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Unknown category: Printers", categories: ["Printer kits", "Toolheads", "Probes & sensors", "Mods", "Hardware", "Other"] });
+    await assertCategoryDismissalControls(tool, input, rename, repository, files);
     repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { path: "Elsewhere", new_name: "Ignored" } });
     expect(await traceCategory(tool, { ...input, plan_id: plan.id }, CATEGORY_TABLES, { repository, files })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_rename_source_category|", action_type: tool });
     await assertCategoryDatabaseErrors(tool, { ...input, plan_id: plan.id }, repository, files);
@@ -1000,6 +1027,7 @@ for (const isolated of [false, true]) {
     expect(await traceCategory(tool, input, ["table:app_settings", "table:plan_decisions", "table:projects", "table:source_docs"], { repository, files, activePlanId: plan.id })).toEqual(deletion(plan.id));
     tenantStorage.run("other", () => repo.saveSourceCategories(["Printers", "Printers/Core", "Other"]));
     expect(await traceCategory(tool, { path: "Printers", plan_id: plan.id }, ["table:app_settings", "table:build_profiles", "table:projects", "table:source_docs"], { repository, tenantId: "other" })).toEqual(sourceCategoryProposal(tool, 0, "Delete category Printers", "Delete “Printers” and its subcategories; 0 Source(s) move to Uncategorised.", { path: "Printers" }, ["Other"]));
+    await assertCategoryDismissalControls(tool, input, deletion, repository, files);
     repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { path: "Tools" } });
     expect(await traceCategory(tool, { ...input, plan_id: plan.id }, CATEGORY_TABLES, { repository, files })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_delete_source_category|", action_type: tool });
     repo.saveSourceCategories(["Printers", "Printers/Core"]);
@@ -1042,6 +1070,7 @@ for (const isolated of [false, true]) {
     sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(foreignSource.id);
     expect(await traceCategory(tool, { source_id: foreignSource.id, category: "Tools" }, ["table:projects"], { repository })).toEqual({ error: "source_id or source_name required" });
     expect(await traceCategory(tool, { source_name: "Fixture", category: "Tools", plan_id: foreign.id }, CATEGORY_TABLES, { repository, tenantId: "other" })).toEqual(sourceCategoryProposal(tool, foreign.id, "File Fixture under Tools", "Move Library Source “Fixture” from Other to “Tools”. Organizational only.", { source_id: foreignSource.id, source_name: "Fixture", category: "Tools" }));
+    await assertCategoryDismissalControls(tool, { source_id: sourceId, category: "Tools" }, setting, repository, sourceFiles);
     repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { source_name: "Fixture", category: "Elsewhere" } });
     expect(await traceCategory(tool, { source_id: sourceId, category: "Tools", plan_id: plan.id }, CATEGORY_TABLES, { repository, files: sourceFiles })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_set_source_category|source_name=Fixture", action_type: tool });
     expect(await traceCategory(tool, { source_id: sourceId, plan_id: plan.id }, ["table:build_profiles", "table:plan_decisions", ...sources], { repository, files: sourceFiles })).toEqual({ error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: "propose_set_source_category|source_name=Fixture", action_type: tool });
@@ -1081,6 +1110,34 @@ it.each<CategoryTool>(["propose_rename_source_category", "propose_delete_source_
   expect(await traceCategory(tool, input, ["table:app_settings", "table:projects", "table:source_docs"], { repository, files: [...missing, ...(isSet ? [] : probe)] })).toEqual(output);
   fs.unlinkSync(workspace);
   fs.renameSync(`${workspace}-saved`, workspace);
+});
+
+it("traces list_sources and list_source_categories isolated root probes against their declarations", async () => {
+  const { repository, files, workspace, repos } = categoryTraceFixture(true);
+  const sources = ["table:projects", "table:source_docs"];
+  const names = (output: Record<string, unknown>) => z.array(z.object({ name: z.string() })).parse(output.sources).map(({ name }) => name);
+  expect(names(await traceCategory("list_sources", {}, sources, { repository, files }))).toEqual(["Fixture", "Unsynced", "UserLocal"]);
+  expect(names(await traceCategory("list_sources", { category: "printers" }, TABLES, { repository, files }))).toEqual(["Fixture"]);
+  expect(names(await traceCategory("list_sources", { category: "__uncategorized__" }, sources, { repository, files }))).toEqual(["Unsynced", "UserLocal"]);
+  expect(await traceCategory("list_sources", { category: "Missing" }, ["table:app_settings"], { repository })).toEqual({ error: 'Unknown library category: "Missing". Call list_source_categories, or create it with propose_create_source_category.', categories: CATEGORY_SAVED });
+  expect(names(await traceCategory("list_sources", {}, sources, { repository, tenantId: "other" }))).toEqual([]);
+  const categories = await traceCategory("list_source_categories", {}, TABLES, { repository, files });
+  expect(z.array(z.object({ path: z.string(), sources_including_subcategories: z.number() })).parse(categories.categories)).toEqual([
+    { path: "Printers", sources_including_subcategories: 1 }, { path: "Printers/Core", sources_including_subcategories: 1 }, { path: "Tools", sources_including_subcategories: 0 },
+  ]);
+  expect(categories.uncategorized_sources).toBe(2);
+  fs.renameSync(workspace, `${workspace}-saved`);
+  const missing: CategoryProbe[] = [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", repos]];
+  expect(names(await traceCategory("list_sources", {}, sources, { repository, files: missing }))).toEqual(["Fixture", "Unsynced", "UserLocal"]);
+  expect((await traceCategory("list_source_categories", {}, TABLES, { repository, files: missing })).uncategorized_sources).toBe(2);
+  fs.renameSync(`${workspace}-saved`, workspace);
+  for (const tool of ["list_sources", "list_source_categories"] as const) {
+    const declared = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+    if (!declared || declared.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect([...unions.get(tool) ?? []].sort()).toEqual(["file:source-workspace", ...TABLES]);
+    expect(declared.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...TABLES]);
+  }
+  expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
 });
 
 it("traces get_plan_decisions plan lookup, limits, fallback and tenant isolation against its declaration", async () => {
@@ -3320,4 +3377,399 @@ it.each(SOURCE_PROPOSAL_TOOLS)("traces %s isolated rejected workspace paths with
   fs.symlinkSync(userRoot, workspace, "dir");
   sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
   expect(await traceCategory(tool, { source_id: sourceId, ...input }, SOURCE_PROPOSAL_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual(sourceProposal(tool, params));
+});
+
+const IDLE_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revisions"].map((table) => `table:${table}`);
+const REFUSED_SNAPSHOT_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revisions", "projects", "source_revisions"].map((table) => `table:${table}`);
+type AcceptedPlanTool = "propose_set_plan_progress" | "propose_set_plan_assembly";
+const ACCEPTED_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revision_required_unit_sets", "plan_revision_required_units", "plan_revisions", "print_progress", "projects", "required_units", "source_revisions"].map((table) => `table:${table}`);
+
+function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = false): string[] {
+  const sql = z.string().parse(statement);
+  if (["BEGIN DEFERRED", "COMMIT", "ROLLBACK"].includes(sql)) return [];
+  if (sql.startsWith('select "id", "name", "order_number", "archived_at" from "build_profiles"')) return [tableForObservedSelect(sql, tenantId)];
+  const match = /^select (?:(?!\bfrom\b).)+ from "([a-z_]+)" where (?:(?!\bfrom\b|\bjoin\b).)+$/.exec(sql);
+  if (match?.[1] === "source_docs") {
+    if (!sourceDocs || !sql.includes(`"tenant_id" = '${tenantId}'`)) throw new Error(`Unsupported SQL: ${sql}`);
+    return ["table:source_docs"];
+  }
+  if (!match || !ACCEPTED_PLAN_TABLES.includes(`table:${match[1]}`)) throw new Error(`Unsupported SQL: ${sql}`);
+  return [`table:${match[1]}`];
+}
+
+type CheckoffReadTool = "get_plan_checkoff" | "get_remaining" | "get_printer_checkoff" | "propose_import_3mf_checkoff";
+
+async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printer_checkoff" | CheckoffReadTool, input: Record<string, unknown>, tables: string[], options: {
+  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number; sourceDocs?: boolean; scratch?: boolean;
+} = {}) {
+  const { repository = repo, files = [], tenantId = "default", activePlanId, sourceDocs = false, scratch = false } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId })); }
+  finally { observer.state.active = false; }
+  const settings = tool === "propose_verify_printer_checkoff" || tool === "get_printer_checkoff";
+  const observed = [...new Set(statements.flatMap((sql) => settings ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId, sourceDocs)))].sort();
+  expect(observed).toEqual(tables);
+  const observedFiles = observer.state.files.map(({ api, args }): CategoryProbe => [api, ...args]);
+  const union = unions.get(tool) ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  if (scratch) {
+    const reposRoot = join(dataDir, "repos");
+    const durable: CategoryProbe[] = [];
+    for (const probe of observedFiles) {
+      const path = probe[1];
+      if (typeof path === "string" && under(reposRoot, path)) durable.push(probe);
+      else if (typeof path === "number" || (typeof path === "string" && path.includes("pp-mcp-3mf-"))) continue;
+      else throw new Error(`Unclassified filesystem call ${probe[0]} ${String(path)}`);
+    }
+    expect(durable).toEqual(files);
+    const durableKeys = new Set(durable.map((probe) => JSON.stringify(probe)));
+    const temp = observedFiles.filter((probe) => !durableKeys.has(JSON.stringify(probe)));
+    expect(temp.some(([api]) => api === "mkdtempSync")).toBe(true);
+    expect(temp.some(([api]) => api === "rmSync")).toBe(true);
+    if (durable.length > 0) union.add("file:source-workspace");
+  } else {
+    expect(observedFiles).toEqual(files);
+    if (observedFiles.length > 0) {
+      expect(observedFiles.every(([, path]) => typeof path === "string" && under(join(dataDir, "repos"), path))).toBe(true);
+      union.add("file:source-workspace");
+    }
+  }
+  unions.set(tool, union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+function acceptedPlanFixture(isolated: boolean) {
+  const repos = join(dataDir, "repos");
+  const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  const source = repo.createSource({ name: "Accepted", source_kind: "local" });
+  const workspace = join(repos, String(source.id));
+  const snapshot = join(workspace, "revisions", "a");
+  fs.mkdirSync(snapshot, { recursive: true });
+  fs.writeFileSync(join(snapshot, "bracket_x2.stl"), "solid b\nendsolid b\n");
+  sqlite.prepare("UPDATE projects SET local_path = ?, last_synced_at = ? WHERE id = ?").run(workspace, "2026-01-01T00:00:00.000Z", source.id);
+  const revision = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${source.id}/revisions/a`, syncedAt: "2026-01-01T00:00:00.000Z", completeness: "complete" });
+  sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, source.id);
+  repo.updateImportRules(source.id, ["bracket_x2.stl"]);
+  const plan = repo.createProfile("Accepted plan", source.id);
+  expect(acceptPlanForTest(repo, plan.id).merged).toBe(true);
+  const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+  if (accepted.kind !== "ready") throw new Error(`Accepted fixture is ${accepted.kind}`);
+  const part = accepted.snapshot.parts[0]!;
+  expect(part.units.map(({ unitIndex }) => unitIndex)).toEqual([0, 1]);
+  const files: CategoryProbe[] = isolated ? [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", snapshot], ["statSync", snapshot]] : [];
+  return { repository, workspace, sourceId: source.id, plan, part, basis: acceptedPlanBasis(accepted.snapshot), files, idle: repo.createProfile("Not accepted"), foreign: tenantStorage.run("other", () => repo.createProfile("Foreign accepted")) };
+}
+
+function acceptedPlanProposal(type: AcceptedPlanTool | "propose_verify_printer_checkoff", planId: number, label: string, summary: string, params: Record<string, unknown>) {
+  return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.", action: { id: expect.any(String), type, plan_id: planId, label, summary, params } };
+}
+
+function assertAcceptedPlanDeclaration(tool: AcceptedPlanTool | "propose_verify_printer_checkoff" | CheckoffReadTool, observed: string[], expected = observed) {
+  expect([...unions.get(tool) ?? []].sort()).toEqual(observed);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+  if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(expected);
+}
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces propose_set_plan_progress plan selection, row validation and tenants under ${policy} policy`, async () => {
+    const { repository, plan, part, basis, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const options = { repository, files };
+    const rows = [{ part_id: part.projectionPartId, printed_count: 2 }];
+    const proposal = (planId: number, proposed = rows) => acceptedPlanProposal("propose_set_plan_progress", planId, "update Plan print progress", "Apply the reviewed printed-unit counts.", { plan_id: planId, rows: proposed, accepted_basis: basis });
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id, rows }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(proposal(plan.id));
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { rows }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(proposal(plan.id));
+    const coerced = [{ part_id: String(part.projectionPartId), printed_count: "0", ignored: true }];
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows: coerced }, ACCEPTED_PLAN_TABLES, options)).toEqual(proposal(plan.id, [{ part_id: part.projectionPartId, printed_count: 0 }]));
+    for (const plan_id of [undefined, null, "invalid"]) expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id, rows }, [], { repository })).toEqual({ error: "plan_id required" });
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id, rows }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: idle.id, rows }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Accepted Plan is not ready" });
+    for (const invalid of [undefined, [], "rows"]) expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows: invalid }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "rows required" });
+    for (const row of [null, {}, { part_id: 999999, printed_count: 1 }, { part_id: part.projectionPartId, printed_count: -1 }, { part_id: part.projectionPartId, printed_count: 3 }]) {
+      expect(await traceAcceptedPlan("propose_set_plan_progress", { plan_id: plan.id, rows: [rows[0], row] }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "Invalid progress row" });
+    }
+    assertAcceptedPlanDeclaration("propose_set_plan_progress", [...(isolated ? ["file:source-workspace"] : []), ...ACCEPTED_PLAN_TABLES], ["file:source-workspace", ...ACCEPTED_PLAN_TABLES]);
+  });
+
+  it(`traces propose_set_plan_assembly targets, unit tokens and tenants under ${policy} policy`, async () => {
+    const { repository, plan, part, basis, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const options = { repository, files };
+    const proposal = (unitIndex: number, assembled: boolean) => acceptedPlanProposal("propose_set_plan_assembly", plan.id, "update Plan assembly checkoff", "Apply the reviewed assembly state.", { plan_id: plan.id, part_id: part.projectionPartId, unit_index: unitIndex, assembled, accepted_basis: basis, token: part.units[unitIndex]!.token });
+    for (const [unit_index, assembled] of [[0, true], [1, false], ["1", true]] as const) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { plan_id: plan.id, part_id: part.projectionPartId, unit_index, assembled }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(proposal(Number(unit_index), assembled));
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_assembly", { part_id: String(part.projectionPartId), unit_index: 0, assembled: true }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(proposal(0, true));
+    const valid = { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
+    for (const invalid of [{ plan_id: undefined }, { part_id: null }, { unit_index: "first" }, { assembled: "true" }]) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, ...invalid }, [], { repository })).toEqual({ error: "plan_id, part_id, unit_index, and assembled are required" });
+    }
+    for (const target of [{ part_id: 999999 }, { unit_index: 2 }, { unit_index: -1 }]) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, ...target }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "part_id and unit_index are not in the accepted Plan" });
+    }
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Accepted Plan is not ready" });
+    }
+    expect(await traceAcceptedPlan("propose_set_plan_assembly", valid, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Accepted Plan is not ready" });
+    expect(await traceAcceptedPlan("propose_set_plan_assembly", { ...valid, plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Accepted Plan is not ready" });
+    assertAcceptedPlanDeclaration("propose_set_plan_assembly", [...(isolated ? ["file:source-workspace"] : []), ...ACCEPTED_PLAN_TABLES], ["file:source-workspace", ...ACCEPTED_PLAN_TABLES]);
+  });
+}
+
+it.each<AcceptedPlanTool>(["propose_set_plan_progress", "propose_set_plan_assembly"])("traces %s isolated symlink snapshot refusal before unit reads", async (tool) => {
+  const { repository, workspace, plan, part } = acceptedPlanFixture(true);
+  const repos = join(dataDir, "repos");
+  fs.renameSync(workspace, `${workspace}-moved`);
+  fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
+  const input = tool === "propose_set_plan_progress" ? { plan_id: plan.id, rows: [{ part_id: part.projectionPartId, printed_count: 1 }] } : { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
+  const error = tool === "propose_set_plan_progress" ? "Plan not found" : "Accepted Plan is not ready";
+  expect(await traceAcceptedPlan(tool, input, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error });
+});
+
+it("rejects reads outside the accepted Plan declaration", () => {
+  expect(() => acceptedPlanSelect('select "id", "project_id" from "source_docs" where "source_docs"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => acceptedPlanSelect('select "id" from "parts" left join "app_settings" on 1 where "parts"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => acceptedPlanSelect('update "print_progress" set "completed" = 1 where "print_progress"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(acceptedPlanSelect('select "id" from "print_progress" where "print_progress"."part_id" in (1.0)', "default")).toEqual(["table:print_progress"]);
+});
+
+it("traces propose_verify_printer_checkoff link lookup, states and tenants against its literal union", async () => {
+  const plan = repo.createProfile("Checkoff plan");
+  const link = (id: string, state: string, profile_id = plan.id) => ({ id, integration_id: "prusa", printer_id: "mk4", filename: `${id}.bgcode`, profile_id, state, units: [] });
+  repo.setSetting("printer.checkoff_links", JSON.stringify([link("awaiting", "awaiting_verify"), link("watching", "watching"), link("unowned", "awaiting_verify", 999999)]));
+  tenantStorage.run("other", () => repo.setSetting("printer.checkoff_links", JSON.stringify([link("hidden", "awaiting_verify")])));
+  const decisions = [{ part_id: 1, unit_index: 0, result: "rejected", reason: " kept verbatim " }, "unvalidated"];
+  const settings = ["table:app_settings"];
+  const proposal = (id: string, planId: number) => acceptedPlanProposal("propose_verify_printer_checkoff", planId, `verify printer checkoff ${id}.bgcode`, "Apply the reviewed confirmed or rejected unit decisions.", { link_id: id, decisions });
+  for (const link_id of ["awaiting", " awaiting "]) expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id, decisions }, settings, { activePlanId: 999998 })).toEqual(proposal("awaiting", plan.id));
+  expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "unowned", decisions }, settings)).toEqual(proposal("unowned", 999999));
+  expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "watching", decisions }, settings)).toEqual({ error: "Checkoff link is not awaiting verification" });
+  for (const link_id of ["absent", "hidden"]) expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id, decisions }, settings)).toEqual({ error: "Checkoff link not found" });
+  expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "hidden", decisions }, settings, { tenantId: "other" })).toEqual(proposal("hidden", plan.id));
+  for (const input of [{ decisions }, { link_id: " ", decisions }, { link_id: 1, decisions }, { link_id: "awaiting" }, { link_id: "awaiting", decisions: [] }, { link_id: "awaiting", decisions: {} }]) {
+    expect(await traceAcceptedPlan("propose_verify_printer_checkoff", input, [])).toEqual({ error: "link_id and decisions are required" });
+  }
+  for (const stored of ["[invalid", "{}", ""]) {
+    repo.setSetting("printer.checkoff_links", stored);
+    expect(await traceAcceptedPlan("propose_verify_printer_checkoff", { link_id: "awaiting", decisions }, settings)).toEqual({ error: "Checkoff link not found" });
+  }
+  expect(observer.state.files).toEqual([]);
+  assertAcceptedPlanDeclaration("propose_verify_printer_checkoff", settings);
+});
+
+const CHECKOFF_READS = ["get_plan_checkoff", "get_remaining"] as const;
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces get_plan_checkoff and get_remaining against the accepted Plan snapshot under ${policy} policy`, async () => {
+    const { repository, plan, part, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const updated = sqlite.prepare("UPDATE print_progress SET completed = 1, assembled = 1 WHERE part_id = ? AND unit_index = 0").run(part.projectionPartId);
+    expect(updated.changes).toBe(1);
+    const read = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    if (read.kind !== "ready") throw new Error(`Accepted fixture is ${read.kind}`);
+    const included = read.snapshot.parts.filter((candidate) => candidate.included);
+    expect(included.map((candidate) => candidate.units.map((unit) => [unit.unitIndex, unit.completed, unit.assembled]))).toEqual([[[0, true, true], [1, false, false]]]);
+    const basis = acceptedPlanBasis(read.snapshot);
+    const options = { repository, files };
+    const parts = included.map((candidate) => ({
+      part_id: candidate.projectionPartId,
+      filename: candidate.filename,
+      relative_path: candidate.relativePath,
+      role: candidate.effectiveRole,
+      quantity_effective: candidate.quantityEffective,
+      printed_count: candidate.units.filter((unit) => unit.completed).length,
+      assembled_count: candidate.units.filter((unit) => unit.assembled).length,
+      missing: candidate.units.some((unit) => unit.required && !unit.completed),
+      units: candidate.units.map((unit) => ({
+        unit_index: unit.unitIndex,
+        token: unit.token,
+        object_name: unit.objectName,
+        required: unit.required,
+        completed: unit.completed,
+        assembled: unit.assembled,
+      })),
+    }));
+    const checkoff = {
+      plan_id: plan.id,
+      plan_name: "Accepted plan",
+      state: "ready",
+      accepted_basis: basis,
+      printed_units: 1,
+      total_units: 2,
+      remaining_units: 1,
+      parts,
+    };
+    const remaining = {
+      plan_id: plan.id,
+      plan_name: "Accepted plan",
+      archived_at: null,
+      summary: "0/1 parts fully printed · 1/2 units",
+      printed_units: 1,
+      total_units: 2,
+      remaining_units: 1,
+      percent: 50,
+      can_archive: false,
+      part_count: 1,
+    };
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(checkoff);
+      expect(await traceAcceptedPlan("get_remaining", { plan_id }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(remaining);
+    }
+    expect(await traceAcceptedPlan("get_plan_checkoff", {}, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(checkoff);
+    expect(await traceAcceptedPlan("get_remaining", {}, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(remaining);
+    for (const plan_id of [undefined, null, "invalid"]) {
+      expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id }, [], { repository })).toEqual({ error: "plan_id required" });
+      expect(await traceAcceptedPlan("get_remaining", { plan_id }, [], { repository })).toEqual({ error: "plan_id required" });
+    }
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+      expect(await traceAcceptedPlan("get_remaining", { plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("get_remaining", { plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    const idleRemaining = { plan_id: idle.id, plan_name: "Not accepted", archived_at: null, summary: "0/0 parts fully printed · 0/0 units", printed_units: 0, total_units: 0, remaining_units: 0, percent: 0, can_archive: false, part_count: 0 };
+    expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual({ plan_id: idle.id, state: "empty", parts: [] });
+    expect(await traceAcceptedPlan("get_remaining", { plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual(idleRemaining);
+    const declared = ["file:source-workspace", ...ACCEPTED_PLAN_TABLES];
+    for (const tool of CHECKOFF_READS) assertAcceptedPlanDeclaration(tool, [...(isolated ? ["file:source-workspace"] : []), ...ACCEPTED_PLAN_TABLES], declared);
+  });
+}
+
+it.each(CHECKOFF_READS)("traces %s isolated symlink snapshot refusal before a unit summary", async (tool) => {
+  const { repository, workspace, plan } = acceptedPlanFixture(true);
+  const repos = join(dataDir, "repos");
+  fs.renameSync(workspace, `${workspace}-moved`);
+  fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
+  expect(await traceAcceptedPlan(tool, { plan_id: plan.id, content_base64: "YQ==" }, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error: "Accepted Plan data is inconsistent" });
+});
+
+it("traces get_printer_checkoff link and unattributed settings without a plan read", async () => {
+  const plan = repo.createProfile("Printer checkoff");
+  const link = (id: string, state: string, profile_id = plan.id, integration_id = "prusa") => ({ id, integration_id, printer_id: "mk4", filename: `${id}.bgcode`, profile_id, state, units: [] });
+  const links = [link("awaiting", "awaiting_verify"), link("watching", "watching"), link("other-host", "awaiting_verify", plan.id, "bambu"), link("foreign-plan", "awaiting_verify", 999999)];
+  const open = { id: "open", integration_id: "prusa", printer_id: "mk4", host_name: "Host", filename: "open.bgcode", completed_at: "2026-01-01T00:00:00.000Z", gcode_objects: [], candidates: [] };
+  const dismissed = { ...open, id: "dismissed", filename: "dismissed.bgcode", dismissed: true, dismissed_at: "2026-01-02T00:00:00.000Z" };
+  const storedLinks = JSON.stringify(links);
+  const storedPrints = JSON.stringify([open, dismissed]);
+  repo.setSetting("printer.checkoff_links", storedLinks);
+  repo.setSetting("printer.unattributed_prints", storedPrints);
+  tenantStorage.run("other", () => {
+    repo.setSetting("printer.checkoff_links", JSON.stringify([link("hidden", "awaiting_verify")]));
+    repo.setSetting("printer.unattributed_prints", JSON.stringify([{ ...open, id: "hidden-print" }]));
+  });
+  const settings = ["table:app_settings"];
+  const bothKeys = () => {
+    const sql = statements.map(String);
+    expect(sql.filter((statement) => statement.includes("'printer.checkoff_links'"))).toHaveLength(1);
+    expect(sql.filter((statement) => statement.includes("'printer.unattributed_prints'"))).toHaveLength(1);
+  };
+  expect(await traceAcceptedPlan("get_printer_checkoff", {}, settings, { activePlanId: plan.id })).toMatchObject({
+    links: [expect.objectContaining({ id: "awaiting" }), expect.objectContaining({ id: "watching" }), expect.objectContaining({ id: "other-host" }), expect.objectContaining({ id: "foreign-plan" })],
+    unattributed: [open],
+    pending_verification: 3,
+  });
+  bothKeys();
+  expect(await traceAcceptedPlan("get_printer_checkoff", { plan_id: plan.id, state: " awaiting_verify ", integration_id: " prusa " }, settings)).toMatchObject({
+    links: [expect.objectContaining({ id: "awaiting", profile_id: plan.id })],
+    unattributed: [],
+    pending_verification: 1,
+  });
+  expect(statements.join("\n")).not.toContain("build_profiles");
+  expect(await traceAcceptedPlan("get_printer_checkoff", { plan_id: 999999 }, settings)).toMatchObject({ links: [expect.objectContaining({ id: "foreign-plan" })], unattributed: [], pending_verification: 1 });
+  expect(await traceAcceptedPlan("get_printer_checkoff", { state: "watching" }, settings)).toMatchObject({ links: [expect.objectContaining({ id: "watching" })], pending_verification: 0 });
+  expect(await traceAcceptedPlan("get_printer_checkoff", {}, settings, { tenantId: "other" })).toMatchObject({ links: [expect.objectContaining({ id: "hidden" })], unattributed: [expect.objectContaining({ id: "hidden-print" })], pending_verification: 1 });
+  for (const state of ["Verified", "applied", "nope"]) expect(await traceAcceptedPlan("get_printer_checkoff", { state }, [])).toEqual({ error: "invalid checkoff state" });
+  expect(statements).toEqual([]);
+  for (const stored of ["[invalid", "{}", ""]) {
+    repo.setSetting("printer.checkoff_links", stored);
+    repo.setSetting("printer.unattributed_prints", stored);
+    expect(await traceAcceptedPlan("get_printer_checkoff", {}, settings)).toEqual({ links: [], unattributed: [], pending_verification: 0 });
+  }
+  repo.setSetting("printer.checkoff_links", storedLinks);
+  repo.setSetting("printer.unattributed_prints", storedPrints);
+  expect(await traceAcceptedPlan("get_printer_checkoff", { plan_id: String(plan.id) }, settings)).toMatchObject({
+    links: [expect.objectContaining({ id: "awaiting" }), expect.objectContaining({ id: "watching" }), expect.objectContaining({ id: "other-host" })],
+    unattributed: [],
+    pending_verification: 2,
+  });
+  expect(repo.getSetting("printer.checkoff_links")).toBe(storedLinks);
+  expect(repo.getSetting("printer.unattributed_prints")).toBe(storedPrints);
+  expect(observer.state.files).toEqual([]);
+  assertAcceptedPlanDeclaration("get_printer_checkoff", settings);
+});
+
+function threeMfFor(token: string, objectName: string): Buffer {
+  const mesh: StlMesh = {
+    vertices: [[0, 0, 0], [10, 0, 0], [0, 10, 0]],
+    faces: [[0, 1, 2]],
+    bounds: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 0, widthMm: 10, depthMm: 10, heightMm: 0 },
+  };
+  return Buffer.from(encodeAcceptedPlate3mf([{ token, objectName, xUm: 0, yUm: 0, mesh }]));
+}
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces propose_import_3mf_checkoff inline and source-file dispatch under ${policy} policy`, async () => {
+    const { repository, workspace, sourceId, plan, part, basis, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const unit = part.units[0]!;
+    const bytes = threeMfFor(unit.token, unit.objectName);
+    const plate = join(workspace, "plate.3mf");
+    fs.writeFileSync(plate, bytes);
+    const encoded = bytes.toString("base64");
+    const repos = join(dataDir, "repos");
+    const sourceProbes: CategoryProbe[] = isolated ? [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", workspace], ["statSync", workspace]] : [];
+    const fileReads: CategoryProbe[] = [["realpathSync", workspace], ["realpathSync", plate], ["statSync", plate], ["statSync", plate], ["readFileSync", plate]];
+    const withDocs = [...ACCEPTED_PLAN_TABLES, "table:source_docs"].sort();
+    const proposal = (filename: string, params: Record<string, unknown>) => ({
+      status: "proposed",
+      note: "Not applied yet — user must confirm via Apply in the UI.",
+      action: {
+        id: expect.any(String),
+        type: "propose_import_3mf_checkoff",
+        plan_id: plan.id,
+        label: `import 3MF checkoff for ${filename}`,
+        summary: "Create a verify-first checkoff link from the imported sliced 3MF.",
+        params: { plan_id: plan.id, filename, integration_id: "mcp-3mf", printer_id: "mcp-3mf", host_name: "Imported 3MF", object_names: [unit.objectName], accepted_basis: basis, ...params },
+      },
+      object_count: 1,
+      objects: [{
+        relative_path: expect.any(String),
+        object_name: unit.objectName,
+        part_number: unit.token,
+        mapped_object_name: unit.objectName,
+        mapped_part_id: part.projectionPartId,
+        mapped_unit_index: unit.unitIndex,
+      }],
+    });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, filename: " foreign-slicer.3mf ", content_base64: ` ${encoded} ` }, ACCEPTED_PLAN_TABLES, { repository, files, scratch: true, activePlanId: idle.id })).toEqual(proposal("foreign-slicer.3mf", { content_base64: encoded }));
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: String(plan.id), source_id: sourceId, path: "plate.3mf", integration_id: " shop ", printer_id: " xl ", host_name: " Bench " }, withDocs, { repository, files: [...files, ...sourceProbes, ...fileReads], scratch: true, sourceDocs: true })).toEqual(proposal("plate.3mf", { source_id: sourceId, path: "plate.3mf", integration_id: "shop", printer_id: "xl", host_name: "Bench" }));
+    for (const plan_id of [undefined, null, "invalid"]) expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id, content_base64: encoded }, [], { repository })).toEqual({ error: "plan_id required" });
+    for (const plan_id of [999999, foreign.id]) expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id, content_base64: encoded }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: idle.id, content_base64: encoded }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Accepted Plan has no required units" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "content_base64 or source_id plus path is required" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: encoded, source_id: sourceId }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "Provide either content_base64 or source_id plus path, not both" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: "????" }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "content_base64 must be valid base64" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: "" }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "content_base64 or source_id plus path is required" });
+    sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(unsyncedId);
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, source_id: unsyncedId, path: "plate.3mf" }, withDocs, { repository, files, sourceDocs: true })).toEqual({ error: "Source is not synchronized" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, source_id: sourceId, path: "../outside.3mf" }, withDocs, { repository, files: [...files, ...sourceProbes], sourceDocs: true })).toEqual({ error: "3MF path not found" });
+    const declared = ["file:source-workspace", ...ACCEPTED_PLAN_TABLES, "table:source_docs"].sort();
+    assertAcceptedPlanDeclaration("propose_import_3mf_checkoff", declared, declared);
+  });
+}
+
+it("traces propose_import_3mf_checkoff symlink refusal before 3MF bytes are read", async () => {
+  const { repository, workspace, plan } = acceptedPlanFixture(true);
+  const repos = join(dataDir, "repos");
+  fs.renameSync(workspace, `${workspace}-moved`);
+  fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
+  expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: "YQ==" }, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error: "Accepted Plan data is inconsistent" });
 });

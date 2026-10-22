@@ -125,6 +125,7 @@ impl Scope<'_> {
         actor: &str,
         decision_digest: &str,
         payload: &str,
+        check: &mut dyn FnMut() -> Result<()>,
     ) -> Result<Outcome> {
         let Some(d) = storage::draft(self.tx, self.tenant, self.profile, self.draft)? else {
             return Ok(Outcome::DraftNotFound);
@@ -169,7 +170,13 @@ impl Scope<'_> {
                 code: DomainCode::RequiredUnitSetUnavailable,
             });
         };
-        let result = model::reconcile(&d.parts, &d.inputs, &base, &command.request.decisions)?;
+        let result = model::reconcile_checked(
+            &d.parts,
+            &d.inputs,
+            &base,
+            &command.request.decisions,
+            check,
+        )?;
         let basis_digest = selection_basis_digest(&mapping, &result.basis);
         let result_digest = digest(&result.full());
         let reconciliation_digest = reconciliation_digest(&json!({
@@ -292,6 +299,7 @@ pub(crate) fn run(
     tx: &Transaction<'_>,
     command: &ReconciliationCommand,
     policy: auth::AuthPolicy,
+    check: &mut dyn FnMut() -> Result<()>,
 ) -> Result<Outcome> {
     let (tenant, actor) = actor(tx, &command.credential, policy)?;
     let profile = i64::try_from(command.profile_id.get())?;
@@ -326,6 +334,6 @@ pub(crate) fn run(
         &[&tenant, &profile, &draft, &actor, &command.idempotency_key],
     )? {
         Some(existing) => scope.replay(&existing, &payload),
-        None => scope.reconcile(command, &actor, &decision_digest, &payload),
+        None => scope.reconcile(command, &actor, &decision_digest, &payload, check),
     }
 }

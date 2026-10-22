@@ -165,6 +165,162 @@ fn ticket_t_7_ownership_propose_import_source_files_refuses_invalid_admission_be
     assert_tool_invalid_admission("tool.propose_import_source_files");
 }
 
+#[test]
+fn ticket_t_7_ownership_propose_set_plan_progress_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_set_plan_progress",
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "parts"},
+            {"kind": "table", "name": "plan_accepted_input_sets"},
+            {"kind": "table", "name": "plan_revision_input_sets"},
+            {"kind": "table", "name": "plan_revision_inputs"},
+            {"kind": "table", "name": "plan_revision_parts"},
+            {"kind": "table", "name": "plan_revision_required_unit_sets"},
+            {"kind": "table", "name": "plan_revision_required_units"},
+            {"kind": "table", "name": "plan_revisions"},
+            {"kind": "table", "name": "print_progress"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "required_units"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_set_plan_progress_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_set_plan_progress");
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_set_plan_assembly_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_set_plan_assembly",
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "parts"},
+            {"kind": "table", "name": "plan_accepted_input_sets"},
+            {"kind": "table", "name": "plan_revision_input_sets"},
+            {"kind": "table", "name": "plan_revision_inputs"},
+            {"kind": "table", "name": "plan_revision_parts"},
+            {"kind": "table", "name": "plan_revision_required_unit_sets"},
+            {"kind": "table", "name": "plan_revision_required_units"},
+            {"kind": "table", "name": "plan_revisions"},
+            {"kind": "table", "name": "print_progress"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "required_units"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_set_plan_assembly_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_set_plan_assembly");
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_verify_printer_checkoff_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_verify_printer_checkoff",
+        json!([
+            {"kind": "table", "name": "app_settings"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_propose_verify_printer_checkoff_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_verify_printer_checkoff");
+}
+
+fn accepted_plan_operational_resources() -> Value {
+    json!([
+        {"kind": "table", "name": "build_profiles"},
+        {"kind": "table", "name": "parts"},
+        {"kind": "table", "name": "plan_accepted_input_sets"},
+        {"kind": "table", "name": "plan_revision_input_sets"},
+        {"kind": "table", "name": "plan_revision_inputs"},
+        {"kind": "table", "name": "plan_revision_parts"},
+        {"kind": "table", "name": "plan_revision_required_unit_sets"},
+        {"kind": "table", "name": "plan_revision_required_units"},
+        {"kind": "table", "name": "plan_revisions"},
+        {"kind": "table", "name": "print_progress"},
+        {"kind": "table", "name": "projects"},
+        {"kind": "table", "name": "required_units"},
+        {"kind": "table", "name": "source_revisions"},
+        {"kind": "file", "name": "source-workspace"}
+    ])
+}
+
+#[test]
+fn ticket_t_7_ownership_checkoff_reads_have_complete_node_owned_resources() {
+    let snapshot = accepted_plan_operational_resources();
+    for id in ["tool.get_plan_checkoff", "tool.get_remaining"] {
+        assert_sqlite_tool_resources(id, snapshot.clone());
+    }
+    let mut import = snapshot;
+    import
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"kind": "table", "name": "source_docs"}));
+    assert_sqlite_tool_resources("tool.propose_import_3mf_checkoff", import);
+    assert_sqlite_tool_resources(
+        "tool.get_printer_checkoff",
+        json!([{"kind": "table", "name": "app_settings"}]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_checkoff_reads_refuse_invalid_admission_before_effects() {
+    for id in [
+        "tool.get_plan_checkoff",
+        "tool.get_remaining",
+        "tool.get_printer_checkoff",
+        "tool.propose_import_3mf_checkoff",
+    ] {
+        assert_tool_invalid_admission(id);
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_list_sources_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.list_sources",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_list_sources_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.list_sources");
+}
+
+#[test]
+fn ticket_t_7_ownership_list_source_categories_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.list_source_categories",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_list_source_categories_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.list_source_categories");
+}
+
 fn assert_sqlite_tool_resources(id: &str, expected: Value) {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
     let index = admit_bundled_manifest().unwrap();
@@ -319,7 +475,12 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         index.resources_for("tool.get_workflow_help"),
         Ok(&BTreeSet::new())
     );
-    let lists = BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]);
+    let lists = BTreeSet::from([
+        Table(Projects),
+        Table(SourceDocs),
+        Table(AppSettings),
+        File(FileFamily::SourceWorkspace),
+    ]);
     assert_eq!(index.resources_for("tool.list_sources"), Ok(&lists));
     assert_eq!(
         index.resources_for("tool.list_source_categories"),
@@ -435,6 +596,13 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.propose_update_source",
         "tool.propose_update_source_naming",
         "tool.propose_import_source_files",
+        "tool.propose_set_plan_progress",
+        "tool.propose_set_plan_assembly",
+        "tool.propose_verify_printer_checkoff",
+        "tool.get_plan_checkoff",
+        "tool.get_remaining",
+        "tool.get_printer_checkoff",
+        "tool.propose_import_3mf_checkoff",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -458,8 +626,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 35);
-    assert_eq!(unresolved.len(), 408);
+    assert_eq!(reviewed.len(), 42);
+    assert_eq!(unresolved.len(), 401);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -732,6 +900,13 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.propose_update_source",
         "tool.propose_update_source_naming",
         "tool.propose_import_source_files",
+        "tool.propose_set_plan_progress",
+        "tool.propose_set_plan_assembly",
+        "tool.propose_verify_printer_checkoff",
+        "tool.get_plan_checkoff",
+        "tool.get_remaining",
+        "tool.get_printer_checkoff",
+        "tool.propose_import_3mf_checkoff",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -823,6 +998,28 @@ fn reviewed_participants_cannot_swap_operations() {
         (
             "tool.propose_update_source_naming",
             "tool.propose_import_source_files",
+        ),
+        (
+            "tool.propose_import_source_files",
+            "tool.propose_set_plan_progress",
+        ),
+        (
+            "tool.propose_set_plan_progress",
+            "tool.propose_set_plan_assembly",
+        ),
+        (
+            "tool.propose_set_plan_assembly",
+            "tool.propose_verify_printer_checkoff",
+        ),
+        (
+            "tool.propose_verify_printer_checkoff",
+            "tool.get_plan_checkoff",
+        ),
+        ("tool.get_plan_checkoff", "tool.get_remaining"),
+        ("tool.get_remaining", "tool.get_printer_checkoff"),
+        (
+            "tool.get_printer_checkoff",
+            "tool.propose_import_3mf_checkoff",
         ),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),

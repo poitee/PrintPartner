@@ -4,7 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SourceSummary } from "@print-partner/contracts";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY, type PlanFeatures, type SourceSummary } from "@print-partner/contracts";
+import { queryKeys } from "../queries/keys";
 import BuildPage from "./BuildPage";
 
 const mocks = vi.hoisted(() => ({
@@ -93,8 +94,16 @@ vi.mock("../components/PlanSpecialRequestField", () => ({ default: () => <input 
 vi.mock("../components/build/BuildRecipePanel", () => ({ default: () => null }));
 vi.mock("../components/sources/SourceCategorySheet", () => ({ default: () => null }));
 
-function renderSources() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderSources(orders?: boolean) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  if (orders !== undefined) {
+    const plan: PlanFeatures = { profile_id: 7, overrides: { orders }, effective: {
+      farm: { enabled: false, source: "default" }, orders: { enabled: orders, source: "plan" },
+      bambu: { enabled: false, source: "default" }, spoolman: { enabled: false, source: "default" },
+    } };
+    client.setQueryData(queryKeys.health, { ok: true, capabilities: [TENANT_FEATURE_TOGGLES_CAPABILITY] });
+    client.setQueryData(queryKeys.planFeatures(7), plan);
+  }
   return render(
     <MemoryRouter>
       <QueryClientProvider client={client}><BuildPage /></QueryClientProvider>
@@ -142,5 +151,26 @@ describe("Sources workspace", () => {
     renderSources();
     fireEvent.click(screen.getByRole("button", { name: "Sync sources" }));
     await waitFor(() => expect(mocks.sync).toHaveBeenCalledWith([2]));
+  });
+});
+
+describe("Build request and Orders", () => {
+  it("keeps the Build request field when the server does not advertise feature toggles", () => {
+    renderSources();
+    expect(screen.getByRole("heading", { name: "Build request" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Special request" })).toBeTruthy();
+  });
+
+  it("shows the Build request field when Orders is enabled for the Plan", () => {
+    renderSources(true);
+    expect(screen.getByRole("heading", { name: "Build request" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Special request" })).toBeTruthy();
+  });
+
+  it("hides the Build request field when Orders is disabled for the Plan", () => {
+    renderSources(false);
+    expect(screen.queryByRole("heading", { name: "Build request" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Special request" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Sources" })).toBeTruthy();
   });
 });
