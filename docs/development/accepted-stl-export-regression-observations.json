@@ -1,0 +1,156 @@
+{
+  "scope": "Bounded local diagnostic validation, not original CI attribution or an implementation speedup comparison",
+  "node": "v22.23.3",
+  "fixture": "10001 units of 12-byte accepted-stl payload; no real data",
+  "observations": [
+    {
+      "condition": "Concurrent with the default-worker full quality run on shared VM135 persistent scratch",
+      "suiteResult": {
+        "passed": 26,
+        "failed": 1,
+        "failure": "10001-unit test exceeded unchanged 60000ms deadline"
+      },
+      "finalSnapshot": {
+        "event": "test-ended",
+        "node": "v22.23.3",
+        "workerPool": "default (4)",
+        "customTmpdir": true,
+        "availableParallelism": 12,
+        "loadAverage": [
+          19.4,
+          10.87,
+          7.16
+        ],
+        "filesystemType": "0xef53",
+        "cpuQuotaV1": null,
+        "cpuPeriodV1": null,
+        "cpuPressure": "some avg10=50.95 avg60=32.60 avg300=11.80 total=3965107197\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+        "ioPressure": "some avg10=6.34 avg60=5.68 avg300=4.82 total=2997608276\nfull avg10=0.11 avg60=1.64 avg300=2.97 total=2317349456",
+        "elapsedMs": 60032.725463,
+        "copiesUntilFirstZipSourceMs": 55786.800317,
+        "firstZipSourceUntilNowMs": 4245.925146000001,
+        "cpuUserMs": 9533.901,
+        "cpuSystemMs": 4961.239,
+        "eventLoopDelayMs": {
+          "mean": 21.049059335907337,
+          "max": 164.495359,
+          "p99": 28.786687
+        },
+        "measurement": {
+          "outcome": {
+            "kind": "running"
+          },
+          "flushCalls": 10002,
+          "flushCallbacks": 10002,
+          "flushErrors": 0,
+          "flushInflight": 0,
+          "flushMaxInflight": 4,
+          "flushLatencyTotalMs": 140546.19706400036,
+          "flushLatencyMaxMs": 201.95131099999708,
+          "zipSources": 876,
+          "zipEnds": 875,
+          "zipErrors": 0,
+          "zipBytes": 10500
+        },
+        "observedCgroupV2CpuMax": [
+          "max 100000"
+        ]
+      }
+    },
+    {
+      "condition": "After the quality run finished, still on shared VM135 persistent scratch",
+      "suiteResult": {
+        "passed": 26,
+        "failed": 1,
+        "failure": "10001-unit test exceeded unchanged 60000ms deadline"
+      },
+      "finalSnapshot": {
+        "event": "test-ended",
+        "node": "v22.23.3",
+        "workerPool": "default (4)",
+        "customTmpdir": true,
+        "availableParallelism": 12,
+        "loadAverage": [
+          8.7,
+          10.5,
+          7.65
+        ],
+        "filesystemType": "0xef53",
+        "cpuQuotaV1": null,
+        "cpuPeriodV1": null,
+        "cpuPressure": "some avg10=1.35 avg60=8.72 avg300=12.90 total=3991172870\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+        "ioPressure": "some avg10=6.33 avg60=5.47 avg300=4.59 total=3003984755\nfull avg10=5.24 avg60=4.20 avg300=3.02 total=2321906793",
+        "elapsedMs": 60011.421749,
+        "copiesUntilFirstZipSourceMs": 58805.488560000005,
+        "firstZipSourceUntilNowMs": 1205.9331889999958,
+        "cpuUserMs": 17007.244,
+        "cpuSystemMs": 6481.111,
+        "eventLoopDelayMs": {
+          "mean": 20.591403604395605,
+          "max": 134.021119,
+          "p99": 27.803647
+        },
+        "measurement": {
+          "outcome": {
+            "kind": "running"
+          },
+          "flushCalls": 10002,
+          "flushCallbacks": 10002,
+          "flushErrors": 0,
+          "flushInflight": 0,
+          "flushMaxInflight": 4,
+          "flushLatencyTotalMs": 160338.97251399964,
+          "flushLatencyMaxMs": 809.4113039999993,
+          "zipSources": 588,
+          "zipEnds": 587,
+          "zipErrors": 0,
+          "zipBytes": 7044
+        },
+        "observedCgroupV2CpuMax": [
+          "max 100000"
+        ]
+      }
+    }
+  ],
+  "tmpfsValidation": {
+    "condition": "Fresh tmpfs scratch on shared VM135, Node22, exporter unchanged",
+    "passed": 27,
+    "failed": 0,
+    "limitation": "Passing console records were suppressed by Vitest minimal reporter before stdout correction; no phase timing claimed"
+  },
+  "stdoutValidation": {
+    "condition": "Fresh tmpfs scratch, current direct-stdout diagnostic, shared VM135 while quality lint ran",
+    "passed": 1,
+    "skipped": 26,
+    "records": [
+      "start",
+      "progress",
+      "progress",
+      "test-ended"
+    ],
+    "outcome": {
+      "kind": "returned",
+      "resultKind": "materialized",
+      "elapsedMs": 40244.009809
+    },
+    "measurement": {
+      "outcome": {
+        "kind": "returned",
+        "resultKind": "materialized",
+        "elapsedMs": 40244.009809
+      },
+      "flushCalls": 10002,
+      "flushCallbacks": 10002,
+      "flushErrors": 0,
+      "flushInflight": 0,
+      "flushMaxInflight": 4,
+      "flushLatencyTotalMs": 4861.018265999945,
+      "flushLatencyMaxMs": 27.268844000000172,
+      "zipSources": 10001,
+      "zipEnds": 10001,
+      "zipErrors": 0,
+      "zipBytes": 120012
+    },
+    "limitation": "Single validation sample; not a performance comparison or affected-runner result"
+  }
+}
