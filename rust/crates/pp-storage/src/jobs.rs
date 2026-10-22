@@ -2358,6 +2358,8 @@ fn claim(
                 if let Some(reason) = refusal {
                     if filter.job_id.is_some() {
                         crate::uploads::record_targeted_authority_refusal(tx, &job)?;
+                    } else if job.kind == JobKind::SuppliedSourceImport {
+                        crate::uploads::record_recovered_authority_refusal(tx, &job)?;
                     }
                     let phase = if filter.job_id.is_some() {
                         AuthorityRefusalPhase::TargetedClaim
