@@ -888,3 +888,211 @@ fn capture_payload_rejects_invalid_policy_and_identity() {
     });
     assert!(serde_json::from_value::<Admission>(admission).is_err());
 }
+
+#[rustfmt::skip]
+mod capture_binding {
+    use super::super::{
+        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
+        Target, decode_import_input_version,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::Connection;
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+    #[derive(Clone)]
+    struct Binding {
+        id: String, actor: String, key: String, source_id: i64, create_name: Option<String>,
+        reserved: u64, max_input: u64, max_prepared: u64, path: String, size: u64, hash: String,
+        kind: String, zip: bool,
+    }
+    impl Binding {
+        fn fixed() -> Self {
+            Self {
+                id: "capture-binding".into(), actor: "physical-owner".into(), key: "bind-op".into(),
+                source_id: 7, create_name: None, reserved: 3_506_438_144, max_input: 268_435_456,
+                max_prepared: 1_073_741_824, path: "part.stl".into(), size: 3, hash: "b".repeat(64),
+                kind: "input".into(), zip: false,
+            }
+        }
+        fn target(&self) -> Target {
+            match &self.create_name {
+                Some(name) => Target::Create { metadata: Box::new(CreateSource { name: name.clone(), ..Default::default() }) },
+                None => Target::Existing { source_id: self.source_id },
+            }
+        }
+        fn limits(&self) -> AdmissionLimits {
+            AdmissionLimits { reserved_bytes: self.reserved, max_input_bytes: self.max_input, max_prepared_bytes: self.max_prepared }
+        }
+        fn files(&self) -> Vec<File> {
+            vec![File { path: self.path.clone(), size: self.size, sha256: self.hash.clone(), kind: self.kind.clone() }]
+        }
+        fn payload(&self) -> CapturedPayloadV1 {
+            if self.zip { CapturedPayloadV1::zip(self.path.clone()) } else { CapturedPayloadV1::files(vec![self.path.clone()]) }
+        }
+        fn try_capture(&self, payload: CapturedPayloadV1) -> anyhow::Result<CapturedInputV2> {
+            let (target, files) = (self.target(), self.files());
+            CapturedInputV2::bind(CaptureId::new(self.id.clone())?, payload, &self.actor, &self.key, &target, self.limits(), &files)
+        }
+        fn capture(&self) -> CapturedInputV2 { self.try_capture(self.payload()).unwrap() }
+        fn check(&self, input: &CapturedInputV2) -> anyhow::Result<()> {
+            let (target, files) = (self.target(), self.files());
+            input.validate(&self.actor, &self.key, Some(&target), self.limits(), &files)
+        }
+    }
+    fn digests(input: &CapturedInputV2) -> (String, String, String) {
+        let value = serde_json::to_value(input).unwrap();
+        let text = |name: &str| value[name].as_str().unwrap().to_string();
+        (text("policy_digest"), text("target_digest"), text("manifest_digest"))
+    }
+    fn assert_rebound(base: &Binding, changed: Binding, message: &str) {
+        let left = base.capture();
+        let (policy, target, manifest) = digests(&left);
+        let (next_policy, next_target, next_manifest) = digests(&changed.capture());
+        assert_eq!(policy, next_policy);
+        assert_ne!(manifest, next_manifest);
+        let same_target = changed.source_id == base.source_id && changed.create_name == base.create_name;
+        assert_eq!(target == next_target, same_target);
+        assert_eq!(changed.check(&left).unwrap_err().to_string(), message);
+    }
+    fn vary(base: &Binding, field: &str) -> (Binding, &'static str) {
+        let mut next = base.clone();
+        let message = match field {
+            "actor" => { next.actor = "other-actor".into(); "Capture manifest digest mismatch" }
+            "key" => { next.key = "other-op".into(); "Capture manifest digest mismatch" }
+            "source" => { next.source_id += 1; "Capture target digest mismatch" }
+            "create" => { next.create_name = Some("Other".into()); "Capture target digest mismatch" }
+            "reserved" => { next.reserved += 1; "Capture manifest digest mismatch" }
+            "max_input" => { next.max_input -= 1; "Capture manifest digest mismatch" }
+            "max_prepared" => { next.max_prepared -= 1; "Capture manifest digest mismatch" }
+            "path" => { next.path = "other.stl".into(); "Capture manifest digest mismatch" }
+            "size" => { next.size += 1; "Capture manifest digest mismatch" }
+            "hash" => { next.hash = "a".repeat(64); "Capture manifest digest mismatch" }
+            "kind" => { next.kind = "stl".into(); "Capture manifest digest mismatch" }
+            _ => unreachable!("{field}"),
+        };
+        (next, message)
+    }
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection.query_row(JOURNAL_SQL, [], |row| row.get(0)).unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { pending.push(path); continue; }
+                let name = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+    fn credential(owner: &WriterOwner) -> Credential { Credential::PhysicalOwner(owner.job_physical_owner()) }
+    fn supplied(base: &Binding) -> Admission {
+        Admission {
+            key: "supplied-op".into(),
+            target: Target::Create { metadata: Box::new(CreateSource { name: "Binding".into(), ..Default::default() }) },
+            input: Input::Files { paths: vec![base.path.clone()] },
+            reserved_bytes: base.reserved, max_input_bytes: base.max_input, max_prepared_bytes: base.max_prepared,
+        }
+    }
+    #[test]
+    fn capture_binding_is_stable() {
+        let base = Binding::fixed();
+        let bound = base.capture();
+        assert_eq!(bound, base.capture());
+        base.check(&bound).unwrap();
+        assert_eq!(format!("{bound:?}"), "CapturedInputV2 { capture_version: 1, capture_id: CaptureId([redacted]), payload: CapturedPayloadV1([redacted]), policy_digest: Sha256Digest([redacted]), target_digest: Sha256Digest([redacted]), manifest_digest: Sha256Digest([redacted]) }");
+        assert_eq!(digests(&bound), (
+            "7163d9f0439e36702b872b901c23a8f40f37683c30ce246faff1cbd666d5129a".into(),
+            "706e746ac8c566c92496ded15d60f6d59a3417439af6454f65c36fbedd7f3c60".into(),
+            "641bd6aa58d3ce758f16d274b8a2a91669b98f1f6e31ff0a03ea2efbe1bc9d88".into(),
+        ));
+        let wire = serde_json::to_value(&bound).unwrap();
+        assert_eq!(decode_import_input_version(&wire["payload"]).unwrap(), 2);
+        assert_eq!(decode_import_input_version(&serde_json::json!({"kind": "files", "paths": ["part.stl"]})).unwrap(), 1);
+        let mut other = base.clone();
+        other.id = "other-capture".into();
+        let (policy, target, manifest) = digests(&bound);
+        let (other_policy, other_target, other_manifest) = digests(&other.capture());
+        assert_eq!((policy, target), (other_policy, other_target));
+        assert_ne!(manifest, other_manifest);
+        let mut zip = base;
+        zip.zip = true;
+        zip.path = "pack.zip".into();
+        let zip_bound = zip.capture();
+        assert_eq!(zip_bound, zip.capture());
+        zip.check(&zip_bound).unwrap();
+    }
+    #[test]
+    fn capture_binding_rejects_changed_actor_target_policy_or_inventory() {
+        let root = directory("capture-binding");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }, 16 * 1024 * 1024 * 1024).unwrap();
+        let base = Binding::fixed();
+        let files = base.files();
+        let cancelled = AtomicBool::new(false);
+        let operation = client.admit(credential(&owner), supplied(&base), files.clone(), 0, client.accounting_epoch(), &cancelled).unwrap();
+        assert_eq!((operation.input_version, operation.actor.as_str(), operation.key.as_str()), (1, "physical-owner", "supplied-op"));
+        let before = journal_and_files(&root);
+        let epoch = client.accounting_epoch();
+        let file = &operation.requested_files[0];
+        let mut live = base;
+        live.key = operation.key.clone();
+        live.source_id = operation.source_id;
+        live.path = file.path.clone();
+        live.size = file.size;
+        live.hash = file.sha256.clone();
+        live.kind = file.kind.clone();
+        let bound = live.capture();
+        live.check(&bound).unwrap();
+        for field in ["actor", "key", "source", "create", "reserved", "max_input", "max_prepared", "path", "size", "hash", "kind"] {
+            let (changed, message) = vary(&live, field);
+            assert_rebound(&live, changed, message);
+        }
+        for (zip, field) in [(false, "max_files"), (true, "max_zip_entries")] {
+            let mut value = serde_json::to_value(if zip { CapturedPayloadV1::zip("pack.zip".into()) } else { CapturedPayloadV1::files(vec!["part.stl".into()]) }).unwrap();
+            value["policy"][field] = serde_json::json!(9_999);
+            assert_eq!(live.try_capture(serde_json::from_value(value).unwrap()).unwrap_err().to_string(), "Unsupported capture policy");
+        }
+        for (pointer, value, message) in [
+            ("/payload/policy/max_files", serde_json::json!(9_999), "Unsupported capture policy"),
+            ("/policy_digest", serde_json::json!("0".repeat(64)), "Capture policy digest mismatch"),
+            ("/capture_version", serde_json::json!(2), "Unsupported capture version"),
+        ] {
+            let mut wire = serde_json::to_value(&bound).unwrap();
+            *wire.pointer_mut(pointer).unwrap() = value;
+            assert_eq!(live.check(&serde_json::from_value(wire).unwrap()).unwrap_err().to_string(), message);
+        }
+        for (pointer, value) in [("/manifest_digest", serde_json::json!("zz")), ("/target_digest", serde_json::json!("A".repeat(64)))] {
+            let mut wire = serde_json::to_value(&bound).unwrap();
+            *wire.pointer_mut(pointer).unwrap() = value;
+            assert!(serde_json::from_value::<CapturedInputV2>(wire).is_err());
+        }
+        let replay = client.admit(credential(&owner), supplied(&live), files, 0, epoch, &cancelled).unwrap();
+        assert_eq!(replay, operation);
+        assert_eq!(client.accounting_epoch(), epoch);
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.get(credential(&owner), "supplied-op".into()).unwrap(), operation);
+        owner.shutdown().unwrap();
+    }
+}
