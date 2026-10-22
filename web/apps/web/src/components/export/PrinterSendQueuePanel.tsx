@@ -7,10 +7,12 @@ import {
   drainPrinterSendQueue,
   fetchPrinterSendQueue,
 } from "../../api/endpoints/productionSend";
+import { useFarmVisible } from "../../hooks/useFarmVisible";
 import { Button } from "../ui/button";
 import { cn } from "@/lib/utils";
 
 type Props = {
+  profileId: number | null;
   engineReady: boolean;
   refreshKey?: number;
   allowDispatch?: boolean;
@@ -38,6 +40,7 @@ function stateLabel(item: PrinterSendQueueItem): string {
 }
 
 export default function PrinterSendQueuePanel({
+  profileId,
   engineReady,
   refreshKey = 0,
   allowDispatch = true,
@@ -45,6 +48,7 @@ export default function PrinterSendQueuePanel({
   onActiveCountChange,
   className,
 }: Props) {
+  const farmVisible = useFarmVisible(profileId);
   const [items, setItems] = useState<PrinterSendQueueItem[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -65,22 +69,26 @@ export default function PrinterSendQueuePanel({
   }, [engineReady]);
 
   useEffect(() => {
+    if (!farmVisible) {
+      setItems([]);
+      return;
+    }
     void reload();
-  }, [reload, refreshKey]);
+  }, [farmVisible, reload, refreshKey]);
 
   useEffect(() => {
-    if (!engineReady) return;
+    if (!farmVisible || !engineReady) return;
     const timer = window.setInterval(() => {
       if (!document.hidden) void reload({ silent: true });
     }, 8_000);
     return () => window.clearInterval(timer);
-  }, [engineReady, reload]);
+  }, [farmVisible, engineReady, reload]);
 
   useEffect(() => {
-    onActiveCountChange?.(engineReady ? items.length : 0);
-  }, [engineReady, items.length, onActiveCountChange]);
+    onActiveCountChange?.(farmVisible && engineReady ? items.length : 0);
+  }, [farmVisible, engineReady, items.length, onActiveCountChange]);
 
-  if (!engineReady || items.length === 0) return null;
+  if (!farmVisible || !engineReady || items.length === 0) return null;
 
   return (
     <div

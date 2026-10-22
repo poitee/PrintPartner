@@ -186,6 +186,7 @@ describe("stored Bambu send-queue dispatch/drain HTTP admission", () => {
 
   it.each(["1", "true"])("checks the complete drain batch before any side effect with flag %j", async (flag) => {
     vi.stubEnv("PP_DESKTOP_REBUILD", flag);
+    repo.setSetting("feature_toggles", '{"farm":true}');
     repo.setSetting("integrations", JSON.stringify([{ id: "moon", type: "moonraker", name: "Moon", config: {} }, { id: "host", type: "bambu", name: "Bambu", config: {} }]));
     repo.setSetting("printer.fleet", JSON.stringify([{ id: "moon", integration_id: "moon" }, { id: "printer", integration_id: "host" }]));
     const moon = seed(repo, jobs.getExportsDir(), profileId, "moon");
@@ -206,7 +207,7 @@ describe("stored Bambu send-queue dispatch/drain HTTP admission", () => {
   });
 
   it.each(["dispatch", "drain"])("%s rechecks access revoked during live-job reconciliation", async (action) => {
-    repo.setSetting("feature_toggles", '{"bambu":true}');
+    repo.setSetting("feature_toggles", '{"bambu":true,"farm":true}');
     repo.setSetting("integrations", JSON.stringify([{ id: "moon", type: "moonraker", name: "Moon", config: {} }, { id: "host", type: "bambu", name: "Bambu", config: {} }]));
     repo.setSetting("printer.fleet", JSON.stringify([{ id: "moon", integration_id: "moon" }, { id: "printer", integration_id: "host" }]));
     const moon = seed(repo, jobs.getExportsDir(), profileId, "moon");
@@ -228,6 +229,7 @@ describe("stored Bambu send-queue dispatch/drain HTTP admission", () => {
 
   it("preflights items added while live-job reconciliation awaits", async () => {
     configureHost(repo, "moonraker");
+    repo.setSetting("feature_toggles", '{"farm":true}');
     const moon = seed(repo, jobs.getExportsDir(), profileId);
     repo.setSetting(PRINTER_SEND_QUEUE_SETTINGS_KEY, JSON.stringify([moon, { ...moon, id: "in-flight", state: "sending", upload_job_id: "stale" }]));
     vi.mocked(jobs.get).mockImplementation(async () => {
@@ -264,11 +266,9 @@ describe("stored Bambu send-queue dispatch/drain HTTP admission", () => {
     const bambu = seed(repo, jobs.getExportsDir(), profileId, "bambu");
     const terminal = ["done", "cancelled", "error"].map((state) => ({ ...bambu, id: state, state }));
     repo.setSetting(PRINTER_SEND_QUEUE_SETTINGS_KEY, JSON.stringify([...terminal, ...moon, bambu]));
-    repo.setSetting("feature_toggles", "broken");
-    const reads = vi.spyOn(repo, "getSettingSnapshot");
+    repo.setSetting("feature_toggles", '{"farm":true}');
     const response = await request("drain", "");
     expect(response.json()).toEqual({ results: [{ item_id: moon[0]?.id, job_id: "upload-job" }] });
-    expect(reads).not.toHaveBeenCalled();
     expect(loadPrinterSendQueue(repo).find((item) => item.id === bambu.id)).toEqual(bambu);
     expect(readFileSync(bambu.artifact_path)).toEqual(bytes);
   });
@@ -285,21 +285,20 @@ describe("stored Bambu send-queue dispatch/drain HTTP admission", () => {
     expect(readFileSync(item.artifact_path)).toEqual(bytes);
   });
 
-  it.each(["moonraker", "prusalink"])("preserves %s dispatch and drain without feature reads", async (type) => {
+  it.each(["moonraker", "prusalink"])("dispatches and drains %s when farm is enabled", async (type) => {
     configureHost(repo, type);
-    repo.setSetting("feature_toggles", "broken");
+    repo.setSetting("feature_toggles", '{"farm":true}');
     const reads = vi.spyOn(repo, "getSettingSnapshot");
     const item = seed(repo, jobs.getExportsDir(), profileId);
     const response = await request("dispatch", item.id);
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ job_id: "upload-job", item: { id: item.id, state: "sending" } });
     expect(jobs.start).toHaveBeenCalledWith("printer-upload", expect.objectContaining({ artifact_path: item.artifact_path, profile_id: profileId }), "default");
-    expect(reads).not.toHaveBeenCalled();
+    expect(reads).toHaveBeenCalledWith("feature_toggles");
     expect(readFileSync(item.artifact_path)).toEqual(bytes);
     const next = seed(repo, jobs.getExportsDir(), profileId);
     const drained = await request("drain", "", urls[1]);
     expect(drained.json()).toEqual({ results: [{ item_id: next.id, job_id: "upload-job" }] });
-    expect(reads).not.toHaveBeenCalled();
     expect(readFileSync(next.artifact_path)).toEqual(bytes);
   });
 

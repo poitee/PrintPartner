@@ -17,6 +17,7 @@ import {
 } from "../components/ui/card";
 import { HOSTED_PLANNING_COMPOSE_NOTE, isHostedPlanning } from "@print-partner/contracts";
 import { useEngineHealth } from "../hooks/useEngineHealth";
+import { useFarmVisible } from "../hooks/useFarmVisible";
 import { resolveEngineState } from "../lib/workflowState";
 import { useProfileSelection } from "../context/ProfileContext";
 import {
@@ -61,6 +62,7 @@ export default function PrintersPage() {
     error: engineError,
   });
   const engineReady = engineState === "ready";
+  const farmVisible = useFarmVisible(selectedProfileId);
   const hostedPlanning = isHostedPlanning(health);
   const pollMs = usePrinterStatusPollMs();
   const [workspacePrinterId, setWorkspacePrinterId] = useState<string | null>(null);
@@ -98,14 +100,14 @@ export default function PrintersPage() {
   const rosterLoading = printersQuery.isPending || (hasConnections && integrationsQuery.isPending);
 
   const statusIntegrationIds = useMemo(
-    () => printers.flatMap((row) => row.host ? [row.host.id] : []),
-    [printers],
+    () => farmVisible ? printers.flatMap((row) => row.host ? [row.host.id] : []) : [],
+    [farmVisible, printers],
   );
   const { statusByIntegration: statusById, refresh: refreshStatus } = usePrinterStatuses(
     statusIntegrationIds,
     engineReady,
   );
-  const checkoffLinksQuery = usePrinterCheckoffLinksQuery(engineReady, pollMs);
+  const checkoffLinksQuery = usePrinterCheckoffLinksQuery(engineReady && farmVisible, pollMs);
   const checkoffLinks = checkoffLinksQuery.data?.links ?? [];
 
   const planNameById = useMemo(() => {
@@ -183,10 +185,11 @@ export default function PrintersPage() {
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {printers.map(({ printer, host, hostType }) => {
-            const status = host ? statusById[host.id] : undefined;
+            const status = farmVisible && host ? statusById[host.id] : undefined;
             const tone = printerLiveStripTone(status?.state);
             const filename = status?.filename?.trim();
             const canSend = hostType === "moonraker" || hostType === "prusalink";
+            const showLive = farmVisible || host == null;
             return (
               <li key={printer.id}>
                 <Card className="h-full border-border shadow-sm">
@@ -200,6 +203,7 @@ export default function PrintersPage() {
                           {hostType ? printerDeskTypeLabel(hostType) : `${printer.model} · Manual tracking`}
                         </CardDescription>
                       </div>
+                      {showLive ? (
                       <Badge
                         variant={toneBadgeVariant(tone)}
                         className={cn(
@@ -208,10 +212,11 @@ export default function PrintersPage() {
                       >
                         {host ? formatPrinterStatusPill(status) : "Unmonitored"}
                       </Badge>
+                      ) : null}
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-2 pt-0">
-                    {filename ? (
+                    {showLive && filename ? (
                       (() => {
                         const planCaption = checkoffLinksQuery.isPending
                           ? null
@@ -238,12 +243,12 @@ export default function PrintersPage() {
                           </p>
                         );
                       })()
-                    ) : (
+                    ) : showLive ? (
                       <p className="text-xs text-muted-foreground">
                         {status?.message?.trim() || (host ? "No active job" : "Provide a print file to track this printer")}
                       </p>
-                    )}
-                    {hostedPlanning ? null : (
+                    ) : null}
+                    {showLive && !hostedPlanning ? (
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-md border border-border/70 bg-muted/25 p-3 text-xs">
                       <div>
                         <dt className="text-muted-foreground">Nozzle</dt>
@@ -264,8 +269,8 @@ export default function PrintersPage() {
                         <dd className="mt-0.5 font-mono">{formatUptime(status.uptime_seconds)}</dd>
                       </div>}
                     </dl>
-                    )}
-                    {status?.progress != null && !hostedPlanning ? (
+                    ) : null}
+                    {showLive && status?.progress != null && !hostedPlanning ? (
                       <div className="space-y-1" aria-label={`Print progress ${status.progress}%`}>
                         <div className="flex justify-between text-micro text-muted-foreground">
                           <span>Progress</span><span className="font-mono">{status.progress}%</span>
