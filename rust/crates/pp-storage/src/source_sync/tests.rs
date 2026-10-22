@@ -1824,3 +1824,192 @@ fn sync_candidate_rejects_changed_configuration_or_observation() {
     );
     assert_eq!(sync.snapshot(), sealed);
 }
+
+fn settlement(source_id: i64) -> SyncSettlement {
+    SyncSettlement {
+        result: jobs::SourceScanResult {
+            project_id: Some(u64::try_from(source_id).unwrap()),
+            stl_count: 2,
+            downloaded: 1,
+            doc_count: 3,
+            docs_downloaded: 0,
+            pdf_extract_job_id: None,
+            postprocess_warning: None,
+        },
+        receipt: jobs::ResultArtifact {
+            receipt_id: format!("local-scan-{}", "ab".repeat(16)),
+            content_hash: "cd".repeat(32),
+            target: format!("source:{source_id}"),
+        },
+    }
+}
+
+fn stored_success(
+    sync: &Fixture,
+    job_id: &str,
+) -> (
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+) {
+    sync.connection()
+        .query_row(
+            "SELECT state,claim_generation,result_json,result_digest,receipt_id,receipt_hash,receipt_target,reservation_acknowledged,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [job_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
+fn refuse_settle(
+    sync: &Fixture,
+    lease: &AttemptLease,
+    target: &mut SyncTargetLease,
+    settlement: SyncSettlement,
+    source_id: i64,
+) -> String {
+    let rows = sync.snapshot();
+    let source = source_row(sync, source_id);
+    let error = sync
+        .worker
+        .settle_source_sync_target(lease, target, settlement)
+        .unwrap_err();
+    assert_eq!(sync.snapshot(), rows);
+    assert_eq!(source_row(sync, source_id), source);
+    let busy = sync.begin_work(source_id).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    error.to_string()
+}
+
+#[test]
+fn sync_settle_persists_one_result() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let token = target.source_work.proof().unwrap().token;
+    let mut other_lease = sync.begin_work(other).unwrap();
+    let before = sync.snapshot();
+    let source = source_row(&sync, first);
+    let busy = sync.begin_work(first).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    let settlement = settlement(first);
+    let settled = sync
+        .worker
+        .settle_source_sync_target(&lease, &mut target, settlement.clone())
+        .unwrap();
+    let result_json = serde_json::to_string(&settlement.result).unwrap();
+    assert_eq!(
+        settled,
+        SettledSyncTarget {
+            key: SyncTargetKey {
+                job_id: job_id.clone(),
+                ordinal: 0,
+            },
+            source_id: first,
+            result: settlement.result.clone(),
+            receipt: settlement.receipt.clone(),
+        }
+    );
+    assert_eq!(
+        stored_success(&sync, &job_id),
+        (
+            "succeeded".into(),
+            1,
+            result_json.clone(),
+            digest(result_json.as_bytes()),
+            settlement.receipt.receipt_id,
+            settlement.receipt.content_hash,
+            settlement.receipt.target,
+            1,
+            format!("{token:016x}"),
+        )
+    );
+    let after = sync.snapshot();
+    assert_eq!(after[0], before[0]);
+    assert_eq!(after[1][1], before[1][1]);
+    assert_eq!(after[2], before[2]);
+    assert_eq!(after[3], before[3]);
+    assert_eq!(source_row(&sync, first), source);
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![
+            (first, "succeeded".into(), None),
+            (second, "pending".into(), None),
+        ]
+    );
+    let still_held = sync.begin_work(other).err().unwrap();
+    assert!(
+        still_held.downcast_ref::<SourceBusy>().is_some(),
+        "{still_held:#}"
+    );
+    other_lease.release().unwrap();
+    sync.begin_work(first).unwrap().release().unwrap();
+    assert_eq!(local(sync.next(&mut lease)).key().ordinal, 1);
+}
+
+#[test]
+fn sync_stale_settlement_preserves_target() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let settlement = settlement(first);
+    let stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    let before = sync.snapshot();
+    assert_eq!(
+        refuse_settle(&sync, &stale, &mut target, settlement.clone(), first),
+        "Stale attempt fence"
+    );
+    let held = std::mem::replace(&mut target.source_work, sync.begin_work(other).unwrap());
+    assert_eq!(
+        refuse_settle(&sync, &lease, &mut target, settlement.clone(), first),
+        "Sync target reservation mismatch"
+    );
+    std::mem::replace(&mut target.source_work, held)
+        .release()
+        .unwrap();
+    let mut unnamed = settlement.clone();
+    unnamed.result.project_id = None;
+    assert_eq!(
+        refuse_settle(&sync, &lease, &mut target, unnamed, first),
+        "Sync result Source mismatch"
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(sync.targets(&job_id), vec![(first, "claimed".into(), None)]);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap()
+            .source_id,
+        first
+    );
+    assert_eq!(sync.snapshot(), before);
+}

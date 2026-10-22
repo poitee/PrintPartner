@@ -2,8 +2,8 @@ use crate::{
     SettingsClient,
     catalog::{SourceBinding, SourceBusy, SourceWorkLease, SourceWorkProof, State},
     jobs::{
-        AttemptLease, JobKind, JobRecord, Payload, PersistentState, SourceScanResult,
-        SourceSyncFailure,
+        AttemptLease, JobKind, JobRecord, Payload, PersistentState, ResultArtifact,
+        SourceScanResult, SourceSyncFailure,
     },
     source_scan::LocalScanObservation,
 };
@@ -60,6 +60,29 @@ pub struct BoundSyncTarget {
     pub(crate) key: SyncTargetKey,
     pub(crate) source_id: i64,
     pub(crate) claim_generation: i64,
+}
+
+/// The successful result a worker stores for one claimed target.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SyncSettlement {
+    pub result: SourceScanResult,
+    pub receipt: ResultArtifact,
+}
+
+/// One target whose successful result is stored and whose reservation the
+/// writer has retired.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SettledSyncTarget {
+    pub(crate) key: SyncTargetKey,
+    pub(crate) source_id: i64,
+    pub(crate) result: SourceScanResult,
+    pub(crate) receipt: ResultArtifact,
+}
+
+pub(crate) struct SettledSyncRelease {
+    pub(crate) settled: SettledSyncTarget,
+    pub(crate) proof: SourceWorkProof,
+    pub(crate) binding: SourceBinding,
 }
 
 pub enum NextSyncTarget {
@@ -719,6 +742,62 @@ pub(crate) fn bind(
     };
     validate_target(tx, &job, &bound)?;
     Ok(bound)
+}
+
+/// Stores one successful result for a claimed target and marks that
+/// reservation released. The attempt and the held Source proof must still be
+/// the claim's. A refusal writes nothing. The Job row and the batch stay as
+/// they were; the live token is retired only after this write commits.
+pub(crate) fn settle(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    candidate: SyncCandidate,
+    settlement: SyncSettlement,
+) -> Result<SettledSyncRelease> {
+    let bound = bind(tx, state, lease, &candidate)?;
+    let SyncSettlement { result, receipt } = settlement;
+    let result_json = serde_json::to_string(&result)?;
+    let result_digest = digest(result_json.as_bytes());
+    validate_result_provenance(
+        bound.source_id,
+        Some(result_json.clone()),
+        Some(result_digest.clone()),
+        Some(receipt.receipt_id.clone()),
+        Some(receipt.content_hash.clone()),
+        Some(receipt.target.clone()),
+    )?;
+    ensure!(
+        tx.execute(
+            "UPDATE source_sync_targets SET state='succeeded',result_json=?3,result_digest=?4,receipt_id=?5,receipt_hash=?6,receipt_target=?7,reservation_acknowledged=1,updated_at=?8 WHERE job_id=?1 AND ordinal=?2 AND state='claimed' AND result_json IS NULL AND result_digest IS NULL AND receipt_id IS NULL AND receipt_hash IS NULL AND receipt_target IS NULL",
+            params![
+                bound.key.job_id,
+                bound.key.ordinal,
+                result_json,
+                result_digest,
+                receipt.receipt_id,
+                receipt.content_hash,
+                receipt.target,
+                now(),
+            ],
+        )? == 1,
+        "Sync target settlement changed"
+    );
+    let proof = candidate.proof;
+    let binding = SourceBinding {
+        tenant: lease.tenant().to_owned(),
+        id: bound.source_id,
+    };
+    Ok(SettledSyncRelease {
+        settled: SettledSyncTarget {
+            key: bound.key,
+            source_id: bound.source_id,
+            result,
+            receipt,
+        },
+        proof,
+        binding,
+    })
 }
 
 fn ordinary_failure(tx: &Transaction<'_>, mut job: JobRecord, key: &SyncTargetKey) -> Result<Next> {
