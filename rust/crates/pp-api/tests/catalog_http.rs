@@ -166,7 +166,7 @@ impl Server {
         }
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
-        if matches!(status, 200 | 400 | 401 | 403) {
+        if matches!(status, 200 | 400 | 401 | 403 | 409) {
             assert_eq!(
                 response
                     .headers()
@@ -674,6 +674,80 @@ async fn catalog_patch_wrong_owner_is_refused() {
     );
     assert_eq!(files(&directory), snapshot);
     assert_eq!(list(&owner.lock().unwrap()), seeded);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_patch_stale_metadata_is_conflict() {
+    if !matches!(
+        std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
+        Some("1" | "true")
+    ) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "catalog_patch_stale_metadata_is_conflict",
+                "--test-threads=1",
+            ])
+            .env("PP_DESKTOP_REBUILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let fixture = node_fixture();
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (status, created) = server
+        .exchange(
+            Method::POST,
+            "/sources",
+            &[("Cookie", &cookie)],
+            Some(&fixture["create"]["body"]),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let id = created["id"].as_i64().unwrap();
+    let stale = match created["catalog_metadata_version"].as_i64() {
+        Some(version) if version != 0 => 0,
+        _ => 4,
+    };
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .exchange(
+            Method::PATCH,
+            &format!("/sources/{id}"),
+            &[("Cookie", &cookie)],
+            Some(&json!({
+                "metadata": {"note": "stale"},
+                "metadata_version": stale
+            })),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (
+            409,
+            Some("Catalog metadata changed; retry from the current version")
+        )
+    );
+    let (status, stored) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(stored["metadata"]["note"], created["metadata"]["note"]);
+    assert_eq!(files(&directory), snapshot);
     server.stop().await;
     shutdown(owner, directory);
 }

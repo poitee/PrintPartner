@@ -35,6 +35,7 @@ pub(super) fn source_patch(body: &Value) -> SourcePatch {
         source_kind: text(body, "source_kind"),
         role: text(body, "role"),
         metadata: object(body, "metadata"),
+        metadata_version: body.get("metadata_version").and_then(Value::as_i64),
         ..Default::default()
     }
 }
