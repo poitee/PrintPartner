@@ -90,16 +90,19 @@ struct App {
     owner: Arc<Mutex<WriterOwner>>,
 }
 
-/// Mounts Source list, detail, create, and metadata patch at `/` and `/api/v1`
-/// when `PP_DESKTOP_REBUILD` was exactly `1` or `true` at startup. Otherwise
-/// nothing is mounted. Delete, sync, and upload stay unregistered.
+/// Mounts Source list, detail, create, metadata patch, and delete at `/` and
+/// `/api/v1` when `PP_DESKTOP_REBUILD` was exactly `1` or `true` at startup.
+/// Otherwise nothing is mounted. Sync and upload stay unregistered.
 pub fn admit_catalog_routes(config: CatalogHttpConfig, owner: Arc<Mutex<WriterOwner>>) -> Router {
     if !config.enabled {
         return Router::new();
     }
     let routes = Router::new()
         .route("/sources", get(list).post(create))
-        .route("/sources/{id}", get(detail).patch(patch_source));
+        .route(
+            "/sources/{id}",
+            get(detail).patch(patch_source).delete(delete_source),
+        );
     let app = App { config, owner };
     Router::new()
         .merge(routes.clone())
@@ -252,6 +255,17 @@ async fn create(
     .await
 }
 
+async fn delete_source(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(id) = source_id(&id) else {
+        return reject(StatusCode::NOT_FOUND, "Source not found");
+    };
+    execute(&app, credentials(principal), CatalogRequest::Delete { id }).await
+}
+
 async fn detail(
     State(app): State<App>,
     Extension(principal): Extension<Principal>,
@@ -334,7 +348,25 @@ async fn execute(app: &App, credentials: Credentials, request: CatalogRequest) -
             Err(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
         },
         Outcome::Source(None) => reject(StatusCode::NOT_FOUND, "Source not found"),
+        Outcome::Deletion(outcome) => deletion_response(wire::source_deletion(outcome)),
         _ => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
+    }
+}
+
+fn deletion_response(mapped: wire::DeletionHttp) -> Response {
+    match mapped {
+        wire::DeletionHttp::Deleted => StatusCode::NO_CONTENT.into_response(),
+        wire::DeletionHttp::Refused {
+            status: 404,
+            detail,
+        } => reject(StatusCode::NOT_FOUND, detail),
+        wire::DeletionHttp::Refused {
+            status: 409,
+            detail,
+        } => reject(StatusCode::CONFLICT, detail),
+        wire::DeletionHttp::Refused { detail, .. } => {
+            reject(StatusCode::INTERNAL_SERVER_ERROR, detail)
+        }
     }
 }
 
@@ -358,6 +390,10 @@ fn catalog_error(error: anyhow::Error) -> Response {
             CatalogFailure::TooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "Catalog request too large".to_owned(),
+            ),
+            CatalogFailure::Conflict => (
+                StatusCode::CONFLICT,
+                "Catalog metadata changed; retry from the current version".to_owned(),
             ),
             CatalogFailure::InvalidStoredNaming => (
                 StatusCode::INTERNAL_SERVER_ERROR,
