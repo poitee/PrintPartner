@@ -1171,6 +1171,21 @@ cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
 
+### D14 captured identifiers and payload policy
+
+GRE-766 decodes a capture identifier and the fixed file or ZIP payload policy
+behind `desktop_rebuild`. A supplied files or ZIP input stays version 1. A
+payload that carries the fixed policy decodes as version 2. `ImportClient::admit`
+still accepts only a supplied input: a captured payload does not deserialize as
+an admission, and this slice writes no captured journal row. Digest binding,
+manifests, and captured admission stay on later D14 slices.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_payload
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
+```
+
 ### D14 uploads: import phases
 
 GRE-610's fourth PR runs an admitted import through its phases, behind

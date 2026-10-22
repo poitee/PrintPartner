@@ -16,6 +16,10 @@ use std::{
 #[cfg(test)]
 mod tests;
 
+mod captured;
+
+pub use captured::{CaptureId, CapturedPayloadV1};
+
 const COLUMNS: &str = include_str!("remote_sources/columns38.sql");
 
 type Install = fn(&Connection) -> Result<()>;
@@ -327,12 +331,30 @@ pub enum Input {
 }
 
 impl Input {
+    pub fn version(&self) -> u32 {
+        match self {
+            Self::Files { .. } | Self::Zip { .. } => 1,
+        }
+    }
+
     fn requested_paths(&self) -> Vec<&str> {
         match self {
             Self::Files { paths } => paths.iter().map(String::as_str).collect(),
             Self::Zip { path } => vec![path],
         }
     }
+}
+
+pub fn decode_import_input_version(value: &serde_json::Value) -> Result<u32> {
+    if value.get("policy").is_some() {
+        let payload: CapturedPayloadV1 = serde_json::from_value(value.clone())
+            .map_err(|error| anyhow!("Invalid captured payload: {error}"))?;
+        payload.validate()?;
+        return Ok(payload.input_version());
+    }
+    let input: Input = serde_json::from_value(value.clone())
+        .map_err(|error| anyhow!("Invalid import input: {error}"))?;
+    Ok(input.version())
 }
 
 #[derive(Serialize, Deserialize)]

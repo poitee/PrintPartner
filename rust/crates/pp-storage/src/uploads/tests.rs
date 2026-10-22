@@ -1,4 +1,7 @@
-use super::{expected, validate_schema};
+use super::{
+    Admission, CaptureId, CapturedPayloadV1, Input, decode_import_input_version, expected,
+    validate_schema,
+};
 use crate::{Limits, WriterOwner, schema::SchemaReady, tests::directory};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -755,4 +758,133 @@ fn schema41_validation_rolls_back_a_drifted_existing_table() {
         "{error:#}"
     );
     assert_eq!(live_contents(&database), original);
+}
+
+#[test]
+fn capture_payload_round_trip() {
+    let identifier = "c".repeat(128);
+    let capture_id = CaptureId::new(identifier.clone()).unwrap();
+    assert_eq!(capture_id.as_str(), identifier);
+    assert_eq!(
+        serde_json::from_str::<CaptureId>(&serde_json::to_string(&capture_id).unwrap()).unwrap(),
+        capture_id
+    );
+    assert_eq!(format!("{capture_id:?}"), "CaptureId([redacted])");
+
+    let files = CapturedPayloadV1::files(vec!["models/a.stl".to_string()]);
+    let files_wire = serde_json::json!({
+        "kind": "files",
+        "paths": ["models/a.stl"],
+        "policy": {
+            "policy_version": 1,
+            "relative_paths_transition": "node_json_array_string_filter_boolean_v1",
+            "label_selection": "trimmed_relative_then_slash_filename_then_ordinal_stl_v1",
+            "backslash_boundary": "replace_with_slash_at_label_boundary_v1",
+            "canonical_paths": "source_path_nfc_case_fold_prefix_v1",
+            "max_raw_input_bytes": 268_435_456,
+            "max_prepared_bytes": 1_073_741_824,
+            "max_files": 10_000,
+            "max_multipart_parts": 10_001,
+            "max_metadata_bytes": 65_536
+        }
+    });
+    assert_eq!(serde_json::to_value(&files).unwrap(), files_wire);
+    let files_decoded: CapturedPayloadV1 = serde_json::from_value(files_wire.clone()).unwrap();
+    assert_eq!(files_decoded, files);
+    files_decoded.validate().unwrap();
+    assert_eq!(files_decoded.input_version(), 2);
+    assert_eq!(decode_import_input_version(&files_wire).unwrap(), 2);
+    assert_eq!(format!("{files:?}"), "CapturedPayloadV1([redacted])");
+
+    let zip = CapturedPayloadV1::zip("pack.zip".to_string());
+    let zip_wire = serde_json::json!({
+        "kind": "zip",
+        "path": "pack.zip",
+        "policy": {
+            "policy_version": 1,
+            "archive_labels": "nfc_at_acquisition",
+            "canonical_paths": "source_path_nfc_case_fold_prefix_v1",
+            "max_raw_input_bytes": 268_435_456,
+            "max_prepared_bytes": 1_073_741_824,
+            "max_zip_entries": 10_000
+        }
+    });
+    assert_eq!(serde_json::to_value(&zip).unwrap(), zip_wire);
+    assert_eq!(
+        serde_json::from_value::<CapturedPayloadV1>(zip_wire.clone()).unwrap(),
+        zip
+    );
+    assert_eq!(decode_import_input_version(&zip_wire).unwrap(), 2);
+
+    let supplied = serde_json::json!({"kind": "files", "paths": ["models/a.stl"]});
+    assert_eq!(decode_import_input_version(&supplied).unwrap(), 1);
+    assert_eq!(
+        serde_json::from_value::<Input>(supplied).unwrap().version(),
+        1
+    );
+    let supplied_zip = serde_json::json!({"kind": "zip", "path": "pack.zip"});
+    assert_eq!(decode_import_input_version(&supplied_zip).unwrap(), 1);
+}
+
+#[test]
+fn capture_payload_rejects_invalid_policy_and_identity() {
+    let error = CaptureId::new("").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Invalid capture identifier"),
+        "{error:#}"
+    );
+    let error = CaptureId::new("c".repeat(129)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Invalid capture identifier"),
+        "{error:#}"
+    );
+    let error = CaptureId::new("capture\ncontrol").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Invalid capture identifier"),
+        "{error:#}"
+    );
+    assert!(serde_json::from_str::<CaptureId>("\"\"").is_err());
+    assert!(serde_json::from_str::<CaptureId>("\"capture\\ncontrol\"").is_err());
+
+    let mut tampered =
+        serde_json::to_value(CapturedPayloadV1::zip("pack.zip".to_string())).unwrap();
+    tampered["policy"]["max_zip_entries"] = serde_json::json!(9_999);
+    let decoded: CapturedPayloadV1 = serde_json::from_value(tampered.clone()).unwrap();
+    let error = decoded.validate().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Unsupported capture policy"),
+        "{error:#}"
+    );
+    let error = decode_import_input_version(&tampered).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Unsupported capture policy"),
+        "{error:#}"
+    );
+
+    let mut unknown_policy =
+        serde_json::to_value(CapturedPayloadV1::files(vec!["a.stl".to_string()])).unwrap();
+    unknown_policy["policy"]["future"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<CapturedPayloadV1>(unknown_policy.clone()).is_err());
+    assert!(decode_import_input_version(&unknown_policy).is_err());
+
+    let mut unknown_label =
+        serde_json::to_value(CapturedPayloadV1::zip("pack.zip".to_string())).unwrap();
+    unknown_label["policy"]["archive_labels"] = serde_json::json!("future");
+    assert!(serde_json::from_value::<CapturedPayloadV1>(unknown_label).is_err());
+    assert!(
+        decode_import_input_version(&serde_json::json!({"kind": "future", "path": "pack.zip"}))
+            .is_err()
+    );
+
+    let captured =
+        serde_json::to_value(CapturedPayloadV1::files(vec!["models/a.stl".to_string()])).unwrap();
+    let admission = serde_json::json!({
+        "key": "captured-op",
+        "target": {"kind": "existing", "source_id": 1},
+        "input": captured,
+        "reserved_bytes": 1,
+        "max_input_bytes": 1,
+        "max_prepared_bytes": 1
+    });
+    assert!(serde_json::from_value::<Admission>(admission).is_err());
 }
