@@ -976,10 +976,9 @@ struct ReportedRecompute {
     body: Vec<u8>,
     rows_before: Vec<Vec<Vec<String>>>,
     rows_after: Vec<Vec<Vec<String>>>,
-    files: Vec<(String, Vec<u8>)>,
 }
 
-fn recompute_reported(reported: &[&str], disk: &[(&str, &str)]) -> ReportedRecompute {
+fn recompute_reported(profile: u64, reported: &[&str], setup: &str) -> ReportedRecompute {
     use crate::{Limits, WriterOwner, auth, read_model::Credential};
     use std::time::Duration;
     let root = FixtureRoot(
@@ -997,16 +996,10 @@ fn recompute_reported(reported: &[&str], disk: &[(&str, &str)]) -> ReportedRecom
         include_bytes!("../../tests/fixtures/required-units/unchanged.db"),
     )
     .unwrap();
-    let revision = root.path().join("repos/1/revisions/fixture");
-    std::fs::create_dir_all(&revision).unwrap();
-    for (name, bytes) in disk {
-        let path = revision.join(name);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&path, bytes).unwrap();
-    }
     let connection = Connection::open(&database).unwrap();
+    if !setup.is_empty() {
+        connection.execute_batch(setup).unwrap();
+    }
     let files: Vec<Value> = reported
         .iter()
         .map(|path| json!({"source":1,"path":path,"content":path}))
@@ -1031,7 +1024,7 @@ fn recompute_reported(reported: &[&str], disk: &[(&str, &str)]) -> ReportedRecom
     let body = client
         .recompute(
             Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
-            super::PositiveId::new(1).unwrap(),
+            super::PositiveId::new(profile).unwrap(),
             super::RecomputeRequest::new("would-wipe", true).unwrap(),
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(60),
@@ -1041,51 +1034,58 @@ fn recompute_reported(reported: &[&str], disk: &[(&str, &str)]) -> ReportedRecom
         .into_bytes();
     owner.shutdown().unwrap();
     let rows_after = table_snapshot(&connection);
-    let files = disk
-        .iter()
-        .map(|(name, _)| {
-            (
-                (*name).to_owned(),
-                std::fs::read(revision.join(name)).unwrap(),
-            )
-        })
-        .collect();
     ReportedRecompute {
         body,
         rows_before,
         rows_after,
-        files,
     }
 }
 
 #[test]
-fn preparation_would_wipe_matches_node_contract() {
-    let run = recompute_reported(
-        &["captured-input.txt"],
-        &[
-            ("captured-input.txt", "captured-bytes"),
-            ("neighbor.stl", "neighbor-bytes"),
-        ],
-    );
-    assert_eq!(run.body, br#"{"kind":"would_wipe"}"#);
-    assert_eq!(run.rows_before, run.rows_after);
+fn would_wipe_serializes_without_a_scanner() {
     assert_eq!(
-        run.files,
-        vec![
-            ("captured-input.txt".into(), b"captured-bytes".to_vec()),
-            ("neighbor.stl".into(), b"neighbor-bytes".to_vec()),
-        ]
+        super::RecomputeOutcome::WouldWipe.into_json_body().into_bytes(),
+        br#"{"kind":"would_wipe"}"#
+    );
+    assert_eq!(
+        super::RebaseOutcome::WouldWipe
+            .into_json_body()
+            .unwrap()
+            .into_bytes(),
+        br#"{"kind":"would_wipe"}"#
     );
 }
 
 #[test]
-fn valid_scans_do_not_report_would_wipe() {
-    let empty = recompute_reported(&[], &[("kept.stl", "kept-bytes")]);
-    assert_eq!(empty.body, br#"{"kind":"no_stls"}"#);
-    assert_eq!(empty.rows_before, empty.rows_after);
-    assert_eq!(
-        empty.files,
-        vec![("kept.stl".into(), b"kept-bytes".to_vec())]
+fn non_stl_scans_are_no_stls() {
+    let accepted = recompute_reported(1, &["captured-input.txt"], "");
+    assert_eq!(accepted.body, br#"{"kind":"no_stls"}"#);
+    assert_eq!(accepted.rows_before, accepted.rows_after);
+
+    let empty_prior = recompute_reported(
+        3,
+        &["captured-input.txt"],
+        "INSERT INTO build_profiles(id,tenant_id,name) VALUES(3,'default','Empty Build'); INSERT INTO profile_layers(tenant_id,profile_id,project_id,layer_type,layer_order) SELECT tenant_id,3,project_id,layer_type,layer_order FROM profile_layers WHERE profile_id=1",
     );
+    assert_eq!(empty_prior.body, br#"{"kind":"no_stls"}"#);
+    assert_eq!(empty_prior.rows_before, empty_prior.rows_after);
+}
+
+#[test]
+fn valid_scans_do_not_report_would_wipe() {
+    let mixed = recompute_reported(1, &["notes.txt", "kept.stl"], "");
+    let body: Value = serde_json::from_slice(&mixed.body).unwrap();
+    assert_eq!(body["kind"], "created");
+    let parts = body["draft"]["parts"].as_array().unwrap();
+    let keys: Vec<&str> = parts
+        .iter()
+        .map(|part| part["partKey"].as_str().unwrap())
+        .collect();
+    let paths: Vec<&str> = parts
+        .iter()
+        .map(|part| part["relativePath"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["kept.stl"]);
+    assert_eq!(paths, ["kept.stl"]);
     client_attempt(ClientAttempt::Match);
 }

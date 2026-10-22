@@ -150,6 +150,10 @@ pub(super) struct PreparedDraftSnapshot {
     pub parts: Vec<DraftPart>,
     pub digest: String,
 }
+/// One captured scanner row. `key` is the normalized relative path.
+///
+/// Only a key ending in `.stl` is a part. Node's `scanRepo` drops every other
+/// file before it chooses `no_stls` or `would_wipe`.
 #[derive(Clone)]
 struct Scanned {
     key: String,
@@ -628,10 +632,21 @@ pub(super) fn parse(
         quantity,
     ))
 }
-fn retain_valid_scanner_entries(scans: &mut [Vec<Scanned>]) {
+fn retain_valid_scanner_entries(
+    scans: &mut [Vec<Scanned>],
+    b: &mut PreparationBudget<'_>,
+) -> Result<()> {
     for scan in scans {
-        scan.retain(|part| part.key.ends_with(".stl"));
+        let mut kept = Vec::with_capacity(scan.len());
+        for part in std::mem::take(scan) {
+            b.visit(0)?;
+            if part.key.ends_with(".stl") {
+                kept.push(part);
+            }
+        }
+        *scan = kept;
     }
+    Ok(())
 }
 fn merge(
     scans: &[Vec<Scanned>],
@@ -911,11 +926,9 @@ pub(super) fn prepare(
         inventories.push(inventory);
     }
     ensure!(!scans.is_empty(), Failure::NoLayers);
+    retain_valid_scanner_entries(&mut scans, b)?;
+    retain_valid_scanner_entries(&mut available, b)?;
     ensure!(available.iter().any(|v| !v.is_empty()), Failure::NoStls);
-    // The guard counts every captured row. A valid scanner emits only `.stl`
-    // keys, so dropping other keys does not change its outcome.
-    retain_valid_scanner_entries(&mut scans);
-    retain_valid_scanner_entries(&mut available);
     let mut merged = merge(&scans, &prior, b)?;
     let selected: HashSet<_> = merged.iter().map(|p| p.key.clone()).collect();
     merged.extend(

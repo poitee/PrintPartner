@@ -1,16 +1,15 @@
 # Preparation would_wipe outcome
 
-Preparation returns `would_wipe` when captured scan rows leave no parts and the
-accepted Plan still has parts. The public recompute and rebase clients serialize
-that outcome as `{"kind":"would_wipe"}`, the same shape Node's preparation
-result uses for `no_layers` and `no_stls`.
+Preparation drops captured rows whose key does not end in `.stl` before the
+`no_stls` and `would_wipe` checks, the same cut Node's `scanRepo` makes while
+walking the tree. A scan whose remaining rows are empty is `no_stls`, including
+when the accepted Plan has parts and when it has none. That refusal returns
+before preparation writes a draft.
 
-The nonempty scan guard stays where it is. A scanner that returns no rows is
-still `no_stls`, including when accepted parts exist. A valid scanner emits only
-`.stl` keys, and those keys still merge into the current prepared draft. A
-captured row whose key does not end in `.stl` can pass the guard and still
-leave no parts. That is the `would_wipe` refusal. It returns before preparation
-writes a draft.
+`would_wipe` stays the outcome for a merge that leaves no parts while accepted
+parts still exist. The public recompute and rebase clients serialize it as
+`{"kind":"would_wipe"}`, the same shape Node uses for `no_layers` and `no_stls`.
+A scanner full of non-`.stl` names does not reach it.
 
 The code remains inside the default-off `desktop_rebuild` module. Product
 callers still require the startup `DesktopRebuild` value captured from
@@ -21,13 +20,16 @@ PR #1003 owns that file, so this note is the updated description.
 The public-client tests call `WriterOwner`'s working-draft client with a
 disposable copy of `required-units/unchanged.db`:
 
-- `preparation_would_wipe_matches_node_contract` reports one captured
-  `captured-input.txt` row. The body is exactly `{"kind":"would_wipe"}`. Draft
-  tables, accepted revision parts, the `parts` table, and both on-disk files
-  stay unchanged.
-- `valid_scans_do_not_report_would_wipe` reports no rows and keeps
-  `{"kind":"no_stls"}` with the same rows and the sentinel file. It also replays
-  the existing hint scan and matches `preparation-hints-node.json`.
+- `would_wipe_serializes_without_a_scanner` builds `RecomputeOutcome::WouldWipe`
+  and `RebaseOutcome::WouldWipe` and checks each body is
+  `{"kind":"would_wipe"}`.
+- `non_stl_scans_are_no_stls` reports one `captured-input.txt` row. With the
+  fixture's accepted parts, and with a second Plan that has layers and no
+  accepted parts, the body is `{"kind":"no_stls"}` and the draft tables stay
+  unchanged.
+- `valid_scans_do_not_report_would_wipe` reports `notes.txt` and `kept.stl`.
+  The created draft's only part key and relative path are `kept.stl`. It also
+  replays the existing hint scan and matches `preparation-hints-node.json`.
 
 Run from the repository root with the VM cargo wrapper and shared sccache:
 
