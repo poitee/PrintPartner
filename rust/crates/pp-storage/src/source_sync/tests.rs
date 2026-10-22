@@ -2013,3 +2013,232 @@ fn sync_stale_settlement_preserves_target() {
     );
     assert_eq!(sync.snapshot(), before);
 }
+
+fn metadata(sync: &Fixture, id: i64) -> Option<String> {
+    sync.connection()
+        .query_row(
+            "SELECT metadata_json FROM projects WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+fn refuse_fail(
+    sync: &Fixture,
+    lease: &mut AttemptLease,
+    target: &SyncTargetLease,
+    source_id: i64,
+    detail: &str,
+) -> String {
+    let rows = sync.snapshot();
+    let source = metadata(sync, source_id);
+    let error = sync
+        .worker
+        .fail_source_sync_target(lease, target, detail)
+        .unwrap_err();
+    assert_eq!(sync.snapshot(), rows);
+    assert_eq!(metadata(sync, source_id), source);
+    let busy = sync.begin_work(source_id).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+    error.to_string()
+}
+
+fn retained_failure(sync: &Fixture, lease: &mut AttemptLease) -> SourceSyncFailure {
+    let NextSyncTarget::RetainedFailure(failure) = sync.next(lease) else {
+        panic!("retained failure expected")
+    };
+    failure
+}
+
+#[test]
+fn sync_target_failure_records_source_observation() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE projects SET metadata_json=?1 WHERE id=?2",
+                (r#"{"keep":7}"#, first),
+            )
+            .unwrap(),
+        1
+    );
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let version = lease.version();
+    let capture: (String, String, String) = sync.connection().query_row(
+        "SELECT activation_observation_digest,path_observation_digest,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        refuse_fail(&sync, &mut lease, &target, first, ""),
+        "Invalid Local Sync failure"
+    );
+    assert_eq!(
+        refuse_fail(&sync, &mut lease, &target, first, &"x".repeat(1025)),
+        "Invalid Local Sync failure"
+    );
+    let source = source_row(&sync, first);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE projects SET local_path='moved' WHERE id=?1",
+                [first]
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_fail(&sync, &mut lease, &target, first, "disk read failed"),
+        "Sync Source observation mismatch"
+    );
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE projects SET local_path=?2 WHERE id=?1",
+                (first, source.1.clone()),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(source_row(&sync, first), source);
+    assert_eq!(metadata(&sync, first).as_deref(), Some(r#"{"keep":7}"#));
+    assert_eq!(lease.version(), version);
+    assert!(sync.job(&job_id).progress.is_none());
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    assert_eq!(
+        failed,
+        FailedSyncTarget {
+            key: SyncTargetKey {
+                job_id: job_id.clone(),
+                ordinal: 0
+            },
+            failure: SourceSyncFailure {
+                project_id: Some(first as u64),
+                name: Some("First".into()),
+                error: "disk read failed".into(),
+            },
+            progress: 0,
+            version: version + 1,
+        }
+    );
+    assert_eq!(
+        metadata(&sync, first).as_deref(),
+        Some(r#"{"keep":7,"sync_error":"disk read failed","sync_required":true}"#)
+    );
+    let still: (String, String, String) = sync.connection().query_row(
+        "SELECT activation_observation_digest,path_observation_digest,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(still, capture);
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![
+            (first, "failed".into(), Some("local_read".into())),
+            (second, "pending".into(), None),
+        ]
+    );
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    assert_eq!(lease.version(), version + 1);
+}
+
+#[test]
+fn sync_failure_does_not_replace_settled_result() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let second = sync.source("Second");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut first_target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut first_target, settlement(first))
+        .unwrap();
+    let stored = stored_success(&sync, &job_id);
+    let first_metadata = metadata(&sync, first);
+    assert!(sync.job(&job_id).progress.is_none());
+    let second_target = local(sync.next(&mut lease));
+    let mut planted = settlement(second);
+    planted.receipt.receipt_id = format!("local-scan-{}", "ef".repeat(16));
+    let result_json = serde_json::to_string(&planted.result).unwrap();
+    let result_digest = digest(result_json.as_bytes());
+    assert_eq!(
+        sync.connection().execute(
+            "UPDATE source_sync_targets SET result_json=?2,result_digest=?3,receipt_id=?4,receipt_hash=?5,receipt_target=?6 WHERE job_id=?1 AND ordinal=1",
+            (&job_id, &result_json, &result_digest, &planted.receipt.receipt_id, &planted.receipt.content_hash, &planted.receipt.target),
+        ).unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_fail(
+            &sync,
+            &mut lease,
+            &second_target,
+            second,
+            "disk read failed"
+        ),
+        "Sync target already stores a result"
+    );
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(metadata(&sync, second), None);
+    let planted_row: (String, String, String) = sync.connection().query_row(
+        "SELECT result_json,receipt_target,state FROM source_sync_targets WHERE job_id=?1 AND ordinal=1",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        planted_row,
+        (
+            result_json,
+            planted.receipt.target.clone(),
+            "claimed".into()
+        )
+    );
+    assert_eq!(
+        sync.connection().execute(
+            "UPDATE source_sync_targets SET result_json=NULL,result_digest=NULL,receipt_id=NULL,receipt_hash=NULL,receipt_target=NULL WHERE job_id=?1 AND ordinal=1",
+            [&job_id],
+        ).unwrap(),
+        1
+    );
+    let failed = sync
+        .worker
+        .fail_source_sync_target(&mut lease, &second_target, "disk read failed")
+        .unwrap();
+    assert_eq!(stored_success(&sync, &job_id), stored);
+    assert_eq!(metadata(&sync, first), first_metadata);
+    assert_eq!(
+        metadata(&sync, second).as_deref(),
+        Some(r#"{"sync_error":"disk read failed","sync_required":true}"#)
+    );
+    assert_eq!(
+        (failed.progress, sync.job(&job_id).progress),
+        (50, Some(50))
+    );
+    assert_eq!(failed.failure.project_id, Some(second as u64));
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![
+            (first, "succeeded".into(), None),
+            (second, "failed".into(), Some("local_read".into())),
+        ]
+    );
+    let acknowledged: (i64, Option<String>) = sync.connection().query_row(
+        "SELECT reservation_acknowledged,result_json FROM source_sync_targets WHERE job_id=?1 AND ordinal=1",
+        [&job_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(acknowledged, (0, None));
+    assert_eq!(retained_failure(&sync, &mut lease), failed.failure);
+    sync.begin_work(first).unwrap().release().unwrap();
+    let busy = sync.begin_work(second).err().unwrap();
+    assert!(busy.downcast_ref::<SourceBusy>().is_some(), "{busy:#}");
+}

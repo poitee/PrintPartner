@@ -85,10 +85,23 @@ pub(crate) struct SettledSyncRelease {
     pub(crate) binding: SourceBinding,
 }
 
+/// One claimed target whose local read failure is stored. The reservation is
+/// still held, so the failure does not count as completed progress.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FailedSyncTarget {
+    pub(crate) key: SyncTargetKey,
+    pub(crate) failure: SourceSyncFailure,
+    pub(crate) progress: u8,
+    pub(crate) version: i64,
+}
+
 pub enum NextSyncTarget {
     Local(SyncTargetLease),
     /// The target failed before any reservation and needs no settlement.
     OrdinaryFailure(SourceSyncFailure),
+    /// A local read failure whose reservation is still held. It is not a
+    /// completed failure, and the following target stays pending.
+    RetainedFailure(SourceSyncFailure),
     Halted,
     Complete,
 }
@@ -578,16 +591,34 @@ pub(crate) fn next(
         )
         .optional()?;
     ensure!(phase.as_deref() == Some("open"), "Sync batch is not open");
-    let row: Option<(i64, i64, String, i64)> = tx
+    let row: Option<(i64, i64, String, i64, i64)> = tx
         .query_row(
-            "SELECT ordinal,requested_source_id,state,claim_generation FROM source_sync_targets WHERE job_id=?1 AND NOT (state IN ('succeeded','failed') AND reservation_acknowledged=1) ORDER BY ordinal LIMIT 1",
+            "SELECT ordinal,requested_source_id,state,claim_generation,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND NOT (state IN ('succeeded','failed') AND reservation_acknowledged=1) ORDER BY ordinal LIMIT 1",
             [&job.job_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((ordinal, source_id, target_state, claim_generation)) = row else {
+    let Some((ordinal, source_id, target_state, claim_generation, acknowledged)) = row else {
         return Ok(Next::Done(NextSyncTarget::Complete, job.state_version));
     };
+    if target_state == "failed" && acknowledged == 0 {
+        let key = SyncTargetKey {
+            job_id: job.job_id,
+            ordinal: u32::try_from(ordinal)?,
+        };
+        return Ok(Next::Done(
+            NextSyncTarget::RetainedFailure(failure(tx, &key)?),
+            job.state_version,
+        ));
+    }
     ensure!(
         target_state == "pending",
         "Prior Sync target is not pending"
@@ -797,6 +828,49 @@ pub(crate) fn settle(
         },
         proof,
         binding,
+    })
+}
+
+/// Records a local read failure for one claimed target and the Source failure
+/// observation. The reservation stays held and unacknowledged, so progress
+/// does not count this target. A refusal, including a target that already
+/// stores a successful result, writes nothing.
+pub(crate) fn fail(
+    tx: &Transaction<'_>,
+    state: &State,
+    lease: &AttemptLease,
+    candidate: SyncCandidate,
+    detail: &str,
+) -> Result<FailedSyncTarget> {
+    ensure!(
+        !detail.is_empty() && detail.len() <= 1024,
+        "Invalid Local Sync failure"
+    );
+    let bound = bind(tx, state, lease, &candidate)?;
+    let stores_result: bool = tx.query_row(
+        "SELECT result_json IS NOT NULL OR result_digest IS NOT NULL OR receipt_id IS NOT NULL OR receipt_hash IS NOT NULL OR receipt_target IS NOT NULL FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2 AND state='claimed'",
+        params![bound.key.job_id, bound.key.ordinal],
+        |row| row.get(0),
+    )?;
+    ensure!(!stores_result, "Sync target already stores a result");
+    crate::source_scan::mark_local_failure(tx, lease.tenant(), bound.source_id, detail)?;
+    ensure!(
+        tx.execute(
+            "UPDATE source_sync_targets SET state='failed',failure_code='local_read',failure_detail=?3,updated_at=?4 WHERE job_id=?1 AND ordinal=?2 AND state='claimed' AND reservation_acknowledged=0 AND result_json IS NULL AND result_digest IS NULL AND receipt_id IS NULL AND receipt_hash IS NULL AND receipt_target IS NULL",
+            params![bound.key.job_id, bound.key.ordinal, detail, now()],
+        )? == 1,
+        "Sync target failure changed"
+    );
+    let failure = failure(tx, &bound.key)?;
+    let mut job = require_sync_job(tx, lease)?;
+    let recorded = progress(tx, &job.job_id)?;
+    job.progress = Some(recorded);
+    crate::jobs::save(tx, &mut job, "source_sync_progress")?;
+    Ok(FailedSyncTarget {
+        key: bound.key,
+        failure,
+        progress: recorded,
+        version: job.state_version,
     })
 }
 

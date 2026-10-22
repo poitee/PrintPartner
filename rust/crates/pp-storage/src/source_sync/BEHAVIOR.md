@@ -64,6 +64,30 @@ that result, the untouched sibling and which reservation was released.
 unchanged database for a stale attempt, a foreign Source proof and a result
 that names no Source.
 
+## Fail one claimed target
+
+`ServerWorkerClient::fail_source_sync_target` records a local read failure for
+one claimed target. `mark_local_failure` writes `sync_error` and
+`sync_required` and keeps earlier Source metadata. The target stores
+`failure_code` `local_read` and the detail. Claim evidence stays, and
+`reservation_acknowledged` stays 0, so the reservation remains held. Progress
+counts only acknowledged successes and failures. The batch stays open and the
+live token is not retired.
+
+A refusal writes nothing. Empty or over-long detail, a changed Source
+observation, and a target that already stores a successful result are refused.
+Another target's stored result stays in place.
+
+The next claim returns `RetainedFailure` for that unacknowledged row. A
+completed failure already has its reservation acknowledged, as a missing or
+non-Local Source does, and the next claim skips it.
+
+`sync_target_failure_records_source_observation` checks the observation,
+unchanged claim capture, progress 0 and the retained next claim.
+`sync_failure_does_not_replace_settled_result` keeps a settled result, refuses
+a sibling that already stores one, then fails that sibling. Progress becomes
+50 because only the acknowledged success counts.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
@@ -74,13 +98,18 @@ CARGO_TARGET_DIR=/persist/targets/gre-775-sync-settle-success \
 cargo test -p pp-storage --features desktop_rebuild --lib source_sync::tests -- --test-threads=8
 cargo test -p pp-storage --features desktop_rebuild --lib sync_settle_persists_one_result -- --test-threads=8
 cargo test -p pp-storage --features desktop_rebuild --lib sync_stale_settlement_preserves_target -- --test-threads=8
+CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
+CARGO_TARGET_DIR=/persist/targets/gre-776-failed-sync-target \
+cargo test -p pp-storage --features desktop_rebuild --lib \
+  'sync_target_failure_records_source_observation|sync_failure_does_not_replace_settled_result' \
+  -- --test-threads=8
 ```
 
-Feature-off, the settle command and its tables are absent:
+Feature-off, settle, fail and their tables are absent. The same check covers both commands:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
-CARGO_TARGET_DIR=/persist/targets/gre-775-sync-settle-success \
+CARGO_TARGET_DIR=/persist/targets/gre-776-failed-sync-target \
 cargo test -p pp-storage --lib sync_settle_is_absent_without_desktop_rebuild
 ```
 
