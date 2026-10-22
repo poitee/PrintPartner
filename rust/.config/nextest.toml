@@ -1,3 +1,8 @@
+# Bound hung tests: mark slow at 60s, terminate after 10 periods (10m).
+# working_draft_* tests are normally 1–10s; this only fires on hangs.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 10 }
+
 [[profile.default.overrides]]
 filter = 'binary(=ticket_t_3_drain) & test(=scratch_root_is_empty_after_drain_tests)'
 threads-required = "num-test-threads"
