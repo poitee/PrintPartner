@@ -212,6 +212,7 @@ pub enum RecomputeOutcome {
     IdempotencyConflict,
     NoLayers,
     NoStls,
+    WouldWipe,
 }
 
 /// Node's `PlanDraftWorkspaceService.recompute` result.
@@ -1236,6 +1237,7 @@ fn recompute(
             return match error.downcast_ref() {
                 Some(preparation::Failure::NoLayers) => finished(RecomputeOutcome::NoLayers),
                 Some(preparation::Failure::NoStls) => finished(RecomputeOutcome::NoStls),
+                Some(preparation::Failure::WouldWipe) => finished(RecomputeOutcome::WouldWipe),
                 None => Err(error),
             };
         }
@@ -1572,6 +1574,7 @@ impl RecomputeOutcome {
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::NoLayers => "no_layers",
             Self::NoStls => "no_stls",
+            Self::WouldWipe => "would_wipe",
         };
         outcome_json_body(kind, None, &[])
     }

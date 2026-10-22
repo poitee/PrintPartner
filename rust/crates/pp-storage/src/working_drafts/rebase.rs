@@ -43,6 +43,7 @@ pub enum RebaseOutcome {
     MergeConflicts { conflicts: Vec<Conflict> },
     NoLayers,
     NoStls,
+    WouldWipe,
 }
 
 /// One of Node's `RebaseConflict`s. Target IDs number the fresh draft's Parts
@@ -127,6 +128,7 @@ impl RebaseOutcome {
             Self::IdempotencyConflict => ("idempotency_conflict", None, Vec::new()),
             Self::NoLayers => ("no_layers", None, Vec::new()),
             Self::NoStls => ("no_stls", None, Vec::new()),
+            Self::WouldWipe => ("would_wipe", None, Vec::new()),
         };
         Ok(outcome_json_body(kind, field, &body))
     }
@@ -297,6 +299,7 @@ pub(super) fn rebase(connection: &mut Connection, args: Args<'_>) -> Result<Reba
             return match error.downcast_ref() {
                 Some(preparation::Failure::NoLayers) => finished(RebaseOutcome::NoLayers),
                 Some(preparation::Failure::NoStls) => finished(RebaseOutcome::NoStls),
+                Some(preparation::Failure::WouldWipe) => finished(RebaseOutcome::WouldWipe),
                 None => Err(error),
             };
         }

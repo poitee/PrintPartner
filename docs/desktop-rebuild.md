@@ -529,8 +529,11 @@ A recompute runs in three steps on the writer thread:
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
 
-`RecomputeOutcome::into_json_body` writes Node's result kinds. Node's
-`would_wipe` result has no Rust preparation counterpart yet.
+`RecomputeOutcome::into_json_body` writes Node's result kinds.
+`RecomputeOutcome::WouldWipe` and `RebaseOutcome::WouldWipe` both serialize
+`{"kind":"would_wipe"}`. Preparation drops a reported row whose key does not
+end in `.stl` before the `no_stls` check, matching Node's `scanRepo`. After
+that check `prepare` cannot return `would_wipe`, and Node cannot either.
 
 `WorkingDraftClient::recompute_and_select` ports Node's
 `PlanDraftWorkspaceService.recompute`. It runs the recompute above and, after
