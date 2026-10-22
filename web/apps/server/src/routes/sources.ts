@@ -8,7 +8,8 @@ import {
 } from "@print-partner/domain";
 import { HOSTED_TENANT_DISK_QUOTA_BYTES, isHostedLibrarySourceKind, normalizeCategoryPath } from "@print-partner/contracts";
 import type { JobSnapshot } from "@print-partner/contracts";
-import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
+import { CatalogMetadataConflict, SourceActivationConflictError, type AppRepository } from "../db/repository.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import {
   OwnershipAdmissionError,
   requireSourceSyncParticipant,
@@ -268,6 +269,16 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
         requestedUrl && (effectiveKind === "github" || effectiveKind === "git")
           ? normalizeGithubSourceLocation(requestedUrl, requestedBranch ?? existing?.branch)
           : null;
+      let metadataVersion: number | undefined;
+      if (desktopFeaturesEnabled() && Object.prototype.hasOwnProperty.call(body, "metadata_version")) {
+        const token = body.metadata_version;
+        if (token !== null && token !== undefined) {
+          if (typeof token !== "number" || !Number.isSafeInteger(token)) {
+            return reply.status(400).send({ detail: "metadata_version must be an integer" });
+          }
+          metadataVersion = token;
+        }
+      }
       const updated = deps.repo.updateSource(id, {
         name: body.name != null ? String(body.name) : undefined,
         url: githubLocation?.url ?? requestedUrl,
@@ -280,9 +291,13 @@ export async function registerSourceRoutes(app: FastifyInstance, deps: RouteDeps
           body.metadata && typeof body.metadata === "object"
             ? (body.metadata as Record<string, unknown>)
             : undefined,
+        metadata_version: metadataVersion,
       });
       return deps.repo.sourceSummaryForClient(updated);
     } catch (e) {
+      if (e instanceof CatalogMetadataConflict) {
+        return reply.status(409).send({ code: e.code, detail: e.message });
+      }
       const msg = e instanceof Error ? e.message : String(e);
       return reply.status(msg.includes("not found") ? 404 : 400).send({ detail: msg });
     }

@@ -10,6 +10,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{os::unix::fs::DirBuilderExt, path::PathBuf};
 
+#[path = "common/process.rs"]
+mod child_process;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Transcript {
@@ -182,6 +185,7 @@ fn outcome(client: &SourceCatalogClient, request: Request) -> Value {
         Request::Delete { id } => Transport::Delete(*id),
         Request::SourceActivity { .. } => Transport::Activity,
         Request::Get { .. }
+        | Request::Update { .. }
         | Request::GetCategoriesWithTree { .. }
         | Request::SaveCategoriesWithTree { .. }
         | Request::ApplyNumericCategory { .. } => Transport::Json,
@@ -210,6 +214,14 @@ fn outcome(client: &SourceCatalogClient, request: Request) -> Value {
         }
         (Transport::GlobalNaming, result) => panic!("unexpected global naming outcome: {result:?}"),
         (_, Ok(result)) => json!({"status": 200, "body": serde_json::to_value(result).unwrap()}),
+        (_, Err(error))
+            if matches!(
+                error.downcast_ref::<CatalogFailure>(),
+                Some(CatalogFailure::Conflict)
+            ) =>
+        {
+            json!({"status": 409, "body": {"code": "catalog_metadata_conflict", "detail": error.to_string()}})
+        }
         (_, Err(error)) => panic!("unmapped catalog error: {error:?}"),
     }
 }
@@ -244,6 +256,174 @@ fn node_catalog_metadata_mutations_match_public_client_and_reopen() {
                 "catalog-metadata-foreign-session".into(),
             ))),
         };
+        let request: Request = serde_json::from_value(step.request.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            step.request,
+            "{}: public request round trip",
+            step.name
+        );
+        let mut actual = outcome(&client, request);
+        fixture.normalize(&mut actual);
+        assert_eq!(
+            actual, step.outcome,
+            "{}: complete command outcome",
+            step.name
+        );
+        assert_eq!(
+            fixture.snapshot(),
+            step.snapshot,
+            "{}: complete persistent rows",
+            step.name
+        );
+    }
+    owner.shutdown().unwrap();
+}
+
+fn rebuild_runtime_enabled() -> bool {
+    matches!(
+        std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
+        Some("1" | "true")
+    )
+}
+
+fn seeded_owner() -> (Fixture, WriterOwner) {
+    let transcript: Transcript = serde_json::from_str(include_str!(
+        "../../../../fixtures/parity/catalog-metadata-mutations/node.json"
+    ))
+    .unwrap();
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    fixture.seed(&transcript.seed_sql);
+    (fixture, owner)
+}
+
+#[test]
+fn catalog_metadata_token_is_ignored_when_runtime_flag_is_off() {
+    assert!(
+        !rebuild_runtime_enabled(),
+        "PP_DESKTOP_REBUILD must be off for the tokenless catalog build"
+    );
+    let (fixture, owner) = seeded_owner();
+    let client = owner.local_source_catalog();
+    let before = fixture.snapshot();
+    let request = Request::Update {
+        id: 7,
+        patch: pp_storage::catalog::SourcePatch {
+            metadata: Some(
+                serde_json::from_value(json!({"custom_name": "Flag off rename"})).unwrap(),
+            ),
+            metadata_version: Some(4),
+            ..Default::default()
+        },
+    };
+    let updated = client.execute(request).unwrap();
+    let body = serde_json::to_value(updated).unwrap();
+    assert_eq!(body["metadata"]["custom_name"], "Flag off rename");
+    assert!(body.get("catalog_metadata_version").is_none());
+    let after = fixture.snapshot();
+    assert_ne!(after, before);
+    assert!(after["projects"].as_array().unwrap().iter().all(|row| {
+        row["metadata_json"]
+            .get("catalog_metadata_version")
+            .is_none()
+    }));
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn catalog_metadata_stale_snapshot_is_refused() {
+    if !rebuild_runtime_enabled() {
+        let output = child_process::command(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "catalog_metadata_stale_snapshot_is_refused",
+                "--test-threads=1",
+            ])
+            .env("PP_DESKTOP_REBUILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stale token child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let (fixture, owner) = seeded_owner();
+    let client = owner.local_source_catalog();
+    let before = fixture.snapshot();
+    let refused = client.execute(Request::Update {
+        id: 7,
+        patch: pp_storage::catalog::SourcePatch {
+            metadata: Some(
+                serde_json::from_value(json!({"custom_name": "Should not land"})).unwrap(),
+            ),
+            metadata_version: Some(4),
+            ..Default::default()
+        },
+    });
+    let error = refused.expect_err("stale catalog metadata token");
+    assert!(
+        matches!(
+            error.downcast_ref::<CatalogFailure>(),
+            Some(CatalogFailure::Conflict)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "Catalog metadata changed; retry from the current version"
+    );
+    assert_eq!(fixture.snapshot(), before, "stale token must not write");
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn catalog_metadata_stale_fixture_matches_node() {
+    if !rebuild_runtime_enabled() {
+        let output = child_process::command(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "catalog_metadata_stale_fixture_matches_node",
+                "--test-threads=1",
+            ])
+            .env("PP_DESKTOP_REBUILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stale fixture child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let transcript: Transcript = serde_json::from_str(include_str!(
+        "../../../../fixtures/parity/catalog-metadata-mutations/stale.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        transcript.generated,
+        "fixtures/parity/catalog-metadata-mutations/generate.mjs"
+    );
+    assert_eq!(transcript.steps.len(), 6);
+    let fixture = Fixture::new();
+    let mut owner = fixture.open();
+    fixture.seed(&transcript.seed_sql);
+    assert_eq!(
+        fixture.snapshot(),
+        transcript.initial,
+        "initial persistent rows"
+    );
+    for step in transcript.steps {
+        if step.reopen {
+            owner.shutdown().unwrap();
+            owner = fixture.open();
+        }
+        let client = owner.local_source_catalog();
+        assert!(matches!(step.actor, Actor::Owner));
         let request: Request = serde_json::from_value(step.request.clone()).unwrap();
         assert_eq!(
             serde_json::to_value(&request).unwrap(),

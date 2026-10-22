@@ -745,3 +745,22 @@ unchanged throughout both controls.
 
 This is coordinator simulation evidence. It does not prove a live Gateway or
 `CoreRuntime` shutdown, actual Mac logout, or full GRE-448 completion.
+
+## Live Gateway and CoreRuntime deadline
+
+`drain::ticket_t_3_drain_runtime_shares_one_deadline` starts a real `CoreRuntime`
+through the `runtime_m0` drain fixture. It holds tracked shutdown work and an
+admitted `POST /plans` that has received `100 Continue` but not its body.
+`CoreRuntime::shutdown` must report `tracked_drain_timed_out` and
+`gateway_drain_timed_out`, retain storage, and finish in at least one
+`MUTATION_DRAIN` and less than that budget plus four seconds.
+
+On 2026-10-22 the committed test passed on the restored shared join. The receipt
+had both timeout errors, graceful compat cleanup, and `elapsed_ms` 5130. A private
+sequential wait in `stop_resources` failed at 10.103s with exit 101. That duration
+also exceeds the committed four-second cleanup allowance. Production
+`reject_and_wait` was restored and is not in the diff. Logs are under
+`/persist/scratch/GRE-448/` on fleet VM 133.
+
+Atomic route and worker cutover, and actual Mac logout, stay outside this slice.
+GRE-448 stays open.
