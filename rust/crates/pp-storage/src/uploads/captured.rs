@@ -99,6 +99,13 @@ impl FilePolicyV1 {
     }
 }
 
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PolicyBindingV1<'a> {
+    Files { policy: &'a FilePolicyV1 },
+    Zip { policy: &'a ZipPolicyV1 },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct ZipPolicyV1 {
@@ -163,6 +170,17 @@ impl CapturedPayloadV1 {
 
     pub fn input_version(&self) -> u32 {
         2
+    }
+
+    pub(super) fn policy_digest(&self) -> Result<super::Sha256Digest> {
+        let binding = match &self.0 {
+            CapturedPayloadKindV1::Files { policy, .. } => PolicyBindingV1::Files { policy },
+            CapturedPayloadKindV1::Zip { policy, .. } => PolicyBindingV1::Zip { policy },
+        };
+        super::Sha256Digest::new(super::serialized_digest(&(
+            "pp-source-acquisition-policy-v1",
+            binding,
+        ))?)
     }
 
     pub fn validate(&self) -> Result<()> {

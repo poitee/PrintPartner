@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashSet},
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -353,6 +354,166 @@ impl Input {
             Self::Files { paths } => paths.iter().map(String::as_str).collect(),
             Self::Zip { path } => vec![path],
         }
+    }
+}
+
+#[derive(Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+struct Sha256Digest(String);
+
+impl Sha256Digest {
+    fn new(value: String) -> Result<Self> {
+        digest(&value)?;
+        Ok(Self(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for Sha256Digest {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for Sha256Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Sha256Digest([redacted])")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdmissionLimits {
+    pub reserved_bytes: u64,
+    pub max_input_bytes: u64,
+    pub max_prepared_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct CaptureManifestBindingV1<'a> {
+    manifest_version: u32,
+    capture_id: &'a CaptureId,
+    operation_key: &'a str,
+    actor: &'a str,
+    target_digest: &'a Sha256Digest,
+    input: &'a CapturedPayloadV1,
+    admission_limits: AdmissionLimits,
+    policy_digest: &'a Sha256Digest,
+    requested_files: &'a [File],
+    requested_digest: &'a Sha256Digest,
+}
+
+fn calculate_capture_binding(
+    capture_id: &CaptureId,
+    operation_key: &str,
+    actor: &str,
+    target_digest: &Sha256Digest,
+    input: &CapturedPayloadV1,
+    admission_limits: AdmissionLimits,
+    requested_files: &[File],
+) -> Result<(Sha256Digest, Sha256Digest)> {
+    let requested_digest = Sha256Digest::new(serialized_digest(&requested_files)?)?;
+    let policy_digest = input.policy_digest()?;
+    let manifest_digest = Sha256Digest::new(serialized_digest(&(
+        "pp-source-capture-binding-v1",
+        CaptureManifestBindingV1 {
+            manifest_version: 1,
+            capture_id,
+            operation_key,
+            actor,
+            target_digest,
+            input,
+            admission_limits,
+            policy_digest: &policy_digest,
+            requested_files,
+            requested_digest: &requested_digest,
+        },
+    ))?)?;
+    Ok((policy_digest, manifest_digest))
+}
+
+fn target_digest(target: &Target) -> Result<Sha256Digest> {
+    Sha256Digest::new(serialized_digest(&("pp-source-import-target-v1", target))?)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapturedInputV2 {
+    capture_version: u32,
+    capture_id: CaptureId,
+    payload: CapturedPayloadV1,
+    policy_digest: Sha256Digest,
+    target_digest: Sha256Digest,
+    manifest_digest: Sha256Digest,
+}
+
+impl CapturedInputV2 {
+    pub fn bind(
+        capture_id: CaptureId,
+        payload: CapturedPayloadV1,
+        actor: &str,
+        operation_key: &str,
+        target: &Target,
+        admission_limits: AdmissionLimits,
+        requested_files: &[File],
+    ) -> Result<Self> {
+        payload.validate()?;
+        let target_digest = target_digest(target)?;
+        let (policy_digest, manifest_digest) = calculate_capture_binding(
+            &capture_id,
+            operation_key,
+            actor,
+            &target_digest,
+            &payload,
+            admission_limits,
+            requested_files,
+        )?;
+        Ok(Self {
+            capture_version: 1,
+            capture_id,
+            payload,
+            policy_digest,
+            target_digest,
+            manifest_digest,
+        })
+    }
+
+    pub fn validate(
+        &self,
+        actor: &str,
+        operation_key: &str,
+        target: Option<&Target>,
+        admission_limits: AdmissionLimits,
+        requested_files: &[File],
+    ) -> Result<()> {
+        ensure!(self.capture_version == 1, "Unsupported capture version");
+        self.payload.validate()?;
+        let (policy_digest, manifest_digest) = calculate_capture_binding(
+            &self.capture_id,
+            operation_key,
+            actor,
+            &self.target_digest,
+            &self.payload,
+            admission_limits,
+            requested_files,
+        )?;
+        ensure!(
+            policy_digest == self.policy_digest,
+            "Capture policy digest mismatch"
+        );
+        if let Some(target) = target {
+            ensure!(
+                target_digest(target)? == self.target_digest,
+                "Capture target digest mismatch"
+            );
+        }
+        ensure!(
+            manifest_digest == self.manifest_digest,
+            "Capture manifest digest mismatch"
+        );
+        Ok(())
     }
 }
 
