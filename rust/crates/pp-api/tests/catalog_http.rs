@@ -166,7 +166,7 @@ impl Server {
         }
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
-        if matches!(status, 200 | 400 | 401 | 403) {
+        if matches!(status, 200 | 400 | 401 | 403 | 409) {
             assert_eq!(
                 response
                     .headers()
@@ -203,11 +203,53 @@ async fn listener() -> (tokio::net::TcpListener, String) {
 }
 
 fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: PathBuf) {
+    seal(owner);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+fn seal(owner: Arc<Mutex<WriterOwner>>) {
     let Ok(owner) = Arc::try_unwrap(owner) else {
         panic!("router still holds storage");
     };
     owner.into_inner().unwrap().shutdown().unwrap();
-    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn insert_safeguards(directory: &Path, history_id: i64, referenced_id: i64) {
+    let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    db.execute_batch(&format!(
+        "PRAGMA foreign_keys=ON;
+         INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at) VALUES('default',{history_id},'retained-a','digest','{history_id}/revisions/retained-a','2026-10-03');
+         INSERT INTO build_profiles(id,tenant_id,name) VALUES(1,'default','Build');
+         INSERT INTO profile_layers(tenant_id,profile_id,layer_type,project_id) VALUES('default',1,'base',{referenced_id});"
+    ))
+    .unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn stored_rows(directory: &Path) -> Vec<String> {
+    let db = rusqlite::Connection::open_with_flags(
+        directory.join("print-partner.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let mut rows = Vec::new();
+    for sql in [
+        "SELECT id || ':' || name FROM projects ORDER BY id",
+        "SELECT project_id || ':' || upstream_revision_key || ':' || manifest_digest || ':' || snapshot_locator || ':' || synced_at FROM source_revisions ORDER BY id",
+        "SELECT project_id || ':' || layer_type FROM profile_layers ORDER BY id",
+    ] {
+        let mut statement = db.prepare(sql).unwrap();
+        rows.extend(
+            statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .map(|row| row.unwrap()),
+        );
+    }
+    rows
 }
 
 #[cfg(not(feature = "desktop_rebuild"))]
@@ -326,6 +368,11 @@ async fn refuse_mounted_reads(server: &Server) {
     }
     let (status, _) = server.send(Method::POST, "/sources", &[]).await;
     assert_eq!(status, 404);
+    for path in ["/sources/1", "/api/v1/sources/1"] {
+        let (status, body) = server.send(Method::DELETE, path, &[]).await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("name").is_none());
+    }
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -460,10 +507,6 @@ async fn catalog_reads_match_existing_source_metadata() {
         (status, body["detail"].as_str()),
         (400, Some("Source name is required"))
     );
-    let (status, _) = server
-        .send(Method::DELETE, "/sources/1", &[("Cookie", &cookie)])
-        .await;
-    assert_eq!(status, 405);
     assert_eq!(files(&directory), snapshot);
     assert_eq!(list(&owner.lock().unwrap()), rows);
     let (status, body) = server
@@ -674,6 +717,205 @@ async fn catalog_patch_wrong_owner_is_refused() {
     );
     assert_eq!(files(&directory), snapshot);
     assert_eq!(list(&owner.lock().unwrap()), seeded);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_delete_wrong_owner_is_refused() {
+    let (owner, directory) = open();
+    let seeded = {
+        let guard = owner.lock().unwrap();
+        seed(&guard)
+    };
+    let foreign_id = seeded[0].id;
+    let (bound, origin) = listener().await;
+    let account = AuthPolicy {
+        registration: pp_storage::auth::RegistrationPolicy::FirstAccountOnly,
+        first_user: pp_storage::auth::FirstUserTenant::NewUser,
+        session_tenant: pp_storage::auth::SessionTenantPolicy::AccountTenant,
+    };
+    let auth = owner.lock().unwrap().auth_with_policy(account).unwrap();
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        catalog::{CatalogHttpConfig, admit_catalog_routes},
+    };
+    let router = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(&origin, "default", account, Some("true")).unwrap(),
+        Arc::clone(&owner),
+    )
+    .merge(auth_router(
+        AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false).unwrap(),
+        auth,
+        ProviderClient::new(None, None).unwrap(),
+        ResetMailer::disabled(),
+    ));
+    let mut server = Server::spawn(bound, router).await;
+    let registered = server
+        .client
+        .post(format!("{}/auth/register", server.origin))
+        .header("Origin", &server.origin)
+        .json(&json!({"email":"stranger@example.test","password":"password-1234"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let cookie = registered.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (status, body) = server
+        .send(Method::GET, "/sources", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!((status, &body), (200, &json!({"sources":[]})));
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .send(
+            Method::DELETE,
+            &format!("/api/v1/sources/{foreign_id}"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), seeded);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn post_source(server: &Server, cookie: &str, name: &str) -> Value {
+    let (status, body) = server
+        .exchange(
+            Method::POST,
+            "/sources",
+            &[("Cookie", cookie)],
+            Some(&json!({"name": name, "source_kind": "local"})),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    body
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn refuse(server: &Server, cookie: &str, path: &str, detail: &str) {
+    let (status, body) = server
+        .send(Method::DELETE, path, &[("Cookie", cookie)])
+        .await;
+    assert_eq!((status, body), (409, json!({ "detail": detail })), "{path}");
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_delete_busy_source_preserves_revisions() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let history = post_source(&server, &cookie, "History").await;
+    let referenced = post_source(&server, &cookie, "Referenced").await;
+    let history_id = history["id"].as_i64().unwrap();
+    let referenced_id = referenced["id"].as_i64().unwrap();
+    insert_safeguards(&directory, history_id, referenced_id);
+    let before = stored_rows(&directory);
+    let mut lease = {
+        let guard = owner.lock().unwrap();
+        guard
+            .local_source_catalog()
+            .begin_work(
+                history_id,
+                &std::sync::atomic::AtomicBool::new(false),
+                std::time::Duration::from_secs(5),
+            )
+            .unwrap()
+    };
+    refuse(
+        &server,
+        &cookie,
+        &format!("/sources/{history_id}"),
+        "Source has active work and cannot be deleted",
+    )
+    .await;
+    refuse(
+        &server,
+        &cookie,
+        &format!("/api/v1/sources/{referenced_id}"),
+        "Source is referenced and cannot be deleted",
+    )
+    .await;
+    assert_eq!(stored_rows(&directory), before);
+    lease.release().unwrap();
+    refuse(
+        &server,
+        &cookie,
+        &format!("/sources/{history_id}"),
+        "Source has immutable revision history and cannot be deleted",
+    )
+    .await;
+    assert_eq!(stored_rows(&directory), before);
+    for (id, previous) in [(history_id, &history), (referenced_id, &referenced)] {
+        let (status, body) = server
+            .send(
+                Method::GET,
+                &format!("/sources/{id}"),
+                &[("Cookie", &cookie)],
+            )
+            .await;
+        assert_eq!(status, 200);
+        assert_eq!(body["id"], previous["id"]);
+        assert_eq!(body["name"], previous["name"]);
+    }
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_delete_unreferenced_source_succeeds() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let keeper = post_source(&server, &cookie, "Keeper").await;
+    let disposable = post_source(&server, &cookie, "Disposable").await;
+    let id = disposable["id"].as_i64().unwrap();
+    let keeper_id = keeper["id"].as_i64().unwrap();
+    let path = PathBuf::from(disposable["local_path"].as_str().unwrap());
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join("kept.stl"), b"retained").unwrap();
+    let (status, body) = server
+        .send(
+            Method::DELETE,
+            &format!("/api/v1/sources/{id}"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, body), (204, Value::Null));
+    let (status, body) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    let (status, body) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{keeper_id}"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, body), (200, keeper));
+    assert_eq!(std::fs::read(path.join("kept.stl")).unwrap(), b"retained");
+    let rows = stored_rows(&directory);
+    assert!(rows.iter().any(|row| row == &format!("{keeper_id}:Keeper")));
+    assert!(rows.iter().all(|row| row != &format!("{id}:Disposable")));
+    assert!(rows.iter().all(|row| !row.starts_with(&format!("{id}:"))));
     server.stop().await;
     shutdown(owner, directory);
 }
