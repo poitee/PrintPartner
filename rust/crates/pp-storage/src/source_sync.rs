@@ -1,7 +1,10 @@
 use crate::{
     SettingsClient,
     catalog::{SourceBinding, SourceBusy, SourceWorkLease, SourceWorkProof, State},
-    jobs::{AttemptLease, JobKind, JobRecord, Payload, PersistentState, SourceSyncFailure},
+    jobs::{
+        AttemptLease, JobKind, JobRecord, Payload, PersistentState, SourceScanResult,
+        SourceSyncFailure,
+    },
     source_scan::LocalScanObservation,
 };
 use anyhow::{Result, anyhow, ensure};
@@ -50,8 +53,8 @@ pub(crate) struct SyncCandidate {
     proof: SourceWorkProof,
 }
 
-/// A claimed target whose held reservation, attempt and sealed basis still
-/// match its stored claim. D18 (b) validates its content against this.
+/// A claimed target whose held reservation, attempt, sealed basis and recorded
+/// content still match. Binding checks that content and writes nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BoundSyncTarget {
     pub(crate) key: SyncTargetKey,
@@ -114,6 +117,21 @@ fn digest(bytes: impl AsRef<[u8]>) -> String {
 fn token_text(token: u64) -> Result<String> {
     ensure!(token != 0, "Invalid Source reservation token");
     Ok(format!("{token:016x}"))
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_receipt_id(value: &str) -> bool {
+    value.len() == 43
+        && value.starts_with("local-scan-")
+        && value[11..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn basis_digest(tenant: &str, selection_kind: &str, source_ids: &[i64]) -> Result<String> {
@@ -192,6 +210,139 @@ fn validate_basis(tx: &Transaction<'_>, job: &JobRecord) -> Result<Vec<i64>> {
         "Sync target basis mismatch"
     );
     Ok(source_ids)
+}
+
+/// Checks one bound candidate against the sealed basis and its recorded content.
+fn validate_target(tx: &Transaction<'_>, job: &JobRecord, bound: &BoundSyncTarget) -> Result<()> {
+    let source_ids = validate_basis(tx, job)?;
+    validate_target_in_basis(tx, job, bound, &source_ids)
+}
+
+/// Checks revision identity, Source configuration, observation and result
+/// provenance for a candidate already placed in the sealed basis.
+fn validate_target_in_basis(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    bound: &BoundSyncTarget,
+    source_ids: &[i64],
+) -> Result<()> {
+    ensure!(bound.key.job_id == job.job_id, "Sync target Job mismatch");
+    let source_id = *source_ids
+        .get(usize::try_from(bound.key.ordinal)?)
+        .ok_or_else(|| anyhow!("Sync target is outside the sealed basis"))?;
+    ensure!(source_id == bound.source_id, "Sync target Source mismatch");
+    let (
+        claim_generation,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_observation_digest,
+        path_observation_digest,
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+    ) = tx.query_row(
+        "SELECT claim_generation,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest,result_json,result_digest,receipt_id,receipt_hash,receipt_target FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2 AND state='claimed'",
+        params![bound.key.job_id, bound.key.ordinal],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+            ))
+        },
+    )?;
+    ensure!(
+        claim_generation == bound.claim_generation,
+        "Sync target claim generation mismatch"
+    );
+    let observation =
+        crate::source_scan::project_observation(tx, &job.tenant, source_id, &authority_actor)?;
+    ensure!(
+        observation.configuration_version == configuration_version,
+        "Sync Source configuration mismatch"
+    );
+    ensure!(
+        observation.authority_actor == authority_actor
+            && observation.authority_basis_digest == authority_basis_digest
+            && observation.path_observation_digest == path_observation_digest,
+        "Sync Source observation mismatch"
+    );
+    ensure!(
+        observation.activation_observation_digest == activation_observation_digest,
+        "Sync revision identity mismatch"
+    );
+    validate_result_provenance(
+        source_id,
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+    )
+}
+
+fn validate_result_provenance(
+    source_id: i64,
+    result_json: Option<String>,
+    result_digest: Option<String>,
+    receipt_id: Option<String>,
+    receipt_hash: Option<String>,
+    receipt_target: Option<String>,
+) -> Result<()> {
+    if result_json.is_none()
+        && result_digest.is_none()
+        && receipt_id.is_none()
+        && receipt_hash.is_none()
+        && receipt_target.is_none()
+    {
+        return Ok(());
+    }
+    let (
+        Some(result_json),
+        Some(result_digest),
+        Some(receipt_id),
+        Some(receipt_hash),
+        Some(receipt_target),
+    ) = (
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+    )
+    else {
+        return Err(anyhow!("Sync result capture incomplete"));
+    };
+    ensure!(valid_digest(&result_digest), "Invalid Sync result digest");
+    ensure!(valid_digest(&receipt_hash), "Invalid Sync receipt digest");
+    ensure!(valid_receipt_id(&receipt_id), "Invalid Local receipt ID");
+    let result: SourceScanResult = serde_json::from_str(&result_json)?;
+    let canonical = serde_json::to_string(&result)?;
+    ensure!(result_json == canonical, "Sync result is not canonical");
+    ensure!(
+        digest(canonical.as_bytes()) == result_digest,
+        "Sync result digest mismatch"
+    );
+    ensure!(
+        result.project_id == u64::try_from(source_id).ok(),
+        "Sync result Source mismatch"
+    );
+    ensure!(
+        receipt_target == format!("source:{source_id}"),
+        "Sync receipt Source mismatch"
+    );
+    Ok(())
 }
 
 /// Seals the batch's targets on first open. A later attempt revalidates the
@@ -494,10 +645,13 @@ pub(crate) fn next(
     }))
 }
 
-/// Binds a candidate to its stored claim. The attempt must be live, the
-/// batch open and its sealed basis intact, the target claimed by this attempt
-/// at the candidate's generation, and the held token the one recorded and
-/// still live for the target's Source. Writes nothing.
+/// Binds a candidate to its stored claim, then checks its content against the
+/// recorded basis. The attempt must be live, the batch open and its sealed
+/// basis intact, the target claimed by this attempt at the candidate's
+/// generation, and the held token the one recorded and still live for the
+/// target's Source. Content must keep the recorded Source configuration,
+/// observation and revision, and any result must carry that Source's
+/// provenance. Writes nothing.
 pub(crate) fn bind(
     tx: &Transaction<'_>,
     state: &State,
@@ -554,15 +708,17 @@ pub(crate) fn bind(
         state,
         proof,
         &SourceBinding {
-            tenant: job.tenant,
+            tenant: job.tenant.clone(),
             id: source_id,
         },
     )?;
-    Ok(BoundSyncTarget {
+    let bound = BoundSyncTarget {
         key: key.clone(),
         source_id,
         claim_generation,
-    })
+    };
+    validate_target(tx, &job, &bound)?;
+    Ok(bound)
 }
 
 fn ordinary_failure(tx: &Transaction<'_>, mut job: JobRecord, key: &SyncTargetKey) -> Result<Next> {

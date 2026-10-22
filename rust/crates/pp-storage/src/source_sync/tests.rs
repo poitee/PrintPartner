@@ -1622,3 +1622,205 @@ fn sync_candidate_rejects_changed_basis() {
     );
     assert_eq!(sync.snapshot(), sealed);
 }
+
+fn source_row(sync: &Fixture, id: i64) -> (i64, Option<String>, Option<i64>) {
+    sync.connection()
+        .query_row(
+            "SELECT source_configuration_version,local_path,current_source_revision_id FROM projects WHERE id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+}
+
+fn refuse_unchanged(
+    sync: &Fixture,
+    lease: &AttemptLease,
+    target: &SyncTargetLease,
+    source_id: i64,
+) -> String {
+    let rows = sync.snapshot();
+    let source = source_row(sync, source_id);
+    let error = refuse_bind(sync, lease, target);
+    assert_eq!(sync.snapshot(), rows);
+    assert_eq!(source_row(sync, source_id), source);
+    error
+}
+
+#[test]
+fn sync_candidate_content_requires_matching_revision() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let other = sync.source("Other");
+    let job_id = sync.enqueue(Some(vec![first as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let bound = BoundSyncTarget {
+        key: SyncTargetKey {
+            job_id: job_id.clone(),
+            ordinal: 0,
+        },
+        source_id: first,
+        claim_generation: 1,
+    };
+    let sealed = sync.snapshot();
+    assert_eq!(source_row(&sync, first).2, None);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    assert_eq!(sync.snapshot(), sealed);
+
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "INSERT INTO source_revisions(tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness) SELECT tenant_id,id,'candidate-revision','digest','snap','2026-10-21T00:00:00Z','complete' FROM projects WHERE id=?1",
+                [first],
+            )
+            .unwrap(),
+        1
+    );
+    tamper(
+        &sync,
+        "UPDATE projects SET current_source_revision_id=(SELECT id FROM source_revisions WHERE project_id=?1 AND upstream_revision_key='candidate-revision') WHERE id=?1",
+        &first.to_string(),
+    );
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync revision identity mismatch"
+    );
+    tamper(
+        &sync,
+        "UPDATE projects SET current_source_revision_id=NULL WHERE id=?1",
+        &first.to_string(),
+    );
+    assert_eq!(sync.snapshot(), sealed);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+
+    let result = jobs::SourceScanResult {
+        project_id: Some(other as u64),
+        stl_count: 0,
+        downloaded: 0,
+        doc_count: 0,
+        docs_downloaded: 0,
+        pdf_extract_job_id: None,
+        postprocess_warning: None,
+    };
+    let result_json = serde_json::to_string(&result).unwrap();
+    let result_digest = digest(result_json.as_bytes());
+    let receipt_id = format!("local-scan-{}", "a".repeat(32));
+    let receipt_hash = "b".repeat(64);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET result_json=?2 WHERE job_id=?1 AND ordinal=0",
+                (&job_id, &result_json),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync result capture incomplete"
+    );
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET result_digest=?2,receipt_id=?3,receipt_hash=?4,receipt_target=?5 WHERE job_id=?1 AND ordinal=0",
+                (
+                    &job_id,
+                    &result_digest,
+                    &receipt_id,
+                    &receipt_hash,
+                    format!("source:{other}"),
+                ),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync result Source mismatch"
+    );
+    tamper(
+        &sync,
+        "UPDATE source_sync_targets SET result_json=NULL,result_digest=NULL,receipt_id=NULL,receipt_hash=NULL,receipt_target=NULL WHERE job_id=?1 AND ordinal=0",
+        &job_id,
+    );
+    assert_eq!(sync.snapshot(), sealed);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+}
+
+#[test]
+fn sync_candidate_rejects_changed_configuration_or_observation() {
+    let sync = Fixture::new();
+    let first = sync.source("First");
+    let job_id = sync.enqueue(Some(vec![first as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let sealed = sync.snapshot();
+    let (version, path, _) = source_row(&sync, first);
+    let bound = BoundSyncTarget {
+        key: SyncTargetKey {
+            job_id: job_id.clone(),
+            ordinal: 0,
+        },
+        source_id: first,
+        claim_generation: 1,
+    };
+    let set_version = |next: i64| {
+        assert_eq!(
+            sync.connection()
+                .execute(
+                    "UPDATE projects SET source_configuration_version=?2 WHERE id=?1",
+                    (first, next),
+                )
+                .unwrap(),
+            1
+        );
+    };
+    let set_path = |next: Option<&str>| {
+        assert_eq!(
+            sync.connection()
+                .execute(
+                    "UPDATE projects SET local_path=?2 WHERE id=?1",
+                    (first, next)
+                )
+                .unwrap(),
+            1
+        );
+    };
+    set_version(version + 1);
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync Source configuration mismatch"
+    );
+    set_version(version);
+    assert_eq!(sync.snapshot(), sealed);
+    set_path(Some("moved"));
+    assert_eq!(
+        refuse_unchanged(&sync, &lease, &target, first),
+        "Sync Source observation mismatch"
+    );
+    set_path(path.as_deref());
+    assert_eq!(sync.snapshot(), sealed);
+    assert_eq!(
+        sync.worker
+            .bind_source_sync_target(&lease, &target)
+            .unwrap(),
+        bound
+    );
+    assert_eq!(sync.snapshot(), sealed);
+}

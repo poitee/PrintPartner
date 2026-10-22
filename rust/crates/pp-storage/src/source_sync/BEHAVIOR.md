@@ -33,8 +33,16 @@ binding requires all of these conditions:
 - The held reservation token and writer incarnation are the ones recorded on the
   target, and the token is still live for the target's Source.
 
-Binding writes nothing, so a refusal leaves every row unchanged. It does not
-compare the Source configuration or observation. D18 (b) adds that check.
+Binding writes nothing, so a refusal leaves every row and the Source row
+unchanged. After the claim checks, `validate_target` and
+`validate_target_in_basis` compare the bound candidate with the recorded basis:
+
+- The live Source configuration version must equal the version stored at claim.
+- The live authority and path observation must equal the stored digests.
+- The live activation digest must equal the stored digest. That digest is the
+  revision identity, and it also covers Source kind and type.
+- A result is optional. When present, its canonical JSON, digest and receipt
+  must name this basis Source. Nothing is settled or published.
 
 ## Run the regression tests
 
@@ -42,7 +50,7 @@ From `rust/`, use the per-VM Cargo wrapper on `PATH`:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
-CARGO_TARGET_DIR=/persist/home/build/gre773-target \
+CARGO_TARGET_DIR=/persist/home/build/gre774-target \
 cargo test -p pp-storage --features desktop_rebuild --lib source_sync::tests --no-fail-fast
 ```
 
@@ -64,6 +72,14 @@ temporary directories and fake accounts and Sources.
 lease, the stored token and the sealed basis, and assert the exact refusal and an
 unchanged database for each case. Once the changes are restored, the same target
 binds again.
+
+`sync_candidate_content_requires_matching_revision` and
+`sync_candidate_rejects_changed_configuration_or_observation` cover content.
+They change the live revision, a recorded result, the configuration version and
+the local path. Each refusal is the exact error, and the
+Sync rows and Source row stay as they were. Restoring the change lets the same
+target bind again. A result that names another Source is refused and left in
+place. No target becomes succeeded.
 
 Check the package in both feature modes:
 
