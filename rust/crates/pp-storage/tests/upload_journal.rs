@@ -7,6 +7,7 @@
 //! observation. A revisioned entry still records its refusal.
 //! `CARGO_BUILD_JOBS=3 cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage --features desktop_rebuild --test upload_journal legacy_targeted_refusal_writes_no_revisioned_observation`
 use pp_storage::{
+    Limits, WriterOwner,
     auth::{self, AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
     catalog::CreateSource,
     jobs::{Credential, JobKind, Payload, WorkerAdmission},
@@ -14,15 +15,14 @@ use pp_storage::{
         Admission, Basis, File, ImportClient, Input, MissingPreclaimRefusal, Operation, State,
         Target,
     },
-    Limits, WriterOwner,
 };
 use rusqlite::Connection;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
