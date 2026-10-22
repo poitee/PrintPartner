@@ -673,6 +673,7 @@ function ProductionWorkspace() {
           onFailure={setSendFailure}
         />
         <PrinterSendQueuePanel
+          profileId={selectedProfileId}
           engineReady={engineState === "ready"}
           allowDispatch
         />

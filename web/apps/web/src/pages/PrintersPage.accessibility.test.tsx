@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import PrintersPage from "./PrintersPage";
+import { queryKeys } from "../queries/keys";
 
 const state = vi.hoisted(() => ({
   health: null as { ok: true } | null,
@@ -43,6 +44,8 @@ function renderWithQueryClient(children: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  queryClient.setQueryDefaults(queryKeys.health, { staleTime: Infinity, retry: false });
+  queryClient.setQueryData(queryKeys.health, { ok: true, capabilities: [] });
   return render(
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
   );

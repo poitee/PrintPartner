@@ -507,6 +507,11 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     let mut separation_tab = false;
     // A tab after a flow node's properties counts once the node ends.
     let mut node_tab = false;
+    // A separation tab on this block line. js-yaml will not open a block
+    // sequence, explicit key, or mapping entry after it. A plain value may.
+    let mut block_tab = false;
+    // The current block node began after `block_tab` on this line.
+    let mut tab_key = false;
     let mut flow_key = false;
     let mut flow_property: Option<FlowProperty> = None;
     // Byte offset just after a flow sequence's `?`. saphyr drops an empty
@@ -534,6 +539,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             shallow_flow = false;
             separation_tab = false;
             node_tab = false;
+            if flow.is_empty() {
+                block_tab = false;
+                tab_key = false;
+            }
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
             // Before a block scalar's first content line sets its indent, js-yaml
             // rejects a tab that sits no deeper than the scalar's parent node.
@@ -901,6 +910,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     end += 1;
                 }
             }
+            if node && flow.is_empty() {
+                tab_key = block_tab;
+            }
             for c in &chars[i..end] {
                 output.push(*c);
                 consumed += c.len_utf8();
@@ -931,6 +943,9 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             return invalid();
         }
         if node && matches!(c, '"' | '\'') {
+            if flow.is_empty() {
+                tab_key = block_tab;
+            }
             quote = Some(c);
             plain = false;
             output.push(c);
@@ -1013,6 +1028,14 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             || (node && matches!(c, '[' | '{'))
             || (node && matches!(c, '-' | '?') && next.is_none_or(yaml_blank_break));
         if structural {
+            // A tab is not block indentation. js-yaml rejects `-`, `?`, or a
+            // mapping key that begins after one. The key may be empty.
+            if flow.is_empty()
+                && block_tab
+                && (matches!(c, '-' | '?') || (colon && (tab_key || node)))
+            {
+                return invalid();
+            }
             // js-yaml reads no comment directly after a quoted key's colon.
             if colon && quoted_end && next == Some('#') {
                 return invalid();
@@ -1037,6 +1060,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             node_tab = false;
             if matches!(c, '[' | '{') {
                 if flow.is_empty() {
+                    tab_key = block_tab;
                     flow_indent = parent.map_or(document_indent.unwrap_or(0), |p| p + 1);
                     shallow_flow = line_indent < flow_indent;
                 }
@@ -1055,14 +1079,23 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             node = !matches!(c, ']' | '}');
             plain = false;
             quoted_end = false;
+            if flow.is_empty() && (colon || matches!(c, '-' | '?')) {
+                tab_key = false;
+            }
         } else if !yaml_blank_break(c) {
             if node {
                 plain_parent = parent;
+                if flow.is_empty() {
+                    tab_key = block_tab;
+                }
             }
             node = false;
             plain = true;
             quoted_end = false;
         } else if c == '\t' && !plain && (node || !flow.is_empty()) {
+            if flow.is_empty() {
+                block_tab = true;
+            }
             if flow_property.is_some() {
                 node_tab = true;
             } else {
@@ -1878,6 +1911,13 @@ mod tests {
     fn yaml_block_colon_matches_js_yaml() {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-block-colon-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_block_tabs_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-block-tabs-node.json"
         ));
     }
 
