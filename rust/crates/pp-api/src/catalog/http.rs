@@ -366,6 +366,16 @@ fn catalog_error(error: anyhow::Error) -> Response {
             CatalogFailure::Input(_)
             | CatalogFailure::DuplicateName(_)
             | CatalogFailure::Referenced => (StatusCode::BAD_REQUEST, error.to_string()),
+            CatalogFailure::Conflict => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "code": "catalog_metadata_conflict",
+                        "detail": failure.to_string(),
+                    })),
+                )
+                    .into_response();
+            }
         };
         return reject(status, detail);
     }
