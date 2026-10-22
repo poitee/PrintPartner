@@ -340,22 +340,44 @@ fn supervise_reexec(
             });
         }
         match lines.recv_timeout(remaining.min(Duration::from_millis(50))) {
-            Ok(line) if entered.is_none() && line == CHILD_ENTERED => {
+            // Under RUST_TEST_THREADS=1, libtest may prefix the marker on the
+            // same stdout line; exact equality misses and the parent times out.
+            Ok(line) if entered.is_none() && line.trim_end().ends_with(CHILD_ENTERED) => {
                 entered = Some(std::time::Instant::now());
             }
             Ok(_) => {}
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+            Err(RecvTimeoutError::Timeout) => {
                 if let Some(status) = child.try_wait().unwrap() {
-                    return if entered.is_none() {
-                        Err(ReexecError::ExitedBeforeEntry(status))
-                    } else if status.success() {
-                        Ok(())
-                    } else {
-                        Err(ReexecError::Failed(status))
-                    };
+                    return finish_reexec(entered.is_some(), status);
                 }
             }
+            Err(RecvTimeoutError::Disconnected) => {
+                // Reader thread ended; wait for the process instead of spinning
+                // on a closed channel.
+                let status = match child.try_wait().unwrap() {
+                    Some(status) => status,
+                    None => {
+                        let wait_slice = remaining.min(Duration::from_millis(50));
+                        std::thread::sleep(wait_slice);
+                        match child.try_wait().unwrap() {
+                            Some(status) => status,
+                            None => continue,
+                        }
+                    }
+                };
+                return finish_reexec(entered.is_some(), status);
+            }
         }
+    }
+}
+
+fn finish_reexec(entered: bool, status: std::process::ExitStatus) -> Result<(), ReexecError> {
+    if !entered {
+        Err(ReexecError::ExitedBeforeEntry(status))
+    } else if status.success() {
+        Ok(())
+    } else {
+        Err(ReexecError::Failed(status))
     }
 }
 
@@ -375,8 +397,10 @@ fn reexec_work_deadline_starts_when_the_child_enters() {
     )
     .unwrap();
 
+    // `exec sleep` so a killed shell does not leave a grandchild holding the
+    // pipe open (nextest LEAK under process leak detection).
     let mut slow_work = std::process::Command::new("sh")
-        .args(["-c", "echo pp-origin-child-entered; sleep 0.8"])
+        .args(["-c", "echo pp-origin-child-entered; exec sleep 0.8"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
