@@ -158,12 +158,18 @@ pub fn initialization_script(
   const themeKey = {theme_key};
   const sidebarKey = {sidebar_key};
   const pollKey = {poll_key};
-  const write = localStorage.setItem.bind(localStorage);
-  if (changed && restore) {{
-    if (restore.theme != null) write(themeKey, restore.theme);
-    if (restore.sidebar != null) write(sidebarKey, restore.sidebar);
-    if (restore.poll != null) write(pollKey, String(restore.poll));
-  }}
+  const restoredKey = "print-partner.origin-change.restored.v1";
+  let storageProto = null;
+  let originalSetItem = null;
+  try {{
+    storageProto = Object.getPrototypeOf(localStorage);
+    if (storageProto && storageProto !== Object.prototype && typeof storageProto.setItem === "function") {{
+      originalSetItem = storageProto.setItem;
+    }}
+  }} catch {{}}
+  const write = (key, value) => {{
+    originalSetItem.call(localStorage, key, value);
+  }};
   const publish = () => {{
     const captured = {{}};
     const theme = localStorage.getItem(themeKey);
@@ -175,24 +181,27 @@ pub fn initialization_script(
     if (captured.theme == null && captured.sidebarCollapsed == null && captured.printerPollSeconds == null) return;
     window.__TAURI_INTERNALS__?.invoke("sync_portable_settings", {{ captured }})?.catch(() => {{}});
   }};
-  publish();
-  const hooked = function(key, value) {{
-    write(key, value);
-    if (key === themeKey || key === sidebarKey || key === pollKey) publish();
-  }};
-  try {{
-    localStorage.setItem = hooked;
-  }} catch {{}}
-  if (localStorage.setItem !== hooked) {{
+  if (changed && restore && originalSetItem) {{
+    let alreadyRestored = false;
     try {{
-      const proto = Object.getPrototypeOf(localStorage);
-      if (proto && proto !== Object.prototype && typeof proto.setItem === "function") {{
-        const original = proto.setItem;
-        proto.setItem = function(key, value) {{
-          original.call(this, key, value);
-          if (key === themeKey || key === sidebarKey || key === pollKey) publish();
-        }};
-      }}
+      alreadyRestored = sessionStorage.getItem(restoredKey) === "1";
+    }} catch {{}}
+    if (!alreadyRestored) {{
+      try {{
+        if (restore.theme != null) write(themeKey, restore.theme);
+        if (restore.sidebar != null) write(sidebarKey, restore.sidebar);
+        if (restore.poll != null) write(pollKey, String(restore.poll));
+        originalSetItem.call(sessionStorage, restoredKey, "1");
+      }} catch {{}}
+    }}
+  }}
+  publish();
+  if (originalSetItem) {{
+    try {{
+      storageProto.setItem = function (key, value) {{
+        originalSetItem.call(this, key, value);
+        if (this === localStorage && (key === themeKey || key === sidebarKey || key === pollKey)) publish();
+      }};
     }} catch {{}}
   }}
   if (typeof window.addEventListener === "function") window.addEventListener("pagehide", publish);
@@ -595,6 +604,7 @@ mod tests {
             without_internals.store["print-partner.theme"],
             serde_json::json!("dark")
         );
+        assert_eq!(without_internals.store.get("setItem"), None);
         assert!(without_internals.invoked.is_empty());
     }
 
@@ -618,6 +628,65 @@ mod tests {
             observed.invoked[0].captured,
             serde_json::json!({"theme": "dark"})
         );
+        assert_eq!(observed.store.get("setItem"), None);
+    }
+
+    #[test]
+    fn ticket_t_12_session_storage_writes_do_not_publish_local_settings() {
+        let preferences = BrowserPreferences {
+            theme: Some(Theme::Dark),
+            sidebar_collapsed: None,
+            printer_poll_interval: None,
+        };
+        let observed = run_script_case(&ScriptCase {
+            script: &initialization_script(&origin(), &preferences, true),
+            page_origin: "http://127.0.0.1:46687",
+            store: &serde_json::json!({}),
+            writes: &[],
+            session_writes: &[("print-partner.theme", "light")],
+            omit_internals: false,
+            reload: false,
+        });
+        assert_eq!(observed.invoked.len(), 1);
+        assert_eq!(
+            observed.invoked[0].captured,
+            serde_json::json!({"theme": "dark"})
+        );
+        assert_eq!(
+            observed.store,
+            serde_json::json!({"print-partner.theme": "dark"})
+        );
+    }
+
+    #[test]
+    fn ticket_t_12_origin_change_keeps_a_later_edit_across_reload() {
+        let preferences = BrowserPreferences {
+            theme: Some(Theme::Dark),
+            sidebar_collapsed: Some(true),
+            printer_poll_interval: Some(PrinterPollInterval::TenSeconds),
+        };
+        let observed = run_script_case(&ScriptCase {
+            script: &initialization_script(&origin(), &preferences, true),
+            page_origin: "http://127.0.0.1:46687",
+            store: &serde_json::json!({}),
+            writes: &[("print-partner.theme", "light")],
+            session_writes: &[],
+            omit_internals: false,
+            reload: true,
+        });
+        assert_eq!(
+            observed.store,
+            serde_json::json!({
+                "print-partner.theme": "light",
+                "print-partner.sidebar.ui.v1": "1",
+                "print-partner.printer-status-poll.v1": "10",
+            })
+        );
+        let last = observed.invoked.last().unwrap();
+        assert_eq!(last.name, "sync_portable_settings");
+        assert_eq!(last.captured["theme"], serde_json::json!("light"));
+        assert_eq!(last.captured["sidebarCollapsed"], serde_json::json!(true));
+        assert_eq!(last.captured["printerPollSeconds"], serde_json::json!(10));
     }
 
     struct Invocation {
@@ -628,6 +697,16 @@ mod tests {
     struct ScriptResult {
         store: serde_json::Value,
         invoked: Vec<Invocation>,
+    }
+
+    struct ScriptCase<'a> {
+        script: &'a str,
+        page_origin: &'a str,
+        store: &'a serde_json::Value,
+        writes: &'a [(&'a str, &'a str)],
+        session_writes: &'a [(&'a str, &'a str)],
+        omit_internals: bool,
+        reload: bool,
     }
 
     fn run_script(script: &str, page_origin: &str, store: &serde_json::Value) -> ScriptResult {
@@ -641,15 +720,35 @@ mod tests {
         writes: &[(&str, &str)],
         omit_internals: bool,
     ) -> ScriptResult {
-        let after: Vec<_> = writes
+        run_script_case(&ScriptCase {
+            script,
+            page_origin,
+            store,
+            writes,
+            session_writes: &[],
+            omit_internals,
+            reload: false,
+        })
+    }
+
+    fn run_script_case(case: &ScriptCase<'_>) -> ScriptResult {
+        let after: Vec<_> = case
+            .writes
+            .iter()
+            .map(|(key, value)| serde_json::json!({"key": key, "value": value}))
+            .collect();
+        let session_after: Vec<_> = case
+            .session_writes
             .iter()
             .map(|(key, value)| serde_json::json!({"key": key, "value": value}))
             .collect();
         let input = serde_json::json!({
-            "origin": page_origin,
-            "store": store,
+            "origin": case.page_origin,
+            "store": case.store,
             "after": after,
-            "omitInternals": omit_internals,
+            "sessionAfter": session_after,
+            "omitInternals": case.omit_internals,
+            "reload": case.reload,
         });
         let mut child = std::process::Command::new("node")
             .arg("-e")
@@ -658,28 +757,84 @@ mod tests {
 const fs = require("node:fs");
 const script = fs.readFileSync(0, "utf8");
 const input = JSON.parse(process.argv[1]);
-const store = new Map(Object.entries(input.store));
-const invoked = [];
-const localStorage = {
-  getItem(key) { return store.has(key) ? store.get(key) : null; },
-  setItem(key, value) { store.set(key, String(value)); },
+const buckets = new WeakMap();
+const members = new Set(["getItem", "setItem", "removeItem", "clear", "key", "length"]);
+
+function Storage() {}
+Storage.prototype.getItem = function (key) {
+  const data = buckets.get(this);
+  const name = String(key);
+  return data && data.has(name) ? data.get(name) : null;
 };
-const window = {};
-if (!input.omitInternals) {
-  window.__TAURI_INTERNALS__ = {
-    invoke(name, args) {
-      invoked.push({ name, args });
-      return Promise.resolve();
+Storage.prototype.setItem = function (key, value) {
+  const data = buckets.get(this);
+  if (data) data.set(String(key), String(value));
+};
+const pristineGetItem = Storage.prototype.getItem;
+const pristineSetItem = Storage.prototype.setItem;
+
+function createStorage(initial) {
+  const data = new Map();
+  for (const [key, value] of Object.entries(initial || {})) {
+    if (value != null) data.set(String(key), String(value));
+  }
+  const target = Object.create(Storage.prototype);
+  // Assignment stores an item and leaves the prototype method in place.
+  const storage = new Proxy(target, {
+    get(target, prop, receiver) {
+      if (typeof prop !== "string") return Reflect.get(target, prop, receiver);
+      if (members.has(prop)) return Reflect.get(target, prop, receiver);
+      if (data.has(prop)) return data.get(prop);
+      return Reflect.get(target, prop, receiver);
     },
-  };
+    set(target, prop, value, receiver) {
+      if (typeof prop !== "string") return Reflect.set(target, prop, value, receiver);
+      data.set(prop, String(value));
+      return true;
+    },
+    getPrototypeOf() {
+      return Storage.prototype;
+    },
+  });
+  buckets.set(storage, data);
+  return { storage, data };
 }
-window.top = window;
+
+const local = createStorage(input.store);
+const session = createStorage({});
+const localStorage = local.storage;
+const sessionStorage = session.storage;
+const invoked = [];
 const location = { origin: input.origin };
-new Function("window", "location", "localStorage", script)(window, location, localStorage);
+
+function evaluate() {
+  Storage.prototype.getItem = pristineGetItem;
+  Storage.prototype.setItem = pristineSetItem;
+  const window = {};
+  if (!input.omitInternals) {
+    window.__TAURI_INTERNALS__ = {
+      invoke(name, args) {
+        invoked.push({ name, args });
+        return Promise.resolve();
+      },
+    };
+  }
+  window.top = window;
+  new Function("window", "location", "localStorage", "sessionStorage", script)(
+    window,
+    location,
+    localStorage,
+    sessionStorage,
+  );
+}
+
+evaluate();
 for (const change of input.after) localStorage.setItem(change.key, change.value);
+for (const change of input.sessionAfter) sessionStorage.setItem(change.key, change.value);
+if (input.reload) evaluate();
 setTimeout(() => {
   process.stdout.write(JSON.stringify({
-    store: Object.fromEntries(store),
+    store: Object.fromEntries(local.data),
     invoked,
   }));
 }, 0);
@@ -697,7 +852,7 @@ setTimeout(() => {
                 .stdin
                 .take()
                 .unwrap()
-                .write_all(script.as_bytes())
+                .write_all(case.script.as_bytes())
                 .unwrap();
         }
         let output = child.wait_with_output().unwrap();
