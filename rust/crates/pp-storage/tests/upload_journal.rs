@@ -1000,14 +1000,13 @@ fn legacy_targeted_refusal_writes_no_revisioned_observation() {
             .unwrap(),
         0
     );
-    assert_eq!(
+    assert!(
         connection
             .query_row(
                 "SELECT json_extract(document,'$.authority_revision') IS NULL AND json_extract(document,'$.observation_cursor') IS NULL FROM source_import_operations WHERE operation_key=?1",
                 [&legacy.key],
                 |row| row.get::<_, bool>(0),
             )
-            .unwrap(),
-        true
+            .unwrap()
     );
 }
