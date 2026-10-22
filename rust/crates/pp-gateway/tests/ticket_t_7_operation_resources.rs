@@ -1125,10 +1125,7 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.propose_set_build_source_roles",
             "tool.propose_rebuild_plan",
         ),
-        (
-            "tool.propose_rebuild_plan",
-            "tool.propose_apply_plan_draft",
-        ),
+        ("tool.propose_rebuild_plan", "tool.propose_apply_plan_draft"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_job_status", "tool.ui_highlight_part"),
