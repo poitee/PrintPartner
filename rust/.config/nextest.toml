@@ -9,8 +9,6 @@ threads-required = "num-test-threads"
 
 [profile.pp-local-linux]
 test-threads = 3
-# Inherit default slow-timeout; keep explicit so CI profile stays self-describing.
-slow-timeout = { period = "60s", terminate-after = 10 }
 
 # Real-process suites must not compete for the three-vCPU runner's test capacity.
 [[profile.pp-local-linux.overrides]]
