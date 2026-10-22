@@ -320,6 +320,7 @@ fn preparation_matches_cases(cases: impl IntoIterator<Item = Value>) {
             Err(e) => match e.downcast_ref::<Failure>() {
                 Some(Failure::NoLayers) => json!({"kind":"no_layers"}),
                 Some(Failure::NoStls) => json!({"kind":"no_stls"}),
+                Some(Failure::WouldWipe) => json!({"kind":"would_wipe"}),
                 None => json!({"error":e.to_string()}),
             },
         };
@@ -938,4 +939,153 @@ fn preparation_path_sort_honors_cancellation() {
 #[test]
 fn preparation_path_sort_preserves_node_order() {
     client_attempt(ClientAttempt::SortMatch);
+}
+
+const PRESERVED_TABLES: &[&str] = &[
+    "plan_drafts",
+    "plan_draft_inputs",
+    "plan_draft_parts",
+    "plan_draft_required_unit_reconciliations",
+    "plan_draft_required_unit_assignments",
+    "plan_revision_parts",
+    "parts",
+];
+
+fn table_snapshot(connection: &Connection) -> Vec<Vec<Vec<String>>> {
+    PRESERVED_TABLES
+        .iter()
+        .map(|table| {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    Ok((0..columns)
+                        .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                        .collect::<Vec<_>>())
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        })
+        .collect()
+}
+
+struct ReportedRecompute {
+    body: Vec<u8>,
+    rows_before: Vec<Vec<Vec<String>>>,
+    rows_after: Vec<Vec<Vec<String>>>,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+fn recompute_reported(reported: &[&str], disk: &[(&str, &str)]) -> ReportedRecompute {
+    use crate::{Limits, WriterOwner, auth, read_model::Credential};
+    use std::time::Duration;
+    let root = FixtureRoot(
+        std::env::temp_dir().join(format!("pp-preparation-wipe-{}", rand::random::<u64>())),
+    );
+    std::fs::create_dir_all(root.path()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let database = root.path().join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../../tests/fixtures/required-units/unchanged.db"),
+    )
+    .unwrap();
+    let revision = root.path().join("repos/1/revisions/fixture");
+    std::fs::create_dir_all(&revision).unwrap();
+    for (name, bytes) in disk {
+        let path = revision.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, bytes).unwrap();
+    }
+    let connection = Connection::open(&database).unwrap();
+    let files: Vec<Value> = reported
+        .iter()
+        .map(|path| json!({"source":1,"path":path,"content":path}))
+        .collect();
+    let reads: Arc<dyn DraftReads> = Arc::new(Reads {
+        case: json!({"files":files}),
+        hashes: Default::default(),
+    });
+    let owner = WriterOwner::open(root.path(), Limits::default()).unwrap().0;
+    let client = owner
+        .working_drafts_with_observations(
+            auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+            reads,
+            PreparationLimits::default(),
+        )
+        .unwrap();
+    let rows_before = table_snapshot(&connection);
+    let body = client
+        .recompute(
+            Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+            super::PositiveId::new(1).unwrap(),
+            super::RecomputeRequest::new("would-wipe", true).unwrap(),
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(60),
+        )
+        .unwrap()
+        .into_json_body()
+        .into_bytes();
+    owner.shutdown().unwrap();
+    let rows_after = table_snapshot(&connection);
+    let files = disk
+        .iter()
+        .map(|(name, _)| {
+            (
+                (*name).to_owned(),
+                std::fs::read(revision.join(name)).unwrap(),
+            )
+        })
+        .collect();
+    ReportedRecompute {
+        body,
+        rows_before,
+        rows_after,
+        files,
+    }
+}
+
+#[test]
+fn preparation_would_wipe_matches_node_contract() {
+    let run = recompute_reported(
+        &["captured-input.txt"],
+        &[
+            ("captured-input.txt", "captured-bytes"),
+            ("neighbor.stl", "neighbor-bytes"),
+        ],
+    );
+    assert_eq!(run.body, br#"{"kind":"would_wipe"}"#);
+    assert_eq!(run.rows_before, run.rows_after);
+    assert_eq!(
+        run.files,
+        vec![
+            ("captured-input.txt".into(), b"captured-bytes".to_vec()),
+            ("neighbor.stl".into(), b"neighbor-bytes".to_vec()),
+        ]
+    );
+}
+
+#[test]
+fn valid_scans_do_not_report_would_wipe() {
+    let empty = recompute_reported(&[], &[("kept.stl", "kept-bytes")]);
+    assert_eq!(empty.body, br#"{"kind":"no_stls"}"#);
+    assert_eq!(empty.rows_before, empty.rows_after);
+    assert_eq!(
+        empty.files,
+        vec![("kept.stl".into(), b"kept-bytes".to_vec())]
+    );
+    client_attempt(ClientAttempt::Match);
 }

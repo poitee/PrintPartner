@@ -628,6 +628,11 @@ pub(super) fn parse(
         quantity,
     ))
 }
+fn retain_valid_scanner_entries(scans: &mut [Vec<Scanned>]) {
+    for scan in scans {
+        scan.retain(|part| part.key.ends_with(".stl"));
+    }
+}
 fn merge(
     scans: &[Vec<Scanned>],
     prior: &HashMap<String, DraftPart>,
@@ -907,6 +912,10 @@ pub(super) fn prepare(
     }
     ensure!(!scans.is_empty(), Failure::NoLayers);
     ensure!(available.iter().any(|v| !v.is_empty()), Failure::NoStls);
+    // The guard counts every captured row. A valid scanner emits only `.stl`
+    // keys, so dropping other keys does not change its outcome.
+    retain_valid_scanner_entries(&mut scans);
+    retain_valid_scanner_entries(&mut available);
     let mut merged = merge(&scans, &prior, b)?;
     let selected: HashSet<_> = merged.iter().map(|p| p.key.clone()).collect();
     merged.extend(
@@ -914,6 +923,7 @@ pub(super) fn prepare(
             .into_iter()
             .filter(|p| !selected.contains(&p.key)),
     );
+    ensure!(!merged.is_empty() || prior.is_empty(), Failure::WouldWipe);
     let defaults =
         connection.read(|tx| setting(tx, tenant, &format!("role_filaments_{profile}")))?;
     if let Some(raw) = &defaults {
@@ -1155,6 +1165,7 @@ impl Default for PreparationOptions {
 pub(super) enum Failure {
     NoLayers,
     NoStls,
+    WouldWipe,
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
