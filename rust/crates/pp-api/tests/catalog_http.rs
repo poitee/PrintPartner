@@ -214,20 +214,7 @@ fn seal(owner: Arc<Mutex<WriterOwner>>) {
     owner.into_inner().unwrap().shutdown().unwrap();
 }
 
-#[cfg(not(feature = "desktop_rebuild"))]
-fn create_local(owner: &WriterOwner, name: &str) -> i64 {
-    match owner
-        .local_source_catalog()
-        .execute(Request::Create {
-            source: sample(name, "kept"),
-        })
-        .unwrap()
-    {
-        Outcome::Source(Some(row)) => row.id,
-        _ => panic!("create"),
-    }
-}
-
+#[cfg(feature = "desktop_rebuild")]
 fn insert_safeguards(directory: &Path, history_id: i64, referenced_id: i64) {
     let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
     db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
@@ -240,6 +227,7 @@ fn insert_safeguards(directory: &Path, history_id: i64, referenced_id: i64) {
     .unwrap();
 }
 
+#[cfg(feature = "desktop_rebuild")]
 fn stored_rows(directory: &Path) -> Vec<String> {
     let db = rusqlite::Connection::open_with_flags(
         directory.join("print-partner.db"),
@@ -302,63 +290,6 @@ async fn catalog_patch_wrong_owner_is_refused() {
         json!({"name":"Stolen","metadata":{"note":"stolen"}}),
     )
     .await;
-}
-
-#[cfg(not(feature = "desktop_rebuild"))]
-#[tokio::test]
-async fn catalog_delete_busy_source_preserves_revisions() {
-    let (owner, directory) = open();
-    let (history, referenced) = {
-        let guard = owner.lock().unwrap();
-        (
-            create_local(&guard, "History"),
-            create_local(&guard, "Referenced"),
-        )
-    };
-    insert_safeguards(&directory, history, referenced);
-    let before = stored_rows(&directory);
-    let (listener, _) = listener().await;
-    let mut server = Server::spawn(listener, axum::Router::new()).await;
-    for id in [history, referenced] {
-        let (status, body) = server
-            .send(Method::DELETE, &format!("/sources/{id}"), &[])
-            .await;
-        assert_eq!(status, 404, "{id}");
-        assert!(body.get("detail").is_none());
-    }
-    server.stop().await;
-    assert_eq!(stored_rows(&directory), before);
-    assert_eq!(
-        list(&owner.lock().unwrap())
-            .iter()
-            .map(|row| row.id)
-            .collect::<Vec<_>>(),
-        vec![history, referenced]
-    );
-    shutdown(owner, directory);
-}
-
-#[cfg(not(feature = "desktop_rebuild"))]
-#[tokio::test]
-async fn catalog_delete_unreferenced_source_succeeds() {
-    let (owner, directory) = open();
-    let id = {
-        let guard = owner.lock().unwrap();
-        create_local(&guard, "Disposable")
-    };
-    let before = list(&owner.lock().unwrap());
-    let snapshot = files(&directory);
-    let (listener, _) = listener().await;
-    let mut server = Server::spawn(listener, axum::Router::new()).await;
-    let (status, body) = server
-        .send(Method::DELETE, &format!("/api/v1/sources/{id}"), &[])
-        .await;
-    assert_eq!(status, 404);
-    assert!(body.get("detail").is_none());
-    server.stop().await;
-    assert_eq!(files(&directory), snapshot);
-    assert_eq!(list(&owner.lock().unwrap()), before);
-    shutdown(owner, directory);
 }
 
 #[cfg(not(feature = "desktop_rebuild"))]
@@ -778,6 +709,75 @@ async fn catalog_patch_wrong_owner_is_refused() {
             &format!("/api/v1/sources/{foreign_id}"),
             &[("Cookie", &cookie)],
             Some(&json!({"name":"Stolen","metadata":{"note":"stolen"}})),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), seeded);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_delete_wrong_owner_is_refused() {
+    let (owner, directory) = open();
+    let seeded = {
+        let guard = owner.lock().unwrap();
+        seed(&guard)
+    };
+    let foreign_id = seeded[0].id;
+    let (bound, origin) = listener().await;
+    let account = AuthPolicy {
+        registration: pp_storage::auth::RegistrationPolicy::FirstAccountOnly,
+        first_user: pp_storage::auth::FirstUserTenant::NewUser,
+        session_tenant: pp_storage::auth::SessionTenantPolicy::AccountTenant,
+    };
+    let auth = owner.lock().unwrap().auth_with_policy(account).unwrap();
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        catalog::{CatalogHttpConfig, admit_catalog_routes},
+    };
+    let router = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(&origin, "default", account, Some("true")).unwrap(),
+        Arc::clone(&owner),
+    )
+    .merge(auth_router(
+        AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false).unwrap(),
+        auth,
+        ProviderClient::new(None, None).unwrap(),
+        ResetMailer::disabled(),
+    ));
+    let mut server = Server::spawn(bound, router).await;
+    let registered = server
+        .client
+        .post(format!("{}/auth/register", server.origin))
+        .header("Origin", &server.origin)
+        .json(&json!({"email":"stranger@example.test","password":"password-1234"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let cookie = registered.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (status, body) = server
+        .send(Method::GET, "/sources", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!((status, &body), (200, &json!({"sources":[]})));
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .send(
+            Method::DELETE,
+            &format!("/api/v1/sources/{foreign_id}"),
+            &[("Cookie", &cookie)],
         )
         .await;
     assert_eq!(
