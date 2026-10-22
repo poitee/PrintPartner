@@ -258,7 +258,13 @@ export function registerAuthRoutes(
             to: user.email,
             resetUrl,
           });
-          devResetUrl = delivery.devResetUrl;
+          if (delivery.errorClass) {
+            request.log.warn(
+              `Password reset mail delivery failed; provider=smtp error_class=${delivery.errorClass}`,
+            );
+          } else {
+            devResetUrl = delivery.devResetUrl;
+          }
         } else {
           request.log.error(
             "Password reset email is unavailable because APP_PUBLIC_URL is not configured",
