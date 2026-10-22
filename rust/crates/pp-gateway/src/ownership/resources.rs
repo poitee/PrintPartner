@@ -99,6 +99,14 @@ enum ReviewedEntry {
     ProposeSetPlanAssembly { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_verify_printer_checkoff")]
     ProposeVerifyPrinterCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_checkoff")]
+    GetPlanCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_remaining")]
+    GetRemaining { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_printer_checkoff")]
+    GetPrinterCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_import_3mf_checkoff")]
+    ProposeImport3mfCheckoff { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -304,6 +312,24 @@ impl ReviewedEntry {
                 resources,
                 BTreeSet::from([Table(AppSettings)]),
             ),
+            Self::GetPlanCheckoff { resources } => (
+                "tool.get_plan_checkoff",
+                resources,
+                accepted_plan_operational(),
+            ),
+            Self::GetRemaining { resources } => {
+                ("tool.get_remaining", resources, accepted_plan_operational())
+            }
+            Self::GetPrinterCheckoff { resources } => (
+                "tool.get_printer_checkoff",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeImport3mfCheckoff { resources } => {
+                let mut expected = accepted_plan_operational();
+                expected.insert(Table(SourceDocs));
+                ("tool.propose_import_3mf_checkoff", resources, expected)
+            }
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -568,6 +594,10 @@ impl Declarations {
             "tool.propose_set_plan_progress",
             "tool.propose_set_plan_assembly",
             "tool.propose_verify_printer_checkoff",
+            "tool.get_plan_checkoff",
+            "tool.get_remaining",
+            "tool.get_printer_checkoff",
+            "tool.propose_import_3mf_checkoff",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

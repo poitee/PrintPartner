@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, isAbsolute, resolve, sep } from "node:path";
+import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { drizzle as drizzlePostgres } from "drizzle-orm/node-postgres";
@@ -74,7 +75,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -3383,34 +3384,58 @@ const REFUSED_SNAPSHOT_TABLES = ["build_profiles", "parts", "plan_accepted_input
 type AcceptedPlanTool = "propose_set_plan_progress" | "propose_set_plan_assembly";
 const ACCEPTED_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revision_required_unit_sets", "plan_revision_required_units", "plan_revisions", "print_progress", "projects", "required_units", "source_revisions"].map((table) => `table:${table}`);
 
-function acceptedPlanSelect(statement: unknown, tenantId: string): string[] {
+function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = false): string[] {
   const sql = z.string().parse(statement);
   if (["BEGIN DEFERRED", "COMMIT", "ROLLBACK"].includes(sql)) return [];
   if (sql.startsWith('select "id", "name", "order_number", "archived_at" from "build_profiles"')) return [tableForObservedSelect(sql, tenantId)];
   const match = /^select (?:(?!\bfrom\b).)+ from "([a-z_]+)" where (?:(?!\bfrom\b|\bjoin\b).)+$/.exec(sql);
+  if (match?.[1] === "source_docs") {
+    if (!sourceDocs || !sql.includes(`"tenant_id" = '${tenantId}'`)) throw new Error(`Unsupported SQL: ${sql}`);
+    return ["table:source_docs"];
+  }
   if (!match || !ACCEPTED_PLAN_TABLES.includes(`table:${match[1]}`)) throw new Error(`Unsupported SQL: ${sql}`);
   return [`table:${match[1]}`];
 }
 
-async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printer_checkoff", input: Record<string, unknown>, tables: string[], options: {
-  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
+type CheckoffReadTool = "get_plan_checkoff" | "get_remaining" | "get_printer_checkoff" | "propose_import_3mf_checkoff";
+
+async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printer_checkoff" | CheckoffReadTool, input: Record<string, unknown>, tables: string[], options: {
+  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number; sourceDocs?: boolean; scratch?: boolean;
 } = {}) {
-  const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
+  const { repository = repo, files = [], tenantId = "default", activePlanId, sourceDocs = false, scratch = false } = options;
   statements = [];
   observer.state.files = [];
   observer.state.active = true;
   let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
   try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId })); }
   finally { observer.state.active = false; }
-  const observed = [...new Set(statements.flatMap((sql) => tool === "propose_verify_printer_checkoff" ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId)))].sort();
+  const settings = tool === "propose_verify_printer_checkoff" || tool === "get_printer_checkoff";
+  const observed = [...new Set(statements.flatMap((sql) => settings ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId, sourceDocs)))].sort();
   expect(observed).toEqual(tables);
   const observedFiles = observer.state.files.map(({ api, args }): CategoryProbe => [api, ...args]);
-  expect(observedFiles).toEqual(files);
   const union = unions.get(tool) ?? new Set<string>();
   for (const resource of observed) union.add(resource);
-  if (observedFiles.length > 0) {
-    expect(observedFiles.every(([, path]) => typeof path === "string" && under(join(dataDir, "repos"), path))).toBe(true);
-    union.add("file:source-workspace");
+  if (scratch) {
+    const reposRoot = join(dataDir, "repos");
+    const durable: CategoryProbe[] = [];
+    for (const probe of observedFiles) {
+      const path = probe[1];
+      if (typeof path === "string" && under(reposRoot, path)) durable.push(probe);
+      else if (typeof path === "number" || (typeof path === "string" && path.includes("pp-mcp-3mf-"))) continue;
+      else throw new Error(`Unclassified filesystem call ${probe[0]} ${String(path)}`);
+    }
+    expect(durable).toEqual(files);
+    const durableKeys = new Set(durable.map((probe) => JSON.stringify(probe)));
+    const temp = observedFiles.filter((probe) => !durableKeys.has(JSON.stringify(probe)));
+    expect(temp.some(([api]) => api === "mkdtempSync")).toBe(true);
+    expect(temp.some(([api]) => api === "rmSync")).toBe(true);
+    if (durable.length > 0) union.add("file:source-workspace");
+  } else {
+    expect(observedFiles).toEqual(files);
+    if (observedFiles.length > 0) {
+      expect(observedFiles.every(([, path]) => typeof path === "string" && under(join(dataDir, "repos"), path))).toBe(true);
+      union.add("file:source-workspace");
+    }
   }
   unions.set(tool, union);
   return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
@@ -3435,14 +3460,14 @@ function acceptedPlanFixture(isolated: boolean) {
   const part = accepted.snapshot.parts[0]!;
   expect(part.units.map(({ unitIndex }) => unitIndex)).toEqual([0, 1]);
   const files: CategoryProbe[] = isolated ? [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", snapshot], ["statSync", snapshot]] : [];
-  return { repository, workspace, plan, part, basis: acceptedPlanBasis(accepted.snapshot), files, idle: repo.createProfile("Not accepted"), foreign: tenantStorage.run("other", () => repo.createProfile("Foreign accepted")) };
+  return { repository, workspace, sourceId: source.id, plan, part, basis: acceptedPlanBasis(accepted.snapshot), files, idle: repo.createProfile("Not accepted"), foreign: tenantStorage.run("other", () => repo.createProfile("Foreign accepted")) };
 }
 
 function acceptedPlanProposal(type: AcceptedPlanTool | "propose_verify_printer_checkoff", planId: number, label: string, summary: string, params: Record<string, unknown>) {
   return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.", action: { id: expect.any(String), type, plan_id: planId, label, summary, params } };
 }
 
-function assertAcceptedPlanDeclaration(tool: AcceptedPlanTool | "propose_verify_printer_checkoff", observed: string[], expected = observed) {
+function assertAcceptedPlanDeclaration(tool: AcceptedPlanTool | "propose_verify_printer_checkoff" | CheckoffReadTool, observed: string[], expected = observed) {
   expect([...unions.get(tool) ?? []].sort()).toEqual(observed);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
   if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
@@ -3538,4 +3563,213 @@ it("traces propose_verify_printer_checkoff link lookup, states and tenants again
   }
   expect(observer.state.files).toEqual([]);
   assertAcceptedPlanDeclaration("propose_verify_printer_checkoff", settings);
+});
+
+const CHECKOFF_READS = ["get_plan_checkoff", "get_remaining"] as const;
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces get_plan_checkoff and get_remaining against the accepted Plan snapshot under ${policy} policy`, async () => {
+    const { repository, plan, part, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const updated = sqlite.prepare("UPDATE print_progress SET completed = 1, assembled = 1 WHERE part_id = ? AND unit_index = 0").run(part.projectionPartId);
+    expect(updated.changes).toBe(1);
+    const read = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    if (read.kind !== "ready") throw new Error(`Accepted fixture is ${read.kind}`);
+    const included = read.snapshot.parts.filter((candidate) => candidate.included);
+    expect(included.map((candidate) => candidate.units.map((unit) => [unit.unitIndex, unit.completed, unit.assembled]))).toEqual([[[0, true, true], [1, false, false]]]);
+    const basis = acceptedPlanBasis(read.snapshot);
+    const options = { repository, files };
+    const parts = included.map((candidate) => ({
+      part_id: candidate.projectionPartId,
+      filename: candidate.filename,
+      relative_path: candidate.relativePath,
+      role: candidate.effectiveRole,
+      quantity_effective: candidate.quantityEffective,
+      printed_count: candidate.units.filter((unit) => unit.completed).length,
+      assembled_count: candidate.units.filter((unit) => unit.assembled).length,
+      missing: candidate.units.some((unit) => unit.required && !unit.completed),
+      units: candidate.units.map((unit) => ({
+        unit_index: unit.unitIndex,
+        token: unit.token,
+        object_name: unit.objectName,
+        required: unit.required,
+        completed: unit.completed,
+        assembled: unit.assembled,
+      })),
+    }));
+    const checkoff = {
+      plan_id: plan.id,
+      plan_name: "Accepted plan",
+      state: "ready",
+      accepted_basis: basis,
+      printed_units: 1,
+      total_units: 2,
+      remaining_units: 1,
+      parts,
+    };
+    const remaining = {
+      plan_id: plan.id,
+      plan_name: "Accepted plan",
+      archived_at: null,
+      summary: "0/1 parts fully printed · 1/2 units",
+      printed_units: 1,
+      total_units: 2,
+      remaining_units: 1,
+      percent: 50,
+      can_archive: false,
+      part_count: 1,
+    };
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(checkoff);
+      expect(await traceAcceptedPlan("get_remaining", { plan_id }, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(remaining);
+    }
+    expect(await traceAcceptedPlan("get_plan_checkoff", {}, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(checkoff);
+    expect(await traceAcceptedPlan("get_remaining", {}, ACCEPTED_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(remaining);
+    for (const plan_id of [undefined, null, "invalid"]) {
+      expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id }, [], { repository })).toEqual({ error: "plan_id required" });
+      expect(await traceAcceptedPlan("get_remaining", { plan_id }, [], { repository })).toEqual({ error: "plan_id required" });
+    }
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+      expect(await traceAcceptedPlan("get_remaining", { plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("get_remaining", { plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    const idleRemaining = { plan_id: idle.id, plan_name: "Not accepted", archived_at: null, summary: "0/0 parts fully printed · 0/0 units", printed_units: 0, total_units: 0, remaining_units: 0, percent: 0, can_archive: false, part_count: 0 };
+    expect(await traceAcceptedPlan("get_plan_checkoff", { plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual({ plan_id: idle.id, state: "empty", parts: [] });
+    expect(await traceAcceptedPlan("get_remaining", { plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual(idleRemaining);
+    const declared = ["file:source-workspace", ...ACCEPTED_PLAN_TABLES];
+    for (const tool of CHECKOFF_READS) assertAcceptedPlanDeclaration(tool, [...(isolated ? ["file:source-workspace"] : []), ...ACCEPTED_PLAN_TABLES], declared);
+  });
+}
+
+it.each(CHECKOFF_READS)("traces %s isolated symlink snapshot refusal before a unit summary", async (tool) => {
+  const { repository, workspace, plan } = acceptedPlanFixture(true);
+  const repos = join(dataDir, "repos");
+  fs.renameSync(workspace, `${workspace}-moved`);
+  fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
+  expect(await traceAcceptedPlan(tool, { plan_id: plan.id, content_base64: "YQ==" }, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error: "Accepted Plan data is inconsistent" });
+});
+
+it("traces get_printer_checkoff link and unattributed settings without a plan read", async () => {
+  const plan = repo.createProfile("Printer checkoff");
+  const link = (id: string, state: string, profile_id = plan.id, integration_id = "prusa") => ({ id, integration_id, printer_id: "mk4", filename: `${id}.bgcode`, profile_id, state, units: [] });
+  const links = [link("awaiting", "awaiting_verify"), link("watching", "watching"), link("other-host", "awaiting_verify", plan.id, "bambu"), link("foreign-plan", "awaiting_verify", 999999)];
+  const open = { id: "open", integration_id: "prusa", printer_id: "mk4", host_name: "Host", filename: "open.bgcode", completed_at: "2026-01-01T00:00:00.000Z", gcode_objects: [], candidates: [] };
+  const dismissed = { ...open, id: "dismissed", filename: "dismissed.bgcode", dismissed: true, dismissed_at: "2026-01-02T00:00:00.000Z" };
+  const storedLinks = JSON.stringify(links);
+  const storedPrints = JSON.stringify([open, dismissed]);
+  repo.setSetting("printer.checkoff_links", storedLinks);
+  repo.setSetting("printer.unattributed_prints", storedPrints);
+  tenantStorage.run("other", () => {
+    repo.setSetting("printer.checkoff_links", JSON.stringify([link("hidden", "awaiting_verify")]));
+    repo.setSetting("printer.unattributed_prints", JSON.stringify([{ ...open, id: "hidden-print" }]));
+  });
+  const settings = ["table:app_settings"];
+  const bothKeys = () => {
+    const sql = statements.map(String);
+    expect(sql.filter((statement) => statement.includes("'printer.checkoff_links'"))).toHaveLength(1);
+    expect(sql.filter((statement) => statement.includes("'printer.unattributed_prints'"))).toHaveLength(1);
+  };
+  expect(await traceAcceptedPlan("get_printer_checkoff", {}, settings, { activePlanId: plan.id })).toMatchObject({
+    links: [expect.objectContaining({ id: "awaiting" }), expect.objectContaining({ id: "watching" }), expect.objectContaining({ id: "other-host" }), expect.objectContaining({ id: "foreign-plan" })],
+    unattributed: [open],
+    pending_verification: 3,
+  });
+  bothKeys();
+  expect(await traceAcceptedPlan("get_printer_checkoff", { plan_id: plan.id, state: " awaiting_verify ", integration_id: " prusa " }, settings)).toMatchObject({
+    links: [expect.objectContaining({ id: "awaiting", profile_id: plan.id })],
+    unattributed: [],
+    pending_verification: 1,
+  });
+  expect(statements.join("\n")).not.toContain("build_profiles");
+  expect(await traceAcceptedPlan("get_printer_checkoff", { plan_id: 999999 }, settings)).toMatchObject({ links: [expect.objectContaining({ id: "foreign-plan" })], unattributed: [], pending_verification: 1 });
+  expect(await traceAcceptedPlan("get_printer_checkoff", { state: "watching" }, settings)).toMatchObject({ links: [expect.objectContaining({ id: "watching" })], pending_verification: 0 });
+  expect(await traceAcceptedPlan("get_printer_checkoff", {}, settings, { tenantId: "other" })).toMatchObject({ links: [expect.objectContaining({ id: "hidden" })], unattributed: [expect.objectContaining({ id: "hidden-print" })], pending_verification: 1 });
+  for (const state of ["Verified", "applied", "nope"]) expect(await traceAcceptedPlan("get_printer_checkoff", { state }, [])).toEqual({ error: "invalid checkoff state" });
+  expect(statements).toEqual([]);
+  for (const stored of ["[invalid", "{}", ""]) {
+    repo.setSetting("printer.checkoff_links", stored);
+    repo.setSetting("printer.unattributed_prints", stored);
+    expect(await traceAcceptedPlan("get_printer_checkoff", {}, settings)).toEqual({ links: [], unattributed: [], pending_verification: 0 });
+  }
+  repo.setSetting("printer.checkoff_links", storedLinks);
+  repo.setSetting("printer.unattributed_prints", storedPrints);
+  expect(await traceAcceptedPlan("get_printer_checkoff", { plan_id: String(plan.id) }, settings)).toMatchObject({
+    links: [expect.objectContaining({ id: "awaiting" }), expect.objectContaining({ id: "watching" }), expect.objectContaining({ id: "other-host" })],
+    unattributed: [],
+    pending_verification: 2,
+  });
+  expect(repo.getSetting("printer.checkoff_links")).toBe(storedLinks);
+  expect(repo.getSetting("printer.unattributed_prints")).toBe(storedPrints);
+  expect(observer.state.files).toEqual([]);
+  assertAcceptedPlanDeclaration("get_printer_checkoff", settings);
+});
+
+function threeMfFor(token: string, objectName: string): Buffer {
+  const mesh: StlMesh = {
+    vertices: [[0, 0, 0], [10, 0, 0], [0, 10, 0]],
+    faces: [[0, 1, 2]],
+    bounds: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 0, widthMm: 10, depthMm: 10, heightMm: 0 },
+  };
+  return Buffer.from(encodeAcceptedPlate3mf([{ token, objectName, xUm: 0, yUm: 0, mesh }]));
+}
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces propose_import_3mf_checkoff inline and source-file dispatch under ${policy} policy`, async () => {
+    const { repository, workspace, sourceId, plan, part, basis, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const unit = part.units[0]!;
+    const bytes = threeMfFor(unit.token, unit.objectName);
+    const plate = join(workspace, "plate.3mf");
+    fs.writeFileSync(plate, bytes);
+    const encoded = bytes.toString("base64");
+    const repos = join(dataDir, "repos");
+    const sourceProbes: CategoryProbe[] = isolated ? [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", workspace], ["statSync", workspace]] : [];
+    const fileReads: CategoryProbe[] = [["realpathSync", workspace], ["realpathSync", plate], ["statSync", plate], ["statSync", plate], ["readFileSync", plate]];
+    const withDocs = [...ACCEPTED_PLAN_TABLES, "table:source_docs"].sort();
+    const proposal = (filename: string, params: Record<string, unknown>) => ({
+      status: "proposed",
+      note: "Not applied yet — user must confirm via Apply in the UI.",
+      action: {
+        id: expect.any(String),
+        type: "propose_import_3mf_checkoff",
+        plan_id: plan.id,
+        label: `import 3MF checkoff for ${filename}`,
+        summary: "Create a verify-first checkoff link from the imported sliced 3MF.",
+        params: { plan_id: plan.id, filename, integration_id: "mcp-3mf", printer_id: "mcp-3mf", host_name: "Imported 3MF", object_names: [unit.objectName], accepted_basis: basis, ...params },
+      },
+      object_count: 1,
+      objects: [{
+        relative_path: expect.any(String),
+        object_name: unit.objectName,
+        part_number: unit.token,
+        mapped_object_name: unit.objectName,
+        mapped_part_id: part.projectionPartId,
+        mapped_unit_index: unit.unitIndex,
+      }],
+    });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, filename: " foreign-slicer.3mf ", content_base64: ` ${encoded} ` }, ACCEPTED_PLAN_TABLES, { repository, files, scratch: true, activePlanId: idle.id })).toEqual(proposal("foreign-slicer.3mf", { content_base64: encoded }));
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: String(plan.id), source_id: sourceId, path: "plate.3mf", integration_id: " shop ", printer_id: " xl ", host_name: " Bench " }, withDocs, { repository, files: [...files, ...sourceProbes, ...fileReads], scratch: true, sourceDocs: true })).toEqual(proposal("plate.3mf", { source_id: sourceId, path: "plate.3mf", integration_id: "shop", printer_id: "xl", host_name: "Bench" }));
+    for (const plan_id of [undefined, null, "invalid"]) expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id, content_base64: encoded }, [], { repository })).toEqual({ error: "plan_id required" });
+    for (const plan_id of [999999, foreign.id]) expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id, content_base64: encoded }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: idle.id, content_base64: encoded }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Accepted Plan has no required units" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "content_base64 or source_id plus path is required" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: encoded, source_id: sourceId }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "Provide either content_base64 or source_id plus path, not both" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: "????" }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "content_base64 must be valid base64" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: "" }, ACCEPTED_PLAN_TABLES, { repository, files })).toEqual({ error: "content_base64 or source_id plus path is required" });
+    sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(unsyncedId);
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, source_id: unsyncedId, path: "plate.3mf" }, withDocs, { repository, files, sourceDocs: true })).toEqual({ error: "Source is not synchronized" });
+    expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, source_id: sourceId, path: "../outside.3mf" }, withDocs, { repository, files: [...files, ...sourceProbes], sourceDocs: true })).toEqual({ error: "3MF path not found" });
+    const declared = ["file:source-workspace", ...ACCEPTED_PLAN_TABLES, "table:source_docs"].sort();
+    assertAcceptedPlanDeclaration("propose_import_3mf_checkoff", declared, declared);
+  });
+}
+
+it("traces propose_import_3mf_checkoff symlink refusal before 3MF bytes are read", async () => {
+  const { repository, workspace, plan } = acceptedPlanFixture(true);
+  const repos = join(dataDir, "repos");
+  fs.renameSync(workspace, `${workspace}-moved`);
+  fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
+  expect(await traceAcceptedPlan("propose_import_3mf_checkoff", { plan_id: plan.id, content_base64: "YQ==" }, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error: "Accepted Plan data is inconsistent" });
 });
