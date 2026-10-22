@@ -80,6 +80,10 @@ fn run() -> Result<u8> {
     if std::env::var_os("PP_DESKTOP_E2E_MARKER").is_some() {
         println!("{}", automation_marker());
     }
+    #[cfg(feature = "desktop_rebuild")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        pp_desktop::native_actions::open_sponsor
+    ]);
     let app = builder
         .build(tauri::generate_context!())
         .context("Native shell initialization failed")?;
@@ -140,7 +144,27 @@ fn run() -> Result<u8> {
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
         let url = core.take_launch_target()?.into_url().parse()?;
-        let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url))
+        #[cfg(feature = "desktop_rebuild")]
+        let sponsor = pp_desktop::native_actions::SponsorAction::from_startup(
+            core.desktop_rebuild(),
+            origin.clone(),
+        );
+        #[cfg(feature = "desktop_rebuild")]
+        if let Some(capability) = sponsor.capability() {
+            app.add_capability(capability)?;
+        }
+        let builder = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url));
+        #[cfg(feature = "desktop_rebuild")]
+        let builder = {
+            let builder = if let Some(script) = sponsor.initialization_script() {
+                builder.initialization_script(script)
+            } else {
+                builder
+            };
+            app.manage(sponsor);
+            builder
+        };
+        let window = builder
             .title("Print Partner")
             .inner_size(1280.0, 850.0)
             .min_inner_size(900.0, 650.0)
