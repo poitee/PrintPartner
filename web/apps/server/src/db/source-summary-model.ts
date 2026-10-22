@@ -7,7 +7,7 @@ import {
 import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { REMOTE_CHECKED_AT_KEY, REMOTE_UPDATE_STATUS_KEY } from "../services/source-update-check.js";
 
-export const CATALOG_METADATA_VERSION = "catalog_metadata_version";
+const CATALOG_METADATA_VERSION = "catalog_metadata_version";
 
 export function readCatalogMetadataVersion(metadata: Record<string, unknown> | null): number {
   const value = metadata?.[CATALOG_METADATA_VERSION];
