@@ -232,6 +232,242 @@ struct FlowProperty {
     key: bool,
 }
 
+struct PlainLanding {
+    pos: usize,
+    line_begin: usize,
+    indent: usize,
+}
+
+struct BlockPlain {
+    text: String,
+    end: usize,
+    line_begin: usize,
+    line_indent: usize,
+}
+
+fn at_document_boundary(
+    chars: &[char],
+    index: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<bool> {
+    let marker = matches!(
+        chars.get(index..index + 3),
+        Some(['-', '-', '-'] | ['.', '.', '.'])
+    ) && chars.get(index + 3).copied().is_none_or(yaml_blank_break);
+    if marker {
+        return Ok(true);
+    }
+    if chars.get(index) == Some(&'\u{feff}') {
+        return bom_boundary(chars, index, budget);
+    }
+    Ok(false)
+}
+
+// Skip the line break js-yaml's plain-scalar scanner consumes, including blank
+// lines, and stop on the next content line. Indent counts spaces only.
+fn skip_plain_separation(
+    chars: &[char],
+    mut pos: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<PlainLanding> {
+    let mut line_begin = pos;
+    let mut indent = 0;
+    let mut steps = 0usize;
+    loop {
+        if steps.is_multiple_of(1024) {
+            budget.check()?;
+        }
+        steps += 1;
+        while chars.get(pos).is_some_and(|c| matches!(c, ' ' | '\t')) {
+            if steps.is_multiple_of(1024) {
+                budget.check()?;
+            }
+            steps += 1;
+            pos += 1;
+        }
+        match chars.get(pos) {
+            Some('\r') => {
+                pos += 1;
+                if chars.get(pos) == Some(&'\n') {
+                    pos += 1;
+                }
+            }
+            Some('\n') => pos += 1,
+            _ => break,
+        }
+        line_begin = pos;
+        indent = 0;
+        while chars.get(pos) == Some(&' ') {
+            if steps.is_multiple_of(1024) {
+                budget.check()?;
+            }
+            steps += 1;
+            indent += 1;
+            pos += 1;
+        }
+    }
+    Ok(PlainLanding {
+        pos,
+        line_begin,
+        indent,
+    })
+}
+
+fn fold_plain(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<String> {
+    let mut result = String::new();
+    let mut i = start;
+    let mut capture_start = start;
+    let mut capture_end = start;
+    while i < end {
+        if (i - start).is_multiple_of(1024) {
+            budget.check()?;
+        }
+        let ch = chars[i];
+        if matches!(ch, '\n' | '\r') {
+            result.extend(&chars[capture_start..capture_end]);
+            let mut breaks = 0usize;
+            while i < end {
+                match chars[i] {
+                    '\n' => {
+                        breaks += 1;
+                        i += 1;
+                    }
+                    '\r' => {
+                        breaks += 1;
+                        i += 1;
+                        if chars.get(i) == Some(&'\n') {
+                            i += 1;
+                        }
+                    }
+                    ' ' | '\t' => i += 1,
+                    _ => break,
+                }
+            }
+            if breaks == 1 {
+                result.push(' ');
+            } else if breaks > 1 {
+                result.push_str(&"\n".repeat(breaks - 1));
+            }
+            capture_start = i;
+            capture_end = i;
+        } else {
+            i += 1;
+            if !matches!(ch, ' ' | '\t') {
+                capture_end = i;
+            }
+        }
+    }
+    result.extend(&chars[capture_start..capture_end]);
+    Ok(result)
+}
+
+// saphyr reads `]`, `}`, and `,` as flow tokens outside a collection. js-yaml
+// reads them as a block plain scalar, so `a:\n  []\n\n: ]` is a null key whose
+// value is "]". A multiline scalar that then stops on `:` is the implicit-key
+// shape js-yaml rejects.
+fn block_indicator_plain(
+    chars: &[char],
+    start: usize,
+    line_begin: usize,
+    line_indent: usize,
+    min_indent: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<BlockPlain> {
+    let mut pos = start;
+    let mut end = start;
+    let mut multiline = false;
+    let mut later_colon = false;
+    let mut line_start = line_begin;
+    let mut cursor_line = line_begin;
+    let mut cursor_indent = line_indent;
+    let mut end_line_begin = line_begin;
+    let mut end_line_indent = line_indent;
+    let mut checked = start;
+    loop {
+        if pos >= checked {
+            budget.check()?;
+            checked = pos + 1024;
+        }
+        if pos >= chars.len() {
+            break;
+        }
+        if pos == line_start && at_document_boundary(chars, pos, budget)? {
+            break;
+        }
+        let ch = chars[pos];
+        if ch == ':' && chars.get(pos + 1).copied().is_none_or(yaml_blank_break) {
+            later_colon = multiline;
+            break;
+        } else if ch == '#' && (pos == 0 || yaml_blank_break(chars[pos - 1])) {
+            break;
+        } else if matches!(ch, '\r' | '\n') {
+            let landing = skip_plain_separation(chars, pos, budget)?;
+            let boundary = landing.pos == landing.line_begin
+                && landing.pos < chars.len()
+                && at_document_boundary(chars, landing.pos, budget)?;
+            if !boundary && landing.indent >= min_indent {
+                multiline = true;
+                pos = landing.pos;
+                line_start = landing.line_begin;
+                cursor_line = landing.line_begin;
+                cursor_indent = landing.indent;
+                continue;
+            }
+            break;
+        }
+        if !matches!(ch, ' ' | '\t') {
+            end = pos + 1;
+            end_line_begin = cursor_line;
+            end_line_indent = cursor_indent;
+        }
+        pos += 1;
+    }
+    if later_colon {
+        return invalid();
+    }
+    for (offset, ch) in chars[start..end].iter().enumerate() {
+        if offset.is_multiple_of(1024) {
+            budget.check()?;
+        }
+        if non_printable(*ch) {
+            return invalid();
+        }
+    }
+    Ok(BlockPlain {
+        text: fold_plain(chars, start, end, budget)?,
+        end,
+        line_begin: end_line_begin,
+        line_indent: end_line_indent,
+    })
+}
+
+fn push_quoted_plain(
+    output: &mut String,
+    text: &str,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<()> {
+    output.push('"');
+    for (offset, ch) in text.chars().enumerate() {
+        if offset.is_multiple_of(1024) {
+            budget.check()?;
+        }
+        match ch {
+            '\\' => output.push_str("\\\\"),
+            '"' => output.push_str("\\\""),
+            '\n' => output.push_str("\\n"),
+            '\u{e000}' => output.push_str("\u{e000}\u{e000}"),
+            ch => output.push(ch),
+        }
+    }
+    output.push('"');
+    Ok(())
+}
+
 fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String> {
     budget.check()?;
     // js-yaml rejects any input that contains a NUL.
@@ -727,6 +963,35 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             node = false;
             continue;
         }
+        if node && flow.is_empty() && matches!(c, ',' | ']' | '}') {
+            let min_indent = parent.map_or(line_indent, |column| column + 1);
+            let quoted =
+                block_indicator_plain(&chars, i, line_begin, line_indent, min_indent, budget)?;
+            if quoted.end <= i {
+                return invalid();
+            }
+            push_quoted_plain(&mut output, &quoted.text, budget)?;
+            if quoted.line_begin != line_begin {
+                line_begin = quoted.line_begin;
+                line_indent = quoted.line_indent;
+                separation_tab = false;
+                node_tab = false;
+                shallow_flow = false;
+                quoted_line = false;
+            }
+            for ch in &chars[i..quoted.end] {
+                consumed += ch.len_utf8();
+                if consumed >= next_check {
+                    budget.check()?;
+                    next_check = consumed + 4096;
+                }
+            }
+            i = quoted.end;
+            node = false;
+            plain = false;
+            quoted_end = false;
+            continue;
+        }
         let colon = c == ':'
             && (separator
                 || next.is_none_or(yaml_blank_break)
@@ -822,7 +1087,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         i += 1;
     }
     budget.check()?;
-    if output.len() > source.len().saturating_mul(2) {
+    // The two quote bytes around a rewritten block scalar sit outside the doubled body.
+    if output.len() > source.len().saturating_mul(2).saturating_add(2) {
         return invalid();
     }
     budget.expansion(output.len().saturating_sub(source.len()))?;
@@ -1595,6 +1861,13 @@ mod tests {
     fn yaml_flow_keys_match_js_yaml() {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-flow-keys-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_block_colon_matches_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-block-colon-node.json"
         ));
     }
 
