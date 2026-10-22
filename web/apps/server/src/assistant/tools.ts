@@ -2942,6 +2942,10 @@ export async function invokeAssistantTool(
       }
 
       case "get_print_stats": {
+        const access = readFarmAccess(() => ctx.repo);
+        if (access.kind !== "allowed") {
+          return { content: JSON.stringify({ error: access.error, code: access.code }) };
+        }
         // `hours` is optional (default 8h / overnight); when present it must be a
         // finite, positive number within a sane window. Reject bad input instead of
         // silently falling back to the default, so callers can tell "no window given"
