@@ -9,6 +9,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useEngineHealth } from "../hooks/useEngineHealth";
+import { useFarmVisible } from "../hooks/useFarmVisible";
 import { isHostedPlanning } from "@print-partner/contracts";
 import {
   globalProductionJobLabel,
@@ -94,7 +95,7 @@ function JobList({
 export default function GlobalProductionPage() {
   const { health, error: engineError, loading: healthLoading } = useEngineHealth();
   const hostedPlanning = isHostedPlanning(health);
-  const { profiles, loading, error: profilesError, reloadProfiles } = useProfileSelection();
+  const { profiles, selectedProfileId, loading, error: profilesError, reloadProfiles } = useProfileSelection();
   const engineState = resolveEngineState({ health, loading: healthLoading, error: engineError });
   const profilesState = resolveResourceState({
     loading,
@@ -114,9 +115,11 @@ export default function GlobalProductionPage() {
 
   const queryClient = useQueryClient();
   const engineReady = engineState === "ready";
-  const linksQuery = usePrinterCheckoffLinksQuery(engineReady);
-  const unattributedQuery = useUnattributedPrintsQuery(engineReady);
-  const links = engineReady ? linksQuery.data?.links : undefined;
+  const farmVisible = useFarmVisible(selectedProfileId);
+  const showFarm = engineReady && farmVisible;
+  const linksQuery = usePrinterCheckoffLinksQuery(showFarm);
+  const unattributedQuery = useUnattributedPrintsQuery(showFarm);
+  const links = showFarm ? linksQuery.data?.links : undefined;
   const activeLinks = useMemo(
     () => (links ?? []).filter((link) =>
       link.state === "watching" || link.state === "awaiting_verify" || link.state === "host_failed",
@@ -127,8 +130,8 @@ export default function GlobalProductionPage() {
     () => (links ?? []).filter((link) => link.state === "verified" || link.state === "applied"),
     [links],
   );
-  const unattributed = (engineReady ? unattributedQuery.data : undefined) ?? [];
-  const farmFailure = engineReady ? linksQuery.error ?? unattributedQuery.error : null;
+  const unattributed = (showFarm ? unattributedQuery.data : undefined) ?? [];
+  const farmFailure = showFarm ? linksQuery.error ?? unattributedQuery.error : null;
   const farmError = farmFailure
     ? farmFailure instanceof Error ? farmFailure.message : String(farmFailure)
     : null;
@@ -162,7 +165,9 @@ export default function GlobalProductionPage() {
         accent
         eyebrow="Workshop"
         title="All Production"
-        description="Work packages and farm status across all Builds. Queue dispatch and printer preparation stay in each Build's Production workspace."
+        description={farmVisible
+          ? "Work packages and farm status across all Builds. Queue dispatch and printer preparation stay in each Build's Production workspace."
+          : "Work packages across Builds. Queue dispatch and printer preparation stay in each Build's Production workspace."}
       />
 
       {profilesBackgroundError && (
@@ -188,7 +193,7 @@ export default function GlobalProductionPage() {
         </Card>
       ) : (
         <>
-          {hostedPlanning ? null : (
+          {showFarm && !hostedPlanning ? (
           <Suspense fallback={null}>
             <PrinterLiveStrip
               engineReady
@@ -196,9 +201,9 @@ export default function GlobalProductionPage() {
               onUnattributedUpdate={refreshFarm}
             />
           </Suspense>
-          )}
+          ) : null}
 
-          {unattributed.length > 0 || buckets.awaiting.length > 0 || buckets.failed.length > 0 ? (
+          {showFarm && (unattributed.length > 0 || buckets.awaiting.length > 0 || buckets.failed.length > 0) ? (
             <section className="space-y-4 rounded-lg border border-border bg-card p-4" aria-labelledby="production-attention-heading">
               <div>
                 <h2 id="production-attention-heading" className="text-sm font-semibold">
@@ -229,9 +234,9 @@ export default function GlobalProductionPage() {
             </section>
           ) : null}
 
-          <JobList title="Printing now" jobs={buckets.watching} />
+          {showFarm ? <JobList title="Printing now" jobs={buckets.watching} /> : null}
 
-          {recent.length > 0 && (
+          {showFarm && recent.length > 0 && (
             <section className="space-y-2">
               <h2 className="text-sm font-medium">Recent work</h2>
               <ul className="space-y-2" aria-label="Recent work">
