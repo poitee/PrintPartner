@@ -234,6 +234,8 @@ pub enum Outcome {
     SourceSyncBound(crate::source_sync::BoundSyncTarget),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncSettled(crate::source_sync::SettledSyncTarget),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncFailed(crate::source_sync::FailedSyncTarget),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -397,6 +399,12 @@ pub(crate) enum Command {
         lease: AttemptLease,
         candidate: crate::source_sync::SyncCandidate,
         settlement: crate::source_sync::SyncSettlement,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    FailSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
+        detail: String,
     },
     Retain {
         per_tenant: usize,
@@ -1107,6 +1115,34 @@ impl ServerWorkerClient {
         target.source_work.consume_retired()?;
         Ok(settled)
     }
+
+    /// Records one claimed target's local read failure and the Source failure
+    /// observation. The reservation stays held. A refusal writes nothing.
+    pub fn fail_source_sync_target(
+        &self,
+        lease: &mut AttemptLease,
+        target: &crate::source_sync::SyncTargetLease,
+        detail: &str,
+    ) -> Result<crate::source_sync::FailedSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let failed = match submit(
+            &self.storage,
+            Command::FailSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+                detail: detail.to_owned(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncFailed(failed) => failed,
+            _ => unreachable!(),
+        };
+        lease.version = failed.version;
+        Ok(failed)
+    }
 }
 
 fn random() -> String {
@@ -1688,6 +1724,18 @@ pub(crate) fn execute(
             candidate,
             settlement,
         )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::FailSourceSyncTarget {
+            lease,
+            candidate,
+            detail,
+        } => TransactionDecision::Outcome(Outcome::SourceSyncFailed(crate::source_sync::fail(
+            &tx,
+            catalog_state,
+            &lease,
+            candidate,
+            &detail,
+        )?)),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
