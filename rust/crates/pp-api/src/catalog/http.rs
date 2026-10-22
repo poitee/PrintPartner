@@ -292,14 +292,13 @@ async fn patch_source(
     if let Some(response) = refused_local_path(&body) {
         return response;
     }
-    let patch = match wire::source_patch(&body) {
-        Ok(patch) => patch,
-        Err(detail) => return reject(StatusCode::BAD_REQUEST, detail),
-    };
     execute(
         &app,
         credentials(principal),
-        CatalogRequest::UpdateCatalogSource { id, patch },
+        CatalogRequest::UpdateCatalogSource {
+            id,
+            patch: wire::source_patch(&body),
+        },
     )
     .await
 }

@@ -6,8 +6,6 @@ use tauri::Url;
 
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_actions;
-#[cfg(feature = "desktop_rebuild")]
-pub mod origin_change;
 
 pub fn desktop_data_dir(
     explicit_data: Option<PathBuf>,
@@ -96,39 +94,6 @@ pub fn startup_diagnostic(error: &anyhow::Error) -> String {
         codes.push("unclassified".to_owned());
     }
     format!("desktop_startup_failed: {}", codes.join(" -> "))
-}
-
-/// Classify a non-fatal browser-preferences read. The launch continues without
-/// portable settings. The line keeps known categories and OS error numbers.
-pub fn browser_preferences_diagnostic(error: &anyhow::Error) -> String {
-    let mut codes = Vec::new();
-    for cause in error.chain() {
-        let code = match cause.to_string().as_str() {
-            "Invalid browser preferences" => Some("invalid_browser_preferences"),
-            "Unsupported browser preferences version" => Some("unsupported_browser_preferences"),
-            "Invalid browser-preferences.json" => Some("invalid_browser_preferences_file"),
-            "Core owner stopped" => Some("core_owner_stopped"),
-            "Desktop configuration unavailable" => Some("configuration_unavailable"),
-            "Desktop configuration changed" => Some("configuration_changed"),
-            _ => None,
-        };
-        if let Some(code) = code {
-            codes.push(code.to_owned());
-        }
-        if let Some(errno) = cause
-            .downcast_ref::<std::io::Error>()
-            .and_then(std::io::Error::raw_os_error)
-        {
-            codes.push(format!("os_error={errno}"));
-        }
-    }
-    if codes.is_empty() {
-        codes.push("unclassified".to_owned());
-    }
-    format!(
-        "desktop_browser_preferences_unavailable: {}",
-        codes.join(" -> ")
-    )
 }
 
 #[derive(Clone)]
@@ -611,21 +576,6 @@ mod tests {
             startup_diagnostic(&error),
             "desktop_startup_failed: resources_unavailable -> os_error=13"
         );
-        let preference_error = anyhow::anyhow!(secret).context("Invalid browser preferences");
-        let preference = browser_preferences_diagnostic(&preference_error);
-        assert_eq!(
-            preference,
-            "desktop_browser_preferences_unavailable: invalid_browser_preferences"
-        );
-        assert!(!preference.contains(secret));
-        let preference_io =
-            anyhow::Error::from(std::io::Error::from_raw_os_error(13)).context(secret);
-        let preference_io = browser_preferences_diagnostic(&preference_io);
-        assert_eq!(
-            preference_io,
-            "desktop_browser_preferences_unavailable: os_error=13"
-        );
-        assert!(!preference_io.contains(secret));
         let error = anyhow::anyhow!(secret)
             .context("Unsafe data directory permissions")
             .context("Desktop core startup failed");
@@ -705,7 +655,6 @@ mod tests {
         ] {
             for command in [
                 "open_sponsor",
-                "sync_portable_settings",
                 "plugin:app|exit",
                 "plugin:window|close",
                 "plugin:webview|create_webview_window",
@@ -725,9 +674,7 @@ mod tests {
     #[cfg(feature = "desktop_rebuild")]
     #[test]
     fn ticket_t_68_sponsor_capability_has_only_the_bound_remote_action() {
-        let mut context = generated_context();
-        crate::origin_change::verify_authority(&mut context);
-        crate::native_actions::verify_authority(context);
+        crate::native_actions::verify_authority(generated_context());
     }
 
     #[test]
