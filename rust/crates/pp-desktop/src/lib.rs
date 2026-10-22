@@ -98,6 +98,39 @@ pub fn startup_diagnostic(error: &anyhow::Error) -> String {
     format!("desktop_startup_failed: {}", codes.join(" -> "))
 }
 
+/// Classify a non-fatal browser-preferences read. The launch continues without
+/// portable settings. The line keeps known categories and OS error numbers.
+pub fn browser_preferences_diagnostic(error: &anyhow::Error) -> String {
+    let mut codes = Vec::new();
+    for cause in error.chain() {
+        let code = match cause.to_string().as_str() {
+            "Invalid browser preferences" => Some("invalid_browser_preferences"),
+            "Unsupported browser preferences version" => Some("unsupported_browser_preferences"),
+            "Invalid browser-preferences.json" => Some("invalid_browser_preferences_file"),
+            "Core owner stopped" => Some("core_owner_stopped"),
+            "Desktop configuration unavailable" => Some("configuration_unavailable"),
+            "Desktop configuration changed" => Some("configuration_changed"),
+            _ => None,
+        };
+        if let Some(code) = code {
+            codes.push(code.to_owned());
+        }
+        if let Some(errno) = cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+        {
+            codes.push(format!("os_error={errno}"));
+        }
+    }
+    if codes.is_empty() {
+        codes.push("unclassified".to_owned());
+    }
+    format!(
+        "desktop_browser_preferences_unavailable: {}",
+        codes.join(" -> ")
+    )
+}
+
 #[derive(Clone)]
 pub struct AllowedOrigin(Url);
 
@@ -578,6 +611,21 @@ mod tests {
             startup_diagnostic(&error),
             "desktop_startup_failed: resources_unavailable -> os_error=13"
         );
+        let preference_error = anyhow::anyhow!(secret).context("Invalid browser preferences");
+        let preference = browser_preferences_diagnostic(&preference_error);
+        assert_eq!(
+            preference,
+            "desktop_browser_preferences_unavailable: invalid_browser_preferences"
+        );
+        assert!(!preference.contains(secret));
+        let preference_io =
+            anyhow::Error::from(std::io::Error::from_raw_os_error(13)).context(secret);
+        let preference_io = browser_preferences_diagnostic(&preference_io);
+        assert_eq!(
+            preference_io,
+            "desktop_browser_preferences_unavailable: os_error=13"
+        );
+        assert!(!preference_io.contains(secret));
         let error = anyhow::anyhow!(secret)
             .context("Unsafe data directory permissions")
             .context("Desktop core startup failed");

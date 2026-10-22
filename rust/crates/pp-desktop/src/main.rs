@@ -183,7 +183,13 @@ fn run() -> Result<u8> {
                     &launch_url,
                 )
                 .context("Desktop core startup failed")?;
-                let preferences = runtime.block_on(core.handle().browser_preferences()).ok();
+                let preferences = match runtime.block_on(core.handle().browser_preferences()) {
+                    Ok(preferences) => Some(preferences),
+                    Err(error) => {
+                        eprintln!("{}", pp_desktop::browser_preferences_diagnostic(&error));
+                        None
+                    }
+                };
                 pp_desktop::origin_change::OriginBridge::enabled(
                     origin.clone(),
                     core.handle(),

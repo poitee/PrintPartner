@@ -158,20 +158,44 @@ pub fn initialization_script(
   const themeKey = {theme_key};
   const sidebarKey = {sidebar_key};
   const pollKey = {poll_key};
+  const write = localStorage.setItem.bind(localStorage);
   if (changed && restore) {{
-    if (restore.theme != null && localStorage.getItem(themeKey) == null) localStorage.setItem(themeKey, restore.theme);
-    if (restore.sidebar != null && localStorage.getItem(sidebarKey) == null) localStorage.setItem(sidebarKey, restore.sidebar);
-    if (restore.poll != null && localStorage.getItem(pollKey) == null) localStorage.setItem(pollKey, String(restore.poll));
+    if (restore.theme != null) write(themeKey, restore.theme);
+    if (restore.sidebar != null) write(sidebarKey, restore.sidebar);
+    if (restore.poll != null) write(pollKey, String(restore.poll));
   }}
-  const captured = {{}};
-  const theme = localStorage.getItem(themeKey);
-  if (theme === "system" || theme === "light" || theme === "dark") captured.theme = theme;
-  const sidebar = localStorage.getItem(sidebarKey);
-  if (sidebar === "1" || sidebar === "0") captured.sidebarCollapsed = sidebar === "1";
-  const poll = localStorage.getItem(pollKey);
-  if (poll === "5" || poll === "10" || poll === "15" || poll === "30") captured.printerPollSeconds = Number(poll);
-  if (captured.theme == null && captured.sidebarCollapsed == null && captured.printerPollSeconds == null) return;
-  window.__TAURI_INTERNALS__.invoke("sync_portable_settings", {{ captured }}).catch(() => {{}});
+  const publish = () => {{
+    const captured = {{}};
+    const theme = localStorage.getItem(themeKey);
+    if (theme === "system" || theme === "light" || theme === "dark") captured.theme = theme;
+    const sidebar = localStorage.getItem(sidebarKey);
+    if (sidebar === "1" || sidebar === "0") captured.sidebarCollapsed = sidebar === "1";
+    const poll = localStorage.getItem(pollKey);
+    if (poll === "5" || poll === "10" || poll === "15" || poll === "30") captured.printerPollSeconds = Number(poll);
+    if (captured.theme == null && captured.sidebarCollapsed == null && captured.printerPollSeconds == null) return;
+    window.__TAURI_INTERNALS__?.invoke("sync_portable_settings", {{ captured }})?.catch(() => {{}});
+  }};
+  publish();
+  const hooked = function(key, value) {{
+    write(key, value);
+    if (key === themeKey || key === sidebarKey || key === pollKey) publish();
+  }};
+  try {{
+    localStorage.setItem = hooked;
+  }} catch {{}}
+  if (localStorage.setItem !== hooked) {{
+    try {{
+      const proto = Object.getPrototypeOf(localStorage);
+      if (proto && proto !== Object.prototype && typeof proto.setItem === "function") {{
+        const original = proto.setItem;
+        proto.setItem = function(key, value) {{
+          original.call(this, key, value);
+          if (key === themeKey || key === sidebarKey || key === pollKey) publish();
+        }};
+      }}
+    }} catch {{}}
+  }}
+  if (typeof window.addEventListener === "function") window.addEventListener("pagehide", publish);
 }})();"#,
         theme_key = serde_json::to_string(THEME_KEY).unwrap_or_else(|_| "\"\"".to_owned()),
         sidebar_key = serde_json::to_string(SIDEBAR_KEY).unwrap_or_else(|_| "\"\"".to_owned()),
@@ -502,11 +526,11 @@ mod tests {
                 true,
                 serde_json::json!({"print-partner.theme": "light"}),
                 serde_json::json!({
-                    "print-partner.theme": "light",
+                    "print-partner.theme": "dark",
                     "print-partner.sidebar.ui.v1": "1",
                     "print-partner.printer-status-poll.v1": "10",
                 }),
-                serde_json::json!({"theme": "light", "sidebarCollapsed": true, "printerPollSeconds": 10}),
+                serde_json::json!({"theme": "dark", "sidebarCollapsed": true, "printerPollSeconds": 10}),
             ),
             (
                 false,
@@ -520,9 +544,9 @@ mod tests {
                 serde_json::json!({
                     "print-partner.theme": "dark",
                     "print-partner.sidebar.ui.v1": "1",
-                    "print-partner.printer-status-poll.v1": "7",
+                    "print-partner.printer-status-poll.v1": "10",
                 }),
-                serde_json::json!({"theme": "dark", "sidebarCollapsed": true}),
+                serde_json::json!({"theme": "dark", "sidebarCollapsed": true, "printerPollSeconds": 10}),
             ),
         ];
         for (changed, existing, expected_store, expected_capture) in cases {
@@ -560,6 +584,40 @@ mod tests {
         );
         assert_eq!(foreign.store, serde_json::json!({}));
         assert!(foreign.invoked.is_empty());
+        let without_internals = run_script_after(
+            &initialization_script(&origin, &preferences, true),
+            "http://127.0.0.1:46687",
+            &serde_json::json!({"print-partner.theme": "light"}),
+            &[],
+            true,
+        );
+        assert_eq!(
+            without_internals.store["print-partner.theme"],
+            serde_json::json!("dark")
+        );
+        assert!(without_internals.invoked.is_empty());
+    }
+
+    #[test]
+    fn ticket_t_12_portable_settings_follow_a_change_after_the_init_script() {
+        let script = initialization_script(&origin(), &BrowserPreferences::default(), false);
+        let observed = run_script_after(
+            &script,
+            "http://127.0.0.1:46687",
+            &serde_json::json!({}),
+            &[("print-partner.theme", "dark")],
+            false,
+        );
+        assert_eq!(
+            observed.store,
+            serde_json::json!({"print-partner.theme": "dark"})
+        );
+        assert_eq!(observed.invoked.len(), 1);
+        assert_eq!(observed.invoked[0].name, "sync_portable_settings");
+        assert_eq!(
+            observed.invoked[0].captured,
+            serde_json::json!({"theme": "dark"})
+        );
     }
 
     struct Invocation {
@@ -573,7 +631,26 @@ mod tests {
     }
 
     fn run_script(script: &str, page_origin: &str, store: &serde_json::Value) -> ScriptResult {
-        let input = serde_json::json!({ "origin": page_origin, "store": store });
+        run_script_after(script, page_origin, store, &[], false)
+    }
+
+    fn run_script_after(
+        script: &str,
+        page_origin: &str,
+        store: &serde_json::Value,
+        writes: &[(&str, &str)],
+        omit_internals: bool,
+    ) -> ScriptResult {
+        let after: Vec<_> = writes
+            .iter()
+            .map(|(key, value)| serde_json::json!({"key": key, "value": value}))
+            .collect();
+        let input = serde_json::json!({
+            "origin": page_origin,
+            "store": store,
+            "after": after,
+            "omitInternals": omit_internals,
+        });
         let mut child = std::process::Command::new("node")
             .arg("-e")
             .arg(
@@ -587,17 +664,19 @@ const localStorage = {
   getItem(key) { return store.has(key) ? store.get(key) : null; },
   setItem(key, value) { store.set(key, String(value)); },
 };
-const window = {
-  __TAURI_INTERNALS__: {
+const window = {};
+if (!input.omitInternals) {
+  window.__TAURI_INTERNALS__ = {
     invoke(name, args) {
       invoked.push({ name, args });
       return Promise.resolve();
     },
-  },
-};
+  };
+}
 window.top = window;
 const location = { origin: input.origin };
 new Function("window", "location", "localStorage", script)(window, location, localStorage);
+for (const change of input.after) localStorage.setItem(change.key, change.value);
 setTimeout(() => {
   process.stdout.write(JSON.stringify({
     store: Object.fromEntries(store),
