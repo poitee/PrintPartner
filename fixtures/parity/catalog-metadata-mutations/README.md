@@ -48,11 +48,21 @@ become `@DATA_DIR@`, after validating the exact expected path and its existence.
 All timestamps are fixed fixture values and compared verbatim. No timestamps
 are removed or replaced. Each complete snapshot is embedded on one JSON line.
 
-Neither client has a version token. "Deleted Source ID" means an ID that was
-successfully deleted earlier in this transcript; it does not test rejection of
-a stale metadata snapshot. Invalid category paths with different error wording,
-concurrent naming conflicts, and explicit-null `functional_class` from GRE-832
-are outside this successful mutation slice. No production code is changed.
+The 33-command transcript sends no catalog metadata version. "Deleted Source ID"
+means an ID that was successfully deleted earlier in this transcript. Invalid
+category paths with different error wording, concurrent naming conflicts, and
+explicit-null `functional_class` from GRE-832 are outside this successful
+mutation slice.
+
+`stale.json` is the flag-on negative case. Generate it with
+`PP_DESKTOP_REBUILD` forced on; the default command deletes that variable before
+it probes, so `node.json` stays the tokenless transcript. A read of an unversioned
+row returns `catalog_metadata_version: 0` and omits that key from `metadata`.
+A metadata edit carrying `0` bumps the stored token to `1`. The following naming
+save bumps it again. An edit that still sends `0` returns HTTP 409
+`catalog_metadata_conflict` and leaves every selected row unchanged. A later
+edit with no token overwrites and bumps. The Rust replay maps
+`CatalogFailure::Conflict` to that same 409 body.
 
 From the repository root, use Node 22 with the workspace dependencies and
 better-sqlite3 native module installed. On fleet VMs, keep the existing Cargo
@@ -61,6 +71,7 @@ semaphore wrapper on PATH and the shared sccache environment configured.
 ```sh
 node fixtures/parity/catalog-metadata-mutations/generate.mjs
 node fixtures/parity/catalog-metadata-mutations/generate.mjs --check
+node fixtures/parity/catalog-metadata-mutations/generate.mjs --stale
 cd rust
 CARGO_BUILD_JOBS=3 cargo test --locked -p pp-storage --features desktop_rebuild --test catalog_metadata_parity
 ```

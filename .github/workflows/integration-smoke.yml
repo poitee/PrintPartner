@@ -33,7 +33,10 @@ jobs:
   postgres:
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.postgres)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # npm 10 waits fetch-timeout (300s) on a stalled socket and prints nothing
+    # when CI hides the progress bar. A 5 minute job cancelled `npm ci` before
+    # that wait could fail or retry (run 39713832065, job 119611149797).
+    timeout-minutes: 12
     services:
       postgres:
         image: postgres:16.15-alpine
@@ -59,8 +62,22 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Verify Node version
         run: test "$(node --version)" = "v22.23.3"
-      - run: npm ci
+      - name: Install web dependencies
         working-directory: web
+        run: |
+          set -euo pipefail
+          install() {
+            local cache="$1"
+            mkdir -p "$cache"
+            timeout 120s npm ci --ignore-scripts --cache "$cache" --fetch-timeout=60000 --fetch-retries=2 || return $?
+            timeout 180s npm rebuild --cache "$cache" || return $?
+          }
+          if install "${HOME}/.npm"; then
+            exit 0
+          fi
+          echo "npm ci attempt 1 failed; retrying with a fresh cache" >&2
+          rm -rf node_modules
+          install "${RUNNER_TEMP}/npm-cache-retry"
       - run: npm run build
         working-directory: web
       - name: Start SaaS server against Postgres

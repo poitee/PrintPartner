@@ -2,7 +2,8 @@ use super::wire;
 use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Extension, Path, State},
+    body::Bytes,
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -11,7 +12,7 @@ use axum::{
 use pp_storage::{
     WriterOwner,
     auth::{AuthFailure, AuthPolicy, Secret},
-    catalog::{Credentials, Outcome, Request as CatalogRequest},
+    catalog::{CatalogFailure, Credentials, Outcome, Request as CatalogRequest},
 };
 use serde_json::json;
 use std::{
@@ -89,19 +90,21 @@ struct App {
     owner: Arc<Mutex<WriterOwner>>,
 }
 
-/// Mounts Source list and detail at `/` and `/api/v1` when `PP_DESKTOP_REBUILD`
-/// was exactly `1` or `true` at startup. Otherwise nothing is mounted.
+/// Mounts Source list, detail, create, and metadata patch at `/` and `/api/v1`
+/// when `PP_DESKTOP_REBUILD` was exactly `1` or `true` at startup. Otherwise
+/// nothing is mounted. Delete, sync, and upload stay unregistered.
 pub fn admit_catalog_routes(config: CatalogHttpConfig, owner: Arc<Mutex<WriterOwner>>) -> Router {
     if !config.enabled {
         return Router::new();
     }
     let routes = Router::new()
-        .route("/sources", get(list))
-        .route("/sources/{id}", get(detail));
+        .route("/sources", get(list).post(create))
+        .route("/sources/{id}", get(detail).patch(patch_source));
     let app = App { config, owner };
     Router::new()
         .merge(routes.clone())
         .nest("/api/v1", routes)
+        .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -225,7 +228,28 @@ fn credentials(principal: Principal) -> Credentials {
 }
 
 async fn list(State(app): State<App>, Extension(principal): Extension<Principal>) -> Response {
-    read(&app, credentials(principal), CatalogRequest::List {}).await
+    execute(&app, credentials(principal), CatalogRequest::List {}).await
+}
+
+async fn create(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    body: Bytes,
+) -> Response {
+    let Some(body) = object_body(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    if let Some(response) = refused_local_path(&body) {
+        return response;
+    }
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::CreateCatalogSource {
+            source: wire::source_create(&body),
+        },
+    )
+    .await
 }
 
 async fn detail(
@@ -236,7 +260,50 @@ async fn detail(
     let Some(id) = source_id(&id) else {
         return reject(StatusCode::NOT_FOUND, "Source not found");
     };
-    read(&app, credentials(principal), CatalogRequest::Get { id }).await
+    execute(&app, credentials(principal), CatalogRequest::Get { id }).await
+}
+
+async fn patch_source(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let Some(id) = source_id(&id) else {
+        return reject(StatusCode::NOT_FOUND, "Source not found");
+    };
+    let Some(body) = object_body(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    if let Some(response) = refused_local_path(&body) {
+        return response;
+    }
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::UpdateCatalogSource {
+            id,
+            patch: wire::source_patch(&body),
+        },
+    )
+    .await
+}
+
+fn object_body(bytes: &[u8]) -> Option<serde_json::Value> {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .filter(serde_json::Value::is_object)
+}
+
+fn refused_local_path(body: &serde_json::Value) -> Option<Response> {
+    body.get("local_path")
+        .is_some_and(|value| !value.is_null())
+        .then(|| {
+            reject(
+                StatusCode::BAD_REQUEST,
+                "Raw local_path requires native Source selection",
+            )
+        })
 }
 
 fn source_id(raw: &str) -> Option<i64> {
@@ -244,7 +311,7 @@ fn source_id(raw: &str) -> Option<i64> {
     (raw == id.to_string()).then_some(id)
 }
 
-async fn read(app: &App, credentials: Credentials, request: CatalogRequest) -> Response {
+async fn execute(app: &App, credentials: Credentials, request: CatalogRequest) -> Response {
     let policy = app.config.policy;
     let client = {
         let Ok(owner) = app.owner.lock() else {
@@ -285,6 +352,23 @@ fn catalog_error(error: anyhow::Error) -> Response {
             _ => reject(StatusCode::UNAUTHORIZED, "Authentication required"),
         };
     }
+    if let Some(failure) = error.downcast_ref::<CatalogFailure>() {
+        let (status, detail) = match failure {
+            CatalogFailure::NotFound => (StatusCode::NOT_FOUND, "Source not found".to_owned()),
+            CatalogFailure::TooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Catalog request too large".to_owned(),
+            ),
+            CatalogFailure::InvalidStoredNaming => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Catalog unavailable".to_owned(),
+            ),
+            CatalogFailure::Input(_)
+            | CatalogFailure::DuplicateName(_)
+            | CatalogFailure::Referenced => (StatusCode::BAD_REQUEST, error.to_string()),
+        };
+        return reject(status, detail);
+    }
     let (status, detail) = match error.to_string().as_str() {
         "Authentication required" | "Invalid session" => {
             (StatusCode::UNAUTHORIZED, "Authentication required")
@@ -299,6 +383,6 @@ fn catalog_error(error: anyhow::Error) -> Response {
     reject(status, detail)
 }
 
-fn reject(status: StatusCode, detail: &'static str) -> Response {
-    (status, Json(json!({ "detail": detail }))).into_response()
+fn reject(status: StatusCode, detail: impl AsRef<str>) -> Response {
+    (status, Json(json!({ "detail": detail.as_ref() }))).into_response()
 }

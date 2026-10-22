@@ -1,0 +1,86 @@
+{
+  "create": {
+    "body": {
+      "name": 12,
+      "url": "https://github.com/Owner/Repo.git/tree/Feature/part.stl",
+      "branch": false,
+      "tag": [
+        " v1 ",
+        null
+      ],
+      "source_kind": "GitHub",
+      "role": {
+        "x": 1
+      },
+      "metadata": {
+        "category": " A / B ",
+        "note": 7,
+        "flag": true
+      },
+      "source_type": 5
+    },
+    "source": {
+      "name": "12",
+      "url": "https://github.com/Owner/Repo",
+      "source_kind": "github",
+      "source_type": "git",
+      "role": "[object Object]",
+      "category": "A / B",
+      "branch": "Feature",
+      "tag": "v1 ,",
+      "content_available": true,
+      "last_synced_at": null,
+      "last_commit_sha": null,
+      "current_source_revision_id": null,
+      "docs_url": null,
+      "manifest_community_slug": null,
+      "metadata": {
+        "category": " A / B ",
+        "note": 7,
+        "flag": true
+      },
+      "naming_use_defaults": true,
+      "update_status": null,
+      "update_checked_at": null,
+      "doc_count": 0
+    }
+  },
+  "patch": {
+    "body": {
+      "name": "  Library  ",
+      "tag": null,
+      "source_kind": 1,
+      "role": false,
+      "metadata": {
+        "category": " A / B / C "
+      }
+    },
+    "source": {
+      "name": "Library",
+      "url": "https://github.com/Owner/Repo",
+      "source_kind": "1",
+      "source_type": "git",
+      "role": "false",
+      "category": "A/B/C",
+      "branch": "Feature",
+      "tag": null,
+      "content_available": true,
+      "last_synced_at": null,
+      "last_commit_sha": null,
+      "current_source_revision_id": null,
+      "docs_url": null,
+      "manifest_community_slug": null,
+      "metadata": {
+        "category": "A/B/C",
+        "note": 7,
+        "flag": true,
+        "sync_required": true,
+        "remote_update_status": "unknown"
+      },
+      "naming_use_defaults": true,
+      "update_status": "unknown",
+      "update_checked_at": null,
+      "doc_count": 0
+    }
+  }
+}

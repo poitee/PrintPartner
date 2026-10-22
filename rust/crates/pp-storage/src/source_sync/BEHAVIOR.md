@@ -44,14 +44,44 @@ unchanged. After the claim checks, `validate_target` and
 - A result is optional. When present, its canonical JSON, digest and receipt
   must name this basis Source. Nothing is settled or published.
 
+## Settle one successful target
+
+`ServerWorkerClient::settle_source_sync_target` stores one claimed target's
+successful result and releases that target's Source reservation. The batch
+stays open. The Job document, the Source row and every other target stay as
+they were.
+
+The command refuses, without writing, when the attempt is stale or the held
+Source proof is not the live reservation recorded on the target. A result that
+names no Source is also refused, and the reservation stays held. The stored
+result is the canonical scan JSON, its digest and the Local receipt.
+`reservation_acknowledged` becomes 1. The recorded token text stays on the
+row; the live token is retired after the commit.
+
+`sync_settle_persists_one_result` settles the first of two targets and checks
+that result, the untouched sibling and which reservation was released.
+`sync_stale_settlement_preserves_target` checks the exact refusal and an
+unchanged database for a stale attempt, a foreign Source proof and a result
+that names no Source.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
-CARGO_TARGET_DIR=/persist/home/build/gre774-target \
-cargo test -p pp-storage --features desktop_rebuild --lib source_sync::tests --no-fail-fast
+CARGO_TARGET_DIR=/persist/targets/gre-775-sync-settle-success \
+cargo test -p pp-storage --features desktop_rebuild --lib source_sync::tests -- --test-threads=8
+cargo test -p pp-storage --features desktop_rebuild --lib sync_settle_persists_one_result -- --test-threads=8
+cargo test -p pp-storage --features desktop_rebuild --lib sync_stale_settlement_preserves_target -- --test-threads=8
+```
+
+Feature-off, the settle command and its tables are absent:
+
+```sh
+CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
+CARGO_TARGET_DIR=/persist/targets/gre-775-sync-settle-success \
+cargo test -p pp-storage --lib sync_settle_is_absent_without_desktop_rebuild
 ```
 
 `durable_claim_returns_source_busy_after_restart` and

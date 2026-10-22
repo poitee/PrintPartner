@@ -232,6 +232,8 @@ pub enum Outcome {
     SourceSyncTarget(crate::source_sync::NextSyncTarget, i64),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncBound(crate::source_sync::BoundSyncTarget),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncSettled(crate::source_sync::SettledSyncTarget),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -259,6 +261,8 @@ enum TransactionDecision {
     LocalScanReconciled(crate::source_scan::PendingLocalReconciliation),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncReserved(crate::source_sync::ReservedTarget, SettingsClient),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncSettled(crate::source_sync::SettledSyncRelease),
     /// Report this error only after committing the refusals recorded before it.
     #[cfg(feature = "desktop_rebuild")]
     ErrorAfterCommit(anyhow::Error),
@@ -387,6 +391,12 @@ pub(crate) enum Command {
     BindSourceSyncTarget {
         lease: AttemptLease,
         candidate: crate::source_sync::SyncCandidate,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    SettleSourceSyncTarget {
+        lease: AttemptLease,
+        candidate: crate::source_sync::SyncCandidate,
+        settlement: crate::source_sync::SyncSettlement,
     },
     Retain {
         per_tenant: usize,
@@ -1068,6 +1078,35 @@ impl ServerWorkerClient {
             _ => unreachable!(),
         }
     }
+
+    /// Stores one successful target result and releases that target's Source
+    /// reservation. A stale attempt, or a Source proof that is not the claim's
+    /// live reservation, is refused and writes nothing.
+    pub fn settle_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        target: &mut crate::source_sync::SyncTargetLease,
+        settlement: crate::source_sync::SyncSettlement,
+    ) -> Result<crate::source_sync::SettledSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let settled = match submit(
+            &self.storage,
+            Command::SettleSourceSyncTarget {
+                lease: lease.clone(),
+                candidate: target.candidate()?,
+                settlement,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncSettled(settled) => settled,
+            _ => unreachable!(),
+        };
+        target.source_work.consume_retired()?;
+        Ok(settled)
+    }
 }
 
 fn random() -> String {
@@ -1637,6 +1676,18 @@ pub(crate) fn execute(
                 &candidate,
             )?))
         }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::SettleSourceSyncTarget {
+            lease,
+            candidate,
+            settlement,
+        } => TransactionDecision::SourceSyncSettled(crate::source_sync::settle(
+            &tx,
+            catalog_state,
+            &lease,
+            candidate,
+            settlement,
+        )?),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -1728,6 +1779,11 @@ pub(crate) fn execute(
         TransactionDecision::SourceSyncReserved(target, storage) => {
             let (target, version) = target.activate(catalog_state, storage)?;
             Ok(Outcome::SourceSyncTarget(target, version))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::SourceSyncSettled(pending) => {
+            catalog_state.retire_issued(&pending.proof, &pending.binding)?;
+            Ok(Outcome::SourceSyncSettled(pending.settled))
         }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Observation {
@@ -4004,5 +4060,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(not(feature = "desktop_rebuild"))]
+    #[test]
+    fn sync_settle_is_absent_without_desktop_rebuild() {
+        let root =
+            std::env::temp_dir().join(format!("pp-sync-settle-off-{}", rand::random::<u64>()));
+        let (owner, ready) = crate::WriterOwner::open(&root, crate::Limits::default()).unwrap();
+        assert_eq!(ready.version, 35);
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let tables: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name LIKE 'source_sync_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        owner.shutdown().unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 }

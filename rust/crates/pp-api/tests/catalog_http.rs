@@ -144,16 +144,29 @@ impl Server {
     }
 
     async fn send(&self, method: Method, path: &str, headers: &[(&str, &str)]) -> (u16, Value) {
+        self.exchange(method, path, headers, None).await
+    }
+
+    async fn exchange(
+        &self,
+        method: Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> (u16, Value) {
         let mut request = self
             .client
             .request(method, format!("{}{path}", self.origin))
             .header("Origin", &self.origin);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
-        if matches!(status, 200 | 401 | 403) {
+        if matches!(status, 200 | 400 | 401 | 403) {
             assert_eq!(
                 response
                     .headers()
@@ -215,6 +228,47 @@ async fn catalog_reads_flag_off_are_404() {
     shutdown(owner, directory);
 }
 
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn catalog_create_patch_match_node_coercions() {
+    unmounted_write(
+        Method::POST,
+        "/sources",
+        json!({"name":12,"source_kind":"GitHub","metadata":{"category":" A / B "}}),
+    )
+    .await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn catalog_patch_wrong_owner_is_refused() {
+    unmounted_write(
+        Method::PATCH,
+        "/api/v1/sources/1",
+        json!({"name":"Stolen","metadata":{"note":"stolen"}}),
+    )
+    .await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+async fn unmounted_write(method: Method, path: &str, body: Value) {
+    let (owner, directory) = open();
+    let before = {
+        let guard = owner.lock().unwrap();
+        seed(&guard)
+    };
+    let snapshot = files(&directory);
+    let (listener, _) = listener().await;
+    let mut server = Server::spawn(listener, axum::Router::new()).await;
+    let (status, response) = server.exchange(method, path, &[], Some(&body)).await;
+    assert_eq!(status, 404, "{path}");
+    assert!(response.get("name").is_none());
+    server.stop().await;
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), before);
+    shutdown(owner, directory);
+}
+
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_reads_flag_off_are_404() {
@@ -257,6 +311,18 @@ async fn refuse_mounted_reads(server: &Server) {
         let (status, body) = server.send(Method::GET, path, &[]).await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("sources").is_none() && body.get("name").is_none());
+    }
+    for path in ["/sources/1", "/api/v1/sources/1"] {
+        let (status, body) = server
+            .exchange(
+                Method::PATCH,
+                path,
+                &[],
+                Some(&json!({"name":"Stolen","metadata":{"note":"stolen"}})),
+            )
+            .await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("name").is_none());
     }
     let (status, _) = server.send(Method::POST, "/sources", &[]).await;
     assert_eq!(status, 404);
@@ -382,8 +448,20 @@ async fn catalog_reads_match_existing_source_metadata() {
         (status, body["detail"].as_str()),
         (404, Some("Source not found"))
     );
+    let (status, body) = server
+        .exchange(
+            Method::POST,
+            "/sources",
+            &[("Cookie", &cookie)],
+            Some(&json!({})),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Source name is required"))
+    );
     let (status, _) = server
-        .send(Method::POST, "/sources", &[("Cookie", &cookie)])
+        .send(Method::DELETE, "/sources/1", &[("Cookie", &cookie)])
         .await;
     assert_eq!(status, 405);
     assert_eq!(files(&directory), snapshot);
@@ -396,6 +474,206 @@ async fn catalog_reads_match_existing_source_metadata() {
         (404, Some("Source not found"))
     );
     assert_eq!(list(&owner.lock().unwrap()), rows);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn node_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../../fixtures/parity/catalog-source-http/node.json"
+    ))
+    .unwrap()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn assert_source(actual: &Value, expected: &Value, directory: &Path) {
+    for (key, value) in expected.as_object().unwrap() {
+        assert_eq!(&actual[key], value, "{key}");
+    }
+    let id = actual["id"].as_i64().unwrap();
+    let path = directory
+        .canonicalize()
+        .unwrap()
+        .join("repos")
+        .join(id.to_string());
+    assert_eq!(actual["local_path"].as_str(), path.to_str());
+    assert_eq!(
+        actual.as_object().unwrap().len(),
+        expected.as_object().unwrap().len() + 2
+    );
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn serve(account_tenant: bool) -> (Arc<Mutex<WriterOwner>>, PathBuf, Server, String) {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        catalog::{CatalogHttpConfig, admit_catalog_routes},
+    };
+    use pp_storage::auth::SessionTenantPolicy;
+    let (owner, directory) = open();
+    let chosen = if account_tenant {
+        AuthPolicy {
+            registration: pp_storage::auth::RegistrationPolicy::FirstAccountOnly,
+            first_user: pp_storage::auth::FirstUserTenant::NewUser,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+        }
+    } else {
+        policy()
+    };
+    let (bound, origin) = listener().await;
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let router = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(&origin, "default", chosen, Some("1")).unwrap(),
+        Arc::clone(&owner),
+    )
+    .merge(auth_router(
+        AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false).unwrap(),
+        auth,
+        ProviderClient::new(None, None).unwrap(),
+        ResetMailer::disabled(),
+    ));
+    let server = Server::spawn(bound, router).await;
+    let registered = server
+        .client
+        .post(format!("{}/auth/register", server.origin))
+        .header("Origin", &server.origin)
+        .json(&json!({"email":"owner@example.test","password":"password-1234"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let cookie = registered.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    (owner, directory, server, cookie)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_create_patch_match_node_coercions() {
+    let fixture = node_fixture();
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (status, created) = server
+        .exchange(
+            Method::POST,
+            "/sources",
+            &[("Cookie", &cookie)],
+            Some(&fixture["create"]["body"]),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_source(&created, &fixture["create"]["source"], &directory);
+    let id = created["id"].as_i64().unwrap();
+    let (status, patched) = server
+        .exchange(
+            Method::PATCH,
+            &format!("/api/v1/sources/{id}"),
+            &[("Cookie", &cookie)],
+            Some(&fixture["patch"]["body"]),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_source(&patched, &fixture["patch"]["source"], &directory);
+    let snapshot = files(&directory);
+    let rows = list(&owner.lock().unwrap());
+    let (status, body) = server
+        .exchange(
+            Method::PATCH,
+            &format!("/sources/{id}"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"local_path":"/tmp/outside","metadata":{"note":"nope"}})),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Raw local_path requires native Source selection"))
+    );
+    let (status, stored) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(stored, patched);
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), rows);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_patch_wrong_owner_is_refused() {
+    let (owner, directory) = open();
+    let seeded = {
+        let guard = owner.lock().unwrap();
+        seed(&guard)
+    };
+    let foreign_id = seeded[0].id;
+    let (bound, origin) = listener().await;
+    let account = AuthPolicy {
+        registration: pp_storage::auth::RegistrationPolicy::FirstAccountOnly,
+        first_user: pp_storage::auth::FirstUserTenant::NewUser,
+        session_tenant: pp_storage::auth::SessionTenantPolicy::AccountTenant,
+    };
+    let auth = owner.lock().unwrap().auth_with_policy(account).unwrap();
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        catalog::{CatalogHttpConfig, admit_catalog_routes},
+    };
+    let router = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(&origin, "default", account, Some("true")).unwrap(),
+        Arc::clone(&owner),
+    )
+    .merge(auth_router(
+        AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false).unwrap(),
+        auth,
+        ProviderClient::new(None, None).unwrap(),
+        ResetMailer::disabled(),
+    ));
+    let mut server = Server::spawn(bound, router).await;
+    let registered = server
+        .client
+        .post(format!("{}/auth/register", server.origin))
+        .header("Origin", &server.origin)
+        .json(&json!({"email":"stranger@example.test","password":"password-1234"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let cookie = registered.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let (status, body) = server
+        .send(Method::GET, "/sources", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!((status, &body), (200, &json!({"sources":[]})));
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .exchange(
+            Method::PATCH,
+            &format!("/api/v1/sources/{foreign_id}"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"name":"Stolen","metadata":{"note":"stolen"}})),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(list(&owner.lock().unwrap()), seeded);
     server.stop().await;
     shutdown(owner, directory);
 }
