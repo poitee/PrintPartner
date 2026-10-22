@@ -6,6 +6,7 @@ use axum::{
 };
 use reqwest::Client;
 use serde_json::Value;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -15,10 +16,10 @@ const SELF: &str = "<origin>";
 const SESSION: &[(&str, &str)] = &[("Origin", SELF), ("Cookie", COOKIE)];
 
 /// Echoes the admitted principal so tests observe what handlers get.
-async fn probe(Extension(principal): Extension<Principal>) -> Json<Value> {
+async fn probe(Extension(principal): Extension<PresentedCredential>) -> Json<Value> {
     Json(match principal {
-        Principal::Session(secret) => json!({"session":secret}),
-        Principal::ApiKey { tenant, secret } => json!({"tenant":tenant,"key":secret}),
+        PresentedCredential::Session(secret) => json!({"session":secret}),
+        PresentedCredential::ApiKey { tenant, secret } => json!({"tenant":tenant,"key":secret}),
     })
 }
 
@@ -413,6 +414,601 @@ async fn response_body_holds_admission_until_consumed_or_dropped() {
             drop(body);
         }
         assert_eq!(admission.available_permits(), 1);
+    }
+}
+
+const DIGEST: &str = "ae11e670337e3e5eab736b29b4e294edbea8b564661cf15972625783f8930ee3";
+const FIXTURE_COOKIE: &str = "pp_session=required-unit-fixture-secret";
+
+fn policy() -> pp_storage::auth::AuthPolicy {
+    pp_storage::auth::AuthPolicy {
+        registration: pp_storage::auth::RegistrationPolicy::Open,
+        session_tenant: pp_storage::auth::SessionTenantPolicy::AccountTenant,
+        first_user: pp_storage::auth::FirstUserTenant::NewUser,
+    }
+}
+
+struct ReadServer {
+    origin: String,
+    client: Client,
+    owner: pp_storage::WriterOwner,
+    task: tokio::task::JoinHandle<()>,
+    directory: std::path::PathBuf,
+}
+impl ReadServer {
+    async fn start(flag: Option<&str>, tenant: &str) -> Self {
+        Self::open(flag, tenant, None).await
+    }
+    async fn start_held(hold: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self::open(Some("true"), "default", Some(hold)).await
+    }
+    async fn open(
+        flag: Option<&str>,
+        tenant: &str,
+        hold: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Self {
+        let mut random = [0; 12];
+        getrandom::fill(&mut random).unwrap();
+        let directory =
+            std::env::temp_dir().join(format!("pp-drafts-http-{}", hex::encode(random)));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("print-partner.db"),
+            include_bytes!("../../../../pp-storage/tests/fixtures/required-units/unchanged.db"),
+        )
+        .unwrap();
+        let owner = pp_storage::WriterOwner::open(&directory, pp_storage::Limits::default())
+            .unwrap()
+            .0;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let config = DraftHttpConfig::from_startup(&origin, tenant, flag).unwrap();
+        let client = owner.working_drafts_with_policy(policy()).unwrap();
+        let router = match hold {
+            Some(hold) => draft_router_with_hold(config, client, hold),
+            None => draft_router(config, client),
+        };
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        Self {
+            origin,
+            client: Client::builder().no_proxy().build().unwrap(),
+            owner,
+            task,
+            directory,
+        }
+    }
+    fn request(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
+        self.client
+            .request(method, format!("{}{path}", self.origin))
+            .header("Origin", &self.origin)
+            .header("Cookie", FIXTURE_COOKIE)
+    }
+    fn host(&self) -> &str {
+        self.origin.strip_prefix("http://").unwrap()
+    }
+    fn sql(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.directory.join("print-partner.db")).unwrap()
+    }
+    async fn close(self) {
+        self.task.abort();
+        let _ = self.task.await;
+        self.owner.shutdown().unwrap();
+        std::fs::remove_dir_all(self.directory).unwrap();
+    }
+}
+
+async fn json_reply(request: reqwest::RequestBuilder, status: u16) -> Value {
+    let response = request.send().await.unwrap();
+    assert_eq!(response.status().as_u16(), status);
+    assert_eq!(response.headers()["content-type"], "application/json");
+    response.json().await.unwrap()
+}
+
+fn open_draft() -> Value {
+    json!({"draft_id":2,"state":"open","lifecycle_version":0,"snapshot_digest":DIGEST,"base":{"revision_id":1,"plan_version":1}})
+}
+
+#[tokio::test]
+async fn listing_and_workspace_have_literal_wire_contracts() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    let expected = json!({"profile_id":1,"drafts":[
+        {"draft_id":1,"state":"consumed","lifecycle_version":1,
+         "snapshot_digest":"3912383330ef528d51a15c351d69eaffd856d7e8dc582ddfc66bf0bf5053b2b0",
+         "base":{"revision_id":null,"plan_version":0}},
+        open_draft()
+    ]});
+    let workspace = json!({
+        "profile_id":1,"draft":open_draft(),"parts":[
+            {"draft_part_id":4,"base_revision_part_id":1,"part_key":"bracket.stl","filename":"bracket.stl","relative_path":"bracket.stl","source_layer":"base:Fixture Source","role":"primary","quantity_inferred":1,"quantity_override":3,"quantity_effective":3,"included":true},
+            {"draft_part_id":5,"base_revision_part_id":2,"part_key":"excluded.stl","filename":"excluded.stl","relative_path":"excluded.stl","source_layer":"base:Fixture Source","role":"primary","quantity_inferred":1,"quantity_override":1,"quantity_effective":1,"included":false},
+            {"draft_part_id":6,"base_revision_part_id":3,"part_key":"gear.stl","filename":"gear.stl","relative_path":"gear.stl","source_layer":"base:Fixture Source","role":"primary","quantity_inferred":1,"quantity_override":2,"quantity_effective":2,"included":true}
+        ],"diff":{"base_is_current":true,"added":[],"removed":[],"changed":[{
+            "before":{"revision_part_id":2,"filename":"excluded.stl","relative_path":"excluded.stl","source_layer":"base:Fixture Source"},
+            "after":{"draft_part_id":5,"base_revision_part_id":2,"part_key":"excluded.stl","filename":"excluded.stl","relative_path":"excluded.stl","source_layer":"base:Fixture Source","role":"primary","quantity_inferred":1,"quantity_override":1,"quantity_effective":1,"included":false},"fields":["status"]
+        }]},"reconciliation":{"kind":"unresolved","conflicts":[]}
+    });
+    for prefix in ["", "/api/v2"] {
+        assert_eq!(
+            json_reply(
+                server.request(Method::GET, &format!("{prefix}/plans/1/drafts")),
+                200
+            )
+            .await,
+            expected
+        );
+        assert_eq!(
+            json_reply(
+                server.request(Method::GET, &format!("{prefix}/plans/1/drafts/2")),
+                200
+            )
+            .await,
+            workspace
+        );
+    }
+    for path in [
+        "/plans/1/drafts/recompute",
+        "/plans/1/drafts/2/abandon",
+        "/api/v2/plans/1/drafts/2/abandon",
+        "/plans/1/drafts/2/rebase",
+        "/plans/1/drafts/2/reconciliation",
+        "/plans/1/drafts/2/apply",
+        "/plans/1/save",
+        "/plans/1/review",
+        "/api/v1/plans/1/review",
+    ] {
+        let status = server
+            .request(Method::POST, path)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16();
+        assert!(matches!(status, 404 | 405), "{path} {status}");
+    }
+    server.close().await;
+}
+
+#[tokio::test]
+async fn missing_resources_cross_tenant_reads_and_invalid_ids_are_hidden() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    let missing = json!({"detail":"Plan not found","code":"profile_not_found"});
+    for profile in [2, 999] {
+        for suffix in ["", "/2"] {
+            assert_eq!(
+                json_reply(
+                    server.request(Method::GET, &format!("/plans/{profile}/drafts{suffix}")),
+                    404
+                )
+                .await,
+                missing
+            );
+        }
+    }
+    assert_eq!(
+        json_reply(server.request(Method::GET, "/plans/1/drafts/999"), 404).await,
+        json!({"detail":"Plan draft not found","code":"draft_not_found"})
+    );
+    for value in [
+        "0",
+        "-1",
+        "9007199254740992",
+        "18446744073709551616",
+        "text",
+    ] {
+        for path in [
+            format!("/plans/{value}/drafts"),
+            format!("/plans/1/drafts/{value}"),
+        ] {
+            assert_eq!(
+                json_reply(server.request(Method::GET, &path), 400).await,
+                json!({"detail":"Request is invalid","code":"invalid_request"})
+            );
+        }
+    }
+    assert_eq!(
+        json_reply(
+            server
+                .client
+                .get(format!("{}/plans/1/drafts", server.origin))
+                .header("Cookie", "pp_session=not-a-session"),
+            401
+        )
+        .await,
+        json!({"detail":"Authentication required"})
+    );
+    server.close().await;
+}
+
+#[tokio::test]
+async fn api_keys_read_the_routed_tenant_without_recording_use() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    let (key_id, secret) = create_key(&server).await;
+    let last_used = || {
+        server
+            .sql()
+            .query_row(
+                "SELECT json_extract(value,'$[0].lastUsedAt') FROM app_settings WHERE tenant_id='default' AND key='api_keys_v1'",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(last_used(), None);
+    let bearer = server
+        .client
+        .get(format!("{}/plans/1/drafts", server.origin))
+        .header("Authorization", format!("Bearer {secret}"))
+        .header("x-tenant-id", "foreign");
+    assert_eq!(json_reply(bearer, 200).await["drafts"][1], open_draft());
+    assert_eq!(last_used(), None);
+    let custom = server
+        .client
+        .get(format!("{}/api/v2/plans/1/drafts/2", server.origin))
+        .header("x-print-partner-api-key", &secret);
+    assert_eq!(json_reply(custom, 200).await["draft"], open_draft());
+    assert_eq!(last_used(), None);
+    let auth = server
+        .owner
+        .rebuild_auth_with_policy(policy(), Default::default())
+        .unwrap();
+    let revoked = tokio::task::spawn_blocking(move || {
+        auth.submit(
+            pp_storage::auth::Request::RevokeKey {
+                session: pp_storage::auth::Secret::new("required-unit-fixture-secret".into()),
+                key_id,
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(2),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        revoked,
+        pp_storage::auth::Outcome::KeyChanged { changed: true, .. }
+    ));
+    for secret in [secret.as_str(), "invalid"] {
+        assert_eq!(
+            json_reply(
+                server
+                    .client
+                    .get(format!("{}/plans/1/drafts", server.origin))
+                    .header("Authorization", format!("Bearer {secret}"),),
+                401
+            )
+            .await,
+            json!({"detail":"Authentication required"})
+        );
+    }
+    server.close().await;
+    let foreign = ReadServer::start(Some("true"), "foreign").await;
+    let (_, foreign_key) = create_key(&foreign).await;
+    assert_eq!(
+        json_reply(
+            foreign
+                .client
+                .get(format!("{}/plans/1/drafts", foreign.origin))
+                .header("Authorization", format!("Bearer {foreign_key}")),
+            401
+        )
+        .await,
+        json!({"detail":"Authentication required"})
+    );
+    foreign.close().await;
+}
+
+fn create_key(server: &ReadServer) -> impl std::future::Future<Output = (String, String)> + '_ {
+    let auth = server
+        .owner
+        .rebuild_auth_with_policy(policy(), Default::default())
+        .unwrap();
+    async move {
+        let outcome = tokio::task::spawn_blocking(move || {
+            auth.submit(
+                pp_storage::auth::Request::CreateKey {
+                    session: pp_storage::auth::Secret::new("required-unit-fixture-secret".into()),
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(2),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+        })
+        .await
+        .unwrap();
+        let pp_storage::auth::Outcome::KeyCreated { info, key } = outcome else {
+            panic!("API key creation");
+        };
+        (info.id, key.expose().to_owned())
+    }
+}
+
+#[tokio::test]
+async fn corrupt_draft_reads_hide_the_stored_detail() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    server
+        .sql()
+        .execute(
+            "UPDATE plan_drafts SET snapshot_digest='private fixture detail' WHERE id=2",
+            [],
+        )
+        .unwrap();
+    for path in ["/plans/1/drafts", "/api/v2/plans/1/drafts/2"] {
+        let body = json_reply(server.request(Method::GET, path), 500).await;
+        assert_eq!(
+            body,
+            json!({"detail":"Plan draft data is inconsistent","code":"internal_error"})
+        );
+        assert!(!body.to_string().contains("private fixture detail"));
+    }
+    server.close().await;
+}
+
+#[tokio::test]
+async fn disabled_gate_mounts_no_draft_reads() {
+    let server = ReadServer::start(None, "default").await;
+    let status = server
+        .request(Method::GET, "/plans/1/drafts")
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, 404);
+    assert_eq!(
+        server
+            .sql()
+            .query_row("SELECT state FROM plan_drafts WHERE id=2", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+        "open"
+    );
+    server.close().await;
+}
+
+struct Gate {
+    entered: std::sync::Mutex<usize>,
+    release: std::sync::Mutex<bool>,
+    cv: std::sync::Condvar,
+}
+impl Gate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: std::sync::Mutex::new(0),
+            release: std::sync::Mutex::new(false),
+            cv: std::sync::Condvar::new(),
+        })
+    }
+    fn wait(&self) {
+        let mut entered = self.entered.lock().unwrap();
+        *entered += 1;
+        self.cv.notify_all();
+        drop(entered);
+        let mut release = self.release.lock().unwrap();
+        while !*release {
+            release = self.cv.wait(release).unwrap();
+        }
+    }
+    fn entered(&self) -> usize {
+        *self.entered.lock().unwrap()
+    }
+    fn release(&self) {
+        *self.release.lock().unwrap() = true;
+        self.cv.notify_all();
+    }
+}
+
+#[tokio::test]
+async fn dropped_handler_keeps_read_capacity_until_the_worker_exits() {
+    let gate = Gate::new();
+    let hold = {
+        let gate = Arc::clone(&gate);
+        Arc::new(move || gate.wait())
+    };
+    let server = ReadServer::start_held(hold).await;
+    let mut streams = Vec::new();
+    for _ in 0..64 {
+        let mut stream = tokio::net::TcpStream::connect(server.host()).await.unwrap();
+        let request = format!(
+            "GET /plans/1/drafts HTTP/1.1\r\nHost: {}\r\nCookie: {FIXTURE_COOKIE}\r\nConnection: keep-alive\r\n\r\n",
+            server.host()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        streams.push(stream);
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while gate.entered() < 64 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(streams);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let status = server
+                .client
+                .get(format!("{}/plans/1/drafts", server.origin))
+                .send()
+                .await
+                .unwrap()
+                .status();
+            if status == 401 {
+                break;
+            }
+            assert_eq!(status, 503);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let blocked = tokio::time::timeout(
+        Duration::from_millis(800),
+        server.request(Method::GET, "/plans/1/drafts").send(),
+    )
+    .await
+    .expect("read capacity was released while workers were still inside");
+    let blocked = blocked.unwrap();
+    assert_eq!(blocked.status(), 503);
+    assert_eq!(
+        blocked.json::<Value>().await.unwrap(),
+        json!({"detail":"Draft service temporarily unavailable"})
+    );
+    assert_eq!(gate.entered(), 64);
+    gate.release();
+    let recovered = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let response = server
+                .request(Method::GET, "/plans/1/drafts")
+                .send()
+                .await
+                .unwrap();
+            if response.status().as_u16() == 200 {
+                break response.json::<Value>().await.unwrap();
+            }
+            assert_eq!(response.status(), 503);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(recovered["drafts"][1], open_draft());
+    server.close().await;
+}
+
+#[tokio::test]
+async fn failure_codes_map_without_private_detail() {
+    let cases: Vec<(&str, anyhow::Error, u16, Option<&str>)> = vec![
+        (
+            "cancelled",
+            anyhow::Error::new(Failure::Cancelled),
+            503,
+            Some("request_cancelled"),
+        ),
+        (
+            "queue",
+            anyhow::Error::new(Failure::QueueFull),
+            503,
+            Some("writer_queue_full"),
+        ),
+        (
+            "stopped",
+            anyhow::Error::new(Failure::Stopped),
+            503,
+            Some("writer_stopped"),
+        ),
+        (
+            "unknown",
+            anyhow::Error::new(Failure::OutcomeUnknown),
+            503,
+            Some("outcome_unknown"),
+        ),
+        (
+            "corrupt",
+            anyhow::Error::new(Failure::CorruptOrigin),
+            500,
+            Some("internal_error"),
+        ),
+        (
+            "session",
+            anyhow::Error::new(pp_storage::auth::AuthFailure::SessionRequired),
+            401,
+            None,
+        ),
+        (
+            "owner",
+            anyhow::Error::new(pp_storage::auth::AuthFailure::OwnerMappingRequired),
+            403,
+            None,
+        ),
+        (
+            "auth queue",
+            anyhow::Error::new(pp_storage::auth::AuthFailure::QueueFull),
+            503,
+            Some("writer_queue_full"),
+        ),
+        (
+            "auth stopped",
+            anyhow::Error::new(pp_storage::auth::AuthFailure::Stopped),
+            503,
+            Some("writer_stopped"),
+        ),
+        (
+            "auth unknown",
+            anyhow::Error::new(pp_storage::auth::AuthFailure::CommitUnknown),
+            503,
+            Some("outcome_unknown"),
+        ),
+        (
+            "admission",
+            anyhow::Error::new(pp_storage::required_units::AdmissionFailure::Cancelled),
+            503,
+            Some("request_cancelled"),
+        ),
+        (
+            "plain auth",
+            anyhow::anyhow!("Authentication required"),
+            401,
+            None,
+        ),
+        (
+            "locked",
+            anyhow::anyhow!("database is locked"),
+            503,
+            Some("transaction_unavailable"),
+        ),
+        (
+            "deadline",
+            anyhow::anyhow!("Writer transaction admission deadline expired"),
+            503,
+            Some("transaction_unavailable"),
+        ),
+        (
+            "writer full",
+            anyhow::anyhow!("Writer queue full"),
+            503,
+            Some("writer_queue_full"),
+        ),
+        (
+            "storage stopped",
+            anyhow::anyhow!("Storage stopped"),
+            503,
+            Some("writer_stopped"),
+        ),
+        (
+            "private",
+            anyhow::anyhow!("private fixture detail"),
+            500,
+            Some("internal_error"),
+        ),
+    ];
+    for (label, error, status, code) in cases {
+        let response = storage_failure(&error);
+        assert_eq!(response.status().as_u16(), status, "{label}");
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            !body.to_string().contains("private fixture detail"),
+            "{label}"
+        );
+        match code {
+            Some(code) => assert_eq!(body["code"], code, "{label}"),
+            None => assert!(body.get("code").is_none(), "{label} {body}"),
+        }
     }
 }
 
