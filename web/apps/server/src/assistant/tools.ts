@@ -26,7 +26,8 @@ import {
   findSourceCategoryPath,
   moveSourceCategoryPath,
 } from "@print-partner/domain";
-import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
+import { CatalogMetadataConflict, SourceActivationConflictError, type AppRepository } from "../db/repository.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-progress.js";
 import type { IntegrationPort } from "../integrations/store.js";
@@ -3056,6 +3057,7 @@ export async function applyAssistantAction(
   status?: number;
   code?: string;
   detail?: string;
+  error?: string;
   job_id?: string;
   result?: Record<string, unknown>;
 }> {
@@ -3164,9 +3166,21 @@ export async function applyAssistantAction(
         const rawPatch = action.params.patch;
         if (!rawPatch || typeof rawPatch !== "object" || Array.isArray(rawPatch)) return { ok: false, detail: "patch required" };
         const patch = rawPatch as Record<string, unknown>;
+        let metadataVersion: number | undefined;
+        if (desktopFeaturesEnabled() && Object.prototype.hasOwnProperty.call(patch, "metadata_version")) {
+          const token = patch.metadata_version;
+          if (token !== null && token !== undefined) {
+            if (typeof token !== "number" || !Number.isSafeInteger(token)) {
+              const detail = "metadata_version must be an integer";
+              return { ok: false, detail, error: detail };
+            }
+            metadataVersion = token;
+          }
+        }
         const allowed = new Set(["name", "url", "branch", "tag", "source_kind", "source_type", "role", "metadata", "manifest_community_slug"]);
         const clean: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(patch)) if (allowed.has(key)) clean[key] = value;
+        if (metadataVersion !== undefined) clean.metadata_version = metadataVersion;
         if (Object.keys(clean).length === 0) return { ok: false, detail: "patch has no supported fields" };
         if (clean.metadata != null && (typeof clean.metadata !== "object" || Array.isArray(clean.metadata))) return { ok: false, detail: "metadata must be an object" };
         if (clean.manifest_community_slug !== undefined) {
@@ -3176,7 +3190,15 @@ export async function applyAssistantAction(
             return { ok: false, detail: INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL };
           }
         }
-        const updated = deps.repo.updateSource(sourceId, clean as Parameters<AppRepository["updateSource"]>[1]);
+        let updated: ReturnType<AppRepository["updateSource"]>;
+        try {
+          updated = deps.repo.updateSource(sourceId, clean as Parameters<AppRepository["updateSource"]>[1]);
+        } catch (error) {
+          if (error instanceof CatalogMetadataConflict) {
+            return { ok: false, code: error.code, detail: error.message, error: error.message };
+          }
+          throw error;
+        }
         outcome = {
           ok: true,
           result: {
