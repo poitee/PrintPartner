@@ -17,11 +17,11 @@ pub(super) fn categories(settings: CategorySettings) -> Result<Value, serde_json
     serde_json::to_value(settings)
 }
 
+type CategorySave = (Vec<String>, HashMap<String, Option<String>>);
+
 /// Node PUT body: `categories` defaults to `[]`, `replacements` to `{}`.
 /// Each category must be a string; each replacement value is a string or null.
-pub(super) fn category_save(
-    body: &Value,
-) -> Option<(Vec<String>, HashMap<String, Option<String>>)> {
+pub(super) fn category_save(body: &Value) -> Option<CategorySave> {
     let categories = match body.get("categories") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(items)) => {
