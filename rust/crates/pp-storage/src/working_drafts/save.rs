@@ -553,9 +553,7 @@ fn transact(
             copy_credential(&c.input.credential),
         )?,
         c.policy,
-        &mut || {
-            Ok(budget.check()?)
-        },
+        &mut || Ok(budget.check()?),
     )?;
     let required_units::Outcome::Ready { workspace } = selection else {
         return Ok(TransactionResult::Refused(match selection {
