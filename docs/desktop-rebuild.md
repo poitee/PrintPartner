@@ -773,7 +773,7 @@ CoreRuntime replaces a valid saved port only when binding returns `AddrInUse`. I
 
 `CoreHandle` offers typed per-field updates and reads for `BrowserPreferences` under the existing storage lease. The versioned `browser-preferences.json` sidecar is independent of the port. It stores optional sidebar collapse, theme, and supported printer poll interval values. Unknown fields, invalid values, unsupported versions, unsafe files, and oversized files fail without overwrite. Updates preserve other fields and unrelated portable-store bytes. Shutdown closes command admission and settles queued callers before releasing the lease.
 
-This is a library contract. GRE-368 must wire browser capture and restore and show the origin-change notice. Existing origin-scoped localStorage and IndexedDB do not follow a changed port today. These operations do not relocate or rewrite product databases or transfer authentication data. A new runtime always bootstraps its gateway session, without adding a user login flow.
+With `desktop_rebuild` compiled and `PP_DESKTOP_REBUILD` exactly `1` or `true`, the shell shows that credential-free notice and copies saved sidebar, theme, and printer poll values into the replacement origin before the page reads them. It writes those same keys back to `browser-preferences.json`. Other localStorage keys and IndexedDB stay on the previous origin. The desktop gateway cookie name includes the port, so a replacement opens the one-shot bootstrap URL. The host-only `pp_session` cookie is not scoped to a port, so the shell does not clear it or add a login step. With either gate off, the shell keeps the previous behavior: no notice and no preference script. Focus, tray, and second-instance window behavior stay in GRE-368. These operations do not relocate or rewrite product databases.
 
 ## Review observations
 
@@ -1197,7 +1197,28 @@ policy, target, and manifest digests. `validate` rejects a changed component.
 Repeated inputs produce the same digests. The payload decodes as version 2.
 Supplied inputs stay version 1, and `ImportClient::admit` still accepts only
 those. Refusal leaves the admitted journal row and non-database files unchanged.
-Manifest bytes and captured preflight stay later.
+
+### D14 capture manifests: inspect, serialize, and journal resolve
+
+GRE-768 adds `inspect_capture_manifest` and `bind_capture_manifest` behind
+`desktop_rebuild`. A closed v1 wire document carries capture id, operation key,
+actor, target, digests, admission limits, and requested inventory.
+`inspect_capture_manifest` returns paths and `max_input_bytes` only after
+recomputing `requested_digest`, `policy_digest`, and `target_digest`, validating
+the payload policy, and checking that payload paths match `requested_files`.
+
+GRE-769 adds `resolve_capture_manifest`. It runs the same integrity checks, then
+compares actor, operation key, target, admission limits, inventory, and digests
+with an admitted journal `Operation`. Exact rebound bytes must match the
+presented document. A mismatch or integrity failure refuses without writing;
+journal rows and non-database files stay unchanged. Captured admission preflight
+stays on GRE-770.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_manifest
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
+```
 
 ### D14 uploads: import phases
 
@@ -1257,8 +1278,9 @@ As in the reference, `uploads::source_reserved` makes Source deletion return
 `active_work` while an import of the Source holds an unsettled reservation.
 Storage written before that guard can hold an unsettled entry whose Source is
 gone. The same startup pass fails its queued job with `source_unavailable`, as a
-claim would, and then settles the entry. Any other job state with a missing
-Source refuses to open.
+claim would, and then settles the entry. A terminal job with a missing Source
+also settles. Only a non-terminal, non-queued job with a missing Source refuses
+to open.
 
 Opening storage checks each preclaim refusal against its entry and job: it must be
 the entry's first and only observation, the entry must be `admitted`, or settled as
@@ -1930,7 +1952,10 @@ the batch. Non-Sync jobs and builds without `desktop_rebuild` keep their existin
 generic worker behavior. GRE-775 stores one successful target and releases its
 reservation. GRE-776 records one local read failure, the Source failure
 observation and progress, and leaves that reservation unacknowledged so the
-failure stays retained evidence. Acknowledging it remains GRE-777.
+failure stays retained evidence. GRE-777 acknowledges that retained failure when
+the presented observation matches the claim. GRE-778 adopts an already-
+acknowledged successful result when the live Source observation still matches
+the claim capture, and refuses mismatched provenance without writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
@@ -2106,6 +2131,23 @@ cutover. Gateway mounting belongs to D26.
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core --features desktop_rebuild
+```
+
+### Password-change response parity, GRE-873
+
+`fixtures/parity/auth-password-change/` records Node's public
+`POST /auth/change-password` status and body together with whether the old and
+new passwords still authenticate. The corpus covers missing cookies, wrong
+current passwords, valid changes, malformed fields, and nonempty invalid or
+revoked cookies (including empty bodies). Rust resolves the session before
+field validation so those stale cookies return
+`401 {"detail":"Authentication required"}` instead of a 400 field error.
+Password and session policy stay unchanged. The focused suite requires
+`desktop_rebuild`.
+
+```sh
+node fixtures/parity/auth-password-change/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test auth_password_change_parity
 ```
 
 ### D30 catalog HTTP reads, GRE-804

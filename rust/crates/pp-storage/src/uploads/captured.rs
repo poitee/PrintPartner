@@ -172,6 +172,15 @@ impl CapturedPayloadV1 {
         2
     }
 
+    pub(super) fn requested_paths(&self) -> Vec<&str> {
+        match &self.0 {
+            CapturedPayloadKindV1::Files { paths, .. } => {
+                paths.iter().map(String::as_str).collect()
+            }
+            CapturedPayloadKindV1::Zip { path, .. } => vec![path.as_str()],
+        }
+    }
+
     pub(super) fn policy_digest(&self) -> Result<super::Sha256Digest> {
         let binding = match &self.0 {
             CapturedPayloadKindV1::Files { policy, .. } => PolicyBindingV1::Files { policy },

@@ -1,5 +1,6 @@
-use pp_storage::catalog::{CreateSource, Deletion, SourcePatch, SourceSummary};
+use pp_storage::catalog::{CategorySettings, CreateSource, Deletion, SourcePatch, SourceSummary};
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 
 pub(super) fn sources(rows: Vec<SourceSummary>) -> Value {
     json!({ "sources": rows })
@@ -7,6 +8,51 @@ pub(super) fn sources(rows: Vec<SourceSummary>) -> Value {
 
 pub(super) fn source(row: SourceSummary) -> Result<Value, serde_json::Error> {
     serde_json::to_value(row)
+}
+
+/// Wrapped `{ categories, tree }` body from `GetCategoriesWithTree` /
+/// `SaveCategoriesWithTree`. The unwrapped list-only `GetCategories` /
+/// `SaveCategories` responses stay off this router.
+pub(super) fn categories(settings: CategorySettings) -> Result<Value, serde_json::Error> {
+    serde_json::to_value(settings)
+}
+
+type CategorySave = (Vec<String>, HashMap<String, Option<String>>);
+
+/// Node PUT body: `categories` defaults to `[]`, `replacements` to `{}`.
+/// Each category must be a string; each replacement value is a string or null.
+pub(super) fn category_save(body: &Value) -> Option<CategorySave> {
+    let categories = match body.get("categories") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let Value::String(value) = item else {
+                    return None;
+                };
+                out.push(value.clone());
+            }
+            out
+        }
+        _ => return None,
+    };
+    let replacements = match body.get("replacements") {
+        None | Some(Value::Null) => HashMap::new(),
+        Some(Value::Object(map)) => {
+            let mut out = HashMap::with_capacity(map.len());
+            for (key, value) in map {
+                let mapped = match value {
+                    Value::Null => None,
+                    Value::String(value) => Some(value.clone()),
+                    _ => return None,
+                };
+                out.insert(key.clone(), mapped);
+            }
+            out
+        }
+        _ => return None,
+    };
+    Some((categories, replacements))
 }
 
 /// `String(body.name ?? "")`, with null and missing fields omitted on the other columns.

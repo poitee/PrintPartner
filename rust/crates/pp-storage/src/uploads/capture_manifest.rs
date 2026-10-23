@@ -1,12 +1,13 @@
-//! Capture-manifest inventory inspection and serialization (GRE-768).
+//! Capture-manifest inventory inspection, serialization, and journal resolve
+//! (GRE-768 / GRE-769).
 //!
 //! Binds a captured payload to a closed wire document through
-//! [`CapturedInputV2`], then exposes public inventory inspection. Journal
-//! resolution against admitted operations remains GRE-769.
+//! [`CapturedInputV2`], inspects inventory only after digest integrity checks,
+//! and resolves presented bytes against an admitted journal [`Operation`].
 
 use super::{
-    AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Sha256Digest, Target,
-    serialized_digest, validate_admission_limits,
+    AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Operation, Sha256Digest,
+    Target, serialized_digest, target_digest, validate_admission_limits,
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -28,10 +29,6 @@ struct CaptureManifestWire<'a> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-#[allow(
-    dead_code,
-    reason = "closed wire shape; GRE-769 resolve reads the remaining identity fields"
-)]
 struct CaptureManifestV1 {
     manifest_version: u32,
     capture_id: CaptureId,
@@ -47,7 +44,7 @@ struct CaptureManifestV1 {
 }
 
 /// Inventory projection of a capture-manifest document.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct CaptureManifestInventory {
     paths: Vec<String>,
     max_input_bytes: u64,
@@ -63,8 +60,33 @@ impl CaptureManifestInventory {
     }
 }
 
-/// Inspect capture-manifest bytes without admitting an import.
-pub fn inspect_capture_manifest(bytes: &[u8]) -> Result<CaptureManifestInventory> {
+fn inventory_of(manifest: &CaptureManifestV1) -> CaptureManifestInventory {
+    CaptureManifestInventory {
+        paths: manifest
+            .requested_files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect(),
+        max_input_bytes: manifest.admission_limits.max_input_bytes,
+    }
+}
+
+fn ensure_payload_matches_inventory(manifest: &CaptureManifestV1) -> Result<()> {
+    let payload_paths = manifest.input.requested_paths();
+    let inventory_paths: Vec<&str> = manifest
+        .requested_files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    ensure!(
+        payload_paths == inventory_paths,
+        "Capture inventory mismatch"
+    );
+    Ok(())
+}
+
+/// Decode wire bytes and recompute digests before trusting inventory or identity.
+fn verify_capture_manifest(bytes: &[u8]) -> Result<CaptureManifestV1> {
     let manifest: CaptureManifestV1 =
         serde_json::from_slice(bytes).map_err(|_| anyhow::anyhow!("Invalid capture manifest"))?;
     ensure!(manifest.manifest_version == 1, "Invalid capture manifest");
@@ -73,20 +95,128 @@ pub fn inspect_capture_manifest(bytes: &[u8]) -> Result<CaptureManifestInventory
         &manifest.requested_files,
         manifest.admission_limits.max_input_bytes,
     )?;
-    let paths = manifest
-        .requested_files
-        .into_iter()
-        .map(|file| file.path)
-        .collect();
-    Ok(CaptureManifestInventory {
-        paths,
-        max_input_bytes: manifest.admission_limits.max_input_bytes,
-    })
+    manifest.input.validate()?;
+    ensure_payload_matches_inventory(&manifest)?;
+
+    let requested_digest = Sha256Digest::new(serialized_digest(&manifest.requested_files)?)?;
+    ensure!(
+        requested_digest == manifest.requested_digest,
+        "Capture requested digest mismatch"
+    );
+    ensure!(
+        target_digest(&manifest.target)? == manifest.target_digest,
+        "Capture target digest mismatch"
+    );
+    ensure!(
+        manifest.input.policy_digest()? == manifest.policy_digest,
+        "Capture policy digest mismatch"
+    );
+
+    let bound = CapturedInputV2::bind(
+        manifest.capture_id.clone(),
+        manifest.input.clone(),
+        &manifest.actor,
+        &manifest.operation_key,
+        &manifest.target,
+        manifest.admission_limits,
+        &manifest.requested_files,
+    )?;
+    ensure!(
+        bound.policy_digest == manifest.policy_digest
+            && bound.target_digest == manifest.target_digest,
+        "Capture manifest digest mismatch"
+    );
+    Ok(manifest)
+}
+
+/// Inspect capture-manifest bytes without admitting an import.
+pub fn inspect_capture_manifest(bytes: &[u8]) -> Result<CaptureManifestInventory> {
+    Ok(inventory_of(&verify_capture_manifest(bytes)?))
+}
+
+/// Resolve capture-manifest bytes against an admitted journal operation.
+///
+/// Compares manifest identity (actor, operation key, target, policy digests,
+/// inventory) with the recorded operation. Refuses without writing on any
+/// mismatch or digest integrity failure.
+pub fn resolve_capture_manifest(
+    bytes: &[u8],
+    operation: &Operation,
+) -> Result<CaptureManifestInventory> {
+    let manifest = verify_capture_manifest(bytes)?;
+    ensure!(manifest.actor == operation.actor, "Capture actor mismatch");
+    ensure!(
+        manifest.operation_key == operation.key,
+        "Capture operation key mismatch"
+    );
+    ensure!(
+        manifest.admission_limits.reserved_bytes == operation.reserved_bytes
+            && manifest.admission_limits.max_input_bytes == operation.max_input_bytes
+            && manifest.admission_limits.max_prepared_bytes == operation.max_prepared_bytes,
+        "Capture admission limits mismatch"
+    );
+    ensure!(
+        manifest.requested_files == operation.requested_files,
+        "Capture inventory mismatch"
+    );
+    ensure!(
+        manifest.requested_digest == Sha256Digest::new(operation.requested_digest.clone())?,
+        "Capture requested digest mismatch"
+    );
+    match &manifest.target {
+        Target::Existing { source_id } => {
+            ensure!(*source_id == operation.source_id, "Capture target mismatch");
+        }
+        Target::Create { .. } => {
+            return Err(anyhow::anyhow!("Capture target mismatch"));
+        }
+    }
+
+    let bound = CapturedInputV2::bind(
+        manifest.capture_id.clone(),
+        manifest.input.clone(),
+        &manifest.actor,
+        &manifest.operation_key,
+        &manifest.target,
+        manifest.admission_limits,
+        &manifest.requested_files,
+    )?;
+    bound.validate(
+        &operation.actor,
+        &operation.key,
+        Some(&Target::Existing {
+            source_id: operation.source_id,
+        }),
+        AdmissionLimits {
+            reserved_bytes: operation.reserved_bytes,
+            max_input_bytes: operation.max_input_bytes,
+            max_prepared_bytes: operation.max_prepared_bytes,
+        },
+        &operation.requested_files,
+    )?;
+    ensure!(
+        bound.policy_digest == manifest.policy_digest
+            && bound.target_digest == manifest.target_digest,
+        "Capture manifest digest mismatch"
+    );
+
+    let rebound = bind_capture_manifest(
+        manifest.capture_id.clone(),
+        manifest.input.clone(),
+        &manifest.actor,
+        &manifest.operation_key,
+        &manifest.target,
+        manifest.admission_limits,
+        &manifest.requested_files,
+    )?;
+    ensure!(rebound.bytes() == bytes, "Capture manifest mismatch");
+
+    Ok(inventory_of(&manifest))
 }
 
 #[allow(
     dead_code,
-    reason = "serialize path exercised in unit tests; GRE-769+ callers consume the bound bytes"
+    reason = "serialize path exercised in unit tests; GRE-770+ callers consume the bound parts"
 )]
 pub(crate) struct BoundCaptureManifest {
     input: CapturedInputV2,
@@ -95,7 +225,7 @@ pub(crate) struct BoundCaptureManifest {
 
 #[allow(
     dead_code,
-    reason = "serialize path exercised in unit tests; GRE-769+ callers consume the bound bytes"
+    reason = "serialize path exercised in unit tests; GRE-770+ callers consume the bound parts"
 )]
 impl BoundCaptureManifest {
     pub(crate) fn input(&self) -> &CapturedInputV2 {
@@ -114,7 +244,7 @@ impl BoundCaptureManifest {
 /// Serialize a capture manifest through the existing captured binding.
 #[allow(
     dead_code,
-    reason = "serialize path exercised in unit tests; GRE-769+ callers consume the bound bytes"
+    reason = "serialize path exercised in unit tests; GRE-770+ callers consume the bound parts"
 )]
 pub(crate) fn bind_capture_manifest(
     capture_id: CaptureId,

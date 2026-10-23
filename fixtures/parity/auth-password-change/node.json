@@ -5,8 +5,8 @@
   "email": "password-parity@example.test",
   "cases": [
     {
-      "session": false,
       "id": "missing_session",
+      "session": "absent",
       "body": {
         "current_password": "original-password-873",
         "new_password": "replacement-password-873"
@@ -30,8 +30,8 @@
       }
     },
     {
-      "session": true,
       "id": "wrong_current",
+      "session": "valid",
       "body": {
         "current_password": "incorrect-password-873",
         "new_password": "replacement-password-873"
@@ -56,8 +56,8 @@
       }
     },
     {
-      "session": true,
       "id": "valid_change",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": "replacement-password-873"
@@ -81,8 +81,8 @@
       }
     },
     {
-      "session": true,
       "id": "missing_both",
+      "session": "valid",
       "body": {},
       "proposed_password": "replacement-password-873",
       "observation": {
@@ -103,8 +103,8 @@
       }
     },
     {
-      "session": true,
       "id": "missing_current",
+      "session": "valid",
       "body": {
         "new_password": "replacement-password-873"
       },
@@ -127,8 +127,8 @@
       }
     },
     {
-      "session": true,
       "id": "missing_new",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873"
       },
@@ -151,8 +151,8 @@
       }
     },
     {
-      "session": true,
       "id": "current_password_null",
+      "session": "valid",
       "body": {
         "current_password": null,
         "new_password": "replacement-password-873"
@@ -176,8 +176,8 @@
       }
     },
     {
-      "session": true,
       "id": "current_password_number",
+      "session": "valid",
       "body": {
         "current_password": 873,
         "new_password": "replacement-password-873"
@@ -201,8 +201,8 @@
       }
     },
     {
-      "session": true,
       "id": "current_password_boolean",
+      "session": "valid",
       "body": {
         "current_password": true,
         "new_password": "replacement-password-873"
@@ -226,8 +226,8 @@
       }
     },
     {
-      "session": true,
       "id": "current_password_array",
+      "session": "valid",
       "body": {
         "current_password": [],
         "new_password": "replacement-password-873"
@@ -251,8 +251,8 @@
       }
     },
     {
-      "session": true,
       "id": "current_password_object",
+      "session": "valid",
       "body": {
         "current_password": {},
         "new_password": "replacement-password-873"
@@ -276,8 +276,8 @@
       }
     },
     {
-      "session": true,
       "id": "current_password_empty",
+      "session": "valid",
       "body": {
         "current_password": "",
         "new_password": "replacement-password-873"
@@ -301,8 +301,8 @@
       }
     },
     {
-      "session": true,
       "id": "current_password_short",
+      "session": "valid",
       "body": {
         "current_password": "short",
         "new_password": "replacement-password-873"
@@ -327,8 +327,8 @@
       }
     },
     {
-      "session": true,
       "id": "new_password_null",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": null
@@ -352,8 +352,8 @@
       }
     },
     {
-      "session": true,
       "id": "new_password_number",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": 873
@@ -377,8 +377,8 @@
       }
     },
     {
-      "session": true,
       "id": "new_password_boolean",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": true
@@ -402,8 +402,8 @@
       }
     },
     {
-      "session": true,
       "id": "new_password_array",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": []
@@ -427,8 +427,8 @@
       }
     },
     {
-      "session": true,
       "id": "new_password_object",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": {}
@@ -452,8 +452,8 @@
       }
     },
     {
-      "session": true,
       "id": "new_password_empty",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": ""
@@ -477,8 +477,8 @@
       }
     },
     {
-      "session": true,
       "id": "new_password_short",
+      "session": "valid",
       "body": {
         "current_password": "original-password-873",
         "new_password": "short"
@@ -493,6 +493,100 @@
           "status": 400,
           "body": {
             "detail": "Password must be at least 8 characters"
+          }
+        },
+        "after": {
+          "old": true,
+          "new": false
+        }
+      }
+    },
+    {
+      "id": "invalid_session_valid_body",
+      "session": "invalid",
+      "body": {
+        "current_password": "original-password-873",
+        "new_password": "replacement-password-873"
+      },
+      "proposed_password": "replacement-password-873",
+      "observation": {
+        "before": {
+          "old": true,
+          "new": false
+        },
+        "change": {
+          "status": 401,
+          "body": {
+            "detail": "Authentication required"
+          }
+        },
+        "after": {
+          "old": true,
+          "new": false
+        }
+      }
+    },
+    {
+      "id": "invalid_session_missing_both",
+      "session": "invalid",
+      "body": {},
+      "proposed_password": "replacement-password-873",
+      "observation": {
+        "before": {
+          "old": true,
+          "new": false
+        },
+        "change": {
+          "status": 401,
+          "body": {
+            "detail": "Authentication required"
+          }
+        },
+        "after": {
+          "old": true,
+          "new": false
+        }
+      }
+    },
+    {
+      "id": "revoked_session_valid_body",
+      "session": "revoked",
+      "body": {
+        "current_password": "original-password-873",
+        "new_password": "replacement-password-873"
+      },
+      "proposed_password": "replacement-password-873",
+      "observation": {
+        "before": {
+          "old": true,
+          "new": false
+        },
+        "change": {
+          "status": 401,
+          "body": {
+            "detail": "Authentication required"
+          }
+        },
+        "after": {
+          "old": true,
+          "new": false
+        }
+      }
+    },
+    {
+      "id": "revoked_session_missing_both",
+      "session": "revoked",
+      "body": {},
+      "proposed_password": "replacement-password-873",
+      "observation": {
+        "before": {
+          "old": true,
+          "new": false
+        },
+        "change": {
+          "status": 401,
+          "body": {
+            "detail": "Authentication required"
           }
         },
         "after": {

@@ -507,7 +507,24 @@ async fn change(
     headers: HeaderMap,
     input: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, Failure> {
-    let session = wire::session(&headers)?;
+    // Node resolves the cookie in onRequest before field checks. Match that so a
+    // nonempty invalid, expired, or revoked token refuses with 401 before 400.
+    let raw = wire::cookie(&headers, "pp_session")
+        .filter(|value| !value.is_empty())
+        .ok_or(Failure(StatusCode::UNAUTHORIZED, "Authentication required"))?;
+    match invoke(
+        &app.auth,
+        Request::ResolveSession {
+            token: Secret::new(raw.clone()),
+        },
+    )
+    .await?
+    {
+        Outcome::User(Some(_)) => {}
+        _ => {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "Authentication required"));
+        }
+    }
     let value = body(input)?;
     let current = text(&value, "current_password");
     let replacement = text(&value, "new_password");
@@ -520,7 +537,7 @@ async fn change(
     let outcome = invoke(
         &app.auth,
         Request::ChangePassword {
-            session,
+            session: Secret::new(raw),
             current: Secret::new(current),
             replacement: Secret::new(replacement),
         },

@@ -90,9 +90,10 @@ struct App {
     owner: Arc<Mutex<WriterOwner>>,
 }
 
-/// Mounts Source list, detail, create, metadata patch, and delete at `/` and
-/// `/api/v1` when `PP_DESKTOP_REBUILD` was exactly `1` or `true` at startup.
-/// Otherwise nothing is mounted. Sync and upload stay unregistered.
+/// Mounts Source list, detail, create, metadata patch, delete, and Source
+/// category settings at `/` and `/api/v1` when `PP_DESKTOP_REBUILD` was exactly
+/// `1` or `true` at startup. Otherwise nothing is mounted. Sync, upload,
+/// naming, and location stay unregistered.
 pub fn admit_catalog_routes(config: CatalogHttpConfig, owner: Arc<Mutex<WriterOwner>>) -> Router {
     if !config.enabled {
         return Router::new();
@@ -102,6 +103,10 @@ pub fn admit_catalog_routes(config: CatalogHttpConfig, owner: Arc<Mutex<WriterOw
         .route(
             "/sources/{id}",
             get(detail).patch(patch_source).delete(delete_source),
+        )
+        .route(
+            "/settings/source-categories",
+            get(get_categories).put(put_categories),
         );
     let app = App { config, owner };
     Router::new()
@@ -304,6 +309,40 @@ async fn patch_source(
     .await
 }
 
+async fn get_categories(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+) -> Response {
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::GetCategoriesWithTree {},
+    )
+    .await
+}
+
+async fn put_categories(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    body: Bytes,
+) -> Response {
+    let Some(body) = object_body(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    let Some((categories, replacements)) = wire::category_save(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::SaveCategoriesWithTree {
+            categories,
+            replacements,
+        },
+    )
+    .await
+}
+
 fn object_body(bytes: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
@@ -349,6 +388,10 @@ async fn execute(app: &App, credentials: Credentials, request: CatalogRequest) -
             Err(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
         },
         Outcome::Source(None) => reject(StatusCode::NOT_FOUND, "Source not found"),
+        Outcome::Categories(settings) => match wire::categories(settings) {
+            Ok(value) => Json(value).into_response(),
+            Err(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
+        },
         Outcome::Deletion(outcome) => deletion_response(wire::source_deletion(outcome)),
         _ => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
     }

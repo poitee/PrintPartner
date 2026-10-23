@@ -416,6 +416,11 @@ pub(crate) enum Command {
         candidate: crate::source_sync::SyncCandidate,
         observation: crate::source_scan::LocalScanObservation,
     },
+    #[cfg(feature = "desktop_rebuild")]
+    AdoptSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+    },
     Retain {
         per_tenant: usize,
         global: usize,
@@ -1182,6 +1187,32 @@ impl ServerWorkerClient {
         lease.version = acknowledged.version;
         Ok(acknowledged)
     }
+
+    /// Returns one already-acknowledged successful Sync target result when this
+    /// attempt still owns the claim and the live Source observation matches the
+    /// claim capture. Writes nothing. A changed observation or stale attempt is
+    /// refused without writing.
+    pub fn adopt_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+    ) -> Result<crate::source_sync::SettledSyncTarget> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::AdoptSourceSyncTarget {
+                lease: lease.clone(),
+                key,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncSettled(settled) => Ok(settled),
+            _ => unreachable!(),
+        }
+    }
 }
 
 fn random() -> String {
@@ -1787,6 +1818,10 @@ pub(crate) fn execute(
             candidate,
             &observation,
         )?),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::AdoptSourceSyncTarget { lease, key } => TransactionDecision::Outcome(
+            Outcome::SourceSyncSettled(crate::source_sync::adopt(&tx, &lease, &key)?),
+        ),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
