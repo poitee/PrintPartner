@@ -2337,3 +2337,22 @@ unregistered. The desktop gateway does not mount this router; D26 does.
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --test catalog_http
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test catalog_http
 ```
+
+### D26 runtime wiring (a), GRE-818
+
+`pp_core::rebuild_api::clients(rebuild, owner, policy, lifetimes)` composes the
+opted-in auth, draft, and Build storage clients from the same `WriterOwner` and
+stored `DesktopRebuild` flag that D23's auth router already uses. It returns
+`None` before creating any client unless the flag is on. Catalog is not in the
+bundle: GRE-819 mounts it with `admit_catalog_routes(config, owner)`, which
+builds a credentialed catalog client per request. `RebuildHttpClients::close`
+drops the owned handles; storage shutdown stays with `WriterOwner`. This slice
+does not mount routes or change production ownership.
+
+```sh
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild \
+  --lib application_host_ -- --test-threads=2
+```
+
+See `docs/gre-818-rebuild-clients.md`.
