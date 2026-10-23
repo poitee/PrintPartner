@@ -2291,7 +2291,10 @@ fn settlement(source_id: i64) -> SyncSettlement {
             postprocess_warning: None,
         },
         receipt: jobs::ResultArtifact {
-            receipt_id: format!("local-scan-{}", "ab".repeat(16)),
+            receipt_id: format!(
+                "local-scan-{:032x}",
+                u64::try_from(source_id).expect("Source ID is positive")
+            ),
             content_hash: "cd".repeat(32),
             target: format!("source:{source_id}"),
         },

@@ -107,7 +107,6 @@ impl AttemptLease {
     pub(crate) fn generation(&self) -> i64 {
         self.generation
     }
-    #[cfg(test)]
     pub(crate) fn version(&self) -> i64 {
         self.version
     }
