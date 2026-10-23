@@ -76,12 +76,14 @@ async function persistBody(
         error: error instanceof Error ? error.message : "Could not save the special request",
       });
       throw error;
-    } finally {
-      if (inFlightByProfile.get(profileId) === run) inFlightByProfile.delete(profileId);
     }
   })();
   inFlightByProfile.set(profileId, run);
-  await run;
+  try {
+    await run;
+  } finally {
+    if (inFlightByProfile.get(profileId) === run) inFlightByProfile.delete(profileId);
+  }
 }
 
 export function flushSpecialRequestSave(
