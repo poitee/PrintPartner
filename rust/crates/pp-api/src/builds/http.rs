@@ -66,7 +66,7 @@ impl BuildHttpConfig {
 }
 
 #[derive(Clone)]
-struct App {
+pub(super) struct App {
     config: BuildHttpConfig,
     client: BuildGraphClient,
     admission: Arc<tokio::sync::Semaphore>,
@@ -88,8 +88,10 @@ impl Drop for Cancellation {
     }
 }
 
-/// Mounts Plan list/detail GET+HEAD at `/`, `/api/v1`, and `/api/v2` when
-/// `PP_DESKTOP_REBUILD` was exactly `1` or `true`. Otherwise mounts nothing.
+/// Mounts Plan list/detail and kit-manifest GET+HEAD at `/`, `/api/v1`, and
+/// `/api/v2` when `PP_DESKTOP_REBUILD` was exactly `1` or `true`. Otherwise
+/// mounts nothing. Create, delete, layers, jobs, SaveKit, and ReadBuilder stay
+/// unregistered.
 pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -102,7 +104,11 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
     };
     let routes = Router::new()
         .route("/plans", get(list))
-        .route("/plans/{id}", get(detail));
+        .route("/plans/{id}", get(detail))
+        .route(
+            "/plans/{id}/kit-manifest",
+            get(super::manifest_options::read_kit),
+        );
     Router::new()
         .merge(routes.clone())
         .nest("/api/v1", routes.clone())
@@ -159,7 +165,11 @@ async fn detail(
     execute(app, request, BuildCommand::Read { build }).await
 }
 
-async fn execute(app: App, request: axum::extract::Request, command: BuildCommand) -> Response {
+pub(super) async fn execute(
+    app: App,
+    request: axum::extract::Request,
+    command: BuildCommand,
+) -> Response {
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
@@ -201,6 +211,7 @@ fn present(method: &Method, outcome: BuildOutcome) -> Response {
         BuildOutcome::Read { profile: value } => {
             json_response(StatusCode::OK, &profile_summary(*value), head)
         }
+        BuildOutcome::Manifest(outcome) => super::manifest_options::present(method, outcome),
         BuildOutcome::MissingBuild => failure(StatusCode::NOT_FOUND, "Profile not found"),
         _ => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -259,6 +270,17 @@ fn json_response(status: StatusCode, value: &impl serde::Serialize, head: bool) 
     }
 }
 
+/// Lossless JSON bytes from storage (`into_success_body`), including UTF-16 ids.
+pub(super) fn bytes_response(status: StatusCode, body: Vec<u8>, head: bool) -> Response {
+    let length = body.len();
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, length)
+        .body(axum::body::Body::from(if head { Vec::new() } else { body }))
+        .unwrap_or_else(|_| encode_unavailable())
+}
+
 fn encode_json_response(
     status: StatusCode,
     value: &impl serde::Serialize,
@@ -284,7 +306,7 @@ fn encode_unavailable() -> Response {
         .unwrap_or_else(|_| Response::new(axum::body::Body::from(BODY)))
 }
 
-fn failure(status: StatusCode, detail: &str) -> Response {
+pub(super) fn failure(status: StatusCode, detail: &str) -> Response {
     json_response(status, &json!({"detail": detail}), false)
 }
 

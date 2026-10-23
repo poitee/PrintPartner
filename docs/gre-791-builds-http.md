@@ -4,7 +4,8 @@ With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 `/plans` and `/plans/{id}` mount at the root, `/api/v1`, and `/api/v2` only when
 the stored `PP_DESKTOP_REBUILD` value is exactly `1` or `true`. Otherwise those
 routes answer 404 and do not open the build graph. Create, delete, layers,
-touch, jobs, and kit/builder manifests stay unregistered (later D25 children).
+touch, jobs, SaveKit, and ReadBuilder stay unregistered (later D25 children).
+`GET`/`HEAD` kit-manifest ReadKit is GRE-801 (`docs/gre-801-manifest-http.md`).
 The desktop gateway does not mount this router in this slice.
 
 Admission (loopback Host/Origin, principal, forwarded-header refusal) is shared
