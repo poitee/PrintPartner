@@ -239,13 +239,14 @@ jobs:
             web/apps/server/dist \
             web/packages/contracts/dist \
             web/packages/domain/dist
-          tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/server/dist/current'
-          tar -tf desktop-release-assets.tar | grep -Fx "web/apps/server/dist/${server_release}/desktop-resolution.js"
-          tar -tf desktop-release-assets.tar | grep -Fx 'web/packages/contracts/dist/current'
-          tar -tf desktop-release-assets.tar | grep -Fx 'web/packages/domain/dist/current'
-          tar -tf desktop-release-assets.tar | grep -qF "web/packages/contracts/dist/${contracts_release}/"
-          tar -tf desktop-release-assets.tar | grep -qF "web/packages/domain/dist/${domain_release}/"
-          tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/web/dist/desktop-build.json'
+          tar -tf desktop-release-assets.tar > desktop-release-assets.list
+          grep -Fx 'web/apps/server/dist/current' desktop-release-assets.list
+          grep -Fx "web/apps/server/dist/${server_release}/desktop-resolution.js" desktop-release-assets.list
+          grep -Fx 'web/packages/contracts/dist/current' desktop-release-assets.list
+          grep -Fx 'web/packages/domain/dist/current' desktop-release-assets.list
+          grep -qF "web/packages/contracts/dist/${contracts_release}/" desktop-release-assets.list
+          grep -qF "web/packages/domain/dist/${domain_release}/" desktop-release-assets.list
+          grep -Fx 'web/apps/web/dist/desktop-build.json' desktop-release-assets.list
       - name: Upload desktop release assets
         if: ${{ !cancelled() && steps.pack-assets.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
