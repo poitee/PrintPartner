@@ -114,6 +114,28 @@ and another worker can take the Source.
 the acknowledgement that follows. `sync_acknowledgement_replay_preserves_result`
 checks the replay, the untouched sibling result and the released Source.
 
+## Adopt one acknowledged success
+
+`ServerWorkerClient::adopt_source_sync_target` returns one already-acknowledged
+successful Sync target result when this attempt still owns the claim and the
+live Source observation matches the capture stored at claim. The stored result,
+receipt and acknowledgement stay as recorded. The command writes nothing.
+
+A changed Source observation is refused as mismatched provenance, without
+writing. A stale attempt fence is refused the same way. After the observation
+is restored, the same key adopts the retained result again. A reclaimed attempt
+after lease expiry is refused as `Sync target attempt mismatch` because the
+target still records the claim attempt's generation, worker and fence. A
+retained failure is refused as `Sync target is not an acknowledged success`.
+
+`sync_adopts_matching_retained_result` settles one target, adopts that key, and
+checks an exact replay with an unchanged database. `sync_adopt_rejects_changed_provenance`
+moves the Source path, asserts the refusal and unchanged Sync rows, restores the
+path, and adopts successfully. `sync_adopt_rejects_reclaimed_attempt` expires
+the lease, reclaims the Job, and asserts the attempt-fence refusal.
+`sync_adopt_rejects_failed_target` fails a claimed target and asserts the
+acknowledged-success guard.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
@@ -148,6 +170,18 @@ CARGO_TARGET_DIR=/persist/targets/gre-777-ack-retained-evidence \
 cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
   sync_acknowledgement_requires_matching_observation \
   sync_acknowledgement_replay_preserves_result
+```
+
+Adopt an acknowledged success with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-778-sync-adopt \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_adopts_matching_retained_result \
+  sync_adopt_rejects_changed_provenance \
+  sync_adopt_rejects_reclaimed_attempt \
+  sync_adopt_rejects_failed_target
 ```
 
 `durable_claim_returns_source_busy_after_restart` and
