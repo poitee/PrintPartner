@@ -2,9 +2,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import PlanSpecialRequestField, { resetSpecialRequestSaveStateForTests } from "./PlanSpecialRequestField";
-import { BuildSaveFlushProvider } from "../context/BuildSaveFlushContext";
+import PlanSpecialRequestField, {
+  flushSpecialRequestSave,
+  resetSpecialRequestSaveStateForTests,
+} from "./PlanSpecialRequestField";
+import { BuildSaveFlushProvider, useFlushBuildPageSaves } from "../context/BuildSaveFlushContext";
 import { resetAuxiliarySaveIntentForTests } from "../lib/planAuxiliarySaveIntent";
+import { act, renderHook } from "@testing-library/react";
 
 const update = vi.hoisted(() => vi.fn());
 vi.mock("../queries/profiles", () => ({
@@ -27,6 +31,72 @@ function field(value: string | null, profileId = 9001) {
     </BuildSaveFlushProvider>
   );
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+it("special_request_barrier_waits_for_in_flight_save", async () => {
+  const pending = deferred<undefined>();
+  update.mockImplementationOnce(() => pending.promise);
+  render(field(null));
+  fireEvent.change(screen.getByRole("textbox", { name: "Special request" }), {
+    target: { value: "Wait for in-flight" },
+  });
+  fireEvent.blur(screen.getByRole("textbox", { name: "Special request" }));
+  await waitFor(() => expect(update).toHaveBeenCalledOnce());
+
+  let finished = false;
+  const barrier = flushSpecialRequestSave(9001, update, null).finally(() => {
+    finished = true;
+  });
+  await act(async () => Promise.resolve());
+  expect(finished).toBe(false);
+
+  pending.resolve(undefined);
+  await barrier;
+  expect(finished).toBe(true);
+  expect(update).toHaveBeenCalledTimes(1);
+});
+
+it("flushAll barrier waits for an in-flight special-request save", async () => {
+  const pending = deferred<undefined>();
+  update.mockImplementationOnce(() => pending.promise);
+  const { result } = renderHook(() => useFlushBuildPageSaves(), {
+    wrapper: ({ children }) => (
+      <BuildSaveFlushProvider>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          {children}
+          <PlanSpecialRequestField profileId={9001} value={null} />
+        </QueryClientProvider>
+      </BuildSaveFlushProvider>
+    ),
+  });
+
+  fireEvent.change(screen.getByRole("textbox", { name: "Special request" }), {
+    target: { value: "Barrier waits" },
+  });
+  fireEvent.blur(screen.getByRole("textbox", { name: "Special request" }));
+  await waitFor(() => expect(update).toHaveBeenCalledOnce());
+
+  let finished = false;
+  const barrier = result.current().finally(() => {
+    finished = true;
+  });
+  await act(async () => Promise.resolve());
+  expect(finished).toBe(false);
+
+  pending.resolve(undefined);
+  await barrier;
+  expect(finished).toBe(true);
+  expect(update).toHaveBeenCalledTimes(1);
+});
 
 it("keeps a failed special request across navigation and retries it", async () => {
   update.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(undefined);

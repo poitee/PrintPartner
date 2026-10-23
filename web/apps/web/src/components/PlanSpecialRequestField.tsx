@@ -188,7 +188,7 @@ export default function PlanSpecialRequestField({
       {pending?.kind === "failed" && (
         <div role="alert" className="flex items-center gap-2 text-xs text-destructive">
           <span>Special request was not saved: {pending.error}</span>
-          <Button type="button" size="sm" variant="secondary" onClick={() => { void persist(); }}>Retry save</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => { void persist().catch(() => {}); }}>Retry save</Button>
         </div>
       )}
     </div>

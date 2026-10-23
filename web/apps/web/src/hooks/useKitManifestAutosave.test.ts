@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ManifestSelections } from "@print-partner/contracts";
 import type { KitManifest } from "../api/endpoints/planManifests";
 import { useKitManifestAutosave } from "./useKitManifestAutosave";
-import { resetAuxiliarySaveIntentForTests } from "../lib/planAuxiliarySaveIntent";
+import {
+  resetAuxiliarySaveIntentForTests,
+  retryFailedAuxiliarySaves,
+} from "../lib/planAuxiliarySaveIntent";
 
 const mocks = vi.hoisted(() => ({
   savePlanKitManifest: vi.fn(),
@@ -138,6 +141,66 @@ describe("useKitManifestAutosave", () => {
       mocks.savePlanKitManifest.mock.calls[0]?.[1],
     );
     await waitFor(() => expect(result.current.status).toBe("idle"));
+  });
+
+  it("manifest_retry_awaits_in_flight_put", async () => {
+    mocks.savePlanKitManifest.mockRejectedValueOnce(new Error("offline"));
+    const { result, rerender } = renderAutosave();
+    act(() => {
+      result.current.saveUserEdit({ extras: ["skirts"] });
+      rerender({
+        profileId: 7,
+        pendingSelections: { extras: ["skirts"] },
+        savedSelections: {},
+      });
+    });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(1);
+
+    const retryPut = deferred<KitManifest>();
+    mocks.savePlanKitManifest.mockImplementationOnce(() => retryPut.promise);
+
+    let saveNowDone = false;
+    let retryDone = false;
+    let saveNowError: unknown;
+    let retryError: unknown;
+    await act(async () => {
+      const saveNowPromise = result.current.saveNow().then(
+        () => {
+          saveNowDone = true;
+        },
+        (error) => {
+          saveNowError = error;
+          saveNowDone = true;
+        },
+      );
+      await Promise.resolve();
+      expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+
+      const retryPromise = retryFailedAuxiliarySaves(7).then(
+        () => {
+          retryDone = true;
+        },
+        (error) => {
+          retryError = error;
+          retryDone = true;
+        },
+      );
+      await Promise.resolve();
+      expect(saveNowDone).toBe(false);
+      expect(retryDone).toBe(false);
+      expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+
+      retryPut.resolve(kit({ extras: ["skirts"] }));
+      await saveNowPromise;
+      await retryPromise;
+    });
+
+    expect(saveNowError).toBeUndefined();
+    expect(retryError).toBeUndefined();
+    expect(saveNowDone).toBe(true);
+    expect(retryDone).toBe(true);
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
   });
 
   it("failed_manifest_save_keeps_exact_payload", async () => {

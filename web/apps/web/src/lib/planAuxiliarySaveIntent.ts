@@ -2,12 +2,10 @@ export type AuxiliarySaveKind = "special_request" | "manifest";
 
 type FailedAuxiliarySave = Readonly<{
   kind: AuxiliarySaveKind;
-  order: number;
   retry: () => Promise<void>;
 }>;
 
 const failedByProfile = new Map<number, Map<AuxiliarySaveKind, FailedAuxiliarySave>>();
-let nextOrder = 0;
 
 export function retainFailedAuxiliarySave(
   profileId: number,
@@ -15,12 +13,7 @@ export function retainFailedAuxiliarySave(
   retry: () => Promise<void>,
 ): void {
   const profileFailures = failedByProfile.get(profileId) ?? new Map<AuxiliarySaveKind, FailedAuxiliarySave>();
-  const existing = profileFailures.get(kind);
-  profileFailures.set(kind, {
-    kind,
-    order: existing?.order ?? nextOrder++,
-    retry,
-  });
+  profileFailures.set(kind, { kind, retry });
   failedByProfile.set(profileId, profileFailures);
 }
 
@@ -35,13 +28,12 @@ export function clearFailedAuxiliarySave(profileId: number, kind: AuxiliarySaveK
 export async function retryFailedAuxiliarySaves(profileId: number): Promise<void> {
   const profileFailures = failedByProfile.get(profileId);
   if (!profileFailures || profileFailures.size === 0) return;
-  const ordered = [...profileFailures.values()].sort((left, right) => left.order - right.order);
-  for (const failure of ordered) {
+  // Map insertion order matches first-failure order (updates keep the original key slot).
+  for (const failure of profileFailures.values()) {
     await failure.retry();
   }
 }
 
 export function resetAuxiliarySaveIntentForTests(): void {
   failedByProfile.clear();
-  nextOrder = 0;
 }

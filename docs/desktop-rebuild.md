@@ -649,8 +649,8 @@ refused request; a later retry does not rebuild from newer UI selections until
 the user makes a new edit. `BuildSaveFlushContext` allows multiple flush
 producers per Build so special-request and manifest autosave can register
 independently. `retryPlanSave` replays retained ordinary-Save intent from
-GRE-812, then retries auxiliary failures in first-failure order (special
-request before manifest when both failed). Web-only; no new Rust
+GRE-812, then retries auxiliary failures in first-failure order (whichever
+kind failed first runs first when both failed). Web-only; no new Rust
 `desktop_rebuild` surface. Focused proofs:
 `failed_manifest_save_keeps_exact_payload` in `useKitManifestAutosave.test.ts`,
 `failed_special_request_retry_preserves_order` in

@@ -18,6 +18,10 @@ describe("planAuxiliarySaveIntent", () => {
     retainFailedAuxiliarySave(7, "special_request", async () => {
       order.push("special_request");
     });
+    // Re-retain special_request: insertion slot stays, so manifest still runs first.
+    retainFailedAuxiliarySave(7, "special_request", async () => {
+      order.push("special_request");
+    });
 
     await retryFailedAuxiliarySaves(7);
 
