@@ -437,15 +437,20 @@ struct ReadServer {
 }
 impl ReadServer {
     async fn start(flag: Option<&str>, tenant: &str) -> Self {
-        Self::open(flag, tenant, None).await
+        Self::open(flag, tenant, None, "", 8 * 1024 * 1024).await
     }
     async fn start_held(hold: Arc<dyn Fn() + Send + Sync>) -> Self {
-        Self::open(Some("true"), "default", Some(hold)).await
+        Self::open(Some("true"), "default", Some(hold), "", 8 * 1024 * 1024).await
+    }
+    async fn start_limited(body_limit: usize, setup: &str) -> Self {
+        Self::open(Some("true"), "default", None, setup, body_limit).await
     }
     async fn open(
         flag: Option<&str>,
         tenant: &str,
         hold: Option<Arc<dyn Fn() + Send + Sync>>,
+        setup: &str,
+        body_limit: usize,
     ) -> Self {
         let mut random = [0; 12];
         getrandom::fill(&mut random).unwrap();
@@ -457,12 +462,21 @@ impl ReadServer {
             include_bytes!("../../../../pp-storage/tests/fixtures/required-units/unchanged.db"),
         )
         .unwrap();
+        if !setup.is_empty() {
+            rusqlite::Connection::open(directory.join("print-partner.db"))
+                .unwrap()
+                .execute_batch(setup)
+                .unwrap();
+        }
         let owner = pp_storage::WriterOwner::open(&directory, pp_storage::Limits::default())
             .unwrap()
             .0;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
-        let config = DraftHttpConfig::from_startup(&origin, tenant, flag).unwrap();
+        let config = DraftHttpConfig::from_startup(&origin, tenant, flag)
+            .unwrap()
+            .with_limits(body_limit, Duration::from_millis(100))
+            .unwrap();
         let client = owner.working_drafts_with_policy(policy()).unwrap();
         let auth = owner
             .rebuild_auth_with_policy(policy(), Default::default())
@@ -499,6 +513,15 @@ impl ReadServer {
     fn sql(&self) -> rusqlite::Connection {
         rusqlite::Connection::open(self.directory.join("print-partner.db")).unwrap()
     }
+    fn included(&self, part_id: i64) -> i64 {
+        self.sql()
+            .query_row(
+                "SELECT included FROM plan_draft_parts WHERE id=?1",
+                [part_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
     async fn close(self) {
         self.task.abort();
         let _ = self.task.await;
@@ -516,6 +539,13 @@ async fn json_reply(request: reqwest::RequestBuilder, status: u16) -> Value {
 
 fn open_draft() -> Value {
     json!({"draft_id":2,"state":"open","lifecycle_version":0,"snapshot_digest":DIGEST,"base":{"revision_id":1,"plan_version":1}})
+}
+
+fn edit(digest: &str) -> Value {
+    json!({"expected_snapshot_digest":digest,"decisions":[
+        {"kind":"set_included","draft_part_ids":[5],"value":true},
+        {"kind":"set_quantity_override","draft_part_ids":[4],"value":null}
+    ]})
 }
 
 #[tokio::test]
@@ -584,10 +614,16 @@ async fn missing_resources_cross_tenant_reads_and_invalid_ids_are_hidden() {
     let server = ReadServer::start(Some("true"), "default").await;
     let missing = json!({"detail":"Plan not found","code":"profile_not_found"});
     for profile in [2, 999] {
-        for suffix in ["", "/2"] {
+        for (method, suffix, body) in [
+            (Method::GET, "", json!({})),
+            (Method::GET, "/2", json!({})),
+            (Method::PATCH, "/2/parts", edit(DIGEST)),
+        ] {
             assert_eq!(
                 json_reply(
-                    server.request(Method::GET, &format!("/plans/{profile}/drafts{suffix}")),
+                    server
+                        .request(method, &format!("/plans/{profile}/drafts{suffix}"))
+                        .json(&body),
                     404
                 )
                 .await,
@@ -595,10 +631,21 @@ async fn missing_resources_cross_tenant_reads_and_invalid_ids_are_hidden() {
             );
         }
     }
-    assert_eq!(
-        json_reply(server.request(Method::GET, "/plans/1/drafts/999"), 404).await,
-        json!({"detail":"Plan draft not found","code":"draft_not_found"})
-    );
+    for (method, suffix, body) in [
+        (Method::GET, "", json!({})),
+        (Method::PATCH, "/parts", edit(DIGEST)),
+    ] {
+        assert_eq!(
+            json_reply(
+                server
+                    .request(method, &format!("/plans/1/drafts/999{suffix}"))
+                    .json(&body),
+                404
+            )
+            .await,
+            json!({"detail":"Plan draft not found","code":"draft_not_found"})
+        );
+    }
     for value in [
         "0",
         "-1",
@@ -1041,4 +1088,273 @@ fn limits_can_only_be_lowered() {
     );
     assert!(config.clone().with_limits(1024, wait * 2).is_err());
     assert!(config.with_limits(0, wait).is_err());
+}
+
+#[tokio::test]
+async fn edits_persist_and_preserve_node_conflict_shapes() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    let before = json_reply(server.request(Method::GET, "/plans/1/drafts/2"), 200).await;
+    // Node 409 is `{code}` plus `workspace` only — no synthetic detail.
+    let mut expected = json!({"code":"draft_changed","workspace":before});
+    assert_eq!(
+        json_reply(
+            server
+                .request(Method::PATCH, "/plans/1/drafts/2/parts")
+                .json(&edit(&"0".repeat(64))),
+            409
+        )
+        .await,
+        expected
+    );
+    let changed = json_reply(
+        server
+            .request(Method::PATCH, "/api/v2/plans/1/drafts/2/parts")
+            .json(&edit(DIGEST)),
+        200,
+    )
+    .await;
+    assert_eq!(
+        changed["draft"],
+        json!({"draft_id":2,"state":"open","lifecycle_version":0,"snapshot_digest":"9a9bc08be4b343d523a2915b4f9c4288edfc35103d24886bf731859a9128f035","base":{"revision_id":1,"plan_version":1}})
+    );
+    assert_eq!(changed["parts"][0]["quantity_override"], Value::Null);
+    assert_eq!(changed["parts"][0]["quantity_effective"], 1);
+    assert_eq!(changed["parts"][1]["included"], true);
+    assert_eq!(
+        changed["reconciliation"],
+        json!({"kind":"ready","reused_units":4,"new_units":0,"surplus_units":2})
+    );
+    assert_eq!(server.included(5), 1);
+    assert_eq!(
+        server
+            .sql()
+            .query_row(
+                "SELECT quantity_override,quantity_effective FROM plan_draft_parts WHERE id=4",
+                [],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?))
+            )
+            .unwrap(),
+        (None, 1)
+    );
+    assert_eq!(
+        json_reply(server.request(Method::GET, "/plans/1/drafts/2"), 200).await,
+        changed
+    );
+    server
+        .sql()
+        .execute_batch("UPDATE plan_drafts SET state='abandoned', lifecycle_version=1 WHERE id=2")
+        .unwrap();
+    let current = json_reply(server.request(Method::GET, "/plans/1/drafts/2"), 200).await;
+    expected["workspace"] = current;
+    expected["code"] = json!("not_open");
+    assert_eq!(
+        json_reply(
+            server
+                .request(Method::PATCH, "/plans/1/drafts/2/parts")
+                .json(&edit(DIGEST)),
+            409
+        )
+        .await,
+        expected
+    );
+    server.close().await;
+}
+
+#[tokio::test]
+async fn api_key_patch_skips_origin_and_rejects_foreign_or_revoked() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    let (key_id, secret) = create_key(&server).await;
+    let patch = |secret: &str| {
+        server
+            .client
+            .request(
+                Method::PATCH,
+                format!("{}/plans/1/drafts/2/parts", server.origin),
+            )
+            .header("Authorization", format!("Bearer {secret}"))
+            .json(&edit(DIGEST))
+    };
+    assert_eq!(
+        json_reply(patch(&secret), 200).await["parts"][1]["included"],
+        true
+    );
+    for origin in ["http://evil.test", "null"] {
+        assert_eq!(
+            json_reply(patch(&secret).header("Origin", origin), 403).await,
+            json!({"detail":"Invalid request origin"})
+        );
+    }
+    assert_eq!(
+        json_reply(patch(&secret).header("Cookie", FIXTURE_COOKIE), 403).await,
+        json!({"detail":"Invalid request origin"})
+    );
+    let auth = server
+        .owner
+        .rebuild_auth_with_policy(policy(), Default::default())
+        .unwrap();
+    let revoked = tokio::task::spawn_blocking(move || {
+        auth.submit(
+            pp_storage::auth::Request::RevokeKey {
+                session: pp_storage::auth::Secret::new("required-unit-fixture-secret".into()),
+                key_id,
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(2),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        revoked,
+        pp_storage::auth::Outcome::KeyChanged { changed: true, .. }
+    ));
+    for secret in [secret.as_str(), "invalid"] {
+        assert_eq!(
+            json_reply(patch(secret), 401).await,
+            json!({"detail":"Authentication required"})
+        );
+    }
+    server.close().await;
+}
+
+#[tokio::test]
+async fn edit_bounds_and_typed_bodies_reject_before_mutation() {
+    let server = ReadServer::start_limited(256, "").await;
+    for body in [
+        "{",
+        "null",
+        "[]",
+        "{}",
+        "{\"expected_snapshot_digest\":-1}",
+        "{\"expected_snapshot_digest\":null,\"extra\":true}",
+    ] {
+        assert_eq!(
+            json_reply(
+                server
+                    .request(Method::PATCH, "/plans/1/drafts/2/parts")
+                    .body(body.to_owned()),
+                400
+            )
+            .await,
+            json!({"detail":"Request is invalid","code":"invalid_request"})
+        );
+    }
+    for body in [
+        json!({"expected_snapshot_digest":DIGEST,"decisions":[]}),
+        json!({"expected_snapshot_digest":DIGEST,"decision":{"kind":"set_included","draft_part_ids":[0],"value":true}}),
+        json!({"expected_snapshot_digest":DIGEST,"decision":{"kind":"set_quantity_override","draft_part_ids":[4],"value":10001}}),
+    ] {
+        assert_eq!(
+            json_reply(
+                server
+                    .request(Method::PATCH, "/plans/1/drafts/2/parts")
+                    .json(&body),
+                400
+            )
+            .await,
+            json!({"detail":"Request is invalid","code":"invalid_request"})
+        );
+    }
+    assert_eq!(
+        json_reply(
+            server
+                .request(Method::PATCH, "/plans/1/drafts/2/parts")
+                .body("x".repeat(257)),
+            413
+        )
+        .await,
+        json!({"detail":"Request body too large"})
+    );
+    assert_eq!(
+        server
+            .sql()
+            .query_row(
+                "SELECT state,lifecycle_version FROM plan_drafts WHERE id=2",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            )
+            .unwrap(),
+        ("open".into(), 0)
+    );
+    assert_eq!(server.included(5), 0);
+    server.close().await;
+
+    let server = ReadServer::start_limited(8 * 1024 * 1024, "").await;
+    let mut bulk = edit(DIGEST).to_string();
+    bulk.extend(std::iter::repeat_n(' ', 3 * 1024 * 1024));
+    let edited = json_reply(
+        server
+            .request(Method::PATCH, "/plans/1/drafts/2/parts")
+            .body(bulk),
+        200,
+    )
+    .await;
+    assert_eq!(edited["parts"][1]["included"], true);
+    assert_eq!(server.included(5), 1);
+    assert_eq!(
+        json_reply(
+            server
+                .request(Method::PATCH, "/plans/1/drafts/2/parts")
+                .body(" ".repeat(8 * 1024 * 1024 + 1)),
+            413
+        )
+        .await,
+        json!({"detail":"Request body too large"})
+    );
+    server.close().await;
+}
+
+#[tokio::test]
+async fn failed_selection_keeps_committed_edit_and_sanitizes_errors() {
+    let server = ReadServer::start_limited(
+        1024 * 1024,
+        "CREATE TRIGGER injected_failure BEFORE INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT RAISE(ABORT,'private fixture detail'); END",
+    )
+    .await;
+    assert_eq!(
+        json_reply(
+            server
+                .request(Method::PATCH, "/plans/1/drafts/2/parts")
+                .json(&edit(DIGEST)),
+            500
+        )
+        .await,
+        json!({"detail":"Plan draft update failed","code":"internal_error"})
+    );
+    assert_eq!(server.included(5), 1);
+    assert_eq!(
+        json_reply(server.request(Method::GET, "/plans/1/drafts/2"), 200).await["parts"][1]
+            ["included"],
+        true
+    );
+    server.close().await;
+}
+
+#[tokio::test]
+async fn present_edit_matches_node_conflict_and_domain_shapes() {
+    use pp_storage::required_units::{DomainCode, Outcome as WorkspaceOutcome};
+    let conflict = present_edit(WorkspaceOutcome::DraftChanged { workspace: None });
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let conflict_body: Value =
+        serde_json::from_slice(&to_bytes(conflict.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(conflict_body, json!({"code":"draft_changed"}));
+    let domain = present_edit(WorkspaceOutcome::DomainError {
+        code: DomainCode::RequiredUnitSetUnavailable,
+    });
+    assert_eq!(domain.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let domain_body: Value =
+        serde_json::from_slice(&to_bytes(domain.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(
+        domain_body,
+        json!({"code":"required_unit_set_unavailable"})
+    );
+    let baseline = present_edit(WorkspaceOutcome::AcceptedBaselineRequired);
+    assert_eq!(baseline.status(), StatusCode::CONFLICT);
+    let baseline_body: Value =
+        serde_json::from_slice(&to_bytes(baseline.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(baseline_body, json!({"code":"accepted_baseline_required"}));
 }
