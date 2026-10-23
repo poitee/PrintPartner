@@ -492,7 +492,7 @@ async fn get_global_naming(
     {
         Ok(Outcome::Data(profile)) => Json(wire::global_naming(profile)).into_response(),
         Ok(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -516,7 +516,7 @@ async fn put_global_naming(
     {
         Ok(Outcome::Data(profile)) => Json(wire::global_naming(profile)).into_response(),
         Ok(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -567,7 +567,7 @@ async fn execute(app: &App, credentials: Credentials, request: CatalogRequest) -
             Outcome::Deletion(outcome) => deletion_response(wire::source_deletion(outcome)),
             _ => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
         },
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -575,32 +575,32 @@ async fn dispatch(
     app: &App,
     credentials: Credentials,
     request: CatalogRequest,
-) -> Result<Outcome, Response> {
+) -> Result<Outcome, Box<Response>> {
     let policy = app.config.policy;
     let client = {
         let Ok(owner) = app.owner.lock() else {
-            return Err(reject(
+            return Err(Box::new(reject(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Catalog unavailable",
-            ));
+            )));
         };
         match owner.source_catalog_with_policy(credentials, policy) {
             Ok(client) => client,
             Err(_) => {
-                return Err(reject(
+                return Err(Box::new(reject(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Catalog unavailable",
-                ));
+                )));
             }
         }
     };
     match tokio::task::spawn_blocking(move || client.execute(request)).await {
         Ok(Ok(outcome)) => Ok(outcome),
-        Ok(Err(error)) => Err(catalog_error(error)),
-        Err(_) => Err(reject(
+        Ok(Err(error)) => Err(Box::new(catalog_error(error))),
+        Err(_) => Err(Box::new(reject(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Catalog unavailable",
-        )),
+        ))),
     }
 }
 
