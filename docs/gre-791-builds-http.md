@@ -5,9 +5,10 @@ With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 the stored `PP_DESKTOP_REBUILD` value is exactly `1` or `true`. Otherwise those
 routes answer 404 and do not open the build graph. Create and delete are
 documented in `docs/gre-792-builds-http.md`. `GET`/`HEAD` kit-manifest ReadKit
-is GRE-801 (`docs/gre-801-manifest-http.md`). Layers, touch, jobs, SaveKit, and
-ReadBuilder stay unregistered (later D25 children). The desktop gateway does
-not mount this router in this slice.
+is GRE-801 (`docs/gre-801-manifest-http.md`); SaveKit `PUT` is GRE-802
+(`docs/gre-802-manifest-http.md`). Layers, touch, jobs, and ReadBuilder stay
+unregistered (later D25 children). The desktop gateway does not mount this
+router in this slice.
 
 Admission (loopback Host/Origin, principal, forwarded-header refusal) is shared
 with drafts through the crate-private `loopback` module.
