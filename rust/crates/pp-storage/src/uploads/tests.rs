@@ -2074,3 +2074,215 @@ mod capture_admission {
         owner.shutdown().unwrap();
     }
 }
+
+mod capture_correlation {
+    use super::super::{
+        AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedPayloadV1, File, Target,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::{Credential, JobKind, WorkerAdmission},
+        tests::directory,
+    };
+    use rusqlite::{Connection, params};
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }]
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    fn create_target(name: &str) -> Target {
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: name.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
+    fn journal_snapshot(root: &std::path::Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        connection
+            .query_row(
+                "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||state||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,state,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state||char(9)||document,char(10)),'') FROM (SELECT id,kind,state,document FROM durable_jobs ORDER BY id))",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn capture_correlation_distinguishes_absent_match_conflict() {
+        let root = directory("capture-correlation-absent-match");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-correlate-key";
+        let capture_id = CaptureId::new("capture-correlate-id").unwrap();
+
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureCorrelate"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                capture_id.clone(),
+                key.into(),
+                payload.clone(),
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest.clone(), inventory.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::Absent
+        ));
+        let before_admit = journal_snapshot(&root);
+
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let after_admit = journal_snapshot(&root);
+        assert_ne!(before_admit, after_admit);
+
+        let matched = client
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
+            .unwrap();
+        assert!(matches!(
+            matched,
+            CaptureJournalCorrelation::ExactAdmitted(_)
+        ));
+        assert_eq!(journal_snapshot(&root), after_admit);
+        assert_eq!(admitted.input_version, 2);
+
+        let mut conflicted = inventory.clone();
+        conflicted[0].sha256 = "b".repeat(64);
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest, conflicted)
+                .unwrap(),
+            CaptureJournalCorrelation::MismatchRepairRequired
+        ));
+        assert_eq!(journal_snapshot(&root), after_admit);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn resolved_capture_claim_rejects_changed_inventory() {
+        let root = directory("capture-correlation-changed-inventory");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-claim-inventory";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureClaimInventory"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-claim-inventory-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+
+        let CaptureJournalCorrelation::ExactAdmitted(claim) = client
+            .correlate_capture_manifest(manifest, inventory)
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut document: String = connection
+            .query_row(
+                "SELECT document FROM source_import_operations WHERE operation_key=?1",
+                [key],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        value["requested_files"][0]["sha256"] = serde_json::json!("c".repeat(64));
+        document = value.to_string();
+        connection
+            .execute(
+                "UPDATE source_import_operations SET document=?1 WHERE operation_key=?2",
+                params![document, key],
+            )
+            .unwrap();
+        drop(connection);
+
+        let before = journal_snapshot(&root);
+        let worker = owner
+            .job_worker_with_policy(
+                policy(),
+                WorkerAdmission {
+                    kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                    total: 1,
+                    per_resource: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .unwrap();
+        let refused = worker
+            .claim_resolved_import(claim)
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(refused, "Captured import requires repair");
+        assert_eq!(journal_snapshot(&root), before);
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+}
