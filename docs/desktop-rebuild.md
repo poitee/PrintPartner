@@ -1267,10 +1267,24 @@ or enqueue a job. A matching prior captured journal entry may be returned as
 `replay` without re-checking owner-wide quota; a supplied prior with the same
 key refuses with an idempotency conflict. Refusal and success both leave
 journal rows, non-database files, and the accounting epoch unchanged.
-`prepare` and `admit_prepared` stay on GRE-771.
+
+### D14 captured prepare and admit
+
+GRE-771 adds `PreflightedCapture::prepare` and `ImportClient::admit_prepared`
+behind `desktop_rebuild`. `prepare` binds the capture manifest (GRE-768/769)
+into a `PreparedCapturedAdmission` with `Input::Captured`. `admit_prepared`
+submits writer `Admit` under `AdmissionAuthority::Preflighted`, re-admits the
+preflight credential in the write transaction (`Capture authority changed` on
+mismatch), revalidates the target basis, checks captured inventory and binding,
+and either returns an exact prior operation (same actor and `intent_digest`) or
+writes one journal row, quota reservation, and supplied import job
+(`input_version` 2). Credential-path `admit` still refuses `Input::Captured`.
+A stale basis after preflight refuses without changing journal rows or
+non-database files. Correlation and resolved claims stay on GRE-772.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```

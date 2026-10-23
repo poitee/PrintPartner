@@ -229,7 +229,6 @@ impl BoundCaptureManifest {
         &self.bytes
     }
 
-    #[cfg(test)]
     pub(crate) fn into_parts(self) -> (CapturedInputV2, Vec<u8>) {
         (self.input, self.bytes)
     }
