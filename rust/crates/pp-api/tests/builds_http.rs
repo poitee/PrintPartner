@@ -1300,34 +1300,81 @@ async fn build_layer_mutations_are_atomic() {
         )
         .await;
     assert_eq!(status, 200, "{body}");
-    let layer_id = body["layers"]
-        .as_array()
-        .unwrap()
+    let layers = body["layers"].as_array().unwrap();
+    let base_layer_id = layers
+        .iter()
+        .find(|layer| layer["layer_type"] == "base")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let layer_id = layers
         .iter()
         .find(|layer| layer["layer_type"] == "addon")
         .unwrap()["id"]
         .as_i64()
         .unwrap();
+    let duplicate = "Source \"Addon\" is already attached to this build";
+    let missing_layer = id + 1_000_000;
 
     let before = layer_rows(&directory, id);
     let snapshot = files(&directory);
-    let (status, body) = server
-        .send_json(
-            Method::POST,
-            &format!("/plans/{id}/layers"),
-            &auth,
-            &json!({"project_id": addon}),
-        )
-        .await;
-    assert_eq!(
-        (status, body["detail"].as_str()),
+    let refusals = [
         (
+            Method::POST,
+            format!("/plans/{id}/layers"),
+            Some(json!({"project_id": addon})),
             409,
-            Some("Source \"Addon\" is already attached to this build")
-        )
-    );
-    assert_eq!(layer_rows(&directory, id), before);
-    assert_eq!(files(&directory), snapshot);
+            duplicate,
+        ),
+        (
+            Method::PUT,
+            format!("/plans/{id}/layers/base"),
+            Some(json!({"project_id": addon})),
+            404,
+            duplicate,
+        ),
+        (
+            Method::PUT,
+            format!("/plans/{id}/layers/{base_layer_id}"),
+            Some(json!({"project_id": addon})),
+            404,
+            duplicate,
+        ),
+        (
+            Method::DELETE,
+            format!("/plans/{id}/layers/{missing_layer}"),
+            None,
+            404,
+            "Layer not found",
+        ),
+        (
+            Method::PUT,
+            format!("/plans/{id}/layers/{missing_layer}"),
+            Some(json!({"project_id": other})),
+            404,
+            "Layer not found",
+        ),
+        (
+            Method::PUT,
+            format!("/plans/{id}/layers/base"),
+            Some(json!({"project_id": 9_007_199_254_740_991u64})),
+            404,
+            "Project not found",
+        ),
+    ];
+    for (method, path, body, status, detail) in &refusals {
+        let (got, response) = match body {
+            Some(body) => server.send_json(method.clone(), path, &auth, body).await,
+            None => server.send(method.clone(), path, &auth).await,
+        };
+        assert_eq!(
+            (got, response["detail"].as_str()),
+            (*status, Some(*detail)),
+            "{method} {path} {response}"
+        );
+        assert_eq!(layer_rows(&directory, id), before, "{method} {path}");
+        assert_eq!(files(&directory), snapshot, "{method} {path}");
+    }
 
     let (status, body) = server
         .send_json(
@@ -1360,23 +1407,6 @@ async fn build_layer_mutations_are_atomic() {
         layer_rows(&directory, id),
         vec![(before[0].0, "base".into(), Some(base))]
     );
-
-    let before = layer_rows(&directory, id);
-    let snapshot = files(&directory);
-    let (status, body) = server
-        .send_json(
-            Method::PUT,
-            &format!("/plans/{id}/layers/base"),
-            &auth,
-            &json!({"project_id": 9_007_199_254_740_991u64}),
-        )
-        .await;
-    assert_eq!(
-        (status, body["detail"].as_str()),
-        (404, Some("Project not found"))
-    );
-    assert_eq!(layer_rows(&directory, id), before);
-    assert_eq!(files(&directory), snapshot);
 
     server.stop().await;
     shutdown(owner, directory);
