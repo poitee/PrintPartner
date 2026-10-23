@@ -2077,16 +2077,17 @@ mod capture_admission {
 
 mod capture_correlation {
     use super::super::{
-        AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedPayloadV1, File, Target,
+        AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedPayloadV1, File, OwnedInput,
+        Phase, State, Target,
     };
     use crate::{
         Limits, WriterOwner,
         auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
         catalog::CreateSource,
-        jobs::{Credential, JobKind, WorkerAdmission},
+        jobs::{Credential, JobKind, PersistentState, ServerWorkerClient, WorkerAdmission},
         tests::directory,
     };
-    use rusqlite::{Connection, params};
+    use rusqlite::Connection;
 
     fn policy() -> AuthPolicy {
         AuthPolicy {
@@ -2124,6 +2125,20 @@ mod capture_correlation {
                 ..Default::default()
             }),
         }
+    }
+
+    fn worker(owner: &WriterOwner) -> ServerWorkerClient {
+        owner
+            .job_worker_with_policy(
+                policy(),
+                WorkerAdmission {
+                    kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                    total: 1,
+                    per_resource: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .unwrap()
     }
 
     const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
@@ -2237,6 +2252,58 @@ mod capture_correlation {
             .admit_prepared(prepared, 0, client.accounting_epoch())
             .unwrap();
 
+        let CaptureJournalCorrelation::ExactAdmitted(mut claim) = client
+            .correlate_capture_manifest(manifest, inventory)
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+        // Keep the journal valid so load→validate_operation succeeds; only the
+        // retained claim inventory diverges, forcing capture_claim_matches.
+        claim.inventory[0].sha256 = "c".repeat(64);
+
+        let before = journal_snapshot(&root);
+        let refused = worker(&owner)
+            .claim_resolved_import(claim)
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(refused, "Captured import requires repair");
+        assert_eq!(journal_snapshot(&root), before);
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn resolved_capture_claim_runs_admitted_job() {
+        let root = directory("capture-correlation-claim-success");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-claim-success";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureClaimSuccess"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-claim-success-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
         let CaptureJournalCorrelation::ExactAdmitted(claim) = client
             .correlate_capture_manifest(manifest, inventory)
             .unwrap()
@@ -2244,43 +2311,79 @@ mod capture_correlation {
             panic!("expected exact admitted claim");
         };
 
-        let connection = Connection::open(root.join("print-partner.db")).unwrap();
-        let mut document: String = connection
-            .query_row(
-                "SELECT document FROM source_import_operations WHERE operation_key=?1",
-                [key],
-                |row| row.get(0),
+        let claimed = worker(&owner)
+            .claim_resolved_import(claim)
+            .unwrap()
+            .expect("valid resolved claim is claimable");
+        assert_eq!(claimed.job.job_id, admitted.job_id);
+        assert_eq!(claimed.job.state, PersistentState::Running);
+        assert!(claimed.source_work.is_some());
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_correlation_reports_exact_owned_or_later() {
+        let root = directory("capture-correlation-owned-or-later");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-owned-or-later";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureOwnedOrLater"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-owned-or-later-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
             )
             .unwrap();
-        let mut value: serde_json::Value = serde_json::from_str(&document).unwrap();
-        value["requested_files"][0]["sha256"] = serde_json::json!("c".repeat(64));
-        document = value.to_string();
-        connection
-            .execute(
-                "UPDATE source_import_operations SET document=?1 WHERE operation_key=?2",
-                params![document, key],
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let CaptureJournalCorrelation::ExactAdmitted(claim) = client
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+
+        let worker = worker(&owner);
+        let claimed = worker
+            .claim_resolved_import(claim)
+            .unwrap()
+            .expect("valid resolved claim is claimable");
+        let owned = worker
+            .import_phase(
+                &claimed.lease,
+                claimed.source_work.as_ref().unwrap(),
+                Phase::Owned(OwnedInput {
+                    locator: format!(".pp-imports/{}", admitted.job_id),
+                    digest: admitted.requested_digest.clone(),
+                    files: admitted.requested_files.clone(),
+                }),
             )
             .unwrap();
-        drop(connection);
+        assert_eq!(owned.state, State::OwnedInputReady);
 
         let before = journal_snapshot(&root);
-        let worker = owner
-            .job_worker_with_policy(
-                policy(),
-                WorkerAdmission {
-                    kinds: vec![(JobKind::SuppliedSourceImport, 1)],
-                    total: 1,
-                    per_resource: 1,
-                    lease_seconds: 60,
-                },
-            )
-            .unwrap();
-        let refused = worker
-            .claim_resolved_import(claim)
-            .err()
-            .unwrap()
-            .to_string();
-        assert_eq!(refused, "Captured import requires repair");
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest, inventory)
+                .unwrap(),
+            CaptureJournalCorrelation::ExactOwnedOrLater
+        ));
         assert_eq!(journal_snapshot(&root), before);
         assert_eq!(admitted.key, key);
         owner.shutdown().unwrap();
