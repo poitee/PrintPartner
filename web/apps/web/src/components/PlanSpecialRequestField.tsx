@@ -23,6 +23,7 @@ type SpecialRequestBody = Readonly<{ id: number; special_request: string | null 
 
 const drafts = new Map<number, RequestDraft>();
 const failedBodies = new Map<number, SpecialRequestBody>();
+const inFlightByProfile = new Map<number, Promise<void>>();
 const listeners = new Set<() => void>();
 
 function warnOnUnload(event: BeforeUnloadEvent) {
@@ -52,24 +53,35 @@ async function persistBody(
   body: SpecialRequestBody,
   mutateAsync: (body: SpecialRequestBody) => Promise<unknown>,
 ): Promise<void> {
-  setRequestDraft(profileId, { kind: "saving", text: body.special_request ?? "" });
-  try {
-    await mutateAsync(body);
-    setRequestDraft(profileId, { kind: "saved", text: (body.special_request ?? "").trim() });
-    failedBodies.delete(profileId);
-    clearFailedAuxiliarySave(profileId, "special_request");
-  } catch (error) {
-    failedBodies.set(profileId, body);
-    retainFailedAuxiliarySave(profileId, "special_request", async () => {
-      await persistBody(profileId, body, mutateAsync);
-    });
-    setRequestDraft(profileId, {
-      kind: "failed",
-      text: body.special_request ?? "",
-      error: error instanceof Error ? error.message : "Could not save the special request",
-    });
-    throw error;
+  const active = inFlightByProfile.get(profileId);
+  if (active) {
+    await active;
+    return;
   }
+  const run = (async () => {
+    setRequestDraft(profileId, { kind: "saving", text: body.special_request ?? "" });
+    try {
+      await mutateAsync(body);
+      setRequestDraft(profileId, { kind: "saved", text: (body.special_request ?? "").trim() });
+      failedBodies.delete(profileId);
+      clearFailedAuxiliarySave(profileId, "special_request");
+    } catch (error) {
+      failedBodies.set(profileId, body);
+      retainFailedAuxiliarySave(profileId, "special_request", async () => {
+        await persistBody(profileId, body, mutateAsync);
+      });
+      setRequestDraft(profileId, {
+        kind: "failed",
+        text: body.special_request ?? "",
+        error: error instanceof Error ? error.message : "Could not save the special request",
+      });
+      throw error;
+    } finally {
+      if (inFlightByProfile.get(profileId) === run) inFlightByProfile.delete(profileId);
+    }
+  })();
+  inFlightByProfile.set(profileId, run);
+  await run;
 }
 
 export function flushSpecialRequestSave(
@@ -77,6 +89,8 @@ export function flushSpecialRequestSave(
   mutateAsync: (body: SpecialRequestBody) => Promise<unknown>,
   value: string | null | undefined,
 ): Promise<void> {
+  const inFlight = inFlightByProfile.get(profileId);
+  if (inFlight) return inFlight;
   const retained = failedBodies.get(profileId);
   if (retained) return persistBody(profileId, retained, mutateAsync);
   const draft = drafts.get(profileId);
@@ -88,6 +102,9 @@ export function flushSpecialRequestSave(
       return Promise.resolve();
     }
     return persistBody(profileId, { id: profileId, special_request: next || null }, mutateAsync);
+  }
+  if (draft?.kind === "saving") {
+    return inFlightByProfile.get(profileId) ?? Promise.resolve();
   }
   return Promise.resolve();
 }
@@ -125,6 +142,11 @@ export default function PlanSpecialRequestField({
   }, [mutateBody, profileId, registerFlush, value]);
 
   const persist = async () => {
+    const inFlight = inFlightByProfile.get(profileId);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
     if (pending?.kind === "saving") return;
     const retained = failedBodies.get(profileId);
     if (retained) {
@@ -174,6 +196,7 @@ export default function PlanSpecialRequestField({
 export function resetSpecialRequestSaveStateForTests(): void {
   drafts.clear();
   failedBodies.clear();
+  inFlightByProfile.clear();
   listeners.clear();
   if (typeof window !== "undefined") {
     window.removeEventListener("beforeunload", warnOnUnload);

@@ -110,6 +110,36 @@ describe("useKitManifestAutosave", () => {
     expect(unregister).toHaveBeenCalledTimes(1);
   });
 
+  it("retries a retained kit after selections resync to saved", async () => {
+    mocks.savePlanKitManifest.mockRejectedValueOnce(new Error("offline"));
+    const { result, rerender } = renderAutosave();
+    act(() => {
+      result.current.saveUserEdit({ extras: ["skirts"] });
+      rerender({
+        profileId: 7,
+        pendingSelections: { extras: ["skirts"] },
+        savedSelections: {},
+      });
+    });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    mocks.savePlanKitManifest.mockResolvedValueOnce(kit({ extras: ["skirts"] }));
+    act(() => {
+      rerender({
+        profileId: 7,
+        pendingSelections: {},
+        savedSelections: {},
+      });
+    });
+    await act(async () => {
+      await result.current.saveNow();
+    });
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+    expect(mocks.savePlanKitManifest.mock.calls[1]?.[1]).toEqual(
+      mocks.savePlanKitManifest.mock.calls[0]?.[1],
+    );
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+  });
+
   it("failed_manifest_save_keeps_exact_payload", async () => {
     mocks.savePlanKitManifest.mockRejectedValueOnce(new Error("offline"));
     const { result, rerender } = renderAutosave();

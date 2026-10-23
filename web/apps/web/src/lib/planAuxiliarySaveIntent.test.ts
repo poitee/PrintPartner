@@ -12,15 +12,15 @@ afterEach(() => {
 describe("planAuxiliarySaveIntent", () => {
   it("failed_special_request_retry_preserves_order", async () => {
     const order: string[] = [];
-    retainFailedAuxiliarySave(7, "special_request", async () => {
-      order.push("special_request");
-    });
     retainFailedAuxiliarySave(7, "manifest", async () => {
       order.push("manifest");
+    });
+    retainFailedAuxiliarySave(7, "special_request", async () => {
+      order.push("special_request");
     });
 
     await retryFailedAuxiliarySaves(7);
 
-    expect(order).toEqual(["special_request", "manifest"]);
+    expect(order).toEqual(["manifest", "special_request"]);
   });
 });

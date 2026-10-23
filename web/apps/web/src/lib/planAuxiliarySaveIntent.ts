@@ -31,10 +31,6 @@ export function clearFailedAuxiliarySave(profileId: number, kind: AuxiliarySaveK
   if (profileFailures.size === 0) failedByProfile.delete(profileId);
 }
 
-export function hasFailedAuxiliarySave(profileId: number, kind: AuxiliarySaveKind): boolean {
-  return failedByProfile.get(profileId)?.has(kind) ?? false;
-}
-
 /** Retries failed special-request and manifest saves in the order they first failed. */
 export async function retryFailedAuxiliarySaves(profileId: number): Promise<void> {
   const profileFailures = failedByProfile.get(profileId);
