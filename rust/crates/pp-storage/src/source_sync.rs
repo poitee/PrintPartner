@@ -299,19 +299,18 @@ pub(crate) fn original_authority_status(
     })
 }
 
-#[allow(dead_code)]
 struct ProducerCapture {
-    claim_generation: i64,
-    parent_generation: i64,
-    worker: String,
-    fence_digest: String,
-    incarnation: String,
-    token: String,
-    configuration_version: i64,
+    _claim_generation: i64,
+    _parent_generation: i64,
+    _worker: String,
+    _fence_digest: String,
+    _incarnation: String,
+    _token: String,
+    _configuration_version: i64,
     authority_actor: String,
-    authority_basis_digest: String,
-    activation_digest: String,
-    path_digest: String,
+    _authority_basis_digest: String,
+    _activation_digest: String,
+    _path_digest: String,
 }
 
 enum ValidatedTargetOutcome {
@@ -322,10 +321,8 @@ enum ValidatedTargetOutcome {
         _receipt: crate::jobs::ResultArtifact,
     },
     Failed {
-        #[allow(dead_code)]
-        failure: SourceSyncFailure,
-        #[allow(dead_code)]
-        code: String,
+        _failure: SourceSyncFailure,
+        _code: String,
     },
     NotRun,
     ReconciliationRequired {
@@ -729,82 +726,80 @@ fn validate_target_in_basis(
         "Invalid Sync acknowledgement state"
     );
     ensure!(claim_generation >= 0, "Invalid Sync claim generation");
-    let capture_values = [
-        parent_generation.is_some(),
-        worker.is_some(),
-        fence_digest.is_some(),
-        incarnation.is_some(),
-        token.is_some(),
-        configuration_version.is_some(),
-        authority_actor.is_some(),
-        authority_basis_digest.is_some(),
-        activation_digest.is_some(),
-        path_digest.is_some(),
-    ];
-    let capture = if capture_values.iter().any(|present| *present) {
-        ensure!(
-            capture_values.iter().all(|present| *present),
-            "Sync producer capture incomplete"
-        );
-        let parent_generation = parent_generation.expect("complete capture");
-        let worker = worker.expect("complete capture");
-        let fence_digest = fence_digest.expect("complete capture");
-        let incarnation = incarnation.expect("complete capture");
-        let token = token.expect("complete capture");
-        let configuration_version = configuration_version.expect("complete capture");
-        let authority_actor = authority_actor.expect("complete capture");
-        let authority_basis_digest = authority_basis_digest.expect("complete capture");
-        let activation_digest = activation_digest.expect("complete capture");
-        let path_digest = path_digest.expect("complete capture");
-        ensure!(
-            claim_generation > 0 && parent_generation > 0,
-            "Invalid Sync producer generation"
-        );
-        ensure!(
-            !worker.is_empty() && !authority_actor.is_empty(),
-            "Invalid Sync producer identity"
-        );
-        ensure!(
-            valid_digest(&fence_digest),
-            "Invalid Sync attempt fence digest"
-        );
-        ensure!(
-            valid_digest(&incarnation),
-            "Invalid Sync reservation incarnation"
-        );
-        ensure!(
-            valid_digest(&authority_basis_digest),
-            "Invalid Sync authority digest"
-        );
-        ensure!(
-            valid_digest(&activation_digest),
-            "Invalid Sync activation digest"
-        );
-        ensure!(valid_digest(&path_digest), "Invalid Sync path digest");
-        ensure!(
-            configuration_version > 0,
-            "Invalid Sync configuration version"
-        );
-        let parsed_token = u64::from_str_radix(&token, 16)?;
-        ensure!(
-            token == token_text(parsed_token)?,
-            "Invalid Sync reservation token"
-        );
-        Some(ProducerCapture {
-            claim_generation,
-            parent_generation,
-            worker,
-            fence_digest,
-            incarnation,
-            token,
-            configuration_version,
-            authority_actor,
-            authority_basis_digest,
-            activation_digest,
-            path_digest,
-        })
-    } else {
-        None
+    let capture = match (
+        parent_generation,
+        worker,
+        fence_digest,
+        incarnation,
+        token,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_digest,
+        path_digest,
+    ) {
+        (None, None, None, None, None, None, None, None, None, None) => None,
+        (
+            Some(parent_generation),
+            Some(worker),
+            Some(fence_digest),
+            Some(incarnation),
+            Some(token),
+            Some(configuration_version),
+            Some(authority_actor),
+            Some(authority_basis_digest),
+            Some(activation_digest),
+            Some(path_digest),
+        ) => {
+            ensure!(
+                claim_generation > 0 && parent_generation > 0,
+                "Invalid Sync producer generation"
+            );
+            ensure!(
+                !worker.is_empty() && !authority_actor.is_empty(),
+                "Invalid Sync producer identity"
+            );
+            ensure!(
+                valid_digest(&fence_digest),
+                "Invalid Sync attempt fence digest"
+            );
+            ensure!(
+                valid_digest(&incarnation),
+                "Invalid Sync reservation incarnation"
+            );
+            ensure!(
+                valid_digest(&authority_basis_digest),
+                "Invalid Sync authority digest"
+            );
+            ensure!(
+                valid_digest(&activation_digest),
+                "Invalid Sync activation digest"
+            );
+            ensure!(valid_digest(&path_digest), "Invalid Sync path digest");
+            ensure!(
+                configuration_version > 0,
+                "Invalid Sync configuration version"
+            );
+            let parsed_token = u64::from_str_radix(&token, 16)?;
+            ensure!(
+                token == token_text(parsed_token)?,
+                "Invalid Sync reservation token"
+            );
+            Some(ProducerCapture {
+                _claim_generation: claim_generation,
+                _parent_generation: parent_generation,
+                _worker: worker,
+                _fence_digest: fence_digest,
+                _incarnation: incarnation,
+                _token: token,
+                _configuration_version: configuration_version,
+                authority_actor,
+                _authority_basis_digest: authority_basis_digest,
+                _activation_digest: activation_digest,
+                _path_digest: path_digest,
+            })
+        }
+        _ => return Err(anyhow!("Sync producer capture incomplete")),
     };
     let receipt_values = [
         receipt_id.is_some(),
@@ -932,8 +927,8 @@ fn validate_target_in_basis(
                 _ => return Err(anyhow!("Invalid Sync failure code")),
             }
             ValidatedTargetOutcome::Failed {
-                failure: failure()?,
-                code,
+                _failure: failure()?,
+                _code: code,
             }
         }
         "not_run" => {

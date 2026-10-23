@@ -844,8 +844,11 @@ GRE-784 adds `pp_core::uploads::SourceImports` behind `desktop_rebuild`. `Source
 
 GRE-785 extends that client with captured preparation. `SourceImports::new` also opens a policy-aware import worker. `preflight_capture` measures stored bytes under `repos` and returns storage's immutable preflight. `admit_captured` admits a `PreparedCapturedAdmission` once per key. `prepare_frozen_claim` inspects a retained frozen capture, correlates its manifest and inventory with the journal, and claims only an exact admitted match that still has a current Source proof. Manifest/journal mismatch and a missing Source refuse with journal rows and non-database files unchanged. The client still does not copy retained inputs into owned import directories (GRE-786). No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
 
+GRE-786 adds the input-copy stage. `write_retained_inputs` takes a claimed frozen capture and copies its retained files into `repos/.pp-imports/{job_id}` through directory capabilities with `O_NOFOLLOW` and `O_EXCL`. Case-folded path collisions are rejected before any destination file is opened. An existing destination operation directory is refused without overwriting. On success the journal advances to `OwnedInputReady` and the frozen capture is removed. The client still does not publish or activate (GRE-787). No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
+
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_client
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_files
 ```
 
 ### D6 native-secret migration
@@ -1671,8 +1674,8 @@ npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manife
 ```
 
 Storage commands landed without HTTP. GRE-801 registers gated ReadKit on the
-Build router (`docs/gre-801-manifest-http.md`). SaveKit and ReadBuilder HTTP
-remain GRE-802 / GRE-803.
+Build router (`docs/gre-801-manifest-http.md`). GRE-802 registers gated SaveKit
+(`docs/gre-802-manifest-http.md`). ReadBuilder HTTP remains GRE-803.
 
 ## D11 required units (GRE-606)
 
