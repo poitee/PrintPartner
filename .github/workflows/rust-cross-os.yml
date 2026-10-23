@@ -243,8 +243,8 @@ jobs:
           tar -tf desktop-release-assets.tar | grep -Fx "web/apps/server/dist/${server_release}/desktop-resolution.js"
           tar -tf desktop-release-assets.tar | grep -Fx 'web/packages/contracts/dist/current'
           tar -tf desktop-release-assets.tar | grep -Fx 'web/packages/domain/dist/current'
-          tar -tf desktop-release-assets.tar | grep -F "web/packages/contracts/dist/${contracts_release}/" | head -n 1 | grep -q .
-          tar -tf desktop-release-assets.tar | grep -F "web/packages/domain/dist/${domain_release}/" | head -n 1 | grep -q .
+          tar -tf desktop-release-assets.tar | grep -qF "web/packages/contracts/dist/${contracts_release}/"
+          tar -tf desktop-release-assets.tar | grep -qF "web/packages/domain/dist/${domain_release}/"
           tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/web/dist/desktop-build.json'
       - name: Upload desktop release assets
         if: ${{ !cancelled() && steps.pack-assets.outcome == 'success' }}
