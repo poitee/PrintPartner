@@ -464,9 +464,12 @@ impl ReadServer {
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let config = DraftHttpConfig::from_startup(&origin, tenant, flag).unwrap();
         let client = owner.working_drafts_with_policy(policy()).unwrap();
+        let auth = owner
+            .rebuild_auth_with_policy(policy(), Default::default())
+            .unwrap();
         let router = match hold {
-            Some(hold) => draft_router_with_hold(config, client, hold),
-            None => draft_router(config, client),
+            Some(hold) => draft_router_with_hold(config, client, auth, hold),
+            None => draft_router(config, client, auth),
         };
         let task = tokio::spawn(async move {
             axum::serve(
@@ -628,7 +631,7 @@ async fn missing_resources_cross_tenant_reads_and_invalid_ids_are_hidden() {
 }
 
 #[tokio::test]
-async fn api_keys_read_the_routed_tenant_without_recording_use() {
+async fn api_keys_record_use_and_reject_foreign_or_revoked() {
     let server = ReadServer::start(Some("true"), "default").await;
     let (key_id, secret) = create_key(&server).await;
     let last_used = || {
@@ -641,6 +644,15 @@ async fn api_keys_read_the_routed_tenant_without_recording_use() {
             )
             .unwrap()
     };
+    let clear_last_used = || {
+        server
+            .sql()
+            .execute(
+                "UPDATE app_settings SET value=json_set(value,'$[0].lastUsedAt',NULL) WHERE tenant_id='default' AND key='api_keys_v1'",
+                [],
+            )
+            .unwrap();
+    };
     assert_eq!(last_used(), None);
     let bearer = server
         .client
@@ -648,13 +660,15 @@ async fn api_keys_read_the_routed_tenant_without_recording_use() {
         .header("Authorization", format!("Bearer {secret}"))
         .header("x-tenant-id", "foreign");
     assert_eq!(json_reply(bearer, 200).await["drafts"][1], open_draft());
+    assert!(last_used().is_some());
+    clear_last_used();
     assert_eq!(last_used(), None);
     let custom = server
         .client
         .get(format!("{}/api/v2/plans/1/drafts/2", server.origin))
         .header("x-print-partner-api-key", &secret);
     assert_eq!(json_reply(custom, 200).await["draft"], open_draft());
-    assert_eq!(last_used(), None);
+    assert!(last_used().is_some());
     let auth = server
         .owner
         .rebuild_auth_with_policy(policy(), Default::default())
