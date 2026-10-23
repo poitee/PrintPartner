@@ -5,17 +5,18 @@ use crate::loopback::{
 use anyhow::Result;
 use axum::{
     Router,
+    body::to_bytes,
     extract::{Path, State},
     http::{Method, StatusCode, header},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
 };
 use pp_storage::{
     auth::AuthFailure,
     build_graph::{
         BuildCommand, BuildGraphClient, BuildOutcome, Failure as BuildFailure, PositiveId,
-        wire::profile_summary,
+        wire::{CreateBuildRequest, layer, profile_summary},
     },
 };
 use serde_json::json;
@@ -27,12 +28,15 @@ use std::{
     time::Duration,
 };
 
+const DEFAULT_BODY_LIMIT: usize = 65_536;
+
 #[derive(Clone)]
 pub struct BuildHttpConfig {
     origin: String,
     host: String,
     api_key_tenant: String,
     enabled: bool,
+    body_limit: usize,
     wait: Duration,
 }
 
@@ -54,6 +58,7 @@ impl BuildHttpConfig {
             host: listener.host,
             api_key_tenant: api_key_tenant.into(),
             enabled: rebuild_flag_enabled(flag),
+            body_limit: DEFAULT_BODY_LIMIT,
             wait: Duration::from_millis(100),
         })
     }
@@ -61,6 +66,15 @@ impl BuildHttpConfig {
     pub fn with_wait(mut self, wait: Duration) -> Result<Self> {
         anyhow::ensure!(wait <= self.wait, "Build HTTP wait may only be reduced");
         self.wait = wait;
+        Ok(self)
+    }
+
+    pub fn with_body_limit(mut self, body_limit: usize) -> Result<Self> {
+        anyhow::ensure!(
+            (1..=self.body_limit).contains(&body_limit),
+            "Build HTTP body limit may only be reduced"
+        );
+        self.body_limit = body_limit;
         Ok(self)
     }
 }
@@ -88,8 +102,9 @@ impl Drop for Cancellation {
     }
 }
 
-/// Mounts Plan list/detail GET+HEAD at `/`, `/api/v1`, and `/api/v2` when
-/// `PP_DESKTOP_REBUILD` was exactly `1` or `true`. Otherwise mounts nothing.
+/// Mounts Plan list/detail GET+HEAD and create/delete at `/`, `/api/v1`, and
+/// `/api/v2` when `PP_DESKTOP_REBUILD` was exactly `1` or `true`. Otherwise
+/// mounts nothing.
 pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -101,8 +116,8 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
         waiters: Arc::new(tokio::sync::Semaphore::new(64)),
     };
     let routes = Router::new()
-        .route("/plans", get(list))
-        .route("/plans/{id}", get(detail));
+        .route("/plans", get(list).post(create))
+        .route("/plans/{id}", get(detail).delete(remove));
     Router::new()
         .merge(routes.clone())
         .nest("/api/v1", routes.clone())
@@ -149,14 +164,59 @@ async fn detail(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Response {
-    let Some(build) = id
-        .parse::<u64>()
-        .ok()
-        .and_then(|value| PositiveId::new(value).ok())
-    else {
+    let Some(build) = parse_build_id(&id) else {
         return failure(StatusCode::BAD_REQUEST, "Request is invalid");
     };
     execute(app, request, BuildCommand::Read { build }).await
+}
+
+async fn create(State(app): State<App>, request: axum::extract::Request) -> Response {
+    let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+    let limit = app.config.body_limit;
+    let bytes = match to_bytes(request.into_body(), limit).await {
+        Ok(bytes) => bytes,
+        Err(_) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "Request body too large"),
+    };
+    let body: CreateBuildRequest = match serde_json::from_slice(&bytes) {
+        Ok(body) => body,
+        Err(error) => {
+            let message = error.to_string();
+            let detail = ["Profile name is required", "Profile name is too long"]
+                .into_iter()
+                .find(|known| message.contains(known))
+                .unwrap_or("Request is invalid");
+            return failure(StatusCode::BAD_REQUEST, detail);
+        }
+    };
+    run(
+        app,
+        presented,
+        Method::POST,
+        BuildCommand::Create {
+            name: body.name,
+            base_source: body.base_project_id,
+        },
+    )
+    .await
+}
+
+async fn remove(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = parse_build_id(&id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    execute(app, request, BuildCommand::Delete { build }).await
+}
+
+fn parse_build_id(id: &str) -> Option<PositiveId> {
+    id.parse::<u64>()
+        .ok()
+        .and_then(|value| PositiveId::new(value).ok())
 }
 
 async fn execute(app: App, request: axum::extract::Request, command: BuildCommand) -> Response {
@@ -164,6 +224,15 @@ async fn execute(app: App, request: axum::extract::Request, command: BuildComman
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     let method = request.method().clone();
+    run(app, presented, method, command).await
+}
+
+async fn run(
+    app: App,
+    presented: PresentedCredential,
+    method: Method,
+    command: BuildCommand,
+) -> Response {
     let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -201,7 +270,26 @@ fn present(method: &Method, outcome: BuildOutcome) -> Response {
         BuildOutcome::Read { profile: value } => {
             json_response(StatusCode::OK, &profile_summary(*value), head)
         }
+        BuildOutcome::Created {
+            profile: value,
+            layers,
+        } => {
+            let mut body = match serde_json::to_value(profile_summary(*value)) {
+                Ok(value) => value,
+                Err(_) => return encode_unavailable(),
+            };
+            body["layers"] = json!(layers.into_iter().map(layer).collect::<Vec<_>>());
+            json_response(StatusCode::OK, &body, false)
+        }
+        BuildOutcome::Deleted if *method == Method::DELETE => {
+            StatusCode::NO_CONTENT.into_response()
+        }
         BuildOutcome::MissingBuild => failure(StatusCode::NOT_FOUND, "Profile not found"),
+        BuildOutcome::InvalidBaseSource => failure(StatusCode::BAD_REQUEST, "Project not found"),
+        BuildOutcome::DuplicateName { name } => failure(
+            StatusCode::BAD_REQUEST,
+            &format!("Profile already exists: {name}"),
+        ),
         _ => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Build service unavailable",
