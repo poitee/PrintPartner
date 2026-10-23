@@ -22,9 +22,11 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 
 | Check name | Runner | Packages | Tests |
 |------------|--------|----------|-------|
-| `rust (linux)` | `ubuntu-latest` | The whole workspace | All |
+| `rust (linux)` | Aggregate over `rust (linux) build` plus rebuild partitions when selected | The whole workspace | All |
 | `rust (macos)` | `macos-26` | The whole workspace | All except [macOS exclusions](#macos-exclusions) |
 | `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
+
+`rust (linux) build` uses `[self-hosted, linux, x64, pp-local]` for same-repository PRs, pushes to `main`, merge groups, and manual dispatch. The nightly schedule keeps `ubuntu-latest`.
 
 Each job runs these steps in order:
 
@@ -39,7 +41,9 @@ Each job runs these steps in order:
 9. `cargo test --doc`, with `desktop_rebuild` off. nextest does not run doctests.
 10. `cargo test --doc`, with `desktop_rebuild` on.
 
-On self-hosted Linux pull requests, step 8 (`nextest` with `desktop_rebuild` on) is skipped so the long rebuild-on suite does not saturate `pp-local` runners. Windows PRs (including self-hosted `pp-local-win`) and hosted Linux PRs still run step 8. Steps 6 and 10 still run on Linux and Windows PRs; macOS PRs skip steps 6, 8 and 10 as before. Non-PR runs keep both feature states on every OS. Same-repo Linux PRs therefore first execute rebuild-on behavior tests (including `pp-api` suites excluded from the Windows job) on `push` to `main`; this repo has no merge queue.
+On self-hosted Linux pull requests, step 8 (`nextest` with `desktop_rebuild` on) is skipped so the long rebuild-on suite does not saturate `pp-local` runners. Windows PRs (including self-hosted `pp-local-win`) and hosted Linux PRs still run step 8. Steps 6 and 10 still run on Linux and Windows PRs; macOS PRs skip steps 6, 8 and 10 as before.
+
+On `push` to `main`, `merge_group`, and `workflow_dispatch`, Linux replaces the in-job step 8 with a nextest archive built once on `pp-local`, then three `rust (linux) rebuild m/3` jobs that run `cargo nextest run --archive-file … --partition slice:m/3` on the three fleet Linux slots. The required check `rust (linux)` is an aggregate that needs the Linux build and those partitions (partitions are skipped on PRs and on the nightly schedule). The schedule keeps the monolithic in-job step 8 on `ubuntu-latest`. PRs never enable rebuild-on nextest on `pp-local`.
 
 The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
 
@@ -177,8 +181,10 @@ because that action's post-job cleanup deletes registry source directories that
 another container may still be compiling. Hosted runners, macOS and Windows keep
 the action cache. Each job's target directory remains in its own workspace.
 
-Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
-manual dispatches and merge groups also keep their existing hosted runners.
+Fork PRs use each job's existing GitHub-hosted label. Schedules and releases keep
+their existing hosted runners. Linux Rust on pushes to `main`, merge groups, and
+manual dispatches uses the `pp-local` fleet so desktop_rebuild nextest can archive
+once and partition across the three slots; other non-PR workflows stay hosted.
 Docker image jobs, service-container jobs and cargo-deny stay hosted because the
 Linux runner containers have no Docker socket. Selector and result-only jobs stay
 hosted. WebKit STL smoke uses the Linux fleet after a fresh-image proof rendered
