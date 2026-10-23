@@ -96,15 +96,13 @@ pub(super) fn present(method: &Method, outcome: ManifestOptionsOutcome) -> Respo
     match outcome {
         success @ (ManifestOptionsOutcome::Kit { .. }
         | ManifestOptionsOutcome::Saved { .. }
-        | ManifestOptionsOutcome::Builder(_)) => {
-            match success.into_success_body() {
-                Ok(body) => bytes_response(StatusCode::OK, body.into_bytes(), head),
-                Err(_) => failure(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Build service unavailable",
-                ),
-            }
-        }
+        | ManifestOptionsOutcome::Builder(_)) => match success.into_success_body() {
+            Ok(body) => bytes_response(StatusCode::OK, body.into_bytes(), head),
+            Err(_) => failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Build service unavailable",
+            ),
+        },
         ManifestOptionsOutcome::MissingBuild => failure(StatusCode::NOT_FOUND, "Profile not found"),
         ManifestOptionsOutcome::InvalidInput { detail } => bytes_response(
             StatusCode::BAD_REQUEST,
