@@ -795,7 +795,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     ]);
 
     await act(async () => {
-      await hook.result.current.preparePlan();
+      await hook.result.current.retryPlanSave();
     });
     expect(savePlanChoices).toHaveBeenCalledTimes(2);
     expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1]).toEqual(originalRequest);
@@ -819,11 +819,33 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(retainedKey).toEqual(expect.any(String));
 
     await act(async () => {
-      await hook.result.current.preparePlan();
+      await hook.result.current.retryPlanSave();
     });
     expect(savePlanChoices).toHaveBeenCalledTimes(2);
     expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);
     expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("preparePlan_does_not_resend_definitive_failed_ordinary_save", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(definitive);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await expect(hook.result.current.preparePlan()).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.draftError).toBe("Quantity is no longer valid");
   });
 
   it("failed_save_definitive_apply_manifest_still_prepares", async () => {
@@ -888,7 +910,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(retainedKey).toEqual(expect.any(String));
 
     await act(async () => {
-      await hook.result.current.preparePlan();
+      await hook.result.current.retryPlanSave();
     });
     expect(savePlanChoices).toHaveBeenCalledTimes(3);
     expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);

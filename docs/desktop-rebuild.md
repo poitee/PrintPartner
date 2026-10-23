@@ -626,6 +626,21 @@ cargo nextest run -p pp-storage --manifest-path rust/Cargo.toml --locked --featu
   -E 'binary(working_draft_save)'
 ```
 
+### D29 failed ordinary-Save intent (client)
+
+GRE-811 retains an immutable failed ordinary-Save command (payload and
+idempotency key) in `PlanWorkspaceContext` for deliberate retry. GRE-812 keeps
+that intent per Plan across Build navigation: switching Plans does not apply one
+Plan's failed intent to another, and ordinary `preparePlan` / navigation does
+not automatically resend a definitive rejection. Deliberate Retry uses
+`retryPlanSave`. Web-only; no new Rust `desktop_rebuild` surface. Focused proofs:
+`failed_save_survives_navigation_without_resend`,
+`failed_save_is_isolated_by_plan` in `PlanSelection.integration.test.tsx`.
+
+```sh
+npm run test -w @print-partner/web -- src/context/PlanSelection.integration.test.tsx src/context/PlanWorkspaceContext.test.tsx
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
