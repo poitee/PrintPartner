@@ -758,6 +758,7 @@ impl Declarations {
             "tool.get_kit_catalog",
             "tool.analyze_build_request",
             "tool.get_build_recipe",
+            "tool.get_build_workflow",
             "tool.get_plan_option_groups",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
