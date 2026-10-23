@@ -7,10 +7,10 @@ routes answer 404 and do not open the build graph. Create and delete are
 documented in `docs/gre-792-builds-http.md`. Layer list and touch are
 `docs/gre-793-builds-http.md`. `GET`/`HEAD` kit-manifest ReadKit is GRE-801
 (`docs/gre-801-manifest-http.md`); SaveKit `PUT` is GRE-802
-(`docs/gre-802-manifest-http.md`). Layer mutate is `docs/gre-794-builds-http.md`.
-Job list HTTP is `docs/gre-795-jobs-http.md`. ReadBuilder stays unregistered
-(later D25 children). The desktop gateway does not mount this router in this
-slice.
+(`docs/gre-802-manifest-http.md`); plan-manifest-builder ReadBuilder is GRE-803
+(`docs/gre-803-manifest-http.md`). Layer mutate is `docs/gre-794-builds-http.md`.
+Job list HTTP is `docs/gre-795-jobs-http.md`. The desktop gateway does not mount this
+router in this slice.
 
 Admission (loopback Host/Origin, principal, forwarded-header refusal) is shared
 with drafts through the crate-private `loopback` module.
