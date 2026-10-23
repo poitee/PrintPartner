@@ -17,8 +17,10 @@ use std::{
 #[cfg(test)]
 mod tests;
 
+mod capture_manifest;
 mod captured;
 
+pub use capture_manifest::{CaptureManifestInventory, inspect_capture_manifest};
 pub use captured::{CaptureId, CapturedPayloadV1};
 
 const COLUMNS: &str = include_str!("remote_sources/columns38.sql");
@@ -389,6 +391,25 @@ pub struct AdmissionLimits {
     pub reserved_bytes: u64,
     pub max_input_bytes: u64,
     pub max_prepared_bytes: u64,
+}
+
+fn validate_admission_limits(limits: AdmissionLimits, quota: Option<u64>) -> Result<()> {
+    ensure!(
+        (1..=256 * 1024 * 1024).contains(&limits.max_input_bytes)
+            && (1..=1024 * 1024 * 1024).contains(&limits.max_prepared_bytes),
+        "Invalid import limits"
+    );
+    let minimum = limits
+        .max_input_bytes
+        .checked_add(3 * limits.max_prepared_bytes)
+        .and_then(|minimum| minimum.checked_add(16 * 1024 * 1024))
+        .ok_or_else(|| anyhow!("Quota overflow"))?;
+    ensure!(
+        limits.reserved_bytes >= minimum
+            && quota.is_none_or(|quota| limits.reserved_bytes <= quota),
+        "Import quota exceeded"
+    );
+    Ok(())
 }
 
 #[derive(Serialize)]
