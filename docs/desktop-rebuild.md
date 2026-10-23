@@ -89,7 +89,7 @@ Slices land in this order. Linear tracks each one under GRE-595. A slice is one 
 | D21 | GRE-616 | pp-storage read_model context and graph |
 | D22 | GRE-618 | pp-storage read_model workflow and views |
 | D23 | GRE-617 | pp-api auth HTTP |
-| D24 | GRE-619 | pp-api drafts HTTP |
+| D24 | GRE-619 | pp-api drafts HTTP (list/read/edit landed; abandon GRE-988) |
 | D25 | GRE-620 | pp-api builds HTTP and jobs |
 | D26 | GRE-621 | Web and server wiring behind the flag |
 
@@ -1678,8 +1678,10 @@ checked before the cap.
   with no selection, the retry selects the saved reconciliation again. A retry
   with a different payload returns `idempotency_conflict`.
 
-The operation has no HTTP route. GRE-619 adds it. The local `Decision` and
-request types exist because `pp-storage` has no dependency on `pp-contracts`.
+The operation has no HTTP route yet. D24 (GRE-619) mounts draft list, read, and
+part-edit HTTP only; Required-unit selection stays unregistered. The local
+`Decision` and request types exist because `pp-storage` has no dependency on
+`pp-contracts`.
 
 Tests open Node-written databases in
 `rust/crates/pp-storage/tests/fixtures/required-units/`. Each operation test
@@ -2190,6 +2192,70 @@ Password and session policy stay unchanged. The focused suite requires
 ```sh
 node fixtures/parity/auth-password-change/generate.mjs --check
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test auth_password_change_parity
+```
+
+### D24 drafts HTTP, GRE-619
+
+`pp-api` `drafts/http.rs` compiles with `desktop_rebuild`.
+`DraftHttpConfig::new` enables the router only when
+`PP_DESKTOP_REBUILD` is exactly `1` or `true` at process start. Otherwise
+`draft_router` and `admit_draft_routes` mount nothing and every draft path
+answers 404.
+
+Landed replacement slices for the superseded #635 monolith:
+
+| Slice | Linear | Scope |
+| --- | --- | --- |
+| a1 | GRE-939 | Loopback Host/Origin admission and credential presentation ([#969](https://github.com/poitee/PrintPartner/pull/969)) |
+| a2 | GRE-944 | Request target, body size, and body-read timeout bounds |
+| b | GRE-940 | List and workspace reads |
+| c | GRE-941 | API-key `ResolveKey` so `lastUsedAt` commits; foreign-tenant keys 401 |
+| d | GRE-942 | Part edits with Node conflict shapes |
+| e | GRE-988 | Abandon (deferred; needs the storage lifecycle token) |
+
+With both gates on, `draft_router` serves these paths at the root and
+`/api/v2`:
+
+| Method | Path | Storage |
+| --- | --- | --- |
+| GET | `/plans/{id}/drafts` | `WorkingDraftClient` list |
+| GET | `/plans/{id}/drafts/{draft_id}` | workspace read |
+| PATCH | `/plans/{id}/drafts/{draft_id}/parts` | `edit` with typed `EditRequest` |
+
+`admit_draft_routes` buffers each body before routing, disables Axum's 2 MiB
+default, and applies the guard's limits: 16 KiB request target, 1 MiB for
+reads, 8 MiB for PATCH, 5 s body timeout, 64 admission permits. Loopback
+transport is required. Host must match the configured listener; forwarded and
+`x-forwarded-*` headers are refused. Session-cookie PATCH needs a matching
+Origin; GETs and API-key PATCH may omit it, but any Origin sent must match.
+A foreign or `null` Origin, or `sec-fetch-site: cross-site`, returns 403.
+Ambiguous credentials return 401, or 403 on an Origin-less PATCH. Exactly one
+of session cookie, `Authorization: Bearer`, or `x-print-partner-api-key` is
+accepted. API keys use the configured tenant, not a request header.
+
+List returns `{ profile_id, drafts: [{ draft_id, state, lifecycle_version,
+snapshot_digest, base }] }`. Workspace returns the storage workspace JSON.
+Missing profile or draft returns 404 with Node `detail` and `code`
+(`profile_not_found` / `draft_not_found`).
+
+PATCH bodies are typed `EditRequest`. Invalid JSON, unknown fields, empty
+decisions, zero part IDs, and out-of-range quantities return 400
+`invalid_request` before any mutation. Successful edits return 200 with the
+workspace. Conflicts match Node `plan-drafts.ts`: 409 is `{ code }` plus
+`workspace` only when one exists (`draft_changed`, `base_changed`,
+`not_open`, `accepted_baseline_required`, `idempotency_conflict`) with no
+synthetic conflict `detail`; 422 `domain_error` is `{ code }` only. 404 and
+503 keep their Node `detail`. Server failures use
+`{ detail: "Plan draft update failed", code: "internal_error" }`.
+
+`POST /plans/{id}/drafts/{draft_id}/abandon` stays unregistered. Storage
+already implements abandon behind the lifecycle version token; the HTTP
+adapter is [GRE-988](https://linear.app/greetz/issue/GRE-988). The desktop
+gateway does not mount this router; D26 does.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --lib
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --lib drafts::http::tests -- --test-threads=2
 ```
 
 ### D30 catalog HTTP reads, GRE-804
