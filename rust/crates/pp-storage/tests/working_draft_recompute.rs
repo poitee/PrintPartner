@@ -810,6 +810,8 @@ fn cap_sized_assignment_selection_recomputes_with_default_limits() {
     }
 }
 
+/// Cap-sized carry cancel: assert `Cancelled` and unchanged rows. No wall-clock
+/// latency bound — a prior release `<50 ms` sweep had limited headroom under load.
 #[test]
 fn cancellation_before_recompute_of_a_cap_sized_selection_writes_nothing() {
     let (f, owner) = large_carried_draft(11);

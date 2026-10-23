@@ -517,14 +517,19 @@ A recompute runs in three steps on the writer thread:
    assignment ceiling.
    This is a work bound; elapsed time depends on the machine and scheduler.
    Refusing two drafts with 200,000 assignments took 2,381.8 ms in one run.
+   Carry loading and budget refusal hold the writer lock for that whole
+   duration. GRE-706 must size the caller's wait and UX for multi-second
+   lock occupancy; there is no elapsed-time guarantee.
    Each cost query streams indexed rows and sums individual column lengths
-   without concatenation, aggregation or sorting. Both the cost scan and the
-   loader check cancellation between rows. JSON parsing and serialization
-   also check cancellation. Large JSON arrays retain raw rows and validate
-   one at a time, so cancelling does not free a whole parsed object tree.
-   The release test sweeps cancellation offsets on 200,000 assignments; the
-   debug test uses 20,000 assignments. SQLite hooks remain a test-only
-   dependency. A limit or cancellation refusal rolls the transaction back.
+   without concatenation, aggregation or sorting. The open-draft ID list,
+   the cost scan, and the loader all check cancellation between rows. JSON
+   parsing and serialization also check cancellation. Large JSON arrays
+   retain raw rows and validate one at a time, so cancelling does not free
+   a whole parsed object tree. Cap-sized carry tests assert cancellation
+   and unchanged rows; they do not bound wall-clock latency (a prior
+   `<50 ms` release sweep had little headroom under load). SQLite hooks
+   remain a test-only dependency. A limit or cancellation refusal rolls
+   the transaction back.
    It abandons
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
@@ -575,7 +580,7 @@ node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development ru
 cmp /persist/tmp/recompute-first.jsonl /persist/tmp/recompute-second.jsonl
 cmp /persist/tmp/recompute-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.jsonl
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute --test-threads=2
-cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(two_hundred_thousand_assignments) | test(multiple_maximum_drafts) | test(cancellation_inside_a_large)'
+cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(cap_sized_assignment_selection) | test(two_cap_sized_drafts) | test(cancellation_before_recompute_of_a_cap_sized)'
 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server --large-carry
 python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 ```
