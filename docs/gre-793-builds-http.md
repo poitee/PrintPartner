@@ -4,8 +4,9 @@ With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 `/plans/{id}/layers` and `POST /plans/{id}/touch` mount at the root, `/api/v1`,
 and `/api/v2` only when the stored `PP_DESKTOP_REBUILD` value is exactly `1` or
 `true`. Otherwise those routes answer 404. List/detail/create/delete remain as
-in GRE-791/GRE-792. Layer mutate (base/addon replace/detach), jobs, and
-kit/builder manifests stay unregistered (later D25 children).
+in GRE-791/GRE-792. Kit-manifest ReadKit is GRE-801
+(`docs/gre-801-manifest-http.md`). Layer mutate (base/addon replace/detach),
+jobs, SaveKit, and ReadBuilder stay unregistered (later D25 children).
 
 Admission matches GRE-791 (loopback Host/Origin, session cookie or API key with
 the configured tenant).

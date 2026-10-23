@@ -1280,11 +1280,23 @@ and either returns an exact prior operation (same actor and `intent_digest`) or
 writes one journal row, quota reservation, and supplied import job
 (`input_version` 2). Credential-path `admit` still refuses `Input::Captured`.
 A stale basis after preflight refuses without changing journal rows or
-non-database files. Correlation and resolved claims stay on GRE-772.
+non-database files.
+
+### D14 capture correlation and resolved claims
+
+GRE-772 adds `ImportClient::correlate_capture_manifest` and
+`ServerWorkerClient::claim_resolved_import` behind `desktop_rebuild`. Correlation
+reads the journal and durable jobs only: it returns `Absent`,
+`ExactAdmitted(ResolvedCapturedClaim)`, `ExactOwnedOrLater`, or
+`MismatchRepairRequired` without admitting or charging. A resolved claim is
+revalidated in the claim transaction against the admitted operation, inventory,
+captured job payload, and Source; a changed inventory or other mismatch refuses
+with `Captured import requires repair` and leaves queued job rows unchanged.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_correlation
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
@@ -1641,8 +1653,9 @@ JSON and generator pattern. Regenerate it from `web`:
 npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.mts apps/server > ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.json
 ```
 
-No HTTP route or runtime caller is added. GRE-644 still needs its HTTP slice
-with D25/GRE-620 build routes, including `PP_DESKTOP_REBUILD` admission.
+Storage commands landed without HTTP. GRE-801 registers gated ReadKit on the
+Build router (`docs/gre-801-manifest-http.md`). SaveKit and ReadBuilder HTTP
+remain GRE-802 / GRE-803.
 
 ## D11 required units (GRE-606)
 
@@ -1680,7 +1693,11 @@ queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
 The expansion loop also checks cancellation once per Part. There is no timing
-target.
+target. Unexpected transaction failures surface Node's
+`Plan draft update failed` on the client, with the source retained through
+`.context`, matching the publication client and Node's reconcile route.
+Authentication failures and admission outcomes (`Cancelled`, `QueueFull`,
+`Stopped`, `OutcomeUnknown`) stay typed and unwrapped.
 
 Selection refuses a draft before it expands assignments when the sum of part
 quantities is above 230. The error is "Reconciliation row limit exceeded".

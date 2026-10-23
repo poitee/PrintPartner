@@ -2074,3 +2074,318 @@ mod capture_admission {
         owner.shutdown().unwrap();
     }
 }
+
+mod capture_correlation {
+    use super::super::{
+        AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedPayloadV1, File, OwnedInput,
+        Phase, State, Target,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::{Credential, JobKind, PersistentState, ServerWorkerClient, WorkerAdmission},
+        tests::directory,
+    };
+    use rusqlite::Connection;
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }]
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    fn create_target(name: &str) -> Target {
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: name.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn worker(owner: &WriterOwner) -> ServerWorkerClient {
+        owner
+            .job_worker_with_policy(
+                policy(),
+                WorkerAdmission {
+                    kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                    total: 1,
+                    per_resource: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .unwrap()
+    }
+
+    const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
+    fn journal_snapshot(root: &std::path::Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        connection
+            .query_row(
+                "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||state||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,state,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state||char(9)||document,char(10)),'') FROM (SELECT id,kind,state,document FROM durable_jobs ORDER BY id))",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn capture_correlation_distinguishes_absent_match_conflict() {
+        let root = directory("capture-correlation-absent-match");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-correlate-key";
+        let capture_id = CaptureId::new("capture-correlate-id").unwrap();
+
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureCorrelate"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                capture_id.clone(),
+                key.into(),
+                payload.clone(),
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest.clone(), inventory.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::Absent
+        ));
+        let before_admit = journal_snapshot(&root);
+
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let after_admit = journal_snapshot(&root);
+        assert_ne!(before_admit, after_admit);
+
+        let matched = client
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
+            .unwrap();
+        assert!(matches!(
+            matched,
+            CaptureJournalCorrelation::ExactAdmitted(_)
+        ));
+        assert_eq!(journal_snapshot(&root), after_admit);
+        assert_eq!(admitted.input_version, 2);
+
+        let mut conflicted = inventory.clone();
+        conflicted[0].sha256 = "b".repeat(64);
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest, conflicted)
+                .unwrap(),
+            CaptureJournalCorrelation::MismatchRepairRequired
+        ));
+        assert_eq!(journal_snapshot(&root), after_admit);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn resolved_capture_claim_rejects_changed_inventory() {
+        let root = directory("capture-correlation-changed-inventory");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-claim-inventory";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureClaimInventory"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-claim-inventory-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+
+        let CaptureJournalCorrelation::ExactAdmitted(mut claim) = client
+            .correlate_capture_manifest(manifest, inventory)
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+        // Keep the journal valid so load→validate_operation succeeds; only the
+        // retained claim inventory diverges, forcing capture_claim_matches.
+        claim.inventory[0].sha256 = "c".repeat(64);
+
+        let before = journal_snapshot(&root);
+        let refused = worker(&owner)
+            .claim_resolved_import(claim)
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(refused, "Captured import requires repair");
+        assert_eq!(journal_snapshot(&root), before);
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn resolved_capture_claim_runs_admitted_job() {
+        let root = directory("capture-correlation-claim-success");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-claim-success";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureClaimSuccess"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-claim-success-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let CaptureJournalCorrelation::ExactAdmitted(claim) = client
+            .correlate_capture_manifest(manifest, inventory)
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+
+        let claimed = worker(&owner)
+            .claim_resolved_import(claim)
+            .unwrap()
+            .expect("valid resolved claim is claimable");
+        assert_eq!(claimed.job.job_id, admitted.job_id);
+        assert_eq!(claimed.job.state, PersistentState::Running);
+        assert!(claimed.source_work.is_some());
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_correlation_reports_exact_owned_or_later() {
+        let root = directory("capture-correlation-owned-or-later");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-owned-or-later";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureOwnedOrLater"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-owned-or-later-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let CaptureJournalCorrelation::ExactAdmitted(claim) = client
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+
+        let worker = worker(&owner);
+        let claimed = worker
+            .claim_resolved_import(claim)
+            .unwrap()
+            .expect("valid resolved claim is claimable");
+        let owned = worker
+            .import_phase(
+                &claimed.lease,
+                claimed.source_work.as_ref().unwrap(),
+                Phase::Owned(OwnedInput {
+                    locator: format!(".pp-imports/{}", admitted.job_id),
+                    digest: admitted.requested_digest.clone(),
+                    files: admitted.requested_files.clone(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(owned.state, State::OwnedInputReady);
+
+        let before = journal_snapshot(&root);
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest, inventory)
+                .unwrap(),
+            CaptureJournalCorrelation::ExactOwnedOrLater
+        ));
+        assert_eq!(journal_snapshot(&root), before);
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+}
