@@ -78,7 +78,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -3278,6 +3278,177 @@ it("traces get_build_recipe isolated workspace probes against its operation-wide
     }
     expect(JSON.parse(output.content)).toMatchObject({ plan_id: plan.id, plan_name: "Isolated recipe" });
     const observed = [...new Set(statements.map((sql) => recipeSelect(sql, "default", plan.id)))].sort();
+    expect(observed).toEqual(BUILD_RECIPE_TABLES);
+    for (const resource of observed) union.add(resource);
+    for (const resource of recipeFileResources([...candidates, ...shipped], [repos, workspace])) union.add(resource);
+    expect(observer.state.files.some(({ api }) => api === "readFileSync")).toBe(true);
+    expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
+    expect([...union].sort()).toEqual(BUILD_RECIPE_UNION);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+function comparePlansSelect(statement: unknown, tenantId: string, planIds: number[]): string {
+  const sql = z.string().parse(statement);
+  for (const planId of planIds) {
+    if (sql === `select "id" from "build_profiles" where ("build_profiles"."tenant_id" = '${tenantId}' and "build_profiles"."id" = ${planId}.0)`) {
+      return "table:build_profiles";
+    }
+    if (sql === `select "id", "tenant_id", "profile_id", "layer_order", "layer_type", "project_id" from "profile_layers" where "profile_layers"."profile_id" = ${planId}.0 order by "profile_layers"."layer_order" asc`) {
+      return "table:profile_layers";
+    }
+  }
+  return tableForObservedSelect(sql, tenantId);
+}
+
+it("traces compare_plans paired recipes, kit diffs, catalog and tenant isolation", async () => {
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  const catalogPaths = [...candidates, ...shipped];
+  const planA = repo.createProfile("Compare A", sourceId);
+  const planB = repo.createProfile("Compare B", sourceId);
+  repo.addAddonLayer(planB.id, userId);
+  const foreign = tenantStorage.run("other", () => {
+    const otherSource = repo
+      .createSource({ name: "ForeignCompareFixture", source_kind: "local", local_path: root })
+      .id;
+    return repo.createProfile("Foreign compare", otherSource);
+  });
+  repo.setSetting(`kit_manifest_${planA.id}`, JSON.stringify({ selections: { size: "small" }, include: [], exclude: [] }));
+  repo.setSetting(`kit_manifest_${planB.id}`, JSON.stringify({ selections: { size: "large" }, include: [], exclude: [] }));
+  fs.mkdirSync(join(dataDir, "manifests"), { recursive: true });
+  fs.writeFileSync(candidates[0]!, JSON.stringify({ version: 1, bases: {}, addon_categories: {}, stack_presets: {} }));
+  const union = new Set<string>();
+  async function trace({
+    input,
+    tables,
+    files = [["readFileSync", candidates[0]!, "utf8"]] as [string, ...unknown[]][],
+    tenantId = "default",
+    planIds,
+    repository = repo,
+  }: {
+    input: Record<string, unknown>;
+    tables: string[];
+    files?: [string, ...unknown[]][];
+    tenantId?: string;
+    planIds: number[];
+    repository?: AppRepository;
+  }) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      output = await tenantStorage.run(tenantId, () =>
+        invokeAssistantTool("compare_plans", input, { repo: repository }),
+      );
+    } finally {
+      observer.state.active = false;
+    }
+    const observed = [...new Set(statements.map((sql) => comparePlansSelect(sql, tenantId, planIds)))].sort();
+    expect(observed).toEqual(tables);
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+    for (const resource of observed) union.add(resource);
+    for (const resource of recipeFileResources(catalogPaths, [join(dataDir, "repos"), root, userRoot])) union.add(resource);
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    expect(await trace({ input: { plan_a_id: planA.id }, tables: [], files: [], planIds: [] })).toEqual({
+      error: "plan_a_id and plan_b_id required",
+    });
+    expect(await trace({ input: { plan_a_id: planA.id, plan_b_id: "x" }, tables: [], files: [], planIds: [] })).toEqual({
+      error: "plan_a_id and plan_b_id required",
+    });
+    expect(await trace({
+      input: { plan_a_id: planA.id, plan_b_id: 999999 },
+      tables: BUILD_RECIPE_TABLES,
+      files: [["readFileSync", candidates[0]!, "utf8"]],
+      planIds: [planA.id],
+    })).toEqual({ error: "Plan not found: 999999" });
+    const diff = await trace({
+      input: { plan_a_id: planA.id, plan_b_id: planB.id },
+      tables: BUILD_RECIPE_TABLES,
+      files: [
+        ["readFileSync", candidates[0]!, "utf8"],
+        ["readFileSync", candidates[0]!, "utf8"],
+      ],
+      planIds: [planA.id, planB.id],
+    });
+    expect(diff).toMatchObject({
+      plan_a: { id: planA.id, name: "Compare A" },
+      plan_b: { id: planB.id, name: "Compare B" },
+      base: { same: true },
+      addons: { only_b: ["UserLocal"] },
+      kit_selections: { changed: [{ key: "size" }] },
+    });
+    expect(await trace({
+      input: { plan_a_id: foreign.id, plan_b_id: planB.id },
+      tables: BUILD_RECIPE_TABLES,
+      files: [["readFileSync", candidates[0]!, "utf8"]],
+      planIds: [foreign.id, planB.id],
+      tenantId: "default",
+    })).toEqual({ error: "Plan not found: " + String(foreign.id) });
+    expect(await trace({
+      input: { plan_a_id: planA.id, plan_b_id: planB.id },
+      tables: ["table:build_profiles"],
+      files: [],
+      planIds: [planA.id, planB.id],
+      tenantId: "other",
+    })).toEqual({ error: "Plan not found: " + String(planA.id) });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect([...union].sort()).toEqual(["file:kit-catalog", ...BUILD_RECIPE_TABLES]);
+  expect(manifest.resources.reviewed.find((entry) => entry.operation === "tool.compare_plans")).toEqual({
+    operation: "tool.compare_plans",
+    resources: [
+      { kind: "table", name: "build_profiles" },
+      { kind: "table", name: "profile_layers" },
+      { kind: "table", name: "projects" },
+      { kind: "table", name: "source_docs" },
+      { kind: "table", name: "app_settings" },
+      { kind: "table", name: "plan_decisions" },
+      { kind: "file", name: "kit-catalog" },
+      { kind: "file", name: "source-workspace" },
+    ],
+  });
+});
+
+it("traces compare_plans isolated workspace probes against its operation-wide union", async () => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  fs.mkdirSync(join(dataDir, "manifests"), { recursive: true });
+  fs.writeFileSync(candidates[0]!, JSON.stringify({ version: 1, bases: {}, addon_categories: {}, stack_presets: {} }));
+  const isolated = new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, {
+    sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM,
+  });
+  const planA = repo.createProfile("Iso compare A", sourceId);
+  const planB = repo.createProfile("Iso compare B", sourceId);
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  const union = new Set<string>();
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      output = await tenantStorage.run("default", () =>
+        invokeAssistantTool("compare_plans", { plan_a_id: planA.id, plan_b_id: planB.id }, { repo: isolated }),
+      );
+    } finally {
+      observer.state.active = false;
+    }
+    expect(JSON.parse(output.content)).toMatchObject({
+      plan_a: { id: planA.id },
+      plan_b: { id: planB.id },
+    });
+    const observed = [...new Set(statements.map((sql) => comparePlansSelect(sql, "default", [planA.id, planB.id])))].sort();
     expect(observed).toEqual(BUILD_RECIPE_TABLES);
     for (const resource of observed) union.add(resource);
     for (const resource of recipeFileResources([...candidates, ...shipped], [repos, workspace])) union.add(resource);
