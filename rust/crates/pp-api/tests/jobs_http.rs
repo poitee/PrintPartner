@@ -319,11 +319,12 @@ async fn jobs_list_matches_node_filters() {
 
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
     let mut server = Server::spawn(
         bound,
         jobs_router(
             JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
-            owner.lock().unwrap().jobs(chosen).unwrap(),
+            jobs,
         ),
     )
     .await;
@@ -397,11 +398,12 @@ async fn jobs_list_flag_off_and_wrong_tenant_are_refused() {
     for flag in [None, Some(""), Some("0"), Some("false"), Some("TRUE")] {
         let bound = bind().await;
         let origin = format!("http://{}", bound.local_addr().unwrap());
+        let jobs = owner.lock().unwrap().jobs(policy()).unwrap();
         let mut server = Server::spawn(
             bound,
             jobs_router(
                 JobsHttpConfig::from_startup(&origin, "default", flag).unwrap(),
-                owner.lock().unwrap().jobs(policy()).unwrap(),
+                jobs,
             ),
         )
         .await;
@@ -462,11 +464,12 @@ async fn jobs_list_flag_off_and_wrong_tenant_are_refused() {
     let before_jobs = job_rows(&directory);
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
     let mut server = Server::spawn(
         bound,
         jobs_router(
             JobsHttpConfig::from_startup(&origin, "default", Some("true")).unwrap(),
-            owner.lock().unwrap().jobs(chosen).unwrap(),
+            jobs,
         ),
     )
     .await;
