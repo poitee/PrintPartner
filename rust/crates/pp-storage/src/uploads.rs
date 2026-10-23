@@ -417,6 +417,27 @@ fn validate_admission_limits(limits: AdmissionLimits, quota: Option<u64>) -> Res
     Ok(())
 }
 
+fn ensure_owner_import_quota(
+    tx: &Transaction<'_>,
+    disk_bytes: u64,
+    reserved_bytes: u64,
+    quota: u64,
+) -> Result<()> {
+    let pending: i64 = tx.query_row(
+        "SELECT COALESCE(SUM(reserved_bytes),0) FROM source_import_quota WHERE settled=0",
+        [],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        disk_bytes
+            .checked_add(u64::try_from(pending)?)
+            .and_then(|total| total.checked_add(reserved_bytes))
+            .is_some_and(|total| total <= quota),
+        "Owner import quota exceeded"
+    );
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct CaptureManifestBindingV1<'a> {
     manifest_version: u32,
@@ -782,6 +803,7 @@ pub(crate) enum Command {
         target: Target,
         payload: CapturedPayloadV1,
         limits: AdmissionLimits,
+        disk_bytes: u64,
         quota: u64,
     },
     Phase {
@@ -898,6 +920,9 @@ impl ImportClient {
         }
     }
 
+    /// Read `disk_bytes` the same way as [`Self::admit`]: measure under the
+    /// owner's repos root after reading [`Self::accounting_epoch`]. Preflight
+    /// does not write, so a stale epoch is not refused here.
     pub fn preflight_capture(
         &self,
         credential: jobs::Credential,
@@ -905,6 +930,7 @@ impl ImportClient {
         target: Target,
         payload: CapturedPayloadV1,
         limits: AdmissionLimits,
+        disk_bytes: u64,
     ) -> Result<PreflightedCapture> {
         match submit(
             &self.storage,
@@ -916,6 +942,7 @@ impl ImportClient {
                 target,
                 payload,
                 limits,
+                disk_bytes,
                 quota: self.quota,
             },
             &AtomicBool::new(false),
@@ -987,6 +1014,7 @@ pub(crate) fn preflight_capture_target(
     payload: &CapturedPayloadV1,
     limits: AdmissionLimits,
     quota: Option<u64>,
+    disk_bytes: u64,
 ) -> Result<Option<Box<Operation>>> {
     validate_admission_limits(limits, quota)?;
     ensure!(
@@ -1011,6 +1039,9 @@ pub(crate) fn preflight_capture_target(
         Ok(Some(Box::new(prior)))
     } else {
         validate_capture_target(tx, tenant, target)?;
+        if let Some(quota) = quota {
+            ensure_owner_import_quota(tx, disk_bytes, limits.reserved_bytes, quota)?;
+        }
         Ok(None)
     }
 }
@@ -1081,6 +1112,7 @@ pub(crate) fn execute(
             mut target,
             payload,
             limits,
+            disk_bytes,
             quota,
         } => {
             let (tenant, actor) = capture_actor(&tx, &credential, policy, &storage)?;
@@ -1093,6 +1125,7 @@ pub(crate) fn execute(
                 &payload,
                 limits,
                 Some(quota),
+                disk_bytes,
             )?;
             UploadsOutcome::Preflighted(PreflightedCapture {
                 credential,
@@ -1828,18 +1861,7 @@ fn admit(
         Target::Create { metadata } => catalog::validate_capture_create(tx, &tenant, metadata)?,
     }
     validate_limits(&request, quota)?;
-    let pending: i64 = tx.query_row(
-        "SELECT COALESCE(SUM(reserved_bytes),0) FROM source_import_quota WHERE settled=0",
-        [],
-        |row| row.get(0),
-    )?;
-    ensure!(
-        disk_bytes
-            .checked_add(u64::try_from(pending)?)
-            .and_then(|total| total.checked_add(request.reserved_bytes))
-            .is_some_and(|total| total <= quota),
-        "Owner import quota exceeded"
-    );
+    ensure_owner_import_quota(tx, disk_bytes, request.reserved_bytes, quota)?;
     let source_id = match request.target {
         Target::Existing { source_id } => source_id,
         Target::Create { metadata } => match catalog::run(

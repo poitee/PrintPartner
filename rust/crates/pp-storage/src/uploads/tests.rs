@@ -1448,7 +1448,8 @@ mod capture_manifest {
 
 mod capture_preflight {
     use super::super::{
-        Admission, AdmissionLimits, CapturedPayloadV1, File, Input, Target,
+        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
+        Operation, State, Target,
     };
     use crate::{
         Limits, WriterOwner,
@@ -1457,7 +1458,8 @@ mod capture_preflight {
         jobs::Credential,
         tests::directory,
     };
-    use rusqlite::Connection;
+    use rusqlite::{Connection, params};
+    use sha2::{Digest, Sha256};
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
 
@@ -1534,11 +1536,13 @@ mod capture_preflight {
         }
     }
 
+    const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
     #[test]
     fn capture_preflight_refuses_stale_target_or_quota() {
         let root = directory("capture-preflight-refuse");
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
-        let client = owner.imports(policy(), 16 * 1024 * 1024 * 1024).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
         let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
 
         let missing = client
@@ -1548,8 +1552,11 @@ mod capture_preflight {
                 Target::Existing { source_id: 9_999 },
                 payload.clone(),
                 limits(),
+                0,
             )
-            .err().unwrap().to_string();
+            .err()
+            .unwrap()
+            .to_string();
         assert!(
             missing.contains("Source not found") || missing.contains("not found"),
             "{missing}"
@@ -1562,14 +1569,18 @@ mod capture_preflight {
                 create_target("CaptureQuota"),
                 payload.clone(),
                 AdmissionLimits {
-                    reserved_bytes: 16 * 1024 * 1024 * 1024 + 1,
+                    reserved_bytes: QUOTA + 1,
                     ..limits()
                 },
+                0,
             )
-            .err().unwrap().to_string();
+            .err()
+            .unwrap()
+            .to_string();
         assert_eq!(over_quota, "Import quota exceeded");
 
         let cancelled = AtomicBool::new(false);
+        let reserved = limits().reserved_bytes;
         client
             .admit(
                 credential(&owner),
@@ -1579,7 +1590,7 @@ mod capture_preflight {
                     input: Input::Files {
                         paths: vec!["nested/part.stl".into()],
                     },
-                    reserved_bytes: limits().reserved_bytes,
+                    reserved_bytes: reserved,
                     max_input_bytes: limits().max_input_bytes,
                     max_prepared_bytes: limits().max_prepared_bytes,
                 },
@@ -1594,11 +1605,28 @@ mod capture_preflight {
                 credential(&owner),
                 "capture-supplied".into(),
                 create_target("CaptureConflict"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(conflict, "Import idempotency conflict");
+
+        let pending = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-pending".into(),
+                create_target("CapturePending"),
                 payload,
                 limits(),
+                QUOTA - 2 * reserved + 1,
             )
-            .err().unwrap().to_string();
-        assert_eq!(conflict, "Import idempotency conflict");
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(pending, "Owner import quota exceeded");
         owner.shutdown().unwrap();
     }
 
@@ -1606,7 +1634,7 @@ mod capture_preflight {
     fn capture_preflight_has_no_journal_side_effects() {
         let root = directory("capture-preflight-clean");
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
-        let client = owner.imports(policy(), 16 * 1024 * 1024 * 1024).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
         let before = journal_and_files(&root);
         let epoch = client.accounting_epoch();
         let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
@@ -1617,6 +1645,7 @@ mod capture_preflight {
             Target::Existing { source_id: 42 },
             payload.clone(),
             limits(),
+            0,
         );
         assert!(refused.is_err());
         assert_eq!(journal_and_files(&root), before);
@@ -1629,9 +1658,119 @@ mod capture_preflight {
                 create_target("CaptureOk"),
                 payload,
                 limits(),
+                0,
             )
             .unwrap();
         assert!(preflight.replay().is_none());
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.accounting_epoch(), epoch);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_preflight_replays_matching_captured_journal() {
+        let root = directory("capture-preflight-replay");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let admitted = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-seed-source".into(),
+                    target: create_target("CaptureReplaySource"),
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        let target = Target::Existing {
+            source_id: admitted.source_id,
+        };
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-replay";
+        let actor = "physical-owner";
+        let captured = CapturedInputV2::bind(
+            CaptureId::new("capture-replay-id").unwrap(),
+            payload.clone(),
+            actor,
+            key,
+            &target,
+            limits(),
+            &inventory,
+        )
+        .unwrap();
+        let requested_digest = hex::encode(Sha256::digest(serde_json::to_vec(&inventory).unwrap()));
+        let prior = Operation {
+            tenant: "default".into(),
+            actor: actor.into(),
+            key: key.into(),
+            intent_digest: "c".repeat(64),
+            source_id: admitted.source_id,
+            job_id: "d".repeat(64),
+            input_version: 2,
+            input: Input::Captured(captured),
+            requested_files: inventory,
+            requested_digest,
+            state: State::Admitted,
+            basis: admitted.basis.clone(),
+            default_rules: true,
+            original_rules: None,
+            reserved_bytes: limits().reserved_bytes,
+            max_input_bytes: limits().max_input_bytes,
+            max_prepared_bytes: limits().max_prepared_bytes,
+            owned: None,
+            artifact: None,
+            receipt: None,
+            cleanup_settled: false,
+            authority_revision: None,
+            observation_cursor: None,
+        };
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO source_import_operations(tenant,operation_key,actor,intent_digest,source_id,job_id,state,document_version,document) VALUES(?1,?2,?3,?4,?5,?6,'admitted',1,?7)",
+                params![
+                    prior.tenant,
+                    prior.key,
+                    prior.actor,
+                    prior.intent_digest,
+                    prior.source_id,
+                    prior.job_id,
+                    serde_json::to_string(&prior).unwrap(),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO source_import_quota VALUES(?1,?2,?3,0,0)",
+                params![
+                    prior.tenant,
+                    prior.key,
+                    i64::try_from(prior.reserved_bytes).unwrap()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        let before = journal_and_files(&root);
+        let epoch = client.accounting_epoch();
+        let preflight = client
+            .preflight_capture(credential(&owner), key.into(), target, payload, limits(), 0)
+            .unwrap();
+        let replay = preflight.replay().expect("captured journal replay");
+        assert_eq!(replay.key, prior.key);
+        assert_eq!(replay.source_id, prior.source_id);
+        assert_eq!(replay.input, prior.input);
         assert_eq!(journal_and_files(&root), before);
         assert_eq!(client.accounting_epoch(), epoch);
         owner.shutdown().unwrap();
