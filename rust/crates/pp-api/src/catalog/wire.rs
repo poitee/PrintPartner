@@ -1,4 +1,7 @@
-use pp_storage::catalog::{CategorySettings, CreateSource, Deletion, SourcePatch, SourceSummary};
+use pp_storage::catalog::{
+    CategorySettings, CreateSource, Deletion, NamingCommand, NamingOverride, NamingPreview,
+    NamingProfile, SourcePatch, SourceSummary,
+};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
@@ -18,6 +21,41 @@ pub(super) fn categories(settings: CategorySettings) -> Result<Value, serde_json
 }
 
 type CategorySave = (Vec<String>, HashMap<String, Option<String>>);
+
+/// Node PUT body: `{ use_defaults: true }` or
+/// `{ use_defaults: false, override: <NamingProfile> }`. Storage tags the
+/// command as `kind`; do not deserialize the HTTP body as `NamingCommand`.
+pub(super) fn naming_save(body: &Value) -> Option<NamingCommand> {
+    let object = body.as_object()?;
+    let use_defaults = object.get("use_defaults")?.as_bool()?;
+    if use_defaults {
+        return (object.len() == 1).then_some(NamingCommand::UseDefaults);
+    }
+    if object.len() != 2 {
+        return None;
+    }
+    let profile: NamingProfile = serde_json::from_value(object.get("override")?.clone()).ok()?;
+    Some(NamingCommand::Override { profile })
+}
+
+/// Node preview body: `{ relative_path, profile? }`. Missing or null
+/// `relative_path` becomes `""`; other scalars use Node `String()` coercion.
+pub(super) fn naming_preview(body: &Value) -> Option<(String, Option<NamingOverride>)> {
+    let object = body.as_object()?;
+    let relative_path = match object.get("relative_path") {
+        None | Some(Value::Null) => String::new(),
+        Some(value) => js_string(value),
+    };
+    let profile = match object.get("profile") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(serde_json::from_value(value.clone()).ok()?),
+    };
+    Some((relative_path, profile))
+}
+
+pub(super) fn naming_preview_body(preview: NamingPreview) -> Result<Value, serde_json::Error> {
+    serde_json::to_value(preview)
+}
 
 /// Node PUT body: `categories` defaults to `[]`, `replacements` to `{}`.
 /// Each category must be a string; each replacement value is a string or null.
