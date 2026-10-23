@@ -1211,11 +1211,21 @@ GRE-769 adds `resolve_capture_manifest`. It runs the same integrity checks, then
 compares actor, operation key, target, admission limits, inventory, and digests
 with an admitted journal `Operation`. Exact rebound bytes must match the
 presented document. A mismatch or integrity failure refuses without writing;
-journal rows and non-database files stay unchanged. Captured admission preflight
-stays on GRE-770.
+journal rows and non-database files stay unchanged.
+
+### D14 captured preflight admission
+
+GRE-770 adds `ImportClient::preflight_capture` and `preflight_capture_target`
+behind `desktop_rebuild`. Preflight authenticates the credential, checks the
+owner import quota and admission limits, validates the create or existing target
+basis, and returns an immutable `PreflightedCapture`. It does not publish files
+or enqueue a job. A matching prior captured journal entry may be returned as
+`replay`; a supplied prior with the same key refuses with an idempotency
+conflict. Refusal and success both leave journal rows, non-database files, and
+the accounting epoch unchanged. `prepare` and `admit_prepared` stay on GRE-771.
 
 ```sh
-cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_manifest
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```

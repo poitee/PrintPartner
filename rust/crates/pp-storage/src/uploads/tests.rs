@@ -1445,3 +1445,195 @@ mod capture_manifest {
         owner.shutdown().unwrap();
     }
 }
+
+mod capture_preflight {
+    use super::super::{
+        Admission, AdmissionLimits, CapturedPayloadV1, File, Input, Target,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::Connection;
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }]
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection
+            .query_row(JOURNAL_SQL, [], |row| row.get(0))
+            .unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+
+    fn create_target(name: &str) -> Target {
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: name.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn capture_preflight_refuses_stale_target_or_quota() {
+        let root = directory("capture-preflight-refuse");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), 16 * 1024 * 1024 * 1024).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+
+        let missing = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-missing".into(),
+                Target::Existing { source_id: 9_999 },
+                payload.clone(),
+                limits(),
+            )
+            .err().unwrap().to_string();
+        assert!(
+            missing.contains("Source not found") || missing.contains("not found"),
+            "{missing}"
+        );
+
+        let over_quota = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-quota".into(),
+                create_target("CaptureQuota"),
+                payload.clone(),
+                AdmissionLimits {
+                    reserved_bytes: 16 * 1024 * 1024 * 1024 + 1,
+                    ..limits()
+                },
+            )
+            .err().unwrap().to_string();
+        assert_eq!(over_quota, "Import quota exceeded");
+
+        let cancelled = AtomicBool::new(false);
+        client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-supplied".into(),
+                    target: create_target("CaptureSupplied"),
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        let conflict = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-supplied".into(),
+                create_target("CaptureConflict"),
+                payload,
+                limits(),
+            )
+            .err().unwrap().to_string();
+        assert_eq!(conflict, "Import idempotency conflict");
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_preflight_has_no_journal_side_effects() {
+        let root = directory("capture-preflight-clean");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), 16 * 1024 * 1024 * 1024).unwrap();
+        let before = journal_and_files(&root);
+        let epoch = client.accounting_epoch();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+
+        let refused = client.preflight_capture(
+            credential(&owner),
+            "capture-stale".into(),
+            Target::Existing { source_id: 42 },
+            payload.clone(),
+            limits(),
+        );
+        assert!(refused.is_err());
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.accounting_epoch(), epoch);
+
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-ok".into(),
+                create_target("CaptureOk"),
+                payload,
+                limits(),
+            )
+            .unwrap();
+        assert!(preflight.replay().is_none());
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.accounting_epoch(), epoch);
+        owner.shutdown().unwrap();
+    }
+}
