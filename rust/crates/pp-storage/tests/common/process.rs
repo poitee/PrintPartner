@@ -6,7 +6,6 @@ use std::process::Command;
 ///
 /// `env!("CARGO_BIN_EXE_…")` is baked in at compile time on the archive host;
 /// partitioned nextest runs remap the workspace and inject runtime paths instead.
-#[allow(dead_code)]
 pub fn bin_exe(name: &str) -> PathBuf {
     for key in [
         format!("NEXTEST_BIN_EXE_{name}"),
@@ -24,5 +23,7 @@ pub fn bin_exe(name: &str) -> PathBuf {
 }
 
 pub fn command(program: impl AsRef<OsStr>) -> Command {
+    // Many #[path] copies only call command(); keep bin_exe live without #[allow].
+    let _: fn(&str) -> PathBuf = bin_exe;
     Command::new(program)
 }
