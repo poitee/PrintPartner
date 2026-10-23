@@ -211,6 +211,28 @@ jobs:
           path: nextest-archive-desktop-rebuild.tar.zst
           if-no-files-found: error
           retention-days: 1
+      # Partitions must reuse the exact measured trees embedded in the archive
+      # binaries (include_bytes! of bundle-manifest.json). Rebuilding web assets
+      # on each partition runner changes digests and fails release verification.
+      - name: Pack desktop release assets for partitions
+        id: pack-assets
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          set -euo pipefail
+          tar -C "$GITHUB_WORKSPACE" -cf desktop-release-assets.tar \
+            rust/bundle-manifest.json \
+            web/apps/web/dist \
+            web/apps/server/dist/current \
+            web/packages/contracts/dist/current \
+            web/packages/domain/dist/current
+      - name: Upload desktop release assets
+        if: ${{ !cancelled() && steps.pack-assets.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-release-assets-linux
+          path: desktop-release-assets.tar
+          if-no-files-found: error
+          retention-days: 1
       - name: nextest (desktop_rebuild on)
         # Bound self-hosted Linux PR runtime only (pp-local ~67m). Windows PRs
         # keep rebuild-on nextest even when pp-local-win is self-hosted. Hosted
@@ -256,24 +278,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Configure sccache on pp-local
-        shell: bash
-        run: |
-          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
-          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
       - name: Set up ephemeral Linux prerequisites
         run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
-      - name: Set up Rust on ephemeral runners
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: '1.99.0'
-          components: rustfmt, clippy
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
-      - name: Install the pinned toolchain from rust-toolchain.toml
-        run: |
-          rustup toolchain install
-          rustc --version
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: nextest@0.9.148
@@ -294,17 +302,26 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
-      - name: Build desktop assets and generate measured manifest
-        env:
-          VITE_PRINT_PARTNER_DESKTOP: '1'
+      # Install lockfile dependencies only. Do not rebuild web or regenerate the
+      # manifest: archived binaries embed digests from the build job.
+      - name: Install web dependencies for release verification
         run: |
           set -euo pipefail
           node_path=$(node -p process.execPath)
           sudo ln -sf "$node_path" /usr/bin/node
           echo "PP_TEST_NODE=$node_path" >> "$GITHUB_ENV"
           npm --prefix web ci
-          npm --prefix web run build
-          python3 rust/scripts/build-desktop-manifest.py --web web --node "$node_path" --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+      - name: Download desktop release assets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: desktop-release-assets-linux
+      - name: Restore desktop release assets
+        run: |
+          set -euo pipefail
+          tar -C "$GITHUB_WORKSPACE" -xf desktop-release-assets.tar
+          test -f rust/bundle-manifest.json
+          test -f web/apps/web/dist/desktop-build.json
+          test -f web/apps/server/dist/current/desktop-resolution.js
       - name: Download nextest desktop_rebuild archive
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -314,11 +331,6 @@ jobs:
         # Remap the archived workspace root (rust/) onto this runner's checkout so
         # partitions do not require identical absolute paths across pp-local slots.
         run: cargo nextest run --archive-file nextest-archive-desktop-rebuild.tar.zst --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:${{ matrix.partition }}/3 --no-fail-fast -E "$NEXTEST_FILTER"
-      - name: Show sccache stats
-        if: always()
-        shell: bash
-        run: |
-          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
 
   # Preserve the required check name rust (linux). Partitions are skipped on PRs
   # and on schedule (monolithic in-job rebuild-on nextest).
