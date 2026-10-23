@@ -219,12 +219,20 @@ jobs:
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
         run: |
           set -euo pipefail
-          tar -C "$GITHUB_WORKSPACE" -cf desktop-release-assets.tar \
+          # atomic-package-build publishes dist/current as a symlink to a release
+          # directory. Plain tar stores that link alone (dangling on restore).
+          # -h archives the resolved trees under the logical current/ paths.
+          test -f "$GITHUB_WORKSPACE/rust/bundle-manifest.json"
+          test -f "$GITHUB_WORKSPACE/web/apps/web/dist/desktop-build.json"
+          test -f "$GITHUB_WORKSPACE/web/apps/server/dist/current/desktop-resolution.js"
+          tar -C "$GITHUB_WORKSPACE" -h -cf desktop-release-assets.tar \
             rust/bundle-manifest.json \
             web/apps/web/dist \
             web/apps/server/dist/current \
             web/packages/contracts/dist/current \
             web/packages/domain/dist/current
+          tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/server/dist/current/desktop-resolution.js'
+          tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/web/dist/desktop-build.json'
       - name: Upload desktop release assets
         if: ${{ !cancelled() && steps.pack-assets.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -318,10 +326,19 @@ jobs:
       - name: Restore desktop release assets
         run: |
           set -euo pipefail
+          test -f desktop-release-assets.tar
           tar -C "$GITHUB_WORKSPACE" -xf desktop-release-assets.tar
-          test -f rust/bundle-manifest.json
-          test -f web/apps/web/dist/desktop-build.json
-          test -f web/apps/server/dist/current/desktop-resolution.js
+          for f in \
+            rust/bundle-manifest.json \
+            web/apps/web/dist/desktop-build.json \
+            web/apps/server/dist/current/desktop-resolution.js
+          do
+            if [ ! -f "$f" ]; then
+              echo "missing after restore: $f" >&2
+              ls -la "$(dirname "$f")" >&2 || true
+              exit 1
+            fi
+          done
       - name: Download nextest desktop_rebuild archive
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
