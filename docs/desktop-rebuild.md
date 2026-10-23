@@ -2197,7 +2197,7 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop
 ### D24 drafts HTTP, GRE-619
 
 `pp-api` `drafts/http.rs` compiles with `desktop_rebuild`.
-`DraftHttpConfig::from_startup` enables the router only when
+`DraftHttpConfig::new` enables the router only when
 `PP_DESKTOP_REBUILD` is exactly `1` or `true` at process start. Otherwise
 `draft_router` and `admit_draft_routes` mount nothing and every draft path
 answers 404.
@@ -2206,7 +2206,7 @@ Landed replacement slices for the superseded #635 monolith:
 
 | Slice | Linear | Scope |
 | --- | --- | --- |
-| a1 | GRE-939 | Loopback Host/Origin admission and credential presentation |
+| a1 | GRE-939 | Loopback Host/Origin admission and credential presentation ([#969](https://github.com/poitee/PrintPartner/pull/969)) |
 | a2 | GRE-944 | Request target, body size, and body-read timeout bounds |
 | b | GRE-940 | List and workspace reads |
 | c | GRE-941 | API-key `ResolveKey` so `lastUsedAt` commits; foreign-tenant keys 401 |
@@ -2226,11 +2226,12 @@ With both gates on, `draft_router` serves these paths at the root and
 default, and applies the guard's limits: 16 KiB request target, 1 MiB for
 reads, 8 MiB for PATCH, 5 s body timeout, 64 admission permits. Loopback
 transport is required. Host must match the configured listener; forwarded and
-`x-forwarded-*` headers are refused. Session cookie GETs need a matching
-Origin; API-key PATCH may omit Origin. A foreign or `null` Origin, cookie plus
-key, or `sec-fetch-site: cross-site` returns 403. Exactly one of session
-cookie, `Authorization: Bearer`, or `x-print-partner-api-key` is accepted.
-API keys use the configured tenant, not a request header.
+`x-forwarded-*` headers are refused. Session-cookie PATCH needs a matching
+Origin; GETs and API-key PATCH may omit it, but any Origin sent must match.
+A foreign or `null` Origin, or `sec-fetch-site: cross-site`, returns 403.
+Ambiguous credentials return 401, or 403 on an Origin-less PATCH. Exactly one
+of session cookie, `Authorization: Bearer`, or `x-print-partner-api-key` is
+accepted. API keys use the configured tenant, not a request header.
 
 List returns `{ profile_id, drafts: [{ draft_id, state, lifecycle_version,
 snapshot_digest, base }] }`. Workspace returns the storage workspace JSON.
