@@ -33,6 +33,7 @@ pub enum TableId {
     PlanDraftRequiredUnitReconciliations,
     PlanDraftRequiredUnitDecisions,
     PlanDraftRequiredUnitAssignments,
+    AcceptedPlateHeads,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -151,6 +152,8 @@ enum ReviewedEntry {
     AnalyzeBuildRequest { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_build_recipe")]
     GetBuildRecipe { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_workflow")]
+    GetBuildWorkflow { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -198,13 +201,35 @@ impl ReviewedEntry {
     ) -> Result<(&'static str, ResourceSet), AdmissionError> {
         use ResourceId::{File, Table};
         use TableId::{
-            AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
-            PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
+            AcceptedPlateHeads, AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets,
+            PlanDecisions, PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
             PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
             PlanRevisionInputSets, PlanRevisionInputs, PlanRevisionParts,
             PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
             PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
             SourceRevisions,
+        };
+        let build_workflow = || {
+            BTreeSet::from([
+                Table(AcceptedPlateHeads),
+                Table(AppSettings),
+                Table(BuildProfiles),
+                Table(Parts),
+                Table(PlanAcceptedInputSets),
+                Table(PlanDrafts),
+                Table(PlanRevisionInputSets),
+                Table(PlanRevisionInputs),
+                Table(PlanRevisionParts),
+                Table(PlanRevisionRequiredUnitSets),
+                Table(PlanRevisionRequiredUnits),
+                Table(PlanRevisions),
+                Table(PrintProgress),
+                Table(ProfileLayers),
+                Table(Projects),
+                Table(RequiredUnits),
+                Table(SourceRevisions),
+                File(FileFamily::SourceWorkspace),
+            ])
         };
         let accepted_plan_operational = || {
             BTreeSet::from([
@@ -481,6 +506,9 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::GetBuildWorkflow { resources } => {
+                ("tool.get_build_workflow", resources, build_workflow())
+            }
             Self::GetPlanOptionGroups { resources } => (
                 "tool.get_plan_option_groups",
                 resources,
