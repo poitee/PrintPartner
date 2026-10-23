@@ -235,7 +235,6 @@ pub(crate) fn reusable_draft_base(
 /// Reads the Accepted Plan and its Build context after a committed Save. The
 /// snapshot must be at least `minimum_version`, the receipt's Plan version.
 #[cfg(feature = "desktop_rebuild")]
-#[cfg_attr(not(test), expect(dead_code, reason = "D13 Save (GRE-608) calls this"))]
 pub(crate) fn capture_published(
     tx: &rusqlite::Transaction<'_>,
     tenant: &str,

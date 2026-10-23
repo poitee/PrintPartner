@@ -31,6 +31,7 @@ mod preparation;
 #[cfg(test)]
 mod preparation_tests;
 mod rebase;
+pub mod save;
 pub use rebase::{
     Conflict as RebaseConflict, Field as RebaseField, RebaseArgs, RebaseOutcome, RebaseRequest,
 };
@@ -483,6 +484,12 @@ pub(super) struct Write {
     operation: Operation,
 }
 enum Operation {
+    Save {
+        request: pp_contracts::autosave::SavePlanChoicesRequest,
+        key: String,
+        observations: Observations,
+        reply: mpsc::Sender<Result<save::Outcome>>,
+    },
     Edit {
         draft_id: PositiveId,
         request: EditRequest,
@@ -818,6 +825,7 @@ pub(super) fn write(
     connection: &mut Connection,
     command: Write,
     admission: writer_admission::Deadline,
+    tokens: &mut dyn crate::plan_publication::RequiredUnitTokenAllocator,
 ) {
     let Write {
         credential,
@@ -827,6 +835,29 @@ pub(super) fn write(
         operation,
     } = command;
     match operation {
+        Operation::Save {
+            request,
+            key,
+            observations,
+            reply,
+        } => {
+            let _ = reply.send(save::execute(
+                connection,
+                save::Command {
+                    input: save::SaveCommand {
+                        credential,
+                        profile,
+                        request,
+                        key,
+                    },
+                    policy,
+                    observations,
+                    cancelled,
+                },
+                tokens,
+                admission,
+            ));
+        }
         Operation::Edit {
             draft_id,
             request,
