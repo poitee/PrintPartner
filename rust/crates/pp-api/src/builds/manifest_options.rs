@@ -70,10 +70,33 @@ pub(super) async fn save_kit(
     .await
 }
 
+/// `GET`/`HEAD` `/plans/{id}/plan-manifest-builder` — storage `ReadBuilder`.
+pub(super) async fn read_builder(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = id
+        .parse::<u64>()
+        .ok()
+        .and_then(|value| PositiveId::new(value).ok())
+    else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    execute(
+        app,
+        request,
+        BuildCommand::Manifest(ManifestOptionsCommand::ReadBuilder { build }),
+    )
+    .await
+}
+
 pub(super) fn present(method: &Method, outcome: ManifestOptionsOutcome) -> Response {
     let head = *method == Method::HEAD;
     match outcome {
-        success @ (ManifestOptionsOutcome::Kit { .. } | ManifestOptionsOutcome::Saved { .. }) => {
+        success @ (ManifestOptionsOutcome::Kit { .. }
+        | ManifestOptionsOutcome::Saved { .. }
+        | ManifestOptionsOutcome::Builder(_)) => {
             match success.into_success_body() {
                 Ok(body) => bytes_response(StatusCode::OK, body.into_bytes(), head),
                 Err(_) => failure(
@@ -106,11 +129,6 @@ pub(super) fn present(method: &Method, outcome: ManifestOptionsOutcome) -> Respo
             }))
             .unwrap_or_else(|_| br#"{"detail":"Build service unavailable"}"#.to_vec()),
             false,
-        ),
-        // ReadBuilder stays unregistered (GRE-803).
-        ManifestOptionsOutcome::Builder(_) => failure(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Build service unavailable",
         ),
     }
 }

@@ -1675,7 +1675,8 @@ npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manife
 
 Storage commands landed without HTTP. GRE-801 registers gated ReadKit on the
 Build router (`docs/gre-801-manifest-http.md`). GRE-802 registers gated SaveKit
-(`docs/gre-802-manifest-http.md`). ReadBuilder HTTP remains GRE-803.
+(`docs/gre-802-manifest-http.md`). GRE-803 registers gated ReadBuilder
+(`docs/gre-803-manifest-http.md`).
 
 ## D11 required units (GRE-606)
 
