@@ -3,17 +3,18 @@ use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path, Query, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use pp_storage::{
     WriterOwner,
     auth::{AuthFailure, AuthPolicy, Secret},
     catalog::{CatalogFailure, Credentials, Outcome, Request as CatalogRequest},
 };
+use serde::Deserialize;
 use serde_json::json;
 use std::{
     net::{IpAddr, SocketAddr},
@@ -90,31 +91,44 @@ struct App {
     owner: Arc<Mutex<WriterOwner>>,
 }
 
-/// Mounts Source list, detail, create, metadata patch, delete, and Source
-/// category settings at `/` and `/api/v1` when `PP_DESKTOP_REBUILD` was exactly
-/// `1` or `true` at startup. Otherwise nothing is mounted. Sync, upload,
-/// naming, and location stay unregistered.
+/// Mounts Source list, detail, create, metadata patch, delete, import-rules,
+/// Source activity, Source category settings, Source naming get/put, and STL
+/// naming preview at `/` and `/api/v1` when `PP_DESKTOP_REBUILD` was exactly
+/// `1` or `true` at startup. Otherwise nothing is mounted. Sync, upload, global
+/// STL naming get/put, and location stay unregistered.
 pub fn admit_catalog_routes(config: CatalogHttpConfig, owner: Arc<Mutex<WriterOwner>>) -> Router {
     if !config.enabled {
         return Router::new();
     }
     let routes = Router::new()
+        .route("/sources/activity", get(list_activity))
         .route("/sources", get(list).post(create))
         .route(
             "/sources/{id}",
             get(detail).patch(patch_source).delete(delete_source),
         )
         .route(
+            "/sources/{id}/import-rules",
+            get(get_import_rules).put(put_import_rules),
+        )
+        .route("/sources/{id}/naming", get(get_naming).put(put_naming))
+        .route(
             "/settings/source-categories",
             get(get_categories).put(put_categories),
-        );
+        )
+        .route("/settings/stl-naming/preview", post(preview_naming));
     let app = App { config, owner };
     Router::new()
         .merge(routes.clone())
         .nest("/api/v1", routes)
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
+}
+
+#[derive(Deserialize)]
+struct ActivityQuery {
+    limit: Option<String>,
 }
 
 async fn guard(
@@ -343,6 +357,124 @@ async fn put_categories(
     .await
 }
 
+async fn list_activity(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<ActivityQuery>,
+) -> Response {
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::SourceActivity {
+            limit: wire::activity_limit(query.limit.as_deref()),
+        },
+    )
+    .await
+}
+
+async fn get_import_rules(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(id) = source_id(&id) else {
+        return reject(StatusCode::NOT_FOUND, "Source not found");
+    };
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::GetImportRules { id },
+    )
+    .await
+}
+
+async fn put_import_rules(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let Some(id) = source_id(&id) else {
+        return reject(StatusCode::NOT_FOUND, "Source not found");
+    };
+    let Some(body) = object_body(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    if let Some(response) = refused_local_path(&body) {
+        return response;
+    }
+    let Some(rules) = wire::import_rules_save(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::SaveImportRules { id, rules },
+    )
+    .await
+}
+
+async fn get_naming(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(id) = source_id(&id) else {
+        return reject(StatusCode::NOT_FOUND, "Source not found");
+    };
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::GetNaming { id },
+    )
+    .await
+}
+
+async fn put_naming(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let Some(id) = source_id(&id) else {
+        return reject(StatusCode::NOT_FOUND, "Source not found");
+    };
+    let Some(body) = object_body(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    let Some(settings) = wire::naming_save(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::SaveNaming { id, settings },
+    )
+    .await
+}
+
+async fn preview_naming(
+    State(app): State<App>,
+    Extension(principal): Extension<Principal>,
+    body: Bytes,
+) -> Response {
+    let Some(body) = object_body(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    let Some((relative_path, profile)) = wire::naming_preview(&body) else {
+        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+    };
+    execute(
+        &app,
+        credentials(principal),
+        CatalogRequest::PreviewNaming {
+            relative_path,
+            profile,
+        },
+    )
+    .await
+}
+
 fn object_body(bytes: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
@@ -392,6 +524,15 @@ async fn execute(app: &App, credentials: Credentials, request: CatalogRequest) -
             Ok(value) => Json(value).into_response(),
             Err(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
         },
+        Outcome::Data(value) => Json(value).into_response(),
+        Outcome::Activity(events) => match wire::activity(events) {
+            Ok(value) => Json(value).into_response(),
+            Err(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
+        },
+        Outcome::Preview(preview) => match wire::naming_preview_body(preview) {
+            Ok(value) => Json(value).into_response(),
+            Err(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
+        },
         Outcome::Deletion(outcome) => deletion_response(wire::source_deletion(outcome)),
         _ => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
     }
@@ -437,7 +578,7 @@ fn catalog_error(error: anyhow::Error) -> Response {
             ),
             CatalogFailure::InvalidStoredNaming => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Catalog unavailable".to_owned(),
+                "Stored Source naming settings are invalid".to_owned(),
             ),
             CatalogFailure::Input(_)
             | CatalogFailure::DuplicateName(_)

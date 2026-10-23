@@ -353,6 +353,12 @@ async fn refuse_mounted_reads(server: &Server) {
         "/sources/1",
         "/api/v1/sources",
         "/api/v1/sources/1",
+        "/sources/activity",
+        "/api/v1/sources/activity",
+        "/sources/1/import-rules",
+        "/api/v1/sources/1/import-rules",
+        "/sources/1/naming",
+        "/api/v1/sources/1/naming",
         "/settings/source-categories",
         "/api/v1/settings/source-categories",
     ] {
@@ -362,6 +368,10 @@ async fn refuse_mounted_reads(server: &Server) {
             body.get("sources").is_none()
                 && body.get("name").is_none()
                 && body.get("categories").is_none()
+                && body.get("events").is_none()
+                && body.get("rules").is_none()
+                && body.get("use_defaults").is_none()
+                && body.get("effective").is_none()
         );
     }
     for path in ["/sources/1", "/api/v1/sources/1"] {
@@ -378,6 +388,21 @@ async fn refuse_mounted_reads(server: &Server) {
     }
     let (status, _) = server.send(Method::POST, "/sources", &[]).await;
     assert_eq!(status, 404);
+    for path in [
+        "/settings/stl-naming/preview",
+        "/api/v1/settings/stl-naming/preview",
+    ] {
+        let (status, body) = server
+            .exchange(
+                Method::POST,
+                path,
+                &[],
+                Some(&json!({"relative_path":"gear.stl"})),
+            )
+            .await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("role").is_none() && body.get("filename").is_none());
+    }
     for path in ["/sources/1", "/api/v1/sources/1"] {
         let (status, body) = server.send(Method::DELETE, path, &[]).await;
         assert_eq!(status, 404, "{path}");
@@ -397,6 +422,20 @@ async fn refuse_mounted_reads(server: &Server) {
             .await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("categories").is_none());
+    }
+    for path in ["/sources/1/naming", "/api/v1/sources/1/naming"] {
+        let (status, body) = server
+            .exchange(Method::PUT, path, &[], Some(&json!({"use_defaults":true})))
+            .await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("use_defaults").is_none() && body.get("effective").is_none());
+    }
+    for path in ["/sources/1/import-rules", "/api/v1/sources/1/import-rules"] {
+        let (status, body) = server
+            .exchange(Method::PUT, path, &[], Some(&json!({"rules":["parts/"]})))
+            .await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("rules").is_none());
     }
 }
 
@@ -935,6 +974,417 @@ fn category_tenants(directory: &Path) -> Vec<(String, String)> {
         .unwrap()
         .map(|row| row.unwrap())
         .collect()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn default_naming_profile() -> Value {
+    json!({
+        "roles": [
+            {"id":"primary","label":"Primary","markers":[]},
+            {"id":"accent","label":"Accent","markers":["[a]"]},
+            {"id":"clear","label":"Clear","markers":["[c]"]},
+            {"id":"opaque","label":"Opaque","markers":["[o]"]}
+        ],
+        "quantity":{"regex":"[ _]x([0-9]+)\\.stl$","default":1},
+        "slug":{"strip_markers":true,"strip_quantity":true},
+        "folder_rules":[],
+        "export_role_order":["primary","accent","clear","opaque"]
+    })
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn database_bytes(directory: &Path) -> Vec<u8> {
+    std::fs::read(directory.join("print-partner.db")).unwrap()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn storage_preview(owner: &WriterOwner, relative_path: &str, profile: Option<Value>) -> Value {
+    use pp_storage::catalog::{NamingOverride, Outcome, Request};
+    let profile = profile.map(|value| serde_json::from_value::<NamingOverride>(value).unwrap());
+    match owner
+        .local_source_catalog()
+        .execute(Request::PreviewNaming {
+            relative_path: relative_path.into(),
+            profile,
+        })
+        .unwrap()
+    {
+        Outcome::Preview(preview) => serde_json::to_value(preview).unwrap(),
+        _ => panic!("preview"),
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_naming_preview_matches_storage() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let created = post_source(&server, &cookie, "Naming").await;
+    let id = created["id"].as_i64().unwrap();
+    let mut override_profile = default_naming_profile();
+    override_profile["roles"][1]["markers"] = json!(["[custom]"]);
+    override_profile["quantity"]["default"] = json!(7);
+    let (status, saved) = server
+        .exchange(
+            Method::PUT,
+            &format!("/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"use_defaults":false,"override":override_profile})),
+        )
+        .await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(saved["use_defaults"], false);
+    assert_eq!(saved["effective"]["quantity"]["default"], 7);
+    assert_eq!(
+        saved["effective"]["roles"][1]["markers"],
+        json!(["[custom]"])
+    );
+    let (status, got) = server
+        .send(
+            Method::GET,
+            &format!("/api/v1/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, got), (200, saved.clone()));
+    let relative_path = "[custom]bracket x3.stl";
+    let preview_profile = json!({
+        "roles":[{"id":"accent","markers":["[custom]"]}],
+        "quantity":{"default":7}
+    });
+    let before_bytes = database_bytes(&directory);
+    let snapshot = files(&directory);
+    let expected = storage_preview(
+        &owner.lock().unwrap(),
+        relative_path,
+        Some(preview_profile.clone()),
+    );
+    assert_eq!(
+        expected,
+        json!({
+            "role":"accent",
+            "quantity":3.0,
+            "part_slug":"bracket",
+            "filename":"[custom]bracket x3.stl"
+        })
+    );
+    for prefix in ["", "/api/v1"] {
+        let (status, body) = server
+            .exchange(
+                Method::POST,
+                &format!("{prefix}/settings/stl-naming/preview"),
+                &[("Cookie", &cookie)],
+                Some(&json!({
+                    "relative_path": relative_path,
+                    "profile": preview_profile
+                })),
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix} {body}");
+        assert_eq!(body, expected, "{prefix}");
+    }
+    // Preview used the same accent marker and quantity default as the saved override.
+    assert_eq!(saved["effective"]["quantity"]["default"], 7);
+    assert_eq!(saved["effective"]["roles"][1]["markers"][0], "[custom]");
+    assert_eq!(expected["role"], "accent");
+    assert_eq!(database_bytes(&directory), before_bytes);
+    assert_eq!(files(&directory), snapshot);
+    let (status, after) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, after), (200, saved));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_invalid_override_does_not_write() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let created = post_source(&server, &cookie, "Guard").await;
+    let id = created["id"].as_i64().unwrap();
+    let mut good = default_naming_profile();
+    good["roles"][0]["label"] = json!("Kept");
+    let (status, saved) = server
+        .exchange(
+            Method::PUT,
+            &format!("/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"use_defaults":false,"override":good})),
+        )
+        .await;
+    assert_eq!(status, 200, "{saved}");
+    let before_bytes = database_bytes(&directory);
+    let snapshot = files(&directory);
+    let mut blank = default_naming_profile();
+    blank["roles"][0]["label"] = json!(" ");
+    let (status, body) = server
+        .exchange(
+            Method::PUT,
+            &format!("/api/v1/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"use_defaults":false,"override":blank})),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Blank naming label"))
+    );
+    let (status, body) = server
+        .exchange(
+            Method::POST,
+            "/settings/stl-naming/preview",
+            &[("Cookie", &cookie)],
+            Some(&json!({
+                "relative_path":"gear.stl",
+                "profile":{"roles":[]}
+            })),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Empty roles override"))
+    );
+    let (status, body) = server
+        .exchange(
+            Method::PUT,
+            &format!("/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"use_defaults":false,"override":{
+                "roles":[],
+                "quantity":{"regex":"[ _]x([0-9]+)\\.stl$","default":1},
+                "slug":{"strip_markers":true,"strip_quantity":true},
+                "folder_rules":[],
+                "export_role_order":["primary","accent","clear","opaque"]
+            }})),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Naming requires primary role"))
+    );
+    let (status, missing) = server
+        .exchange(
+            Method::PUT,
+            "/sources/999999/naming",
+            &[("Cookie", &cookie)],
+            Some(&json!({"use_defaults":true})),
+        )
+        .await;
+    assert_eq!(
+        (status, missing["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    assert_eq!(database_bytes(&directory), before_bytes);
+    assert_eq!(files(&directory), snapshot);
+    let (status, after) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, after), (200, saved));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_import_rules_round_trip() {
+    use pp_storage::catalog::{Outcome, Request};
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let created = post_source(&server, &cookie, "Rules").await;
+    let id = created["id"].as_i64().unwrap();
+    let (status, empty) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200, "{empty}");
+    assert_eq!(empty, json!({"rules":[],"legacy_import_all":true}));
+    let body = json!({"rules":[" /STLs ","\\STLs","a.STL",12,""]});
+    let (status, saved) = server
+        .exchange(
+            Method::PUT,
+            &format!("/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+            Some(&body),
+        )
+        .await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(saved["rules"], json!(["STLs/", "a.STL", "12/"]));
+    let (status, got) = server
+        .send(
+            Method::GET,
+            &format!("/api/v1/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(
+        got,
+        json!({"rules":["STLs/","a.STL","12/"],"legacy_import_all":false})
+    );
+    let storage = {
+        let guard = owner.lock().unwrap();
+        match guard
+            .local_source_catalog()
+            .execute(Request::GetImportRules { id })
+            .unwrap()
+        {
+            Outcome::Data(value) => value,
+            _ => panic!("import rules"),
+        }
+    };
+    assert_eq!(got, storage);
+    let before_bytes = database_bytes(&directory);
+    let snapshot = files(&directory);
+    let (status, missing) = server
+        .exchange(
+            Method::PUT,
+            "/sources/999999/import-rules",
+            &[("Cookie", &cookie)],
+            Some(&json!({"rules":["nope/"]})),
+        )
+        .await;
+    assert_eq!(
+        (status, missing["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    let (status, refused) = server
+        .exchange(
+            Method::PUT,
+            &format!("/api/v1/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"rules":["parts/"],"local_path":"/tmp/outside"})),
+        )
+        .await;
+    assert_eq!(
+        (status, refused["detail"].as_str()),
+        (400, Some("Raw local_path requires native Source selection"))
+    );
+    assert_eq!(database_bytes(&directory), before_bytes);
+    assert_eq!(files(&directory), snapshot);
+    let (status, after) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, after), (200, got));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_activity_limit_matches_node() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let created = post_source(&server, &cookie, "Activity").await;
+    let source_id = created["id"].as_i64().unwrap();
+    {
+        let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+        db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+        for (tenant, kind, payload) in [
+            (
+                "default",
+                "source.updated",
+                format!(r#"{{"source_id":{source_id},"source_name":"Activity"}}"#),
+            ),
+            (
+                "default",
+                "source.sync_failed",
+                r#"{"source_name":"Broken","error":"boom"}"#.into(),
+            ),
+            ("default", "source.update_available", "{}".into()),
+            ("default", "unrelated", "{}".into()),
+            (
+                "foreign",
+                "source.updated",
+                r#"{"source_id":99,"source_name":"Foreign"}"#.into(),
+            ),
+        ] {
+            db.execute(
+                "INSERT INTO app_events(tenant_id,at,kind,payload_json) VALUES(?1,'2026-10-23T00:00:00.000Z',?2,?3)",
+                rusqlite::params![tenant, kind, payload],
+            )
+            .unwrap();
+        }
+        for i in 0..110 {
+            db.execute(
+                "INSERT INTO app_events(tenant_id,at,kind,payload_json) VALUES('default','2026-10-23T00:00:00.000Z','source.updated',?1)",
+                rusqlite::params![format!(r#"{{"source_name":"Pad {i}"}}"#)],
+            )
+            .unwrap();
+        }
+    }
+    for prefix in ["", "/api/v1"] {
+        let (status, body) = server
+            .send(
+                Method::GET,
+                &format!("{prefix}/sources/activity"),
+                &[("Cookie", &cookie)],
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix} {body}");
+        let events = body["events"].as_array().unwrap();
+        assert_eq!(events.len(), 20, "{prefix}");
+        assert!(body.get("events").is_some());
+        assert!(events.iter().all(|event| {
+            event.get("id").is_some()
+                && event.get("at").is_some()
+                && event.get("kind").is_some()
+                && event.get("source_name").is_some()
+                && event.as_object().unwrap().contains_key("source_id")
+                && event.as_object().unwrap().contains_key("detail")
+        }));
+        assert!(events.iter().all(|event| event["source_name"] != "Foreign"));
+    }
+    let (status, zero) = server
+        .send(
+            Method::GET,
+            "/sources/activity?limit=0",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(zero["events"].as_array().unwrap().len(), 1);
+    let (status, five) = server
+        .send(
+            Method::GET,
+            "/api/v1/sources/activity?limit=5",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(five["events"].as_array().unwrap().len(), 5);
+    let (status, oversize) = server
+        .send(
+            Method::GET,
+            "/sources/activity?limit=150",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(oversize["events"].as_array().unwrap().len(), 100);
+    let (status, bad) = server
+        .send(
+            Method::GET,
+            "/sources/activity?limit=abc",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(bad["events"].as_array().unwrap().len(), 20);
+    server.stop().await;
+    shutdown(owner, directory);
 }
 
 #[cfg(feature = "desktop_rebuild")]

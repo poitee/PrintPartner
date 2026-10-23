@@ -125,17 +125,21 @@ async function runPrinterUploadJobInner(
   if (!integration) {
     throw new Error("Linked printer host integration was not found");
   }
-  if (integration.type === "bambu" && desktopFeaturesEnabled()) {
-    const profileId = input.profile_id;
-    if (profileId == null || !Number.isSafeInteger(profileId) || profileId <= 0) {
-      throw new Error("Pick a plan to bind this send (profile_id required)");
-    }
-    if (!repo.getOwnedProfileIdentity(profileId)) {
-      throw new Error("Profile not found");
-    }
-    const access = readFeatureAccess(() => repo, "bambu", profileId);
-    if (access.kind !== "allowed") {
-      throw new Error(`${access.code}: ${access.error}`);
+  if (desktopFeaturesEnabled()) {
+    const farmHost = integration.type === "moonraker" || integration.type === "prusalink";
+    const feature = integration.type === "bambu" ? "bambu" : farmHost ? "farm" : null;
+    if (feature) {
+      const profileId = input.profile_id;
+      if (profileId == null || !Number.isSafeInteger(profileId) || profileId <= 0) {
+        throw new Error("Pick a plan to bind this send (profile_id required)");
+      }
+      if (!repo.getOwnedProfileIdentity(profileId)) {
+        throw new Error("Profile not found");
+      }
+      const access = readFeatureAccess(() => repo, feature, profileId);
+      if (access.kind !== "allowed") {
+        throw new Error(`${access.code}: ${access.error}`);
+      }
     }
   }
   if (integration.config.enabled === false) {

@@ -2,10 +2,12 @@ use super::*;
 use axum::{
     Extension,
     body::Body,
+    extract::ConnectInfo,
     routing::{get, patch},
 };
 use reqwest::Client;
 use serde_json::Value;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -126,7 +128,7 @@ fn transport_admission_requires_loopback_peer_and_matching_authority() {
         (local, Some("evil.test"), lo, Some(403)),
         ("https://evil.test/plans/1/drafts", host, lo, Some(403)),
     ] {
-        let result = admit(&config, &request(uri, host, peer));
+        let result = admit_request(&config, &request(uri, host, peer));
         assert_eq!(
             result.err().map(|error| error.0.as_u16()),
             status,
@@ -137,7 +139,7 @@ fn transport_admission_requires_loopback_peer_and_matching_authority() {
     duplicate
         .headers_mut()
         .append("host", "127.0.0.1:1234".parse().unwrap());
-    assert_eq!(admit(&config, &duplicate).unwrap_err().0, 403);
+    assert_eq!(admit_request(&config, &duplicate).unwrap_err().0, 403);
 }
 
 #[test]

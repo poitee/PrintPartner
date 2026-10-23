@@ -238,6 +238,10 @@ pub enum Outcome {
     SourceSyncFailed(crate::source_sync::FailedSyncTarget),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncAcknowledged(crate::source_sync::AcknowledgedSyncTarget),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncHalted(JobRecord),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncInspection(crate::source_sync::SyncTargetInspection),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -420,6 +424,18 @@ pub(crate) enum Command {
     AdoptSourceSyncTarget {
         lease: AttemptLease,
         key: crate::source_sync::SyncTargetKey,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    HaltSourceSync {
+        lease: AttemptLease,
+        halt: crate::source_sync::SourceSyncHalt,
+        detail: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        policy: AuthPolicy,
     },
     Retain {
         per_tenant: usize,
@@ -804,7 +820,7 @@ impl ServerWorkerClient {
     ) -> Result<crate::uploads::Operation> {
         ensure!(lease.worker == self.identity, "Foreign worker lease");
         let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
-        crate::uploads::submit(
+        match crate::uploads::submit(
             &self.storage,
             crate::uploads::Command::Phase {
                 lease: lease.clone(),
@@ -813,7 +829,12 @@ impl ServerWorkerClient {
                 policy,
             },
             &AtomicBool::new(false),
-        )
+        )? {
+            crate::uploads::UploadsOutcome::Operation(operation) => Ok(*operation),
+            crate::uploads::UploadsOutcome::Preflighted(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
+        }
     }
     /// Revalidates the original credential of a live attempt. The check does
     /// not change the job.
@@ -1210,6 +1231,61 @@ impl ServerWorkerClient {
         .receive()?
         {
             Outcome::SourceSyncSettled(settled) => Ok(settled),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Halts the open Sync batch after a caller Source operation error. The
+    /// detail becomes the Job recovery message. Retained target evidence stays
+    /// in place; a claimed or unacknowledged target leaves the Job for
+    /// reconciliation. A stale attempt is refused without writing.
+    pub fn halt_source_sync(
+        &self,
+        lease: &AttemptLease,
+        halt: crate::source_sync::SourceSyncHalt,
+        detail: String,
+    ) -> Result<JobRecord> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        match submit(
+            &self.storage,
+            Command::HaltSourceSync {
+                lease: lease.clone(),
+                halt,
+                detail,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncHalted(job) => Ok(job),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Reads one live Sync target for this authorized attempt. Writes nothing
+    /// and leaves reservation ownership unchanged. A foreign tenant row or
+    /// stale attempt is refused without writing.
+    pub fn inspect_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+    ) -> Result<crate::source_sync::SyncTargetInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::InspectSourceSyncTarget {
+                lease: lease.clone(),
+                key,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(inspection) => Ok(inspection),
             _ => unreachable!(),
         }
     }
@@ -1822,6 +1898,24 @@ pub(crate) fn execute(
         Command::AdoptSourceSyncTarget { lease, key } => TransactionDecision::Outcome(
             Outcome::SourceSyncSettled(crate::source_sync::adopt(&tx, &lease, &key)?),
         ),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::HaltSourceSync {
+            lease,
+            halt,
+            detail,
+        } => {
+            ensure!(
+                !detail.is_empty() && detail.len() <= 1024,
+                "Invalid Sync halt detail"
+            );
+            let job = crate::source_sync::halt_after_error(&tx, &lease, halt.stored(), &detail)?
+                .ok_or_else(|| anyhow!("Sync batch is not open"))?;
+            TransactionDecision::Outcome(Outcome::SourceSyncHalted(job))
+        }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectSourceSyncTarget { lease, key, policy } => TransactionDecision::Outcome(
+            Outcome::SourceSyncInspection(crate::source_sync::inspect(&tx, &lease, &key, policy)?),
+        ),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }
@@ -1830,6 +1924,8 @@ pub(crate) fn execute(
         TransactionDecision::Outcome(Outcome::Job(job, LocalCommit::Committed)) => {
             job.state.terminal()
         }
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Outcome(Outcome::SourceSyncHalted(job)) => job.state.terminal(),
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Refused(CommittedRefusal { job, .. }) => job.state.terminal(),
         #[cfg(feature = "desktop_rebuild")]

@@ -2675,3 +2675,262 @@ fn sync_adopt_rejects_failed_target() {
         "Sync target is not an acknowledged success"
     );
 }
+
+#[test]
+fn sync_halt_after_error_retains_primary_failure() {
+    let sync = Fixture::new();
+    let first = sync.source("Primary");
+    let second = sync.source("Sibling");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    sync.worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    drop(target);
+    let retained = failed_hold(&sync, &job_id);
+    assert_eq!(
+        (
+            retained.0.as_str(),
+            retained.1.as_str(),
+            retained.2.as_str(),
+            retained.3,
+        ),
+        ("failed", "local_read", "disk read failed", 0)
+    );
+    let stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    let before = sync.snapshot();
+    let refused = sync
+        .worker
+        .halt_source_sync(
+            &stale,
+            SourceSyncHalt::Fatal,
+            "primary source operation failed".into(),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(refused.to_string(), "Stale attempt fence");
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(failed_hold(&sync, &job_id), retained);
+    let detail = "primary source operation failed";
+    let halted = sync
+        .worker
+        .halt_source_sync(&lease, SourceSyncHalt::Fatal, detail.into())
+        .unwrap();
+    assert_eq!(halted.state, PersistentState::ReconciliationRequired);
+    assert_eq!(halted.recovery.as_deref(), Some(detail));
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
+    assert_eq!(
+        sync.targets(&job_id),
+        [
+            (first, "failed".into(), Some("local_read".into())),
+            (second, "not_run".into(), Some("batch_halt".into())),
+        ]
+    );
+    assert_eq!(failed_hold(&sync, &job_id), retained);
+    let reopened = sync.job(&job_id);
+    assert_eq!(reopened.state, PersistentState::ReconciliationRequired);
+    assert_eq!(reopened.recovery.as_deref(), Some(detail));
+    assert_eq!(failed_hold(&sync, &job_id), retained);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_halt_after_error_keeps_target_for_reconciliation() {
+    let sync = Fixture::new();
+    let first = sync.source("Claimed");
+    let second = sync.source("Pending");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let claim = sync
+        .connection()
+        .query_row(
+            "SELECT state,claim_generation,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(claim.0, "claimed");
+    let detail = "settlement reply unresolved";
+    let halted = sync
+        .worker
+        .halt_source_sync(&lease, SourceSyncHalt::UncertainTarget, detail.into())
+        .unwrap();
+    assert_eq!(halted.state, PersistentState::ReconciliationRequired);
+    assert_eq!(halted.recovery.as_deref(), Some(detail));
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
+    assert_eq!(
+        sync.targets(&job_id),
+        [
+            (
+                first,
+                "reconciliation_required".into(),
+                Some("local_settlement".into()),
+            ),
+            (second, "not_run".into(), Some("batch_halt".into())),
+        ]
+    );
+    let kept: (String, String, i64, String) = sync
+        .connection()
+        .query_row(
+            "SELECT state,failure_code,claim_generation,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(kept.0, "reconciliation_required");
+    assert_eq!(kept.1, "local_settlement");
+    assert_eq!(kept.2, claim.1);
+    assert_eq!(kept.3, claim.2);
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_inspect_returns_authorized_target() {
+    let sync = Fixture::new();
+    let first = sync.source("Inspected");
+    let second = sync.source("Sibling");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let key = target.key().clone();
+    let before_claim = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .unwrap(),
+        SyncTargetInspection::Pending
+    );
+    assert_eq!(sync.snapshot(), before_claim);
+    let settlement = settlement(first);
+    let settled = sync
+        .worker
+        .settle_source_sync_target(&lease, &mut target, settlement.clone())
+        .unwrap();
+    let after_settle = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .unwrap(),
+        SyncTargetInspection::Succeeded(settlement.result.clone())
+    );
+    assert_eq!(sync.snapshot(), after_settle);
+    assert_eq!(
+        sync.worker.inspect_source_sync_target(&lease, key).unwrap(),
+        SyncTargetInspection::Succeeded(settled.result)
+    );
+    assert_eq!(sync.snapshot(), after_settle);
+    let sibling = local(sync.next(&mut lease));
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, sibling.key().clone())
+            .unwrap(),
+        SyncTargetInspection::Pending
+    );
+    assert_eq!(sync.targets(&job_id)[0].1, "succeeded");
+    drop(sibling);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_inspect_is_read_only_and_tenant_scoped() {
+    let sync = Fixture::new();
+    let id = sync.source("Scoped");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let key = target.key().clone();
+    let before = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .unwrap(),
+        SyncTargetInspection::Pending
+    );
+    assert_eq!(sync.snapshot(), before);
+    let foreign = SyncTargetKey {
+        job_id: "foreign-job".into(),
+        ordinal: 0,
+    };
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, foreign)
+            .err()
+            .unwrap()
+            .to_string(),
+        "Sync target Job mismatch"
+    );
+    assert_eq!(sync.snapshot(), before);
+    let outside = SyncTargetKey {
+        job_id: job_id.clone(),
+        ordinal: 1,
+    };
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, outside)
+            .err()
+            .unwrap()
+            .to_string(),
+        "Sync target is outside the sealed basis"
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET tenant='other-tenant' WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after_tamper = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .err()
+            .unwrap()
+            .to_string(),
+        "Sync target tenant mismatch"
+    );
+    assert_eq!(sync.snapshot(), after_tamper);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET tenant=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![sync.job(&job_id).tenant, job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sync.worker.inspect_source_sync_target(&lease, key).unwrap(),
+        SyncTargetInspection::Pending
+    );
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

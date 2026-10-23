@@ -169,14 +169,12 @@ describe("printer-upload worker Bambu admission", () => {
 
   it.each([
     ["moonraker", false], ["moonraker", true], ["prusalink", false], ["prusalink", true],
-  ] as const)("keeps %s transfer and cleanup with queued=%j", async (type, queued) => {
+  ] as const)("does not require bambu when farm allows %s with queued=%j", async (type, queued) => {
     f.host(type);
-    f.repo.setSetting("feature_toggles", "broken");
-    const reads = vi.spyOn(f.repo, "getSettingSnapshot");
+    f.repo.setSetting("feature_toggles", '{"farm":true,"bambu":false}');
     expect(await f.run({ queued })).toMatchObject({ status: "done", error: null });
     expect(type === "moonraker" ? f.upload : f.prusaUpload).toHaveBeenCalledExactlyOnceWith(
       {}, { path: expect.any(String) }, "plate.gcode", { start: false },
     );
-    expect(reads).not.toHaveBeenCalled();
   });
 });

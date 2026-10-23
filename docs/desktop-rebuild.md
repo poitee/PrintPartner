@@ -1253,11 +1253,38 @@ GRE-769 adds `resolve_capture_manifest`. It runs the same integrity checks, then
 compares actor, operation key, target, admission limits, inventory, and digests
 with an admitted journal `Operation`. Exact rebound bytes must match the
 presented document. A mismatch or integrity failure refuses without writing;
-journal rows and non-database files stay unchanged. Captured admission preflight
-stays on GRE-770.
+journal rows and non-database files stay unchanged.
+
+### D14 captured preflight admission
+
+GRE-770 adds `ImportClient::preflight_capture` and `preflight_capture_target`
+behind `desktop_rebuild`. Preflight authenticates the credential, checks
+admission limits, and — for a fresh key — checks that the bytes on disk plus
+every unsettled reservation plus this reservation fit the owner import quota
+(`Owner import quota exceeded`), then validates the create or existing target
+basis. It returns an immutable `PreflightedCapture` and does not publish files
+or enqueue a job. A matching prior captured journal entry may be returned as
+`replay` without re-checking owner-wide quota; a supplied prior with the same
+key refuses with an idempotency conflict. Refusal and success both leave
+journal rows, non-database files, and the accounting epoch unchanged.
+
+### D14 captured prepare and admit
+
+GRE-771 adds `PreflightedCapture::prepare` and `ImportClient::admit_prepared`
+behind `desktop_rebuild`. `prepare` binds the capture manifest (GRE-768/769)
+into a `PreparedCapturedAdmission` with `Input::Captured`. `admit_prepared`
+submits writer `Admit` under `AdmissionAuthority::Preflighted`, re-admits the
+preflight credential in the write transaction (`Capture authority changed` on
+mismatch), revalidates the target basis, checks captured inventory and binding,
+and either returns an exact prior operation (same actor and `intent_digest`) or
+writes one journal row, quota reservation, and supplied import job
+(`input_version` 2). Credential-path `admit` still refuses `Input::Captured`.
+A stale basis after preflight refuses without changing journal rows or
+non-database files. Correlation and resolved claims stay on GRE-772.
 
 ```sh
-cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_manifest
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
@@ -2000,6 +2027,15 @@ failure stays retained evidence. GRE-777 acknowledges that retained failure when
 the presented observation matches the claim. GRE-778 adopts an already-
 acknowledged successful result when the live Source observation still matches
 the claim capture, and refuses mismatched provenance without writing.
+GRE-779 ports `halt_after_error` and `HaltSourceSync` so a caller Source
+operation error closes through the existing batch halt path. The detail is the
+Job recovery message. Retained failures stay as recorded. A claimed target is
+kept for reconciliation. A stale attempt is refused without writing.
+GRE-780 ports `inspect` and `InspectSourceSyncTarget` so the authorized worker
+reads one live Sync target without writing or changing reservation ownership.
+Claimed targets report `Pending`; acknowledged successes and failures return
+their stored evidence. A foreign tenant row or Job mismatch is refused without
+writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
