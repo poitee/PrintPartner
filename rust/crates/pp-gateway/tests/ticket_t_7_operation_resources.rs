@@ -705,7 +705,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 54);
+    assert_eq!(reviewed.len(), 55);
     assert_eq!(unresolved.len(), 388);
     let resolved: BTreeSet<_> = index
         .claims()
