@@ -1278,8 +1278,9 @@ As in the reference, `uploads::source_reserved` makes Source deletion return
 `active_work` while an import of the Source holds an unsettled reservation.
 Storage written before that guard can hold an unsettled entry whose Source is
 gone. The same startup pass fails its queued job with `source_unavailable`, as a
-claim would, and then settles the entry. Any other job state with a missing
-Source refuses to open.
+claim would, and then settles the entry. A terminal job with a missing Source
+also settles. Only a non-terminal, non-queued job with a missing Source refuses
+to open.
 
 Opening storage checks each preclaim refusal against its entry and job: it must be
 the entry's first and only observation, the entry must be `admitted`, or settled as
