@@ -311,7 +311,9 @@ jobs:
           name: nextest-archive-linux-desktop-rebuild
       - name: nextest desktop_rebuild partition
         timeout-minutes: 40
-        run: cargo nextest run --archive-file nextest-archive-desktop-rebuild.tar.zst --partition slice:${{ matrix.partition }}/3 --no-fail-fast -E "$NEXTEST_FILTER"
+        # Remap the archived workspace root (rust/) onto this runner's checkout so
+        # partitions do not require identical absolute paths across pp-local slots.
+        run: cargo nextest run --archive-file nextest-archive-desktop-rebuild.tar.zst --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:${{ matrix.partition }}/3 --no-fail-fast -E "$NEXTEST_FILTER"
       - name: Show sccache stats
         if: always()
         shell: bash
@@ -323,7 +325,8 @@ jobs:
   rust-linux:
     name: rust (linux)
     needs: [rust-linux-build, rust-linux-rebuild]
-    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust-linux-build.result != 'skipped'
+    # !cancelled() so a cancelled workflow reports skipped/cancel, not aggregate failure.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust-linux-build.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
