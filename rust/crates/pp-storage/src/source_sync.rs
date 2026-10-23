@@ -299,19 +299,18 @@ pub(crate) fn original_authority_status(
     })
 }
 
-#[allow(dead_code)]
 struct ProducerCapture {
-    claim_generation: i64,
-    parent_generation: i64,
-    worker: String,
-    fence_digest: String,
-    incarnation: String,
-    token: String,
-    configuration_version: i64,
+    _claim_generation: i64,
+    _parent_generation: i64,
+    _worker: String,
+    _fence_digest: String,
+    _incarnation: String,
+    _token: String,
+    _configuration_version: i64,
     authority_actor: String,
-    authority_basis_digest: String,
-    activation_digest: String,
-    path_digest: String,
+    _authority_basis_digest: String,
+    _activation_digest: String,
+    _path_digest: String,
 }
 
 enum ValidatedTargetOutcome {
@@ -322,10 +321,8 @@ enum ValidatedTargetOutcome {
         _receipt: crate::jobs::ResultArtifact,
     },
     Failed {
-        #[allow(dead_code)]
-        failure: SourceSyncFailure,
-        #[allow(dead_code)]
-        code: String,
+        _failure: SourceSyncFailure,
+        _code: String,
     },
     NotRun,
     ReconciliationRequired {
@@ -789,17 +786,17 @@ fn validate_target_in_basis(
                 "Invalid Sync reservation token"
             );
             Some(ProducerCapture {
-                claim_generation,
-                parent_generation,
-                worker,
-                fence_digest,
-                incarnation,
-                token,
-                configuration_version,
+                _claim_generation: claim_generation,
+                _parent_generation: parent_generation,
+                _worker: worker,
+                _fence_digest: fence_digest,
+                _incarnation: incarnation,
+                _token: token,
+                _configuration_version: configuration_version,
                 authority_actor,
-                authority_basis_digest,
-                activation_digest,
-                path_digest,
+                _authority_basis_digest: authority_basis_digest,
+                _activation_digest: activation_digest,
+                _path_digest: path_digest,
             })
         }
         _ => return Err(anyhow!("Sync producer capture incomplete")),
@@ -930,8 +927,8 @@ fn validate_target_in_basis(
                 _ => return Err(anyhow!("Invalid Sync failure code")),
             }
             ValidatedTargetOutcome::Failed {
-                failure: failure()?,
-                code,
+                _failure: failure()?,
+                _code: code,
             }
         }
         "not_run" => {
