@@ -216,6 +216,8 @@ impl ReviewedEntry {
                 Table(BuildProfiles),
                 Table(Parts),
                 Table(PlanAcceptedInputSets),
+                Table(PlanDraftInputs),
+                Table(PlanDraftParts),
                 Table(PlanDrafts),
                 Table(PlanRevisionInputSets),
                 Table(PlanRevisionInputs),

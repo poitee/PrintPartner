@@ -3289,7 +3289,8 @@ it("traces get_build_recipe isolated workspace probes against its operation-wide
   }
 });
 
-const BUILD_WORKFLOW_TABLES = [
+const BUILD_WORKFLOW_OPEN_DRAFT_TABLES = ["plan_draft_inputs", "plan_draft_parts"];
+const BUILD_WORKFLOW_BASE_TABLES = [
   "accepted_plate_heads",
   "app_settings",
   "build_profiles",
@@ -3307,7 +3308,11 @@ const BUILD_WORKFLOW_TABLES = [
   "projects",
   "required_units",
   "source_revisions",
-].map((table) => `table:${table}`);
+];
+const BUILD_WORKFLOW_ACCEPTED_TABLES = BUILD_WORKFLOW_BASE_TABLES.map((table) => `table:${table}`);
+const BUILD_WORKFLOW_TABLES = [...BUILD_WORKFLOW_BASE_TABLES, ...BUILD_WORKFLOW_OPEN_DRAFT_TABLES]
+  .map((table) => `table:${table}`)
+  .sort();
 const BUILD_WORKFLOW_UNION = ["file:source-workspace", ...BUILD_WORKFLOW_TABLES].sort();
 const IDLE_BUILD_WORKFLOW_TABLES = [
   "table:app_settings",
@@ -3393,8 +3398,7 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
   expect(await trace({}, IDLE_BUILD_WORKFLOW_TABLES, { activePlanId: idle.id })).toMatchObject({ build: { id: idle.id } });
   expect(await trace({ plan_id: foreign.id }, ["table:build_profiles"], { activePlanId: idle.id })).toEqual({ error: "Build not found" });
   const { repository, plan, files } = acceptedPlanFixture(false);
-  const acceptedTables = BUILD_WORKFLOW_TABLES;
-  const accepted = await trace({ plan_id: plan.id }, acceptedTables, { repository, files });
+  const accepted = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_ACCEPTED_TABLES, { repository, files });
   expect(accepted).toMatchObject({
     build: { id: plan.id, name: "Accepted plan" },
     accepted_plan: { kind: "ready" },
@@ -3402,6 +3406,12 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
   });
   expect(await trace({ plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Build not found" });
   expect(await trace({ plan_id: foreign.id }, IDLE_BUILD_WORKFLOW_TABLES, { tenantId: "other" })).toMatchObject({ build: { id: foreign.id } });
+  const draft = insertEmptyPlanDraft(plan.id);
+  const withOpenDraft = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_TABLES, { repository, files });
+  expect(withOpenDraft).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    working_plan: { kind: "stale", draft_id: draft.id },
+  });
   expect([...union, "file:source-workspace"].sort()).toEqual(BUILD_WORKFLOW_UNION);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_build_workflow");
   if (!entry || entry.operation === "source.sync") throw new Error("Missing build workflow declaration");
@@ -3424,9 +3434,10 @@ it("traces get_build_workflow isolated workspace probes against its operation-wi
   }
   expect(JSON.parse(output.content)).toMatchObject({ build: { id: plan.id, name: "Accepted plan" } });
   const observed = [...new Set(statements.flatMap((sql) => buildWorkflowSelect(sql, "default")))].sort();
-  expect(observed).toEqual(BUILD_WORKFLOW_TABLES);
+  expect(observed).toEqual(BUILD_WORKFLOW_ACCEPTED_TABLES);
   for (const resource of observed) union.add(resource);
   for (const resource of buildWorkflowFileResources([join(dataDir, "repos"), workspace])) union.add(resource);
+  for (const table of BUILD_WORKFLOW_OPEN_DRAFT_TABLES) union.add(`table:${table}`);
   expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
   expect([...union].sort()).toEqual(BUILD_WORKFLOW_UNION);
 });

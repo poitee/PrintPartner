@@ -1034,6 +1034,14 @@
           },
           {
             "kind": "table",
+            "name": "plan_draft_inputs"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_parts"
+          },
+          {
+            "kind": "table",
             "name": "plan_drafts"
           },
           {

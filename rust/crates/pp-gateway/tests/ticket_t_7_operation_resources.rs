@@ -2125,10 +2125,11 @@ fn assert_tool_invalid_admission(id: &str) {
                 AdmissionError::ResourceSetMismatch { id: id.into() }
             }
             13 => {
+                let participant = "tool.audit_build_coverage";
                 regroup(&mut value, "tool.regrouped", &[id]);
-                regroup(&mut value, id, &["tool.get_build_workflow"]);
+                regroup(&mut value, id, &[participant]);
                 let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-                unresolved.retain(|operation| operation != "tool.get_build_workflow");
+                unresolved.retain(|operation| operation != participant);
                 unresolved.push(json!("tool.regrouped"));
                 malformed(&format!(
                     "reviewed participant {id} must belong to operation {id}"
@@ -2440,6 +2441,8 @@ fn ticket_t_7_ownership_get_build_workflow_has_complete_node_owned_resources() {
         {"kind":"table","name":"build_profiles"},
         {"kind":"table","name":"parts"},
         {"kind":"table","name":"plan_accepted_input_sets"},
+        {"kind":"table","name":"plan_draft_inputs"},
+        {"kind":"table","name":"plan_draft_parts"},
         {"kind":"table","name":"plan_drafts"},
         {"kind":"table","name":"plan_revision_input_sets"},
         {"kind":"table","name":"plan_revision_inputs"},
