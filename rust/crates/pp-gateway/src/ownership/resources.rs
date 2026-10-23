@@ -151,6 +151,8 @@ enum ReviewedEntry {
     AnalyzeBuildRequest { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_build_recipe")]
     GetBuildRecipe { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.compare_plans")]
+    ComparePlans { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -481,6 +483,20 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::ComparePlans { resources } => (
+                "tool.compare_plans",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    Table(PlanDecisions),
+                    File(FileFamily::KitCatalog),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::GetPlanOptionGroups { resources } => (
                 "tool.get_plan_option_groups",
                 resources,
@@ -730,6 +746,7 @@ impl Declarations {
             "tool.get_kit_catalog",
             "tool.analyze_build_request",
             "tool.get_build_recipe",
+            "tool.compare_plans",
             "tool.get_plan_option_groups",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",

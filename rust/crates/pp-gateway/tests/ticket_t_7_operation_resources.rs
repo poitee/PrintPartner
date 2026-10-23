@@ -686,6 +686,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_kit_catalog",
         "tool.analyze_build_request",
         "tool.get_build_recipe",
+        "tool.compare_plans",
         "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
@@ -705,7 +706,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.analyze_stl_mesh",
     ]);
     assert_eq!(reviewed.len(), 54);
-    assert_eq!(unresolved.len(), 389);
+    assert_eq!(unresolved.len(), 388);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1002,6 +1003,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_kit_catalog",
         "tool.analyze_build_request",
         "tool.get_build_recipe",
+        "tool.compare_plans",
         "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
@@ -1138,7 +1140,8 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),
         ("tool.analyze_build_request", "tool.get_build_recipe"),
-        ("tool.get_build_recipe", "tool.get_plan_option_groups"),
+        ("tool.get_build_recipe", "tool.compare_plans"),
+        ("tool.compare_plans", "tool.get_plan_option_groups"),
         ("tool.get_workflow_help", "tool.web_search"),
         ("tool.web_search", "tool.fetch_web_page"),
         ("tool.fetch_web_page", "tool.get_job_status"),
@@ -1982,6 +1985,11 @@ fn ticket_t_7_ownership_get_build_recipe_refuses_invalid_admission_before_effect
     assert_tool_invalid_admission("tool.get_build_recipe");
 }
 
+#[test]
+fn ticket_t_7_ownership_compare_plans_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.compare_plans");
+}
+
 fn assert_tool_invalid_admission(id: &str) {
     let mut original = manifest();
     original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
@@ -2363,6 +2371,75 @@ fn ticket_t_7_ownership_analyze_build_request_has_complete_node_owned_resources(
 fn ticket_t_7_ownership_get_build_recipe_has_complete_node_owned_resources() {
     use pp_gateway::ownership::{Owner, manifest::Disposition};
     let id = "tool.get_build_recipe";
+    let index = admit_bundled_manifest().unwrap();
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"table","name":"build_profiles"},
+        {"kind":"table","name":"profile_layers"},
+        {"kind":"table","name":"projects"},
+        {"kind":"table","name":"source_docs"},
+        {"kind":"table","name":"app_settings"},
+        {"kind":"table","name":"plan_decisions"},
+        {"kind":"file","name":"kit-catalog"},
+        {"kind":"file","name":"source-workspace"}
+    ]))
+    .unwrap();
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut sqlite_compatible = manifest();
+    sqlite_compatible["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(
+        admit(&sqlite_compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    for (format, node_reads, writers) in [
+        ("sqlite-schema", 34, vec![Some(35), None]),
+        ("source-revision-workspace", 1, vec![Some(2), None]),
+        ("kit-catalog", 1, vec![Some(2), None]),
+    ] {
+        for rust_writes in writers {
+            let mut value = manifest();
+            value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+            value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+    }
+    let mut value = manifest();
+    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+}
+
+#[test]
+fn ticket_t_7_ownership_compare_plans_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.compare_plans";
     let index = admit_bundled_manifest().unwrap();
     let expected: ResourceSet = serde_json::from_value(json!([
         {"kind":"table","name":"build_profiles"},
