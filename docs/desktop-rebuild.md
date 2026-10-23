@@ -2324,12 +2324,13 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop
 ### D26 runtime wiring (a), GRE-818
 
 `pp_core::rebuild_api::clients(rebuild, owner, policy, lifetimes)` composes the
-opted-in auth, draft, Build, and catalog storage clients from the same
-`WriterOwner` and stored `DesktopRebuild` flag that D23's auth router already
-uses. It returns `None` before creating any client unless the flag is on.
-`RebuildHttpClients::close` drops the owned handles; storage shutdown stays
-with `WriterOwner`. This slice does not mount routes or change production
-ownership. Authenticated read mounting is GRE-819.
+opted-in auth, draft, and Build storage clients from the same `WriterOwner` and
+stored `DesktopRebuild` flag that D23's auth router already uses. It returns
+`None` before creating any client unless the flag is on. Catalog is not in the
+bundle: GRE-819 mounts it with `admit_catalog_routes(config, owner)`, which
+builds a credentialed catalog client per request. `RebuildHttpClients::close`
+drops the owned handles; storage shutdown stays with `WriterOwner`. This slice
+does not mount routes or change production ownership.
 
 ```sh
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
