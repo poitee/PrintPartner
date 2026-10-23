@@ -10,13 +10,13 @@ use axum::{
     http::{Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use pp_storage::{
     auth::AuthFailure,
     build_graph::{
         BuildCommand, BuildGraphClient, BuildOutcome, Failure as BuildFailure, PositiveId,
-        wire::{CreateBuildRequest, layer, profile_summary},
+        wire::{CreateBuildRequest, SourceAttachmentRequest, layer, profile_summary},
     },
 };
 use serde_json::json;
@@ -102,10 +102,10 @@ impl Drop for Cancellation {
     }
 }
 
-/// Mounts Plan list/detail GET+HEAD, create/delete, layer list GET+HEAD, touch,
+/// Mounts Plan list/detail GET+HEAD, create/delete, layer list/mutate, touch,
 /// and kit-manifest ReadKit plus SaveKit (`PUT`) at `/`, `/api/v1`, and `/api/v2`
 /// when `PP_DESKTOP_REBUILD` was exactly `1` or `true`. Otherwise mounts nothing.
-/// Layer mutate, jobs, and ReadBuilder stay unregistered.
+/// Jobs and ReadBuilder stay unregistered.
 pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -119,7 +119,12 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
     let routes = Router::new()
         .route("/plans", get(list).post(create))
         .route("/plans/{id}", get(detail).delete(remove))
-        .route("/plans/{id}/layers", get(list_layers))
+        .route("/plans/{id}/layers", get(list_layers).post(attach_addon))
+        .route("/plans/{id}/layers/base", put(set_base))
+        .route(
+            "/plans/{id}/layers/{layer_id}",
+            put(replace_attachment).delete(detach),
+        )
         .route("/plans/{id}/touch", post(touch))
         .route(
             "/plans/{id}/kit-manifest",
@@ -181,6 +186,7 @@ async fn create(State(app): State<App>, request: axum::extract::Request) -> Resp
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
+    let path = request.uri().path().to_owned();
     let limit = app.config.body_limit;
     let bytes = match to_bytes(request.into_body(), limit).await {
         Ok(bytes) => bytes,
@@ -201,6 +207,7 @@ async fn create(State(app): State<App>, request: axum::extract::Request) -> Resp
         app,
         presented,
         Method::POST,
+        path,
         BuildCommand::Create {
             name: body.name,
             base_source: body.base_project_id,
@@ -242,6 +249,92 @@ async fn touch(
     execute(app, request, BuildCommand::Touch { build }).await
 }
 
+async fn set_base(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = parse_build_id(&id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    attachment(app, request, Method::PUT, |source| BuildCommand::SetBase {
+        build,
+        source,
+    })
+    .await
+}
+
+async fn attach_addon(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = parse_build_id(&id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    attachment(app, request, Method::POST, |source| {
+        BuildCommand::AttachAddon { build, source }
+    })
+    .await
+}
+
+async fn replace_attachment(
+    State(app): State<App>,
+    Path((id, layer_id)): Path<(String, String)>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = parse_build_id(&id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    let Some(layer) = parse_build_id(&layer_id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    attachment(app, request, Method::PUT, |source| {
+        BuildCommand::ReplaceAttachment {
+            build,
+            layer,
+            source,
+        }
+    })
+    .await
+}
+
+async fn detach(
+    State(app): State<App>,
+    Path((id, layer_id)): Path<(String, String)>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = parse_build_id(&id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    let Some(layer) = parse_build_id(&layer_id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    execute(app, request, BuildCommand::Detach { build, layer }).await
+}
+
+async fn attachment(
+    app: App,
+    request: axum::extract::Request,
+    method: Method,
+    command: impl FnOnce(PositiveId) -> BuildCommand,
+) -> Response {
+    let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+    let path = request.uri().path().to_owned();
+    let limit = app.config.body_limit;
+    let bytes = match to_bytes(request.into_body(), limit).await {
+        Ok(bytes) => bytes,
+        Err(_) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "Request body too large"),
+    };
+    let body: SourceAttachmentRequest = match serde_json::from_slice(&bytes) {
+        Ok(body) => body,
+        Err(_) => return failure(StatusCode::BAD_REQUEST, "Request is invalid"),
+    };
+    run(app, presented, method, path, command(body.project_id)).await
+}
+
 fn parse_build_id(id: &str) -> Option<PositiveId> {
     id.parse::<u64>()
         .ok()
@@ -257,13 +350,15 @@ pub(super) async fn execute(
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     let method = request.method().clone();
-    run(app, presented, method, command).await
+    let path = request.uri().path().to_owned();
+    run(app, presented, method, path, command).await
 }
 
 pub(super) async fn run(
     app: App,
     presented: PresentedCredential,
     method: Method,
+    path: String,
     command: BuildCommand,
 ) -> Response {
     let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
@@ -283,7 +378,7 @@ pub(super) async fn run(
     })
     .await
     {
-        Ok(Ok(outcome)) => present(&method, outcome),
+        Ok(Ok(outcome)) => present(&method, &path, outcome),
         Ok(Err(error)) => domain_error(error),
         Err(_) => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -292,7 +387,7 @@ pub(super) async fn run(
     }
 }
 
-fn present(method: &Method, outcome: BuildOutcome) -> Response {
+fn present(method: &Method, path: &str, outcome: BuildOutcome) -> Response {
     let head = *method == Method::HEAD;
     match outcome {
         BuildOutcome::Listed { profiles } => json_response(
@@ -328,10 +423,23 @@ fn present(method: &Method, outcome: BuildOutcome) -> Response {
         BuildOutcome::Manifest(outcome) => super::manifest_options::present(method, outcome),
         BuildOutcome::MissingBuild => failure(StatusCode::NOT_FOUND, "Profile not found"),
         BuildOutcome::InvalidBaseSource => failure(StatusCode::BAD_REQUEST, "Project not found"),
+        BuildOutcome::MissingSource => failure(StatusCode::NOT_FOUND, "Project not found"),
+        BuildOutcome::MissingLayer => failure(StatusCode::NOT_FOUND, "Layer not found"),
         BuildOutcome::DuplicateName { name } => failure(
             StatusCode::BAD_REQUEST,
             &format!("Profile already exists: {name}"),
         ),
+        BuildOutcome::DuplicateAttachment { source_name } => {
+            let detail = format!("Source \"{source_name}\" is already attached to this build");
+            let status = if path.ends_with("/layers") && *method == Method::POST {
+                StatusCode::CONFLICT
+            } else if path.ends_with("/layers/base") || *method == Method::PUT {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            failure(status, &detail)
+        }
         _ => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Build service unavailable",
