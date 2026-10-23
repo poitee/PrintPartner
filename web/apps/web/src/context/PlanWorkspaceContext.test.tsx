@@ -767,6 +767,68 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(hook.result.current.draftError).toBeNull();
   });
 
+  it("failed_save_retains_original_request", async () => {
+    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(uncertain)
+      .mockResolvedValueOnce(savedChoices(2, 2));
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Save could not be confirmed",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    const originalRequest = vi.mocked(savePlanChoices).mock.calls[0]?.[1];
+    expect(originalRequest?.decisions).toEqual([
+      expect.objectContaining({
+        kind: "set_quantity_override",
+        target: {
+          part_key: planRow.match_key,
+          relative_path: planRow.relative_path,
+          source_layer: planRow.source_layer,
+        },
+        value: 2,
+      }),
+    ]);
+
+    await act(async () => {
+      await hook.result.current.preparePlan();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[1]).toEqual(originalRequest);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("failed_save_retry_reuses_operation_identity", async () => {
+    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(uncertain)
+      .mockResolvedValueOnce(savedChoices(2, 2));
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Save could not be confirmed",
+      );
+    });
+    const retainedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+    expect(retainedKey).toEqual(expect.any(String));
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);
+
+    await act(async () => {
+      await hook.result.current.preparePlan();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[2]).toBe(retainedKey);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
   it("keeps a completed Build A edit out of Build B's active draft state", async () => {
     const edit = deferred<PlanDraftWorkspace>();
     vi.mocked(editPlanDraftParts).mockReturnValueOnce(edit.promise);
