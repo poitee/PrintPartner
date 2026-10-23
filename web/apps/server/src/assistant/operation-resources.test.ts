@@ -77,7 +77,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -491,6 +491,131 @@ it("rejects an undeclared read against the empty get_workflow_help resource set"
   if (!entry || entry.operation === "source.sync") throw new Error("Missing workflow help declaration");
   const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
   expect(() => expect(observed).toEqual(declared)).toThrow();
+});
+
+
+it("traces web_search as an explicitly resource-free operation", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.web_search");
+  expect(entry).toEqual({ operation: "tool.web_search", resources: [] });
+  const outbound = await import("../lib/outbound-url.js");
+  const html = `
+      <a class="result__a" href="https://example.com/a">Title A</a>
+      <a class="result__snippet">Snippet A</a>
+    `;
+  const spy = vi.spyOn(outbound, "safeOutboundFetch").mockImplementation(async () =>
+    new Response(html, { status: 200 }),
+  );
+  try {
+    for (const tenantId of ["default", "tenant-b"]) {
+      for (const input of [{ query: "voron tap" }, { query: " voron tap ", site: "printables.com" }]) {
+        statements = [];
+        observer.state.files = [];
+        observer.state.active = true;
+        let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+        try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("web_search", input, { repo })); }
+        finally { observer.state.active = false; }
+        const raw = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+        expect(raw.untrusted_banner).toMatch(/UNTRUSTED/i);
+        expect(Array.isArray(raw.hits)).toBe(true);
+        expect(statements).toEqual([]);
+        expect(observer.state.files).toEqual([]);
+      }
+    }
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let blank: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { blank = await tenantStorage.run("default", () => invokeAssistantTool("web_search", { query: "  " }, { repo })); }
+    finally { observer.state.active = false; }
+    expect(JSON.parse(blank.content)).toEqual({ error: "query required" });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("rejects observed reads against the empty web_search declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("web_search", { query: "x" }, { repo });
+    repo.listSources();
+  } finally { observer.state.active = false; }
+  const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql)))].sort();
+  expect(observed).toEqual(["table:projects", "table:source_docs"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.web_search");
+  expect(entry).toEqual({ operation: "tool.web_search", resources: [] });
+  expect(() => expect(observed).toEqual([])).toThrow();
+});
+
+it("traces fetch_web_page as an explicitly resource-free operation", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.fetch_web_page");
+  expect(entry).toEqual({ operation: "tool.fetch_web_page", resources: [] });
+  const outbound = await import("../lib/outbound-url.js");
+  const html = `<html><head><title>Kit Docs</title></head><body><p>Hello kit world</p></body></html>`;
+  const spy = vi.spyOn(outbound, "safeOutboundFetch").mockImplementation(async () =>
+    new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
+  );
+  try {
+    for (const tenantId of ["default", "tenant-b"]) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, { repo })); }
+      finally { observer.state.active = false; }
+      const raw = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+      expect(raw.ok).toBe(true);
+      expect(raw.title).toBe("Kit Docs");
+      expect(statements).toEqual([]);
+      expect(observer.state.files).toEqual([]);
+    }
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let blank: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { blank = await tenantStorage.run("default", () => invokeAssistantTool("fetch_web_page", { url: "  " }, { repo })); }
+    finally { observer.state.active = false; }
+    expect(JSON.parse(blank.content)).toEqual({ error: "url required" });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let disabled: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      disabled = await tenantStorage.run("default", () =>
+        invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, {
+          repo,
+          runtime: { assistantAllowUrlIngest: false },
+        }),
+      );
+    } finally { observer.state.active = false; }
+    expect(JSON.parse(disabled.content)).toEqual({
+      error: "URL fetch disabled (ASSISTANT_ALLOW_URL_INGEST=0)",
+    });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("rejects observed reads against the empty fetch_web_page declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, { repo });
+    repo.listSources();
+  } finally { observer.state.active = false; }
+  const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql)))].sort();
+  expect(observed).toEqual(["table:projects", "table:source_docs"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.fetch_web_page");
+  expect(entry).toEqual({ operation: "tool.fetch_web_page", resources: [] });
+  expect(() => expect(observed).toEqual([])).toThrow();
 });
 
 it("traces check_hardware_interfaces inputs, comparisons and tenants against its reviewed empty union", async () => {

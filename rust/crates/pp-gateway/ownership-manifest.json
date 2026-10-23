@@ -299,6 +299,14 @@
         "resources": []
       },
       {
+        "operation": "tool.web_search",
+        "resources": []
+      },
+      {
+        "operation": "tool.fetch_web_page",
+        "resources": []
+      },
+      {
         "operation": "tool.get_plan_decisions",
         "resources": [
           {
@@ -1559,7 +1567,6 @@
       "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
       "tool.duplicate_plan",
-      "tool.fetch_web_page",
       "tool.find_filament_matches",
       "tool.get_build_recipe",
       "tool.get_build_workflow",
@@ -1587,7 +1594,6 @@
       "tool.start_sync",
       "tool.suggest_source_contributions",
       "tool.update_kit_selections",
-      "tool.web_search",
       "worker.startManagedProfileSync"
     ]
   },
