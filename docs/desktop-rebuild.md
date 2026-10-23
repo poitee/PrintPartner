@@ -2386,3 +2386,19 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features deskto
 ```
 
 See `docs/gre-818-rebuild-clients.md`.
+
+### D26 runtime wiring (b), GRE-819
+
+`pp_core::rebuild_api::read_router` mounts auth, Plan builds, and catalog from
+one `WriterOwner` when the stored rebuild flag is on. It uses the GRE-818 client
+bundle plus `admit_catalog_routes(config, owner)`. Aliases share that owner.
+`RebuildReadOwner::admit` fails closed for unknown names. Flag off returns
+`None` before clients or mounts. Draft HTTP is GRE-820; cutover remains GRE-593.
+
+```sh
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild \
+  --test rebuild_read_http -- --exact --test-threads=2
+```
+
+Focused tests: `rebuild_read_aliases_use_one_owner`, `unknown_read_owner_is_refused_before_execution`.
