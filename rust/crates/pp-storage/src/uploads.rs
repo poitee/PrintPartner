@@ -764,10 +764,6 @@ impl Observed {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "GRE-771 prepare/admit_prepared consumes credential, tenant, actor, and target"
-)]
 pub struct PreflightedCapture {
     pub(crate) credential: jobs::Credential,
     pub(crate) tenant: String,

@@ -457,9 +457,9 @@ fn injected_sqlite_failure_maps_to_node_plan_draft_update_failed() {
     let error = f.call(&client, "selection", f.request()).unwrap_err();
     assert_eq!(error.to_string(), "Plan draft update failed");
     assert!(
-        error
-            .chain()
-            .any(|cause| cause.to_string().contains("injected reconciliation failure")),
+        error.chain().any(|cause| cause
+            .to_string()
+            .contains("injected reconciliation failure")),
         "{error:#}"
     );
     assert_eq!(tables.map(|table| f.count(table)), before);
