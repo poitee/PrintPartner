@@ -60,7 +60,7 @@ impl Drop for Fixture {
 }
 
 fn invoke(fixture: &Fixture) -> std::process::Output {
-    let mut child = support::command(env!("CARGO_BIN_EXE_pp-source-media"))
+    let mut child = support::command(support::bin_exe("pp-source-media"))
         .current_dir(&fixture.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

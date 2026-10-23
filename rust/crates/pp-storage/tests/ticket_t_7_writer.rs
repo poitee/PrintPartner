@@ -86,7 +86,7 @@ fn snapshot(dir: &Path, tenant: &str, key: &str) -> SettingSnapshot {
 #[test]
 fn ticket_t_7_writer_reopens_after_clean_process_exit() {
     let dir = temp_dir("clean");
-    let bin = env!("CARGO_BIN_EXE_storage-fixture");
+    let bin = child_process::bin_exe("storage-fixture");
     let mut child = child_process::command(bin)
         .args([
             "settings",
@@ -458,7 +458,7 @@ struct Contender {
 }
 
 fn lock_from_another_process(dir: &Path) -> Contender {
-    let mut child = child_process::command(env!("CARGO_BIN_EXE_storage-fixture"))
+    let mut child = child_process::command(child_process::bin_exe("storage-fixture"))
         .args(["contend", dir.to_str().unwrap()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
