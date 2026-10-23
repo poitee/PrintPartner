@@ -89,7 +89,7 @@ Slices land in this order. Linear tracks each one under GRE-595. A slice is one 
 | D21 | GRE-616 | pp-storage read_model context and graph |
 | D22 | GRE-618 | pp-storage read_model workflow and views |
 | D23 | GRE-617 | pp-api auth HTTP |
-| D24 | GRE-619 | pp-api drafts HTTP (list/read/edit landed; abandon GRE-988) |
+| D24 | GRE-619 | pp-api drafts HTTP (list/read/edit/abandon; abandon GRE-988) |
 | D25 | GRE-620 | pp-api builds HTTP and jobs |
 | D26 | GRE-621 | Web and server wiring behind the flag |
 
@@ -1267,10 +1267,24 @@ or enqueue a job. A matching prior captured journal entry may be returned as
 `replay` without re-checking owner-wide quota; a supplied prior with the same
 key refuses with an idempotency conflict. Refusal and success both leave
 journal rows, non-database files, and the accounting epoch unchanged.
-`prepare` and `admit_prepared` stay on GRE-771.
+
+### D14 captured prepare and admit
+
+GRE-771 adds `PreflightedCapture::prepare` and `ImportClient::admit_prepared`
+behind `desktop_rebuild`. `prepare` binds the capture manifest (GRE-768/769)
+into a `PreparedCapturedAdmission` with `Input::Captured`. `admit_prepared`
+submits writer `Admit` under `AdmissionAuthority::Preflighted`, re-admits the
+preflight credential in the write transaction (`Capture authority changed` on
+mismatch), revalidates the target basis, checks captured inventory and binding,
+and either returns an exact prior operation (same actor and `intent_digest`) or
+writes one journal row, quota reservation, and supplied import job
+(`input_version` 2). Credential-path `admit` still refuses `Input::Captured`.
+A stale basis after preflight refuses without changing journal rows or
+non-database files. Correlation and resolved claims stay on GRE-772.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
@@ -2017,6 +2031,11 @@ GRE-779 ports `halt_after_error` and `HaltSourceSync` so a caller Source
 operation error closes through the existing batch halt path. The detail is the
 Job recovery message. Retained failures stay as recorded. A claimed target is
 kept for reconciliation. A stale attempt is refused without writing.
+GRE-780 ports `inspect` and `InspectSourceSyncTarget` so the authorized worker
+reads one live Sync target without writing or changing reservation ownership.
+Claimed targets report `Pending`; acknowledged successes and failures return
+their stored evidence. A foreign tenant row or Job mismatch is refused without
+writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
@@ -2228,7 +2247,7 @@ Landed replacement slices for the superseded #635 monolith:
 | b | GRE-940 | List and workspace reads |
 | c | GRE-941 | API-key `ResolveKey` so `lastUsedAt` commits; foreign-tenant keys 401 |
 | d | GRE-942 | Part edits with Node conflict shapes |
-| e | GRE-988 | Abandon (deferred; needs the storage lifecycle token) |
+| e | GRE-988 | Abandon with storage lifecycle token |
 
 With both gates on, `draft_router` serves these paths at the root and
 `/api/v2`:
@@ -2238,15 +2257,16 @@ With both gates on, `draft_router` serves these paths at the root and
 | GET | `/plans/{id}/drafts` | `WorkingDraftClient` list |
 | GET | `/plans/{id}/drafts/{draft_id}` | workspace read |
 | PATCH | `/plans/{id}/drafts/{draft_id}/parts` | `edit` with typed `EditRequest` |
+| POST | `/plans/{id}/drafts/{draft_id}/abandon` | `abandon` with typed `AbandonRequest` |
 
 `admit_draft_routes` buffers each body before routing, disables Axum's 2 MiB
 default, and applies the guard's limits: 16 KiB request target, 1 MiB for
 reads, 8 MiB for PATCH, 5 s body timeout, 64 admission permits. Loopback
 transport is required. Host must match the configured listener; forwarded and
-`x-forwarded-*` headers are refused. Session-cookie PATCH needs a matching
-Origin; GETs and API-key PATCH may omit it, but any Origin sent must match.
+`x-forwarded-*` headers are refused. Session-cookie writes (PATCH/POST) need a matching
+Origin; GETs and API-key writes may omit it, but any Origin sent must match.
 A foreign or `null` Origin, or `sec-fetch-site: cross-site`, returns 403.
-Ambiguous credentials return 401, or 403 on an Origin-less PATCH. Exactly one
+Ambiguous credentials return 401, or 403 on an Origin-less write. Exactly one
 of session cookie, `Authorization: Bearer`, or `x-print-partner-api-key` is
 accepted. API keys use the configured tenant, not a request header.
 
@@ -2265,10 +2285,16 @@ synthetic conflict `detail`; 422 `domain_error` is `{ code }` only. 404 and
 503 keep their Node `detail`. Server failures use
 `{ detail: "Plan draft update failed", code: "internal_error" }`.
 
-`POST /plans/{id}/drafts/{draft_id}/abandon` stays unregistered. Storage
-already implements abandon behind the lifecycle version token; the HTTP
-adapter is [GRE-988](https://linear.app/greetz/issue/GRE-988). The desktop
-gateway does not mount this router; D26 does.
+`POST /plans/{id}/drafts/{draft_id}/abandon` takes
+`{ expected_lifecycle_version }` (`AbandonRequest`). Success returns 200 with
+the draft identity (`state: abandoned`, lifecycle advanced). A retry with the
+same expected lifecycle version is idempotent (`Ready`). A stale token returns
+409 `{ code: "draft_changed", workspace }` with no synthetic `detail`; a
+consumed or already-closed draft that is not the idempotent retry returns
+409 `{ code: "not_open", workspace }`. Invalid bodies return 400
+`invalid_request` before mutation. Server failures use the same
+`Plan draft update failed` detail as edit. The desktop gateway does not mount
+this router; D26 does.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --lib

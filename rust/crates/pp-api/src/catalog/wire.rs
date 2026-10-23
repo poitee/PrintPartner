@@ -1,6 +1,6 @@
 use pp_storage::catalog::{
     CategorySettings, CreateSource, Deletion, NamingCommand, NamingOverride, NamingPreview,
-    NamingProfile, SourcePatch, SourceSummary,
+    NamingProfile, SourceActivityEvent, SourcePatch, SourceSummary,
 };
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -55,6 +55,33 @@ pub(super) fn naming_preview(body: &Value) -> Option<(String, Option<NamingOverr
 
 pub(super) fn naming_preview_body(preview: NamingPreview) -> Result<Value, serde_json::Error> {
     serde_json::to_value(preview)
+}
+
+/// Node PUT body: `{ rules?: string[] }`. Missing or null `rules` becomes `[]`.
+/// Each rule uses Node `String()` coercion; a non-array `rules` is refused.
+pub(super) fn import_rules_save(body: &Value) -> Option<Vec<String>> {
+    match body.get("rules") {
+        None | Some(Value::Null) => Some(Vec::new()),
+        Some(Value::Array(items)) => Some(items.iter().map(js_string).collect()),
+        _ => None,
+    }
+}
+
+/// Storage returns a bare activity array; HTTP wraps `{ "events": [...] }`.
+pub(super) fn activity(events: Vec<SourceActivityEvent>) -> Result<Value, serde_json::Error> {
+    Ok(json!({ "events": events }))
+}
+
+/// Node: `Number(query.limit ?? 20)`; non-finite → `20`; then trunc + clamp `1..=100`.
+pub(super) fn activity_limit(raw: Option<&str>) -> u8 {
+    let requested = match raw {
+        None => 20.0,
+        Some(value) => match value.parse::<f64>() {
+            Ok(number) if number.is_finite() => number,
+            _ => 20.0,
+        },
+    };
+    requested.trunc().clamp(1.0, 100.0) as u8
 }
 
 /// Node PUT body: `categories` defaults to `[]`, `replacements` to `{}`.

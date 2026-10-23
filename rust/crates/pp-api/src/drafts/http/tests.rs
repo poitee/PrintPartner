@@ -2,10 +2,12 @@ use super::*;
 use axum::{
     Extension,
     body::Body,
+    extract::ConnectInfo,
     routing::{get, patch},
 };
 use reqwest::Client;
 use serde_json::Value;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -126,7 +128,7 @@ fn transport_admission_requires_loopback_peer_and_matching_authority() {
         (local, Some("evil.test"), lo, Some(403)),
         ("https://evil.test/plans/1/drafts", host, lo, Some(403)),
     ] {
-        let result = admit(&config, &request(uri, host, peer));
+        let result = admit_request(&config, &request(uri, host, peer));
         assert_eq!(
             result.err().map(|error| error.0.as_u16()),
             status,
@@ -137,7 +139,7 @@ fn transport_admission_requires_loopback_peer_and_matching_authority() {
     duplicate
         .headers_mut()
         .append("host", "127.0.0.1:1234".parse().unwrap());
-    assert_eq!(admit(&config, &duplicate).unwrap_err().0, 403);
+    assert_eq!(admit_request(&config, &duplicate).unwrap_err().0, 403);
 }
 
 #[test]
@@ -548,6 +550,10 @@ fn edit(digest: &str) -> Value {
     ]})
 }
 
+fn abandon_body(lifecycle: u64) -> Value {
+    json!({"expected_lifecycle_version": lifecycle})
+}
+
 #[tokio::test]
 async fn listing_and_workspace_have_literal_wire_contracts() {
     let server = ReadServer::start(Some("true"), "default").await;
@@ -587,8 +593,6 @@ async fn listing_and_workspace_have_literal_wire_contracts() {
     }
     for path in [
         "/plans/1/drafts/recompute",
-        "/plans/1/drafts/2/abandon",
-        "/api/v2/plans/1/drafts/2/abandon",
         "/plans/1/drafts/2/rebase",
         "/plans/1/drafts/2/reconciliation",
         "/plans/1/drafts/2/apply",
@@ -618,6 +622,7 @@ async fn missing_resources_cross_tenant_reads_and_invalid_ids_are_hidden() {
             (Method::GET, "", json!({})),
             (Method::GET, "/2", json!({})),
             (Method::PATCH, "/2/parts", edit(DIGEST)),
+            (Method::POST, "/2/abandon", abandon_body(0)),
         ] {
             assert_eq!(
                 json_reply(
@@ -634,6 +639,7 @@ async fn missing_resources_cross_tenant_reads_and_invalid_ids_are_hidden() {
     for (method, suffix, body) in [
         (Method::GET, "", json!({})),
         (Method::PATCH, "/parts", edit(DIGEST)),
+        (Method::POST, "/abandon", abandon_body(0)),
     ] {
         assert_eq!(
             json_reply(
@@ -1353,4 +1359,154 @@ async fn present_edit_matches_node_conflict_and_domain_shapes() {
     let baseline_body: Value =
         serde_json::from_slice(&to_bytes(baseline.into_body(), 4096).await.unwrap()).unwrap();
     assert_eq!(baseline_body, json!({"code":"accepted_baseline_required"}));
+}
+
+#[tokio::test]
+async fn abandon_persists_and_preserves_node_conflict_shapes() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    let abandoned = json!({
+        "draft_id":2,"state":"abandoned","lifecycle_version":1,
+        "snapshot_digest":DIGEST,"base":{"revision_id":1,"plan_version":1}
+    });
+    for prefix in ["", "/api/v2"] {
+        let server = ReadServer::start(Some("true"), "default").await;
+        assert_eq!(
+            json_reply(
+                server
+                    .request(Method::POST, &format!("{prefix}/plans/1/drafts/2/abandon"))
+                    .json(&abandon_body(0)),
+                200
+            )
+            .await,
+            abandoned
+        );
+        assert_eq!(
+            server
+                .sql()
+                .query_row(
+                    "SELECT state,lifecycle_version FROM plan_drafts WHERE id=2",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                )
+                .unwrap(),
+            ("abandoned".into(), 1)
+        );
+        let listed = json_reply(
+            server.request(Method::GET, &format!("{prefix}/plans/1/drafts")),
+            200,
+        )
+        .await;
+        assert_eq!(listed["drafts"][1], abandoned);
+        let workspace = json_reply(
+            server.request(Method::GET, &format!("{prefix}/plans/1/drafts/2")),
+            200,
+        )
+        .await;
+        assert_eq!(workspace["draft"], abandoned);
+        // Idempotent retry with the same lifecycle token returns Ready.
+        assert_eq!(
+            json_reply(
+                server
+                    .request(Method::POST, &format!("{prefix}/plans/1/drafts/2/abandon"))
+                    .json(&abandon_body(0)),
+                200
+            )
+            .await,
+            abandoned
+        );
+        // Stale token: 409 `{code,workspace}` with no synthetic detail.
+        let stale = json_reply(
+            server
+                .request(Method::POST, &format!("{prefix}/plans/1/drafts/2/abandon"))
+                .json(&abandon_body(99)),
+            409,
+        )
+        .await;
+        assert_eq!(stale["code"], "draft_changed");
+        assert_eq!(stale["workspace"]["draft"], abandoned);
+        assert!(stale.get("detail").is_none());
+        server.close().await;
+    }
+    // Fixture draft 1 is already consumed → not_open with workspace, no detail.
+    let current = json_reply(server.request(Method::GET, "/plans/1/drafts/1"), 200).await;
+    let not_open = json_reply(
+        server
+            .request(Method::POST, "/plans/1/drafts/1/abandon")
+            .json(&abandon_body(1)),
+        409,
+    )
+    .await;
+    assert_eq!(not_open, json!({"code":"not_open","workspace":current}));
+    assert!(not_open.get("detail").is_none());
+    server.close().await;
+}
+
+#[tokio::test]
+async fn abandon_bounds_and_typed_bodies_reject_before_mutation() {
+    let server = ReadServer::start(Some("true"), "default").await;
+    for body in [
+        "{",
+        "null",
+        "[]",
+        "{}",
+        "{\"expected_lifecycle_version\":-1}",
+        "{\"expected_lifecycle_version\":0,\"extra\":true}",
+        "{\"expected_lifecycle_version\":null}",
+    ] {
+        assert_eq!(
+            json_reply(
+                server
+                    .request(Method::POST, "/plans/1/drafts/2/abandon")
+                    .body(body.to_owned()),
+                400
+            )
+            .await,
+            json!({"detail":"Request is invalid","code":"invalid_request"})
+        );
+    }
+    assert_eq!(
+        server
+            .sql()
+            .query_row(
+                "SELECT state,lifecycle_version FROM plan_drafts WHERE id=2",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            )
+            .unwrap(),
+        ("open".into(), 0)
+    );
+    server.close().await;
+}
+
+#[tokio::test]
+async fn present_abandon_matches_node_conflict_shapes() {
+    use pp_storage::required_units::{DraftBase, DraftIdentity};
+    let draft = DraftIdentity {
+        draft_id: 2,
+        state: "abandoned".into(),
+        lifecycle_version: 1,
+        snapshot_digest: DIGEST.into(),
+        base: DraftBase {
+            revision_id: Some(1),
+            plan_version: 1,
+        },
+    };
+    let ready = present_abandon(AbandonOutcome::Ready {
+        draft: draft.clone(),
+    });
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready_body: Value =
+        serde_json::from_slice(&to_bytes(ready.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(
+        ready_body,
+        json!({"draft_id":2,"state":"abandoned","lifecycle_version":1,"snapshot_digest":DIGEST,"base":{"revision_id":1,"plan_version":1}})
+    );
+    let missing = present_abandon(AbandonOutcome::DraftNotFound);
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let missing_body: Value =
+        serde_json::from_slice(&to_bytes(missing.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(
+        missing_body,
+        json!({"detail":"Plan draft not found","code":"draft_not_found"})
+    );
 }

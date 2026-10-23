@@ -353,6 +353,10 @@ async fn refuse_mounted_reads(server: &Server) {
         "/sources/1",
         "/api/v1/sources",
         "/api/v1/sources/1",
+        "/sources/activity",
+        "/api/v1/sources/activity",
+        "/sources/1/import-rules",
+        "/api/v1/sources/1/import-rules",
         "/sources/1/naming",
         "/api/v1/sources/1/naming",
         "/settings/source-categories",
@@ -364,6 +368,8 @@ async fn refuse_mounted_reads(server: &Server) {
             body.get("sources").is_none()
                 && body.get("name").is_none()
                 && body.get("categories").is_none()
+                && body.get("events").is_none()
+                && body.get("rules").is_none()
                 && body.get("use_defaults").is_none()
                 && body.get("effective").is_none()
         );
@@ -423,6 +429,13 @@ async fn refuse_mounted_reads(server: &Server) {
             .await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("use_defaults").is_none() && body.get("effective").is_none());
+    }
+    for path in ["/sources/1/import-rules", "/api/v1/sources/1/import-rules"] {
+        let (status, body) = server
+            .exchange(Method::PUT, path, &[], Some(&json!({"rules":["parts/"]})))
+            .await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("rules").is_none());
     }
 }
 
@@ -1175,6 +1188,201 @@ async fn catalog_invalid_override_does_not_write() {
         )
         .await;
     assert_eq!((status, after), (200, saved));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_import_rules_round_trip() {
+    use pp_storage::catalog::{Outcome, Request};
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let created = post_source(&server, &cookie, "Rules").await;
+    let id = created["id"].as_i64().unwrap();
+    let (status, empty) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200, "{empty}");
+    assert_eq!(empty, json!({"rules":[],"legacy_import_all":true}));
+    let body = json!({"rules":[" /STLs ","\\STLs","a.STL",12,""]});
+    let (status, saved) = server
+        .exchange(
+            Method::PUT,
+            &format!("/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+            Some(&body),
+        )
+        .await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(saved["rules"], json!(["STLs/", "a.STL", "12/"]));
+    let (status, got) = server
+        .send(
+            Method::GET,
+            &format!("/api/v1/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(
+        got,
+        json!({"rules":["STLs/","a.STL","12/"],"legacy_import_all":false})
+    );
+    let storage = {
+        let guard = owner.lock().unwrap();
+        match guard
+            .local_source_catalog()
+            .execute(Request::GetImportRules { id })
+            .unwrap()
+        {
+            Outcome::Data(value) => value,
+            _ => panic!("import rules"),
+        }
+    };
+    assert_eq!(got, storage);
+    let before_bytes = database_bytes(&directory);
+    let snapshot = files(&directory);
+    let (status, missing) = server
+        .exchange(
+            Method::PUT,
+            "/sources/999999/import-rules",
+            &[("Cookie", &cookie)],
+            Some(&json!({"rules":["nope/"]})),
+        )
+        .await;
+    assert_eq!(
+        (status, missing["detail"].as_str()),
+        (404, Some("Source not found"))
+    );
+    let (status, refused) = server
+        .exchange(
+            Method::PUT,
+            &format!("/api/v1/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"rules":["parts/"],"local_path":"/tmp/outside"})),
+        )
+        .await;
+    assert_eq!(
+        (status, refused["detail"].as_str()),
+        (400, Some("Raw local_path requires native Source selection"))
+    );
+    assert_eq!(database_bytes(&directory), before_bytes);
+    assert_eq!(files(&directory), snapshot);
+    let (status, after) = server
+        .send(
+            Method::GET,
+            &format!("/sources/{id}/import-rules"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, after), (200, got));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_activity_limit_matches_node() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let created = post_source(&server, &cookie, "Activity").await;
+    let source_id = created["id"].as_i64().unwrap();
+    {
+        let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+        db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+        for (tenant, kind, payload) in [
+            (
+                "default",
+                "source.updated",
+                format!(r#"{{"source_id":{source_id},"source_name":"Activity"}}"#),
+            ),
+            (
+                "default",
+                "source.sync_failed",
+                r#"{"source_name":"Broken","error":"boom"}"#.into(),
+            ),
+            ("default", "source.update_available", "{}".into()),
+            ("default", "unrelated", "{}".into()),
+            (
+                "foreign",
+                "source.updated",
+                r#"{"source_id":99,"source_name":"Foreign"}"#.into(),
+            ),
+        ] {
+            db.execute(
+                "INSERT INTO app_events(tenant_id,at,kind,payload_json) VALUES(?1,'2026-10-23T00:00:00.000Z',?2,?3)",
+                rusqlite::params![tenant, kind, payload],
+            )
+            .unwrap();
+        }
+        for i in 0..110 {
+            db.execute(
+                "INSERT INTO app_events(tenant_id,at,kind,payload_json) VALUES('default','2026-10-23T00:00:00.000Z','source.updated',?1)",
+                rusqlite::params![format!(r#"{{"source_name":"Pad {i}"}}"#)],
+            )
+            .unwrap();
+        }
+    }
+    for prefix in ["", "/api/v1"] {
+        let (status, body) = server
+            .send(
+                Method::GET,
+                &format!("{prefix}/sources/activity"),
+                &[("Cookie", &cookie)],
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix} {body}");
+        let events = body["events"].as_array().unwrap();
+        assert_eq!(events.len(), 20, "{prefix}");
+        assert!(body.get("events").is_some());
+        assert!(events.iter().all(|event| {
+            event.get("id").is_some()
+                && event.get("at").is_some()
+                && event.get("kind").is_some()
+                && event.get("source_name").is_some()
+                && event.as_object().unwrap().contains_key("source_id")
+                && event.as_object().unwrap().contains_key("detail")
+        }));
+        assert!(events.iter().all(|event| event["source_name"] != "Foreign"));
+    }
+    let (status, zero) = server
+        .send(
+            Method::GET,
+            "/sources/activity?limit=0",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(zero["events"].as_array().unwrap().len(), 1);
+    let (status, five) = server
+        .send(
+            Method::GET,
+            "/api/v1/sources/activity?limit=5",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(five["events"].as_array().unwrap().len(), 5);
+    let (status, oversize) = server
+        .send(
+            Method::GET,
+            "/sources/activity?limit=150",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(oversize["events"].as_array().unwrap().len(), 100);
+    let (status, bad) = server
+        .send(
+            Method::GET,
+            "/sources/activity?limit=abc",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(bad["events"].as_array().unwrap().len(), 20);
     server.stop().await;
     shutdown(owner, directory);
 }

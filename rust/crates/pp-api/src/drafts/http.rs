@@ -1,24 +1,26 @@
+use crate::loopback::{
+    LoopbackOrigin, PresentedCredential, admit, principal, rebuild_flag_enabled,
+    require_api_key_tenant,
+};
 use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
     body::{Body, Bytes, to_bytes},
-    extract::{ConnectInfo, DefaultBodyLimit, Extension, State},
-    http::{HeaderMap, Method, StatusCode, Uri},
+    extract::{DefaultBodyLimit, Extension, State},
+    http::{Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use pp_storage::{
     auth::{self, AuthFailure, Secret, rebuild::RebuildAuthClient},
-    read_model::Credential,
     required_units::{AdmissionFailure, Outcome as WorkspaceOutcome},
     working_drafts::{
-        DraftIdentity, DraftList, EditRequest, Failure, Outcome, PositiveId, Request,
-        WorkingDraftClient,
+        AbandonOutcome, AbandonRequest, DraftIdentity, DraftList, EditRequest, Failure, Outcome,
+        PositiveId, Request, WorkingDraftClient,
     },
 };
 use serde_json::{Value, json};
-use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,39 +57,13 @@ impl DraftHttpConfig {
     }
 
     fn from_startup(origin: &str, api_key_tenant: &str, flag: Option<&str>) -> Result<Self> {
-        let url = reqwest::Url::parse(origin)?;
-        ensure!(
-            url.path() == "/"
-                && url.query().is_none()
-                && url.fragment().is_none()
-                && url.username().is_empty()
-                && url.password().is_none(),
-            "Listener must be an origin"
-        );
-        let ip: IpAddr = url
-            .host_str()
-            .unwrap_or("")
-            .trim_matches(['[', ']'])
-            .parse()?;
-        ensure!(
-            ip.is_loopback() && matches!(url.scheme(), "http" | "https"),
-            "Listener must be loopback HTTP"
-        );
-        ensure!(
-            !api_key_tenant.trim().is_empty() && api_key_tenant.len() <= 512,
-            "Invalid API key tenant"
-        );
-        let origin = url.origin().ascii_serialization();
-        let host = origin
-            .split_once("://")
-            .ok_or_else(|| anyhow::anyhow!("Listener must be an origin"))?
-            .1
-            .to_owned();
+        let listener = LoopbackOrigin::parse(origin)?;
+        require_api_key_tenant(api_key_tenant)?;
         Ok(Self {
-            origin,
-            host,
+            origin: listener.origin,
+            host: listener.host,
             api_key_tenant: api_key_tenant.into(),
-            enabled: matches!(flag, Some("1" | "true")),
+            enabled: rebuild_flag_enabled(flag),
             body_limit: 8 * 1024 * 1024,
             wait: Duration::from_millis(100),
         })
@@ -146,7 +122,7 @@ async fn guard(
     if request.uri().to_string().len() > TARGET_LIMIT {
         return failure(StatusCode::URI_TOO_LONG, "Request target too long");
     }
-    if let Err((status, detail)) = admit(&config, &request) {
+    if let Err((status, detail)) = admit_request(&config, &request) {
         return failure(status, detail);
     }
     let Some(presented) = principal(request.headers(), &config.api_key_tenant) else {
@@ -200,97 +176,16 @@ impl http_body::Body for AdmittedBody {
     }
 }
 
-fn admit(
+fn admit_request(
     config: &DraftHttpConfig,
     request: &axum::extract::Request,
 ) -> std::result::Result<(), (StatusCode, &'static str)> {
-    let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() else {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Transport identity unavailable",
-        ));
-    };
-    if !peer.ip().is_loopback() {
-        return Err((StatusCode::FORBIDDEN, "Loopback transport required"));
-    }
-    let headers = request.headers();
-    let authority = request.uri().authority().map(|value| value.as_str());
-    let host = headers.get("host").and_then(|value| value.to_str().ok());
-    if headers.get_all("host").iter().count() > 1
-        || (headers.contains_key("host") && host != Some(&config.host))
-        || authority.or(host) != Some(&config.host)
-        || headers
-            .keys()
-            .any(|key| key == "forwarded" || key.as_str().starts_with("x-forwarded-"))
-    {
-        return Err((StatusCode::FORBIDDEN, "Invalid request host"));
-    }
-    let origin = headers.get("origin").and_then(|value| value.to_str().ok());
-    if headers.get_all("origin").iter().count() > 1
-        || (headers.contains_key("origin") && origin != Some(&config.origin))
-        || (!matches!(
-            *request.method(),
-            Method::GET | Method::HEAD | Method::OPTIONS
-        ) && origin != Some(&config.origin)
-            && !matches!(
-                principal(headers, &config.api_key_tenant),
-                Some(PresentedCredential::ApiKey { .. })
-            ))
-        || headers
-            .get_all("sec-fetch-site")
-            .iter()
-            .any(|value| value == "cross-site")
-    {
-        return Err((StatusCode::FORBIDDEN, "Invalid request origin"));
-    }
-    Ok(())
-}
-
-/// The one credential a draft request presented. API keys route to the
-/// configured tenant; request headers cannot select another tenant.
-/// Storage accepts it before a read handler runs.
-#[derive(Clone)]
-enum PresentedCredential {
-    Session(String),
-    ApiKey { tenant: String, secret: String },
-}
-
-fn principal(headers: &HeaderMap, tenant: &str) -> Option<PresentedCredential> {
-    let mut session = None;
-    for header in headers.get_all("cookie") {
-        for item in header.to_str().ok()?.split(';') {
-            if let Some(("pp_session", value)) = item.trim().split_once('=')
-                && session.replace(value).is_some()
-            {
-                return None;
-            }
-        }
-    }
-    let auth = headers.get("authorization");
-    let custom = headers.get("x-print-partner-api-key");
-    if headers.get_all("authorization").iter().count() > 1
-        || headers.get_all("x-print-partner-api-key").iter().count() > 1
-        || usize::from(session.is_some())
-            + usize::from(auth.is_some())
-            + usize::from(custom.is_some())
-            != 1
-    {
-        return None;
-    }
-    if let Some(value) = session {
-        return (!value.is_empty() && value.len() <= 4096)
-            .then(|| PresentedCredential::Session(value.into()));
-    }
-    let key = if let Some(value) = auth {
-        value.to_str().ok()?.strip_prefix("Bearer ")?
-    } else {
-        custom?.to_str().ok()?
-    }
-    .trim();
-    (!key.is_empty() && key.len() <= 4096).then(|| PresentedCredential::ApiKey {
-        tenant: tenant.into(),
-        secret: key.into(),
-    })
+    admit(
+        &config.origin,
+        &config.host,
+        &config.api_key_tenant,
+        request,
+    )
 }
 
 fn failure(status: StatusCode, detail: &str) -> Response {
@@ -335,8 +230,8 @@ enum ReadError {
     Storage(anyhow::Error),
 }
 
-/// Mounts list/workspace reads and part edits when the startup gate is on.
-/// Storage accepts the presented credential before a handler runs.
+/// Mounts list/workspace reads, part edits, and abandon when the startup gate
+/// is on. Storage accepts the presented credential before a handler runs.
 /// API-key reads also resolve the key so `lastUsedAt` commits as Node does.
 /// A disabled gate mounts nothing.
 pub fn draft_router(
@@ -384,20 +279,9 @@ fn mount(
         .route("/plans/{id}/drafts", get(list))
         .route("/plans/{id}/drafts/{draft_id}", get(workspace))
         .route("/plans/{id}/drafts/{draft_id}/parts", patch(edit))
+        .route("/plans/{id}/drafts/{draft_id}/abandon", post(abandon))
         .route_layer(middleware::from_fn_with_state(app, authorize));
     admit_draft_routes(config, routes)
-}
-
-impl PresentedCredential {
-    fn into_credential(self) -> Credential {
-        match self {
-            Self::Session(value) => Credential::Session(Secret::new(value)),
-            Self::ApiKey { tenant, secret } => Credential::ApiKey {
-                routed_tenant: tenant,
-                secret: Secret::new(secret),
-            },
-        }
-    }
 }
 
 async fn authorize(
@@ -647,6 +531,14 @@ async fn run_edit(
 }
 
 fn edit_target(path: &str) -> Option<(PositiveId, PositiveId)> {
+    write_target(path, "parts")
+}
+
+fn abandon_target(path: &str) -> Option<(PositiveId, PositiveId)> {
+    write_target(path, "abandon")
+}
+
+fn write_target(path: &str, action: &str) -> Option<(PositiveId, PositiveId)> {
     let path = path.strip_prefix("/api/v2").unwrap_or(path);
     let mut parts = path.split('/').filter(|part| !part.is_empty());
     if parts.next()? != "plans" {
@@ -657,10 +549,111 @@ fn edit_target(path: &str) -> Option<(PositiveId, PositiveId)> {
         return None;
     }
     let draft_id = path_id(parts.next()?)?;
-    if parts.next()? != "parts" || parts.next().is_some() {
+    if parts.next()? != action || parts.next().is_some() {
         return None;
     }
     Some((profile, draft_id))
+}
+
+async fn abandon(
+    Extension(app): Extension<App>,
+    Extension(presented): Extension<PresentedCredential>,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let Some((profile, draft_id)) = abandon_target(uri.path()) else {
+        return invalid_request();
+    };
+    let Ok(request) = serde_json::from_slice::<AbandonRequest>(&body) else {
+        return invalid_request();
+    };
+    match run_abandon(&app, presented, profile, draft_id, request).await {
+        Ok(outcome) => present_abandon(outcome),
+        Err(error) => {
+            let (class, response) = match error {
+                ReadError::Worker => ("worker_failure", edit_internal_error()),
+                ReadError::Storage(error) => (
+                    error_class(&error),
+                    storage_failure_with(&error, EDIT_DETAIL),
+                ),
+                ReadError::Busy => (
+                    "read_pool_exhausted",
+                    failure(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Draft service temporarily unavailable",
+                    ),
+                ),
+            };
+            if response.status().is_server_error() {
+                log::error!(
+                    target: "pp_api::drafts",
+                    "Draft HTTP failed; operation=abandon profile_id={profile:?} draft_id={draft_id:?} error_class={class}"
+                );
+            }
+            response
+        }
+    }
+}
+
+async fn run_abandon(
+    app: &App,
+    presented: PresentedCredential,
+    profile: PositiveId,
+    draft_id: PositiveId,
+    request: AbandonRequest,
+) -> std::result::Result<AbandonOutcome, ReadError> {
+    let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
+        return Err(ReadError::Busy);
+    };
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut cancel = CancelOnDrop {
+        flag: Arc::clone(&flag),
+        armed: true,
+    };
+    let client = app.client.clone();
+    let wait = app.wait;
+    #[cfg(test)]
+    let hold = app.hold.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        #[cfg(test)]
+        if let Some(hold) = hold {
+            hold();
+        }
+        if flag.load(Ordering::Acquire) {
+            return Err(anyhow::Error::new(Failure::Cancelled));
+        }
+        client.abandon(
+            presented.into_credential(),
+            profile,
+            draft_id,
+            request,
+            flag,
+            wait,
+        )
+    })
+    .await;
+    cancel.armed = false;
+    match joined {
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(error)) => Err(ReadError::Storage(error)),
+        Err(_) => Err(ReadError::Worker),
+    }
+}
+
+/// Maps abandon outcomes to Node's `sendFailure` shapes in `plan-drafts.ts`.
+/// Ready returns the draft identity. 409 is `{code}` plus `workspace` with no
+/// synthetic conflict `detail`.
+fn present_abandon(outcome: AbandonOutcome) -> Response {
+    match outcome {
+        AbandonOutcome::Ready { draft } => json_response(StatusCode::OK, draft),
+        AbandonOutcome::ProfileNotFound => profile_missing(),
+        AbandonOutcome::DraftNotFound => draft_missing(),
+        AbandonOutcome::DraftChanged { workspace } => {
+            conflict("draft_changed", Some(json!(workspace)))
+        }
+        AbandonOutcome::NotOpen { workspace } => conflict("not_open", Some(json!(workspace))),
+    }
 }
 
 /// Maps edit outcomes to Node's `sendFailure` shapes in `plan-drafts.ts`.

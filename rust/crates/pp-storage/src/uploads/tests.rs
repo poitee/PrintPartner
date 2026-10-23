@@ -1776,3 +1776,301 @@ mod capture_preflight {
         owner.shutdown().unwrap();
     }
 }
+
+mod capture_admission {
+    use super::super::{
+        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
+        Target,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::{Connection, params};
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }]
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection
+            .query_row(JOURNAL_SQL, [], |row| row.get(0))
+            .unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+
+    fn create_target(name: &str) -> Target {
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: name.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
+    #[test]
+    fn captured_admission_replays_once() {
+        let root = directory("capture-admission-replay");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-admit-replay";
+        let capture_id = CaptureId::new("capture-admit-replay-id").unwrap();
+
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureAdmitReplay"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap();
+        let prepared = preflight
+            .prepare(
+                capture_id.clone(),
+                key.into(),
+                payload.clone(),
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        assert!(!prepared.manifest().is_empty());
+
+        let first = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        assert_eq!(first.input_version, 2);
+        assert!(matches!(first.input, Input::Captured(_)));
+
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM source_import_operations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let quotas: i64 = connection
+            .query_row("SELECT COUNT(*) FROM source_import_quota", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let jobs: i64 = connection
+            .query_row("SELECT COUNT(*) FROM durable_jobs", [], |row| row.get(0))
+            .unwrap();
+        drop(connection);
+        assert_eq!((rows, quotas, jobs), (1, 1, 1));
+
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureAdmitReplay"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap();
+        let prepared = preflight
+            .prepare(capture_id, key.into(), payload, limits(), inventory)
+            .unwrap();
+        let replay = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        assert_eq!(replay, first);
+
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM source_import_operations", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM source_import_quota", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM durable_jobs", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        drop(connection);
+
+        let refused = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "credential-captured".into(),
+                    target: create_target("CredentialCaptured"),
+                    input: Input::Captured(
+                        CapturedInputV2::bind(
+                            CaptureId::new("credential-captured-id").unwrap(),
+                            CapturedPayloadV1::files(vec!["nested/part.stl".into()]),
+                            "physical-owner",
+                            "credential-captured",
+                            &create_target("CredentialCaptured"),
+                            limits(),
+                            &files(),
+                        )
+                        .unwrap(),
+                    ),
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &AtomicBool::new(false),
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(refused, "Captured imports require prepared admission");
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn captured_admission_stale_basis_rolls_back() {
+        let root = directory("capture-admission-stale");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let seeded = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-stale-seed".into(),
+                    target: create_target("CaptureStaleSeed"),
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        let target = Target::Existing {
+            source_id: seeded.source_id,
+        };
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-stale-admit".into(),
+                target,
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap();
+        assert!(preflight.replay().is_none());
+
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        connection
+            .execute(
+                "DELETE FROM projects WHERE tenant_id=?1 AND id=?2",
+                params!["default", seeded.source_id],
+            )
+            .unwrap();
+        drop(connection);
+
+        let before = journal_and_files(&root);
+        let prepared = preflight
+            .prepare(
+                CaptureId::new("capture-stale-admit-id").unwrap(),
+                "capture-stale-admit".into(),
+                payload,
+                limits(),
+                files(),
+            )
+            .unwrap();
+        let refused = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            refused.contains("Source not found") || refused.contains("not found"),
+            "{refused}"
+        );
+        assert_eq!(journal_and_files(&root), before);
+        owner.shutdown().unwrap();
+    }
+}

@@ -154,6 +154,24 @@ halt, then halts with the live lease and checks that the recovery detail and
 halts while a target is still claimed and checks that claim capture remains on
 the reconciliation-required row.
 
+## Inspect a live Sync target
+
+`ServerWorkerClient::inspect_source_sync_target` reads one target for the live
+authorized attempt. Claimed and pending targets return `Pending`. An
+acknowledged success returns its stored result. An acknowledged failure returns
+that failure. `not_run` returns `Halted`. Unacknowledged terminal rows and
+`reconciliation_required` return `ReconciliationRequired`. The command writes
+nothing and does not change reservation ownership.
+
+The Job must still own the attempt, the original authority must still resolve,
+and the target row's tenant must match the Job. A foreign Job id, an ordinal
+outside the sealed basis, or a tampered tenant is refused without writing.
+
+`sync_inspect_returns_authorized_target` claims, inspects `Pending`, settles,
+then inspects the exact settled result twice with an unchanged database.
+`sync_inspect_is_read_only_and_tenant_scoped` checks those refusals and that
+successful inspection leaves every Sync row unchanged.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
@@ -172,7 +190,7 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
   unacknowledged_failure_blocks_claim_after_restart
 ```
 
-Feature-off, settle, fail, acknowledge, adopt, halt and their tables are absent. The same check covers those commands:
+Feature-off, settle, fail, acknowledge, adopt, halt, inspect and their tables are absent. The same check covers those commands:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
@@ -210,6 +228,16 @@ CARGO_TARGET_DIR=/persist/targets/gre-779-sync-halt \
 cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
   sync_halt_after_error_retains_primary_failure \
   sync_halt_after_error_keeps_target_for_reconciliation
+```
+
+Inspect a live Sync target with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-780-sync-inspect \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_inspect_returns_authorized_target \
+  sync_inspect_is_read_only_and_tenant_scoped
 ```
 
 `durable_claim_returns_source_busy_after_restart` and

@@ -2805,3 +2805,132 @@ fn sync_halt_after_error_keeps_target_for_reconciliation() {
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn sync_inspect_returns_authorized_target() {
+    let sync = Fixture::new();
+    let first = sync.source("Inspected");
+    let second = sync.source("Sibling");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let key = target.key().clone();
+    let before_claim = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .unwrap(),
+        SyncTargetInspection::Pending
+    );
+    assert_eq!(sync.snapshot(), before_claim);
+    let settlement = settlement(first);
+    let settled = sync
+        .worker
+        .settle_source_sync_target(&lease, &mut target, settlement.clone())
+        .unwrap();
+    let after_settle = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .unwrap(),
+        SyncTargetInspection::Succeeded(settlement.result.clone())
+    );
+    assert_eq!(sync.snapshot(), after_settle);
+    assert_eq!(
+        sync.worker.inspect_source_sync_target(&lease, key).unwrap(),
+        SyncTargetInspection::Succeeded(settled.result)
+    );
+    assert_eq!(sync.snapshot(), after_settle);
+    let sibling = local(sync.next(&mut lease));
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, sibling.key().clone())
+            .unwrap(),
+        SyncTargetInspection::Pending
+    );
+    assert_eq!(sync.targets(&job_id)[0].1, "succeeded");
+    drop(sibling);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_inspect_is_read_only_and_tenant_scoped() {
+    let sync = Fixture::new();
+    let id = sync.source("Scoped");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let key = target.key().clone();
+    let before = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .unwrap(),
+        SyncTargetInspection::Pending
+    );
+    assert_eq!(sync.snapshot(), before);
+    let foreign = SyncTargetKey {
+        job_id: "foreign-job".into(),
+        ordinal: 0,
+    };
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, foreign)
+            .err()
+            .unwrap()
+            .to_string(),
+        "Sync target Job mismatch"
+    );
+    assert_eq!(sync.snapshot(), before);
+    let outside = SyncTargetKey {
+        job_id: job_id.clone(),
+        ordinal: 1,
+    };
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, outside)
+            .err()
+            .unwrap()
+            .to_string(),
+        "Sync target is outside the sealed basis"
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET tenant='other-tenant' WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after_tamper = sync.snapshot();
+    assert_eq!(
+        sync.worker
+            .inspect_source_sync_target(&lease, key.clone())
+            .err()
+            .unwrap()
+            .to_string(),
+        "Sync target tenant mismatch"
+    );
+    assert_eq!(sync.snapshot(), after_tamper);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET tenant=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![sync.job(&job_id).tenant, job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sync.worker.inspect_source_sync_target(&lease, key).unwrap(),
+        SyncTargetInspection::Pending
+    );
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
