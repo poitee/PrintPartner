@@ -1024,7 +1024,15 @@ fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
         .query_row(
             "SELECT document,state,resource,version,lease_until FROM durable_jobs WHERE id=?1",
             [&job_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(stored.0, document);
