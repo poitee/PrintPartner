@@ -79,6 +79,10 @@ enum ReviewedEntry {
     SourceSync { import: SourceSyncImport },
     #[serde(rename = "tool.get_workflow_help")]
     GetWorkflowHelp { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.web_search")]
+    WebSearch { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.fetch_web_page")]
+    FetchWebPage { resources: Vec<ResourceId> },
     #[serde(rename = "tool.check_hardware_interfaces")]
     CheckHardwareInterfaces { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_add_custom_filament")]
@@ -260,6 +264,8 @@ impl ReviewedEntry {
             Self::GetWorkflowHelp { resources } => {
                 ("tool.get_workflow_help", resources, BTreeSet::new())
             }
+            Self::WebSearch { resources } => ("tool.web_search", resources, BTreeSet::new()),
+            Self::FetchWebPage { resources } => ("tool.fetch_web_page", resources, BTreeSet::new()),
             Self::CheckHardwareInterfaces { resources } => {
                 ("tool.check_hardware_interfaces", resources, BTreeSet::new())
             }
@@ -670,6 +676,8 @@ impl Declarations {
         for id in [
             "source.sync",
             "tool.get_workflow_help",
+            "tool.web_search",
+            "tool.fetch_web_page",
             "tool.get_job_status",
             "tool.check_hardware_interfaces",
             "tool.propose_add_custom_filament",
