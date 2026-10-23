@@ -844,8 +844,11 @@ GRE-784 adds `pp_core::uploads::SourceImports` behind `desktop_rebuild`. `Source
 
 GRE-785 extends that client with captured preparation. `SourceImports::new` also opens a policy-aware import worker. `preflight_capture` measures stored bytes under `repos` and returns storage's immutable preflight. `admit_captured` admits a `PreparedCapturedAdmission` once per key. `prepare_frozen_claim` inspects a retained frozen capture, correlates its manifest and inventory with the journal, and claims only an exact admitted match that still has a current Source proof. Manifest/journal mismatch and a missing Source refuse with journal rows and non-database files unchanged. The client still does not copy retained inputs into owned import directories (GRE-786). No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
 
+GRE-786 adds the input-copy stage. `write_retained_inputs` takes a claimed frozen capture and copies its retained files into `repos/.pp-imports/{job_id}` through directory capabilities with `O_NOFOLLOW` and `O_EXCL`. Case-folded path collisions are rejected before any destination file is opened. An existing destination operation directory is refused without overwriting. On success the journal advances to `OwnedInputReady` and the frozen capture is removed. The client still does not publish or activate (GRE-787). No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
+
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_client
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_files
 ```
 
 ### D6 native-secret migration
@@ -1671,8 +1674,8 @@ npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manife
 ```
 
 Storage commands landed without HTTP. GRE-801 registers gated ReadKit on the
-Build router (`docs/gre-801-manifest-http.md`). SaveKit and ReadBuilder HTTP
-remain GRE-802 / GRE-803.
+Build router (`docs/gre-801-manifest-http.md`). GRE-802 registers gated SaveKit
+(`docs/gre-802-manifest-http.md`). ReadBuilder HTTP remains GRE-803.
 
 ## D11 required units (GRE-606)
 
@@ -2378,3 +2381,19 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features deskto
 ```
 
 See `docs/gre-818-rebuild-clients.md`.
+
+### D26 runtime wiring (b), GRE-819
+
+`pp_core::rebuild_api::read_router` mounts auth, Plan builds, and catalog from
+one `WriterOwner` when the stored rebuild flag is on. It uses the GRE-818 client
+bundle plus `admit_catalog_routes(config, owner)`. Aliases share that owner.
+`RebuildReadOwner::admit` fails closed for unknown names. Flag off returns
+`None` before clients or mounts. Draft HTTP is GRE-820; cutover remains GRE-593.
+
+```sh
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild \
+  --test rebuild_read_http -- --exact --test-threads=2
+```
+
+Focused tests: `rebuild_read_aliases_use_one_owner`, `unknown_read_owner_is_refused_before_execution`.

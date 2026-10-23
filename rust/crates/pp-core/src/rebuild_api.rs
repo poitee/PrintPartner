@@ -1,13 +1,21 @@
 use crate::DesktopRebuild;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use axum::Router;
-use pp_api::auth::{AuthHttpConfig, ProviderClient, ResetMailer, auth_router};
+use pp_api::{
+    auth::auth_router,
+    builds::{BuildHttpConfig, build_router},
+    catalog::{CatalogHttpConfig, admit_catalog_routes},
+};
+// Re-export so desktop_rebuild integration tests can build AuthRoutes without a
+// non-optional pp-api [dev-dependencies] edge (gated boundary check).
+pub use pp_api::auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer};
 use pp_storage::{
     WriterOwner,
     auth::{AuthPolicy, rebuild::AuthLifetimes, rebuild::RebuildAuthClient},
     build_graph::BuildGraphClient,
     working_drafts::WorkingDraftClient,
 };
+use std::sync::{Arc, Mutex};
 
 pub struct AuthRoutes {
     pub http: AuthHttpConfig,
@@ -17,12 +25,34 @@ pub struct AuthRoutes {
     pub mail: ResetMailer,
 }
 
+/// Completed authenticated read surfaces the rebuild router may admit.
+/// Draft mutations stay with GRE-820; jobs/WS with GRE-821.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebuildReadOwner {
+    Auth,
+    Builds,
+    Catalog,
+}
+
+impl RebuildReadOwner {
+    /// Admit a known read surface. Unknown names fail closed (`None`) before
+    /// any client construction, route mount, or storage execution.
+    pub fn admit(name: &str) -> Option<Self> {
+        match name {
+            "auth" => Some(Self::Auth),
+            "builds" => Some(Self::Builds),
+            "catalog" => Some(Self::Catalog),
+            _ => None,
+        }
+    }
+}
+
 /// Opted-in rebuild HTTP storage clients. Constructed only when the stored
-/// `DesktopRebuild` setting is on. Does not mount routes (GRE-819).
+/// `DesktopRebuild` setting is on.
 ///
 /// Catalog HTTP is not a precomposed client: `admit_catalog_routes` takes the
 /// shared `WriterOwner` and builds a credentialed `SourceCatalogClient` per
-/// request. GRE-819 mounts catalog that way; this bundle does not hold a
+/// request. `read_router` mounts catalog that way; this bundle does not hold a
 /// LocalOwner catalog handle.
 pub struct RebuildHttpClients {
     pub auth: RebuildAuthClient,
@@ -37,7 +67,7 @@ impl RebuildHttpClients {
 
 /// Compose auth, draft, and Build clients without mounting.
 /// Returns `None` before creating any client unless the stored setting is on.
-/// Catalog admission stays with GRE-819 via `admit_catalog_routes(owner)`.
+/// Catalog admission uses `admit_catalog_routes(owner)` from `read_router`.
 pub fn clients(
     rebuild: DesktopRebuild,
     owner: &WriterOwner,
@@ -73,10 +103,51 @@ pub fn router(
     )))
 }
 
+/// Compose authenticated read routers (auth, Plan builds, catalog) from one
+/// `WriterOwner` when the stored rebuild setting is on. Aliases share that
+/// owner. Returns `None` before creating clients or mounting when the setting
+/// is off. Does not cut over production gateway ownership (GRE-593).
+///
+/// `origin` must match `auth.http`'s listener origin. `api_key_tenant` is the
+/// configured API-key tenant for build and catalog admission.
+pub fn read_router(
+    rebuild: DesktopRebuild,
+    owner: Arc<Mutex<WriterOwner>>,
+    auth: AuthRoutes,
+    origin: &str,
+    api_key_tenant: &str,
+) -> Result<Option<Router>> {
+    if !rebuild.enabled() {
+        return Ok(None);
+    }
+    let policy = auth.policy;
+    let RebuildHttpClients {
+        auth: auth_client,
+        drafts: _drafts,
+        builds: builds_client,
+    } = {
+        let guard = owner
+            .lock()
+            .map_err(|_| anyhow!("rebuild owner lock poisoned"))?;
+        clients(rebuild, &guard, policy, auth.lifetimes)?
+            .ok_or_else(|| anyhow!("flag on constructs clients"))?
+    };
+    // `_drafts` is opened with the bundle for GRE-818 parity; draft HTTP is GRE-820.
+    let builds = build_router(
+        BuildHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
+        builds_client,
+    );
+    let catalog = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(origin, api_key_tenant, policy, Some("1"))?,
+        Arc::clone(&owner),
+    );
+    let auth_routes = auth_router(auth.http, auth_client, auth.providers, auth.mail);
+    Ok(Some(auth_routes.merge(builds).merge(catalog)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pp_api::auth::CookieTransport;
     use pp_storage::{
         Limits,
         auth::{FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},

@@ -7,7 +7,7 @@
 pub use pp_contracts::build_identity::{
     AcceptedProgressSummary, AcceptedProgressUnavailableReason, CreateBuildRequest,
     FreshnessReasons, PlanFreshness, PlanStaleReason, PlanUntrackedReason, ProfileLayer,
-    ProfileSummary,
+    ProfileSummary, SourceAttachmentRequest,
 };
 
 use super::{
