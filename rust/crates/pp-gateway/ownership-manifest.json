@@ -956,6 +956,15 @@
         ]
       },
       {
+        "operation": "tool.analyze_build_request",
+        "resources": [
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_plan_snapshot",
         "resources": [
           {
@@ -1541,7 +1550,6 @@
       "startup.seedStockSlicerInstancesIfEmpty",
       "startup.sweepExpiredTransferArtifacts",
       "tool.add_addon",
-      "tool.analyze_build_request",
       "tool.apply_build_recipe",
       "tool.apply_stack_preset",
       "tool.archive_plan",

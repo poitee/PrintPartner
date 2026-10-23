@@ -77,7 +77,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -2920,6 +2920,74 @@ it("traces get_kit_catalog real catalogs, fallbacks and tenant independence with
   });
   observer.state.files.push({ api: "readFileSync", args: [join(root, "README.md"), "utf8"] });
   expect(() => kitCatalogResources([...candidates, ...shipped])).toThrow();
+});
+
+it("traces analyze_build_request catalog candidates, zero SQL and tenant independence", async () => {
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  const union = new Set<string>();
+  const catalog = {
+    version: 1,
+    bases: {},
+    addon_categories: { toolhead: { rule: "pick_one", sources: [{ name: "Addon" }] }, extruder: { rule: "pick_one", sources: [] } },
+    stack_presets: {},
+  };
+  const request = "Build a Voron with toolhead";
+  const baseBody = {
+    special_request: request,
+    requirements: [
+      { key: "project", value: "Voron", status: "unverified" },
+      { key: "requested_feature_1", value: "toolhead", status: "unverified" },
+    ],
+    evidence: [],
+    build_scoped_slots_allowed: true,
+    supported_inputs: {
+      links: ["public Git repositories", "Printables", "MakerWorld", "public web pages"],
+      uploads: [".zip", ".stl", ".3mf", "supporting project files"],
+      upload_workflow:
+        "Create a local/model-library Source, upload files with POST /sources/:id/upload-files or an archive with POST /sources/:id/upload-zip, then attach the returned Source id with propose_import_build_inputs.",
+    },
+    contribution_instruction:
+      "Reuse a functional slot when its responsibility fits. Otherwise propose a snake_case Build-scoped slot with path scope, evidence, and confidence.",
+  };
+  async function trace(expected: unknown, reads: string[], catalogDir: string | null = dataDir) {
+    for (const tenantId of ["default", "other"]) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("analyze_build_request", { request }, { repo, dataDir: catalogDir })); }
+      finally { observer.state.active = false; }
+      expect(JSON.parse(output.content)).toEqual(expected);
+      expect(statements).toEqual([]);
+      if (reads.length) for (const resource of kitCatalogResources([...candidates, ...shipped])) union.add(resource);
+      expect(observer.state.files.map(({ args }) => args[0])).toEqual(reads);
+    }
+  }
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let blank: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { blank = await tenantStorage.run("default", () => invokeAssistantTool("analyze_build_request", { request: "  " }, { repo, dataDir })); }
+  finally { observer.state.active = false; }
+  expect(blank).toEqual({ content: JSON.stringify({ error: "request required" }) });
+  expect(statements).toEqual([]);
+  expect(observer.state.files).toEqual([]);
+  fs.mkdirSync(join(dataDir, "manifests"), { recursive: true });
+  fs.writeFileSync(candidates[0]!, JSON.stringify(catalog));
+  await trace({ ...baseBody, functional_slot_vocabulary: ["toolhead", "extruder"] }, candidates.slice(0, 1));
+  fs.rmSync(candidates[0]!);
+  await trace(
+    {
+      ...baseBody,
+      functional_slot_vocabulary: ["toolhead", "extruder", "hotend", "toolhead_electronics", "probe", "controller", "cable_routing", "z_drives", "skirts_panels", "accent"],
+    },
+    [...candidates, ...shipped.slice(0, 2)],
+  );
+  expect([...union]).toEqual(["file:kit-catalog"]);
+  expect(manifest.resources.reviewed.find((entry) => entry.operation === "tool.analyze_build_request")).toEqual({
+    operation: "tool.analyze_build_request", resources: [{ kind: "file", name: "kit-catalog" }],
+  });
 });
 
 const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "table:profile_layers", "table:projects"];

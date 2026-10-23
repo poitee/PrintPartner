@@ -210,23 +210,16 @@ pub fn resolve_capture_manifest(
         &manifest.requested_files,
     )?;
     ensure!(rebound.bytes() == bytes, "Capture manifest mismatch");
+    ensure!(rebound.input() == &bound, "Capture binding mismatch");
 
     Ok(inventory_of(&manifest))
 }
 
-#[allow(
-    dead_code,
-    reason = "serialize path exercised in unit tests; GRE-770+ callers consume the bound parts"
-)]
 pub(crate) struct BoundCaptureManifest {
     input: CapturedInputV2,
     bytes: Vec<u8>,
 }
 
-#[allow(
-    dead_code,
-    reason = "serialize path exercised in unit tests; GRE-770+ callers consume the bound parts"
-)]
 impl BoundCaptureManifest {
     pub(crate) fn input(&self) -> &CapturedInputV2 {
         &self.input
@@ -236,16 +229,13 @@ impl BoundCaptureManifest {
         &self.bytes
     }
 
+    #[cfg(test)]
     pub(crate) fn into_parts(self) -> (CapturedInputV2, Vec<u8>) {
         (self.input, self.bytes)
     }
 }
 
 /// Serialize a capture manifest through the existing captured binding.
-#[allow(
-    dead_code,
-    reason = "serialize path exercised in unit tests; GRE-770+ callers consume the bound parts"
-)]
 pub(crate) fn bind_capture_manifest(
     capture_id: CaptureId,
     payload: CapturedPayloadV1,
