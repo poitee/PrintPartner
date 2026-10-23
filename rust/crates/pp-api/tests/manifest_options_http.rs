@@ -171,9 +171,7 @@ async fn kit_manifest_read_flag_off_is_404() {
 async fn kit_manifest_read_matches_storage() {
     let (owner, directory) = open();
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
-    let (status, body) = server
-        .send(Method::GET, "/plans/1/kit-manifest", &[])
-        .await;
+    let (status, body) = server.send(Method::GET, "/plans/1/kit-manifest", &[]).await;
     assert_eq!(status, 404);
     assert!(body.get("kit").is_none());
     server.stop().await;
@@ -230,7 +228,11 @@ fn read_kit_storage(owner: &Mutex<WriterOwner>, token: &str, build: i64) -> Valu
         read_model::Credential,
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
-    let client = owner.lock().unwrap().build_graph_with_policy(policy()).unwrap();
+    let client = owner
+        .lock()
+        .unwrap()
+        .build_graph_with_policy(policy())
+        .unwrap();
     match client
         .execute(
             Credential::Session(Secret::new(token.into())),

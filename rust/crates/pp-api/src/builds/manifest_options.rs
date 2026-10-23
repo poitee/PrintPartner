@@ -39,9 +39,7 @@ pub(super) fn present(method: &Method, outcome: ManifestOptionsOutcome) -> Respo
                 "Build service unavailable",
             ),
         },
-        ManifestOptionsOutcome::MissingBuild => {
-            failure(StatusCode::NOT_FOUND, "Profile not found")
-        }
+        ManifestOptionsOutcome::MissingBuild => failure(StatusCode::NOT_FOUND, "Profile not found"),
         // SaveKit / ReadBuilder stay unregistered (GRE-802 / GRE-803).
         _ => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
