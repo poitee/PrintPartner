@@ -1,23 +1,27 @@
 use anyhow::{Result, anyhow, ensure};
-use pp_source::{LocalFiles, SourcePath, local_selection, retained_capture::FrozenCapture};
+use pp_source::{
+    LocalFiles, SourcePath, local_selection,
+    retained_capture::{FrozenCapture, RetainedInputTransfer},
+};
 use pp_storage::{
     WriterOwner,
     auth::AuthPolicy,
     jobs::{ClaimedAttempt, Credential, JobKind, ServerWorkerClient, WorkerAdmission},
     uploads::{
         Admission, AdmissionLimits, CaptureJournalCorrelation, CapturedPayloadV1, File,
-        ImportClient, Input, Operation, PreflightedCapture, PreparedCapturedAdmission, Target,
-        inspect_capture_manifest,
+        ImportClient, Input, Operation, OwnedInput, Phase, PreflightedCapture,
+        PreparedCapturedAdmission, State, Target, inspect_capture_manifest,
     },
 };
+use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
 
 /// Synchronous admission and lookup for Source imports. Supplied admits hash a
-/// directory. Captured admits preflight, prepare, and claim a frozen capture
-/// through a policy-aware worker; they never copy retained inputs.
+/// directory. Captured admits preflight, prepare, claim, and copy retained
+/// inputs into owned import directories. They do not publish or activate.
 pub struct SourceImports {
     client: ImportClient,
     worker: ServerWorkerClient,
@@ -137,6 +141,61 @@ impl SourceImports {
                 Err(anyhow!("Retained capture requires repair"))
             }
         }
+    }
+
+    /// Copies retained inputs for a claimed frozen capture into
+    /// `repos/.pp-imports/{job_id}` through directory capabilities (`O_NOFOLLOW`
+    /// and `O_EXCL`). Case-folded path collisions are rejected before any
+    /// destination file is opened. Advances the journal to `OwnedInputReady`
+    /// and removes the frozen capture. Does not publish or activate.
+    pub fn write_retained_inputs(
+        &self,
+        claim: ClaimedAttempt,
+        frozen: FrozenCapture,
+        cancelled: &AtomicBool,
+    ) -> Result<Operation> {
+        let ClaimedAttempt {
+            job: _,
+            lease,
+            source_work,
+        } = claim;
+        let live =
+            source_work.ok_or_else(|| anyhow!("Supplied import claim missing Source authority"))?;
+        let mut op = self.worker.import_phase(&lease, &live, Phase::Read)?;
+        if op.state == State::Admitted {
+            let paths = op
+                .requested_files
+                .iter()
+                .map(|file| SourcePath::try_from(file.path.clone()))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let inventory = frozen
+                .transfer_owned_input(RetainedInputTransfer {
+                    paths: &paths,
+                    owned_root: &self.repos,
+                    operation: &op.job_id,
+                    max_bytes: op.max_input_bytes,
+                    cancelled,
+                })?
+                .into_inventory();
+            let files = inventory.into_iter().map(input_file).collect::<Vec<_>>();
+            ensure!(
+                files == op.requested_files
+                    && hex::encode(Sha256::digest(serde_json::to_vec(&files)?))
+                        == op.requested_digest,
+                "Owned input requires repair"
+            );
+            op = self.worker.import_phase(
+                &lease,
+                &live,
+                Phase::Owned(OwnedInput {
+                    locator: format!(".pp-imports/{}", op.job_id),
+                    digest: op.requested_digest.clone(),
+                    files: op.requested_files.clone(),
+                }),
+            )?;
+            frozen.remove(&paths)?;
+        }
+        Ok(op)
     }
 
     pub fn get(&self, credential: Credential, key: String) -> Result<Operation> {
