@@ -3520,7 +3520,7 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
 });
 
 it("traces get_build_workflow isolated workspace probes against its operation-wide union", async () => {
-  const { repository, workspace, plan, files } = acceptedPlanFixture(true);
+  const { repository, workspace, plan } = acceptedPlanFixture(true);
   const union = new Set<string>();
   statements = [];
   observer.state.files = [];
