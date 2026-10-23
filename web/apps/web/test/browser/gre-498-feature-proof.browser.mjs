@@ -8,6 +8,13 @@ import { browserExecutable } from "./browserExecutable.mjs";
 
 const fixture = "test/browser/gre-498-feature-proof-visibility.html";
 const evidenceRoot = process.env.PP_GRE498_PROOF_EVIDENCE;
+const planRows = [
+  { key: "farm", title: "Print farm" },
+  { key: "orders", title: "Orders" },
+  { key: "bambu", title: "Bambu printers" },
+  { key: "spoolman", title: "Spoolman" },
+];
+
 const shots = [
   { name: "01-account-default", query: "surface=account" },
   { name: "02-account-all-enabled", query: "surface=account&enabled=1" },
@@ -50,13 +57,30 @@ try {
 
     if (query.includes("surface=plan")) {
       await page.getByRole("heading", { name: "Plan feature overrides" }).waitFor();
-      await page.getByText("Print farm").waitFor();
-      const onButtons = page.getByRole("button", { name: "On" });
-      assert.equal(await onButtons.count(), 4);
+      const allEnabled = query.includes("enabled=1");
+      for (const { key, title } of planRows) {
+        const effective = page.getByTestId(`effective-${key}`);
+        await effective.waitFor();
+        const label = await effective.innerText();
+        if (allEnabled) {
+          assert.match(label, /Effective: On · Plan override/);
+          assert.equal(
+            await page.getByRole("button", { name: `${title}: On` }).getAttribute("aria-pressed"),
+            "true",
+          );
+        } else {
+          assert.match(label, /Effective: Off · Default/);
+          assert.equal(
+            await page.getByRole("button", { name: `${title}: Inherit` }).getAttribute("aria-pressed"),
+            "true",
+          );
+        }
+      }
     }
 
     if (query.includes("surface=farm")) {
       await page.getByRole("heading", { name: "Production send queue" }).waitFor();
+      await page.waitForFunction(() => document.body.dataset.planFeaturesReady === "1");
       const marker = page.locator('[aria-label="Send queue visible"]');
       await marker.waitFor({ state: "attached" });
       const queue = page.getByRole("region", { name: "Printer send queue" });

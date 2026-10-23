@@ -56,7 +56,18 @@ function planFeatures(): PlanFeatures {
   return { profile_id: profileId, overrides: planOverrides, effective: resolved };
 }
 
-const farmEffectiveOn = planFeatures().effective.farm.enabled;
+const queuedSendJob = {
+  id: "q1",
+  filename: "plate.gcode",
+  artifact_path: "/data/plate.gcode",
+  printer_id: "printer-1",
+  wait_for_idle: true,
+  start: true,
+  state: "queued",
+  created_at: "2026-10-22T00:00:00Z",
+  updated_at: "2026-10-22T00:00:00Z",
+  host_name: "Core One",
+};
 
 window.fetch = async (input, init) => {
   const request = new Request(input, init);
@@ -87,26 +98,11 @@ window.fetch = async (input, init) => {
       const patch = (await request.json()) as Partial<Record<FeatureKey, boolean | null>>;
       planOverrides = { ...planOverrides, ...patch };
     }
+    document.body.dataset.planFeaturesReady = "1";
     return json(planFeatures());
   }
   if (path === "/printer-send-queue" && request.method === "GET") {
-    if (!farmEffectiveOn) return json({ items: [] });
-    return json({
-      items: [
-        {
-          id: "q1",
-          filename: "plate.gcode",
-          artifact_path: "/data/plate.gcode",
-          printer_id: "printer-1",
-          wait_for_idle: true,
-          start: true,
-          state: "queued",
-          created_at: "2026-10-22T00:00:00Z",
-          updated_at: "2026-10-22T00:00:00Z",
-          host_name: "Core One",
-        },
-      ],
-    });
+    return json({ items: [queuedSendJob] });
   }
   throw new Error(`Unexpected fixture request ${request.method} ${path}`);
 };
