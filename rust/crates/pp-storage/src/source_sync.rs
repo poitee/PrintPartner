@@ -1,4 +1,5 @@
 use crate::{
+    SettingsClient,
     catalog::{
         IssuedTokenState, SourceBinding, SourceBusy, SourceWorkLease, SourceWorkProof, State,
     },
@@ -7,10 +8,9 @@ use crate::{
         SourceScanResult, SourceSyncFailure,
     },
     source_scan::LocalScanObservation,
-    SettingsClient,
 };
-use anyhow::{anyhow, ensure, Result};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use anyhow::{Result, anyhow, ensure};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 
 /// One target of a Sync batch, by its ordinal in the sealed basis.
