@@ -840,12 +840,21 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       await flushFileChoices(selectedProfileId);
       if (!options?.applyManifest) return;
     }
-    const retained =
+    const pending =
+      selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId) ?? null;
+    const failed =
       selectedProfileId == null
         ? null
-        : (pendingSaveByBuild.current.get(selectedProfileId) ??
-          failedOrdinarySaveByBuild.current.get(selectedProfileId)?.command ??
-          null);
+        : failedOrdinarySaveByBuild.current.get(selectedProfileId) ?? null;
+    // Deliberate Retry save (no applyManifest) replays retained ordinary-Save intent for
+    // both certainties. applyManifest must still reach prepare: a definitive rejection is
+    // shown and kept for Retry/discard, but must not stick prepare on that payload.
+    // Uncertain/pending still replay first because the outcome is ambiguous.
+    const retained =
+      pending ??
+      (failed && (failed.certainty === "uncertain" || !options?.applyManifest)
+        ? failed.command
+        : null);
     if (retained && selectedProfileId != null) {
       await editDraft(retained.edits, selectedProfileId);
       if (!options?.applyManifest) return;

@@ -768,20 +768,19 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
   });
 
   it("failed_save_retains_original_request", async () => {
-    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
     vi.mocked(savePlanChoices)
-      .mockRejectedValueOnce(uncertain)
-      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(definitive)
       .mockResolvedValueOnce(savedChoices(2, 2));
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
     await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
 
     await act(async () => {
       await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
-        "Save could not be confirmed",
+        "Quantity is no longer valid",
       );
     });
-    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
     const originalRequest = vi.mocked(savePlanChoices).mock.calls[0]?.[1];
     expect(originalRequest?.decisions).toEqual([
       expect.objectContaining({
@@ -798,34 +797,90 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     await act(async () => {
       await hook.result.current.preparePlan();
     });
-    expect(savePlanChoices).toHaveBeenCalledTimes(3);
-    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[1]).toEqual(originalRequest);
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1]).toEqual(originalRequest);
     expect(hook.result.current.draftError).toBeNull();
   });
 
   it("failed_save_retry_reuses_operation_identity", async () => {
-    const uncertain = new EngineHttpError("Save could not be confirmed", 500);
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
     vi.mocked(savePlanChoices)
-      .mockRejectedValueOnce(uncertain)
-      .mockRejectedValueOnce(uncertain)
+      .mockRejectedValueOnce(definitive)
       .mockResolvedValueOnce(savedChoices(2, 2));
     const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
     await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
 
     await act(async () => {
       await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
-        "Save could not be confirmed",
+        "Quantity is no longer valid",
       );
     });
     const retainedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
     expect(retainedKey).toEqual(expect.any(String));
+
+    await act(async () => {
+      await hook.result.current.preparePlan();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
     expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("failed_save_definitive_apply_manifest_still_prepares", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    vi.mocked(savePlanChoices).mockRejectedValue(definitive);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    const rejectedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+
+    await act(async () => {
+      await hook.result.current.preparePlan({ applyManifest: true });
+    });
+    // Definitive rejection stays retained for Retry/discard, but applyManifest must
+    // reach prepare instead of resending the rejected payload.
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[2]).toBe(rejectedKey);
+    expect(
+      vi.mocked(applyPlanDraft).mock.calls.length +
+        vi.mocked(abandonPlanDraft).mock.calls.length,
+    ).toBeGreaterThan(0);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("failed_save_409_recovery_issues_new_operation_key", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    const changed = { ...savedWorkspace, diff: { ...savedWorkspace.diff, base_is_current: false } };
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(definitive)
+      .mockRejectedValueOnce(new EngineHttpError("Changed", 409, {
+        code: "base_changed", workspace: changed,
+      }))
+      .mockResolvedValueOnce({ ...savedChoices(2, 3), closed_draft_ids: [10] });
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    const retainedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+    expect(retainedKey).toEqual(expect.any(String));
 
     await act(async () => {
       await hook.result.current.preparePlan();
     });
     expect(savePlanChoices).toHaveBeenCalledTimes(3);
-    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[2]).toBe(retainedKey);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[2]).not.toBe(retainedKey);
+    expect(rebasePlanDraft).toHaveBeenCalled();
     expect(hook.result.current.draftError).toBeNull();
   });
 
