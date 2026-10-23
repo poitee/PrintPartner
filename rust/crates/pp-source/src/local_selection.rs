@@ -1,4 +1,7 @@
-use crate::{Directory, Error, LocalFiles, MAX_ENTRIES, PathCollisions, Result, SourcePath};
+use crate::{
+    Directory, Error, FileKind, LocalFiles, MAX_CONTENT_BYTES, MAX_ENTRIES, PathCollisions, Result,
+    SelectedFile, SourcePath, SourceRoot,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -160,6 +163,108 @@ impl LocalFiles {
         imports.sync()?;
         let inventory = owned.inventory(paths, max_bytes)?;
         Ok((owned, inventory))
+    }
+
+    /// Classifies retained files into a snapshot selection and an upstream key.
+    pub fn local_snapshot_selection(&self) -> Result<(String, Vec<SelectedFile>)> {
+        let mut paths = self.paths()?;
+        paths.retain(|path| classify(path.as_str()).is_some());
+        paths.sort_by(|a, b| crate::compare_paths(a.as_str(), b.as_str()));
+        let inventory = self.inventory(&paths, MAX_CONTENT_BYTES)?;
+        let mut hash = Sha256::new();
+        let mut files = Vec::new();
+        let mut stls = 0;
+        for file in inventory {
+            let kind = classify(file.path.as_str()).ok_or(Error::InvalidIdentity)?;
+            if kind == FileKind::Stl {
+                stls += 1;
+            }
+            if stls > 500 || (file.path.as_str() == "pp-phases.json" && file.size > 1024 * 1024) {
+                return Err(Error::Limit);
+            }
+            hash.update(serde_json::to_vec(&file)?);
+            hash.update(b"\n");
+            files.push(SelectedFile {
+                path: file.path,
+                kind,
+                size_hint_bytes: Some(file.size),
+            });
+        }
+        if files.is_empty() {
+            return Err(Error::InvalidIdentity);
+        }
+        Ok((hex::encode(hash.finalize()), files))
+    }
+}
+
+fn classify(path: &str) -> Option<FileKind> {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".stl") {
+        Some(FileKind::Stl)
+    } else if lower.ends_with(".3mf")
+        || lower.ends_with(".zip")
+        || path == "pp-phases.json"
+        || path == "print-partner.manifest.yaml"
+    {
+        Some(FileKind::Artifact)
+    } else if lower.ends_with(".pdf") {
+        Some(FileKind::Pdf)
+    } else if lower.ends_with(".md") {
+        Some(
+            if lower
+                .rsplit('/')
+                .next()
+                .is_some_and(|base| base == "readme.md" || base.starts_with("readme."))
+            {
+                FileKind::Readme
+            } else {
+                FileKind::Md
+            },
+        )
+    } else {
+        None
+    }
+}
+
+/// Removes `repos/.pp-imports/{operation}` after publication settles.
+pub fn discard_owned(root: &Path, operation: &str) -> Result<()> {
+    crate::validate_revision(operation)?;
+    let parent = Directory::open_root(root)?.child(".pp-imports", true)?;
+    parent.remove_tree(operation)?;
+    parent.sync()
+}
+
+impl SourceRoot {
+    /// Reloads a published revision and checks its stored bytes and digest.
+    pub fn verify_published(&self, key: &str) -> Result<crate::PublishedSnapshot> {
+        crate::validate_revision(key)?;
+        self.load(&self.revisions.child(key, false)?, key)
+    }
+
+    /// Removes abandoned media, archive, and snapshot staging directories.
+    pub fn discard_staging(&mut self) -> Result<()> {
+        use fs2::FileExt;
+        self.revisions.0.try_lock_exclusive()?;
+        let result = (|| {
+            for name in [".pp-source-archives", ".pp-source-media"] {
+                let parent = match self.revisions.child(name, false) {
+                    Ok(parent) => parent,
+                    Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+                parent.0.try_lock_exclusive()?;
+                parent.remove_tree(".candidate")?;
+                parent.sync()?;
+            }
+            self.revisions.remove_tree(crate::CANDIDATE)?;
+            self.revisions.sync()
+        })();
+        let unlocked = FileExt::unlock(&self.revisions.0);
+        result?;
+        unlocked?;
+        Ok(())
     }
 }
 

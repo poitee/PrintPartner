@@ -1,6 +1,8 @@
 use anyhow::{Result, anyhow, ensure};
 use pp_source::{
-    LocalFiles, SourcePath, local_selection,
+    ArtifactBudget, ContentFile, LocalFiles, Selection, SnapshotRequest, SourcePath, TenantRepos,
+    local_selection::{self, InputFile},
+    media::MediaLimits,
     retained_capture::{FrozenCapture, RetainedInputTransfer},
 };
 use pp_storage::{
@@ -8,7 +10,7 @@ use pp_storage::{
     auth::AuthPolicy,
     jobs::{ClaimedAttempt, Credential, JobKind, ServerWorkerClient, WorkerAdmission},
     uploads::{
-        Admission, AdmissionLimits, CaptureJournalCorrelation, CapturedPayloadV1, File,
+        Admission, AdmissionLimits, Artifact, CaptureJournalCorrelation, CapturedPayloadV1, File,
         ImportClient, Input, Operation, OwnedInput, Phase, PreflightedCapture,
         PreparedCapturedAdmission, State, Target, inspect_capture_manifest,
     },
@@ -20,12 +22,22 @@ use std::{
 };
 
 /// Synchronous admission and lookup for Source imports. Supplied admits hash a
-/// directory. Captured admits preflight, prepare, claim, and copy retained
-/// inputs into owned import directories. They do not publish or activate.
+/// directory. Captured admits preflight, prepare, claim, copy retained inputs,
+/// publish an immutable revision, and activate through journal receipts.
 pub struct SourceImports {
     client: ImportClient,
     worker: ServerWorkerClient,
     repos: PathBuf,
+}
+
+/// Durable stop points for [`SourceImports::work_operation`] and
+/// [`SourceImports::work_frozen`]. Later calls resume at the journaled phase.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Through {
+    OwnedInput,
+    Published,
+    Activated,
+    Settled,
 }
 
 impl SourceImports {
@@ -198,8 +210,68 @@ impl SourceImports {
         Ok(op)
     }
 
+    /// Claims `job_id` and advances through `through`, resuming at the durable
+    /// journal phase without recopying owned inputs on exact retry.
+    pub fn work_operation(
+        &self,
+        job_id: &str,
+        supplied: Option<&Path>,
+        through: Through,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<Operation>> {
+        self.work(Some(job_id), supplied, through, cancelled)
+    }
+
+    /// Claims the next supplied-import job and advances through `through`.
+    pub fn work_next(&self, through: Through, cancelled: &AtomicBool) -> Result<Option<Operation>> {
+        self.work(None, None, through, cancelled)
+    }
+
+    /// Correlates a frozen capture, claims an exact admitted match, and advances
+    /// through `through`. Exact owned-or-later and absent captures are removed.
+    pub fn work_frozen(
+        &self,
+        frozen: FrozenCapture,
+        through: Through,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<Operation>> {
+        let manifest = frozen.manifest()?;
+        let inspected = inspect_capture_manifest(&manifest)?;
+        let paths = inspected
+            .paths()
+            .iter()
+            .cloned()
+            .map(SourcePath::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let inventory = frozen
+            .inventory(&paths, inspected.max_input_bytes())?
+            .into_iter()
+            .map(input_file)
+            .collect();
+        match self
+            .client
+            .correlate_capture_manifest(manifest, inventory)?
+        {
+            CaptureJournalCorrelation::ExactAdmitted(claim) => {
+                let Some(claim) = self.worker.claim_resolved_import(claim)? else {
+                    return Ok(None);
+                };
+                self.work_claimed(claim, None, Some((frozen, paths)), through, cancelled)
+            }
+            CaptureJournalCorrelation::ExactOwnedOrLater | CaptureJournalCorrelation::Absent => {
+                frozen.remove(&paths)?;
+                Ok(None)
+            }
+            CaptureJournalCorrelation::MismatchRepairRequired => {
+                Err(anyhow!("Retained capture requires repair"))
+            }
+        }
+    }
+
     pub fn get(&self, credential: Credential, key: String) -> Result<Operation> {
-        self.client.get(credential, key)
+        let op = self.client.get(credential, key)?;
+        self.verify_artifact(&op)?;
+        Ok(op)
     }
 
     /// Names every regular file below `supplied`.
@@ -212,6 +284,219 @@ impl SourceImports {
                 .collect(),
         })
     }
+
+    fn work(
+        &self,
+        job_id: Option<&str>,
+        supplied: Option<&Path>,
+        through: Through,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<Operation>> {
+        let claim = match job_id {
+            Some(id) => self.worker.claim_import(id)?,
+            None => self.worker.claim_kind(JobKind::SuppliedSourceImport)?,
+        };
+        let Some(claim) = claim else {
+            return Ok(None);
+        };
+        self.work_claimed(claim, supplied, None, through, cancelled)
+    }
+
+    fn work_claimed(
+        &self,
+        claim: ClaimedAttempt,
+        supplied: Option<&Path>,
+        retained: Option<(FrozenCapture, Vec<SourcePath>)>,
+        through: Through,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<Operation>> {
+        let retained_work = retained.is_some();
+        let mut retained = retained;
+        let ClaimedAttempt {
+            job,
+            lease,
+            source_work,
+        } = claim;
+        let live =
+            source_work.ok_or_else(|| anyhow!("Supplied import claim missing Source authority"))?;
+        let mut op = self.worker.import_phase(&lease, &live, Phase::Read)?;
+        let result = (|| -> Result<()> {
+            if job.cancel_requested && op.receipt.is_none() {
+                op = self.worker.import_phase(&lease, &live, Phase::Fail)?;
+                self.cleanup(&op)?;
+                op = self.worker.import_phase(&lease, &live, Phase::Cleanup)?;
+                return Ok(());
+            }
+            if op.state == State::Admitted {
+                local_selection::discard_owned(&self.repos, &op.job_id)?;
+                let inventory = if let Some((frozen, paths)) = retained.as_ref() {
+                    frozen
+                        .transfer_owned_input(RetainedInputTransfer {
+                            paths,
+                            owned_root: &self.repos,
+                            operation: &op.job_id,
+                            max_bytes: op.max_input_bytes,
+                            cancelled,
+                        })?
+                        .into_inventory()
+                } else {
+                    let supplied = supplied
+                        .ok_or_else(|| anyhow!("Import requires explicitly supplied input"))?;
+                    let paths = op
+                        .requested_files
+                        .iter()
+                        .map(|file| SourcePath::try_from(file.path.clone()))
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    LocalFiles::open(supplied)?
+                        .capture(
+                            &paths,
+                            &self.repos,
+                            &op.job_id,
+                            op.max_input_bytes,
+                            cancelled,
+                        )?
+                        .1
+                };
+                let files = inventory.into_iter().map(input_file).collect::<Vec<_>>();
+                ensure!(
+                    files == op.requested_files
+                        && hex::encode(Sha256::digest(serde_json::to_vec(&files)?))
+                            == op.requested_digest,
+                    "Owned input requires repair"
+                );
+                op = self.worker.import_phase(
+                    &lease,
+                    &live,
+                    Phase::Owned(OwnedInput {
+                        locator: format!(".pp-imports/{}", op.job_id),
+                        digest: op.requested_digest.clone(),
+                        files: op.requested_files.clone(),
+                    }),
+                )?;
+                if let Some((frozen, paths)) = retained.take() {
+                    frozen.remove(&paths)?;
+                }
+            }
+            if through == Through::OwnedInput {
+                return Ok(());
+            }
+            if op.state == State::OwnedInputReady {
+                let owned = op
+                    .owned
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Owned input missing"))?;
+                let local = LocalFiles::open(&self.repos.join(&owned.locator))?;
+                let paths = owned
+                    .files
+                    .iter()
+                    .map(|file| SourcePath::try_from(file.path.clone()))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let inventory = local
+                    .inventory(&paths, op.max_input_bytes)?
+                    .into_iter()
+                    .map(input_file)
+                    .collect::<Vec<_>>();
+                ensure!(
+                    inventory == owned.files
+                        && hex::encode(Sha256::digest(serde_json::to_vec(&inventory)?))
+                            == owned.digest,
+                    "Owned input requires repair"
+                );
+                let mut root = TenantRepos::open(op.tenant.clone(), &self.repos)?
+                    .source(op.source_id.try_into()?)?;
+                let prepared = root.prepare_media(
+                    &local,
+                    &local.paths()?,
+                    &[],
+                    MediaLimits {
+                        max_total_bytes: op.max_prepared_bytes,
+                        max_output_bytes: op.max_prepared_bytes.min(256 * 1024 * 1024),
+                        ..Default::default()
+                    },
+                    cancelled,
+                )?;
+                let (key, files) = prepared.files().local_snapshot_selection()?;
+                let snapshot = root.materialize(
+                    SnapshotRequest {
+                        upstream_revision_key: key,
+                        files,
+                        selection: Selection {
+                            max_stl_files: 500,
+                            max_documentation_bytes: 1024 * 1024 * 1024,
+                            omitted_files: vec![],
+                        },
+                    },
+                    prepared.files(),
+                    ArtifactBudget::new(op.reserved_bytes, op.max_prepared_bytes)?,
+                )?;
+                let artifact = Artifact {
+                    tenant: snapshot.tenant_id,
+                    source_id: snapshot.source_id.try_into()?,
+                    upstream_key: snapshot.upstream_revision_key,
+                    manifest_digest: snapshot.manifest_digest,
+                    locator: snapshot.snapshot_locator,
+                    stored_bytes: snapshot.stored_bytes,
+                    files: artifact_files(&snapshot.files)?,
+                    suggested_rules: prepared.receipt().suggested_import_rules.clone(),
+                };
+                op = self
+                    .worker
+                    .import_phase(&lease, &live, Phase::Published(artifact))?;
+                prepared.discard()?;
+            }
+            if through == Through::Published {
+                return Ok(());
+            }
+            if op.state == State::Published {
+                self.verify_artifact(&op)?;
+                op = self.worker.import_phase(&lease, &live, Phase::Activate)?;
+            }
+            if through == Through::Activated {
+                return Ok(());
+            }
+            self.cleanup(&op)?;
+            op = self.worker.import_phase(&lease, &live, Phase::Cleanup)?;
+            Ok(())
+        })();
+        // A captured import that is still admitted keeps its retained capture
+        // as the only copy, so a failed attempt leaves it for `work_frozen`.
+        if result.is_err()
+            && !retained_work
+            && !(op.state == State::Admitted && matches!(op.input, Input::Captured(_)))
+            && op.receipt.is_none()
+            && op.state != State::Published
+            && self.worker.import_phase(&lease, &live, Phase::Fail).is_ok()
+            && self.cleanup(&op).is_ok()
+        {
+            let _ = self.worker.import_phase(&lease, &live, Phase::Cleanup);
+        }
+        drop(live);
+        result.map(|()| Some(op))
+    }
+
+    fn verify_artifact(&self, op: &Operation) -> Result<()> {
+        if let Some(artifact) = &op.artifact {
+            let root = TenantRepos::open(op.tenant.clone(), &self.repos)?
+                .source(op.source_id.try_into()?)?;
+            let verified = root.verify_published(&artifact.upstream_key)?;
+            ensure!(
+                verified.stored_bytes == artifact.stored_bytes
+                    && verified.manifest_digest == artifact.manifest_digest
+                    && verified.snapshot_locator == artifact.locator
+                    && artifact_files(&verified.files)? == artifact.files,
+                "Accepted artifact requires repair"
+            );
+        }
+        Ok(())
+    }
+
+    fn cleanup(&self, op: &Operation) -> Result<()> {
+        TenantRepos::open(op.tenant.clone(), &self.repos)?
+            .source(op.source_id.try_into()?)?
+            .discard_staging()?;
+        local_selection::discard_owned(&self.repos, &op.job_id)?;
+        Ok(())
+    }
 }
 
 fn source_worker_admission() -> WorkerAdmission {
@@ -223,7 +508,24 @@ fn source_worker_admission() -> WorkerAdmission {
     }
 }
 
-fn input_file(file: pp_source::local_selection::InputFile) -> File {
+fn artifact_files(files: &[ContentFile]) -> Result<Vec<File>> {
+    files
+        .iter()
+        .map(|file| {
+            Ok(File {
+                path: file.path.as_str().into(),
+                size: file.size_bytes,
+                sha256: file.sha256.clone(),
+                kind: serde_json::to_value(&file.kind)?
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Artifact kind requires repair"))?
+                    .into(),
+            })
+        })
+        .collect()
+}
+
+fn input_file(file: InputFile) -> File {
     File {
         path: file.path.as_str().into(),
         size: file.size,
