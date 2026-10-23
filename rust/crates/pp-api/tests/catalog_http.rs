@@ -353,10 +353,16 @@ async fn refuse_mounted_reads(server: &Server) {
         "/sources/1",
         "/api/v1/sources",
         "/api/v1/sources/1",
+        "/settings/source-categories",
+        "/api/v1/settings/source-categories",
     ] {
         let (status, body) = server.send(Method::GET, path, &[]).await;
         assert_eq!(status, 404, "{path}");
-        assert!(body.get("sources").is_none() && body.get("name").is_none());
+        assert!(
+            body.get("sources").is_none()
+                && body.get("name").is_none()
+                && body.get("categories").is_none()
+        );
     }
     for path in ["/sources/1", "/api/v1/sources/1"] {
         let (status, body) = server
@@ -376,6 +382,21 @@ async fn refuse_mounted_reads(server: &Server) {
         let (status, body) = server.send(Method::DELETE, path, &[]).await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("name").is_none());
+    }
+    for path in [
+        "/settings/source-categories",
+        "/api/v1/settings/source-categories",
+    ] {
+        let (status, body) = server
+            .exchange(
+                Method::PUT,
+                path,
+                &[],
+                Some(&json!({"categories":["Stolen"],"replacements":{}})),
+            )
+            .await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("categories").is_none());
     }
 }
 
@@ -873,6 +894,263 @@ async fn catalog_delete_busy_source_preserves_revisions() {
         assert_eq!(body["id"], previous["id"]);
         assert_eq!(body["name"], previous["name"]);
     }
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn stored_categories(directory: &Path, tenant: &str) -> Option<String> {
+    let db = rusqlite::Connection::open_with_flags(
+        directory.join("print-partner.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    match db.query_row(
+        "SELECT value FROM app_settings WHERE tenant_id=?1 AND key='source_categories'",
+        [tenant],
+        |row| row.get(0),
+    ) {
+        Ok(value) => Some(value),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(error) => panic!("{error}"),
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn category_tenants(directory: &Path) -> Vec<(String, String)> {
+    let db = rusqlite::Connection::open_with_flags(
+        directory.join("print-partner.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let mut statement = db
+        .prepare(
+            "SELECT tenant_id, value FROM app_settings WHERE key='source_categories' ORDER BY tenant_id",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_categories_round_trip() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let defaults = json!([
+        "Printer kits",
+        "Toolheads",
+        "Probes & sensors",
+        "Mods",
+        "Hardware",
+        "Other"
+    ]);
+    for prefix in ["", "/api/v1"] {
+        let (status, body) = server
+            .send(
+                Method::GET,
+                &format!("{prefix}/settings/source-categories"),
+                &[("Cookie", &cookie)],
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix}");
+        assert_eq!(body["categories"], defaults);
+        assert_eq!(body["tree"].as_array().unwrap().len(), 6);
+    }
+    let (status, saved) = server
+        .exchange(
+            Method::PUT,
+            "/settings/source-categories",
+            &[("Cookie", &cookie)],
+            Some(&json!({
+                "categories": [" Parts / Mechanical ", "Mods"],
+                "replacements": {}
+            })),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        saved["categories"],
+        json!(["Parts", "Parts/Mechanical", "Mods"])
+    );
+    assert_eq!(saved["tree"][0]["path"], "Parts");
+    assert_eq!(saved["tree"][0]["children"][0]["path"], "Parts/Mechanical");
+    assert_eq!(saved["tree"][0]["children"][0]["parent"], "Parts");
+    assert_eq!(saved["tree"][1]["path"], "Mods");
+    let (status, body) = server
+        .send(
+            Method::GET,
+            "/api/v1/settings/source-categories",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, body), (200, saved.clone()));
+    let before = stored_categories(&directory, "default");
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .exchange(
+            Method::PUT,
+            "/settings/source-categories",
+            &[("Cookie", &cookie)],
+            Some(&json!({"categories":[],"replacements":{}})),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("At least one category is required"))
+    );
+    assert_eq!(stored_categories(&directory, "default"), before);
+    assert_eq!(files(&directory), snapshot);
+    let (status, body) = server
+        .send(
+            Method::GET,
+            "/settings/source-categories",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, body), (200, saved));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_categories_are_tenant_scoped() {
+    let (owner, directory) = open();
+    {
+        let guard = owner.lock().unwrap();
+        assert!(matches!(
+            guard
+                .local_source_catalog()
+                .execute(Request::SaveCategoriesWithTree {
+                    categories: vec!["Default Only".into()],
+                    replacements: Default::default(),
+                })
+                .unwrap(),
+            Outcome::Categories(_)
+        ));
+    }
+    let default_before = stored_categories(&directory, "default");
+    assert_eq!(default_before.as_deref(), Some(r#"["Default Only"]"#));
+    let (bound, origin) = listener().await;
+    let account = AuthPolicy {
+        registration: pp_storage::auth::RegistrationPolicy::FirstAccountOnly,
+        first_user: pp_storage::auth::FirstUserTenant::NewUser,
+        session_tenant: pp_storage::auth::SessionTenantPolicy::AccountTenant,
+    };
+    let auth = owner.lock().unwrap().auth_with_policy(account).unwrap();
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        catalog::{CatalogHttpConfig, admit_catalog_routes},
+    };
+    let router = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(&origin, "default", account, Some("true")).unwrap(),
+        Arc::clone(&owner),
+    )
+    .merge(auth_router(
+        AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false).unwrap(),
+        auth,
+        ProviderClient::new(None, None).unwrap(),
+        ResetMailer::disabled(),
+    ));
+    let mut server = Server::spawn(bound, router).await;
+    let registered = server
+        .client
+        .post(format!("{}/auth/register", server.origin))
+        .header("Origin", &server.origin)
+        .json(&json!({"email":"other@example.test","password":"password-1234"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 200);
+    let cookie = registered.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let token = cookie.strip_prefix("pp_session=").unwrap();
+    let tenant = {
+        let guard = owner.lock().unwrap();
+        let pp_storage::auth::Outcome::User(Some(user)) = guard
+            .auth_with_policy(account)
+            .unwrap()
+            .submit(
+                pp_storage::auth::Request::ResolveSession {
+                    token: Secret::new(token.into()),
+                },
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                std::time::Duration::from_secs(1),
+            )
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("session");
+        };
+        assert_ne!(user.tenant_id, "default");
+        user.tenant_id
+    };
+    let (status, body) = server
+        .send(
+            Method::GET,
+            "/settings/source-categories",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["categories"],
+        json!([
+            "Printer kits",
+            "Toolheads",
+            "Probes & sensors",
+            "Mods",
+            "Hardware",
+            "Other"
+        ])
+    );
+    let (status, body) = server
+        .exchange(
+            Method::PUT,
+            "/api/v1/settings/source-categories",
+            &[("Cookie", &cookie)],
+            Some(&json!({
+                "categories": ["Other Tenant"],
+                "replacements": {}
+            })),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["categories"], json!(["Other Tenant"]));
+    assert_eq!(stored_categories(&directory, "default"), default_before);
+    assert_eq!(
+        stored_categories(&directory, &tenant).as_deref(),
+        Some(r#"["Other Tenant"]"#)
+    );
+    let mut rows = category_tenants(&directory);
+    rows.sort();
+    let mut expected = vec![
+        ("default".into(), r#"["Default Only"]"#.into()),
+        (tenant, r#"["Other Tenant"]"#.into()),
+    ];
+    expected.sort();
+    assert_eq!(rows, expected);
+    let (status, body) = server
+        .send(
+            Method::GET,
+            "/settings/source-categories",
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["categories"], json!(["Other Tenant"]));
     server.stop().await;
     shutdown(owner, directory);
 }
