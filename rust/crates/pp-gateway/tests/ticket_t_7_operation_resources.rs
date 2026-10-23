@@ -2439,6 +2439,9 @@ fn ticket_t_7_ownership_get_build_workflow_has_complete_node_owned_resources() {
     let index = admit_bundled_manifest().unwrap();
     let expected: ResourceSet = serde_json::from_value(json!([
         {"kind":"table","name":"accepted_plate_heads"},
+        {"kind":"table","name":"accepted_plate_revisions"},
+        {"kind":"table","name":"accepted_plate_units"},
+        {"kind":"table","name":"accepted_plates"},
         {"kind":"table","name":"app_settings"},
         {"kind":"table","name":"build_profiles"},
         {"kind":"table","name":"parts"},

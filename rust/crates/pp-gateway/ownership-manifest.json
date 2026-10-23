@@ -1018,6 +1018,18 @@
           },
           {
             "kind": "table",
+            "name": "accepted_plate_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "accepted_plate_units"
+          },
+          {
+            "kind": "table",
+            "name": "accepted_plates"
+          },
+          {
+            "kind": "table",
             "name": "app_settings"
           },
           {

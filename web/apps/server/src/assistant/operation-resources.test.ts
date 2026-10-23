@@ -3295,6 +3295,11 @@ const BUILD_WORKFLOW_RECONCILIATION_TABLES = [
   "plan_draft_required_unit_reconciliations",
 ];
 const BUILD_WORKFLOW_OPEN_DRAFT_TABLES = ["plan_draft_inputs", "plan_draft_parts", ...BUILD_WORKFLOW_RECONCILIATION_TABLES];
+const BUILD_WORKFLOW_PLATE_LAYOUT_TABLES = [
+  "accepted_plate_revisions",
+  "accepted_plate_units",
+  "accepted_plates",
+];
 const BUILD_WORKFLOW_BASE_TABLES = [
   "accepted_plate_heads",
   "app_settings",
@@ -3315,7 +3320,24 @@ const BUILD_WORKFLOW_BASE_TABLES = [
   "source_revisions",
 ];
 const BUILD_WORKFLOW_ACCEPTED_TABLES = BUILD_WORKFLOW_BASE_TABLES.map((table) => `table:${table}`);
-const BUILD_WORKFLOW_TABLES = [...BUILD_WORKFLOW_BASE_TABLES, ...BUILD_WORKFLOW_OPEN_DRAFT_TABLES]
+const BUILD_WORKFLOW_READY_PLATE_TABLES = [...BUILD_WORKFLOW_BASE_TABLES, ...BUILD_WORKFLOW_PLATE_LAYOUT_TABLES]
+  .map((table) => `table:${table}`)
+  .sort();
+const BUILD_WORKFLOW_STALE_PLATE_TABLES = [...BUILD_WORKFLOW_BASE_TABLES, "accepted_plate_revisions"]
+  .map((table) => `table:${table}`)
+  .sort();
+const BUILD_WORKFLOW_TABLES = [
+  ...BUILD_WORKFLOW_BASE_TABLES,
+  ...BUILD_WORKFLOW_OPEN_DRAFT_TABLES,
+  ...BUILD_WORKFLOW_PLATE_LAYOUT_TABLES,
+]
+  .map((table) => `table:${table}`)
+  .sort();
+const BUILD_WORKFLOW_RECONCILED_STALE_PLATE_TABLES = [
+  ...BUILD_WORKFLOW_BASE_TABLES,
+  ...BUILD_WORKFLOW_OPEN_DRAFT_TABLES,
+  "accepted_plate_revisions",
+]
   .map((table) => `table:${table}`)
   .sort();
 const BUILD_WORKFLOW_UNION = ["file:source-workspace", ...BUILD_WORKFLOW_TABLES].sort();
@@ -3343,7 +3365,7 @@ function buildWorkflowSelect(statement: unknown, tenantId: string, sourceDocs = 
       continue;
     }
   }
-  const plate = /^select (?:(?!\bfrom\b).)+ from "(accepted_plate_[a-z_]+)"/.exec(sql);
+  const plate = /^select (?:(?!\bfrom\b).)+ from "(accepted_plate_heads|accepted_plate_revisions|accepted_plates|accepted_plate_units)"/.exec(sql);
   if (plate) return [`table:${plate[1]}`];
   if (sql.includes('from "build_profiles" left join "plan_accepted_input_sets"')) {
     return ["table:build_profiles", "table:plan_accepted_input_sets", "table:plan_revision_required_unit_sets"];
@@ -3405,12 +3427,62 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
   expect(idleWorkflow).toMatchObject({ build: { id: idle.id, name: "Idle workflow" }, accepted_plan: { kind: "none" }, working_plan: { kind: "none" } });
   expect(await trace({}, IDLE_BUILD_WORKFLOW_TABLES, { activePlanId: idle.id })).toMatchObject({ build: { id: idle.id } });
   expect(await trace({ plan_id: foreign.id }, ["table:build_profiles"], { activePlanId: idle.id })).toEqual({ error: "Build not found" });
-  const { repository, plan } = acceptedPlanFixture(true);
+  const { repository, plan, part, basis } = acceptedPlanFixture(true);
   const accepted = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_ACCEPTED_TABLES, { repository });
   expect(accepted).toMatchObject({
     build: { id: plan.id, name: "Accepted plan" },
     accepted_plan: { kind: "ready" },
     stages: expect.arrayContaining([expect.objectContaining({ id: "sources" })]),
+  });
+  expect(repository.readAcceptedPlates(plan.id)).toMatchObject({ kind: "empty", plates: [] });
+  const tokens = part.units.filter((unit) => unit.required).map((unit) => unit.token);
+  expect(tokens.length).toBeGreaterThan(0);
+  const published = repository.publishAcceptedPlates({
+    profileId: plan.id,
+    expected: basis,
+    expectedPlateRevisionId: null,
+    plates: [
+      {
+        plateId: "workflow-plate",
+        printerId: "printer-1",
+        printerName: "Printer 1",
+        printerModel: "Test Printer",
+        bedWidthUm: 500_000,
+        bedDepthUm: 500_000,
+        bedHeightUm: 500_000,
+        marginUm: 0,
+        units: tokens.map((token, index) => ({
+          token,
+          xUm: index * 20_000,
+          yUm: 0,
+          widthUm: 10_000,
+          depthUm: 10_000,
+          heightUm: 10_000,
+        })),
+      },
+    ],
+  });
+  expect(published).toMatchObject({ kind: "published" });
+  const withPlates = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_READY_PLATE_TABLES, { repository });
+  expect(withPlates).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    stages: expect.arrayContaining([
+      expect.objectContaining({ id: "production", status: expect.objectContaining({ kind: "ready" }) }),
+    ]),
+  });
+  expect(repository.readAcceptedPlates(plan.id).kind).toBe("ready");
+  sqlite.exec("DROP TRIGGER trg_accepted_plate_revisions_immutable_update");
+  const staleDigest = sqlite
+    .prepare("UPDATE accepted_plate_revisions SET plan_revision_digest = ? WHERE profile_id = ?")
+    .run("f".repeat(64), plan.id);
+  expect(staleDigest.changes).toBe(1);
+  expect(repository.readAcceptedPlates(plan.id).kind).toBe("stale_accepted_plan");
+  const withStalePlates = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_STALE_PLATE_TABLES, { repository });
+  expect(withStalePlates).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    stages: expect.arrayContaining([
+      expect.objectContaining({ id: "production", status: expect.objectContaining({ kind: "stale" }) }),
+    ]),
   });
   expect(await trace({ plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Build not found" });
   expect(await trace({ plan_id: foreign.id }, IDLE_BUILD_WORKFLOW_TABLES, { tenantId: "other" })).toMatchObject({ build: { id: foreign.id } });
@@ -3432,7 +3504,11 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
     idempotencyKey: "workflow-reconciliation",
   });
   expect(saved.kind).toBe("saved");
-  const withReconciledDraft = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_TABLES, { repository });
+  const withReconciledDraft = await trace(
+    { plan_id: plan.id },
+    BUILD_WORKFLOW_RECONCILED_STALE_PLATE_TABLES,
+    { repository },
+  );
   expect(withReconciledDraft).toMatchObject({
     build: { id: plan.id, name: "Accepted plan" },
     working_plan: { kind: "ready", draft_id: draft.id },

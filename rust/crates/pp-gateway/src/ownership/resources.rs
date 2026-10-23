@@ -34,6 +34,9 @@ pub enum TableId {
     PlanDraftRequiredUnitDecisions,
     PlanDraftRequiredUnitAssignments,
     AcceptedPlateHeads,
+    AcceptedPlateRevisions,
+    AcceptedPlates,
+    AcceptedPlateUnits,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -201,8 +204,9 @@ impl ReviewedEntry {
     ) -> Result<(&'static str, ResourceSet), AdmissionError> {
         use ResourceId::{File, Table};
         use TableId::{
-            AcceptedPlateHeads, AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets,
-            PlanDecisions, PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
+            AcceptedPlateHeads, AcceptedPlateRevisions, AcceptedPlateUnits, AcceptedPlates,
+            AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
+            PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
             PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
             PlanRevisionInputSets, PlanRevisionInputs, PlanRevisionParts,
             PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
@@ -212,6 +216,9 @@ impl ReviewedEntry {
         let build_workflow = || {
             BTreeSet::from([
                 Table(AcceptedPlateHeads),
+                Table(AcceptedPlateRevisions),
+                Table(AcceptedPlateUnits),
+                Table(AcceptedPlates),
                 Table(AppSettings),
                 Table(BuildProfiles),
                 Table(Parts),
