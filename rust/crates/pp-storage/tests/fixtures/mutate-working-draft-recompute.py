@@ -52,17 +52,17 @@ with tempfile.TemporaryDirectory(prefix='pp-a9-mutants-', dir='/persist/tmp') as
     def run(name=None):
         selected = command
         if name in ('assignment row work is free', 'assignment row work is undercharged'):
-            selected = command + ['--release', '-E', 'test(multiple_maximum_drafts)']
+            selected = command + ['--release', '-E', 'test(two_cap_sized_drafts)']
         elif name == 'assignments spend visits':
-            selected = command + ['--release', '-E', 'test(two_hundred_thousand_assignments)']
+            selected = command + ['--release', '-E', 'test(cap_sized_assignment_selection)']
         elif name:
-            selected = command + ['-E', 'not test(two_hundred_thousand_assignments)']
+            selected = command + ['-E', 'not test(cap_sized_assignment_selection)']
         return subprocess.run(selected, env=env, capture_output=True, text=True)
     baseline = run()
     if baseline.returncode:
         raise SystemExit(baseline.stdout + baseline.stderr)
     print('BASELINE debug passed', flush=True)
-    baseline = subprocess.run(command + ['--release', '-E', 'test(two_hundred_thousand_assignments) | test(multiple_maximum_drafts) | test(cancellation_inside_a_large)'], env=env, capture_output=True, text=True)
+    baseline = subprocess.run(command + ['--release', '-E', 'test(cap_sized_assignment_selection) | test(two_cap_sized_drafts) | test(cancellation_before_recompute_of_a_cap_sized)'], env=env, capture_output=True, text=True)
     if baseline.returncode:
         raise SystemExit(baseline.stdout + baseline.stderr)
     print('BASELINE release passed', flush=True)
