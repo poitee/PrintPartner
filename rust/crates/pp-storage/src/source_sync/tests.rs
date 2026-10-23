@@ -958,37 +958,114 @@ fn pad_running_sync_document_over_limit(sync: &Fixture, job_id: &str, lease_unti
     document
 }
 
-fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
-    let admission = WorkerAdmission {
-        kinds: vec![(JobKind::Sync, 2)],
-        total: 2,
-        per_resource: 2,
-        ..admission()
-    };
-    let mut sync = Fixture::with_admission(admission.clone());
-    let [first, second] = ["First", "Second"].map(|name| sync.source(name));
-    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
-    let mut lease = sync.open();
-    if claimed {
-        drop(local(sync.next(&mut lease)));
-    }
-    let targets_before = sync.targets(&job_id);
-    let batch_before = sync.batch(&job_id);
-    let resource_before: String = sync
-        .connection()
+/// Pads with confirmed effects (kept by `halt_job`) so decode succeeds, then
+/// `halt_job`'s recovery / state / finished_at rewrite tips `save` over the limit.
+fn pad_running_sync_just_under_limit_for_halt(
+    sync: &Fixture,
+    job_id: &str,
+    lease_until: i64,
+) -> String {
+    let connection = sync.connection();
+    let original: String = connection
         .query_row(
-            "SELECT resource FROM durable_jobs WHERE id=?1",
-            [&job_id],
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [job_id],
             |row| row.get(0),
         )
         .unwrap();
-    assert!(!resource_before.is_empty(), "{resource_before}");
-    // Startup recover(all=true) recovers every running Job. Expired-lease recovery
-    // uses the same recover_in body with lease_until already in the past.
-    // 2001-09-09 is a valid unix timestamp well after "now" for these fixtures.
-    let lease_until = if expired_lease { 0 } else { 2_000_000_000 };
-    let document = pad_running_sync_document_over_limit(&sync, &job_id, lease_until);
-    sync = reopen_with_admission(sync, admission);
+    let mut value: Value = serde_json::from_str(&original).unwrap();
+    value["state"] = "running".into();
+    value["state_version"] = 9.into();
+    value["generation"] = 9.into();
+    value["attempt"] = 100.into();
+    value["lease_until"] = lease_until.into();
+    value["_attempt_fence"] = "".into();
+    value["_attempt_worker"] = "".into();
+    value["recovery"] = Value::Null;
+    value["progress"] = Value::Null;
+    value["finished_at"] = Value::Null;
+    value["result"] = Value::Null;
+    value["effects"] = Value::Array(vec![]);
+    // Leave headroom smaller than halt_job's recovery + state growth so save fails.
+    const HEADROOM: usize = 48;
+    let effect = |target: &str| {
+        serde_json::json!({
+            "intent": {
+                "operation": "source_refresh",
+                "basis_hash": "a".repeat(64),
+                "content_hash": "b".repeat(64),
+                "target": target,
+            },
+            "attempt": 100,
+            "generation": 9,
+            "confirmed": true,
+            "receipt": {
+                "receipt_id": "halt-pad",
+                "content_hash": "b".repeat(64),
+                "target": target,
+            },
+        })
+    };
+    loop {
+        let mut next = value.clone();
+        let mut effects = next["effects"].as_array().unwrap().clone();
+        effects.push(effect(&"x".repeat(1024)));
+        next["effects"] = Value::Array(effects);
+        if serde_json::to_string(&next).unwrap().len() > jobs::JOB_DOC_SIZE_LIMIT - HEADROOM {
+            break;
+        }
+        value = next;
+    }
+    // Grow the last effect target (capped at 1024) until the document sits in
+    // [LIMIT - HEADROOM, LIMIT]. Targets appear twice (intent + receipt).
+    let budget = jobs::JOB_DOC_SIZE_LIMIT - HEADROOM;
+    let mut lo = 1usize;
+    let mut hi = 1024usize;
+    let mut best = value.clone();
+    while lo <= hi {
+        let mid = (lo + hi) / 2;
+        let mut effects = value["effects"].as_array().unwrap().clone();
+        effects.push(effect(&"y".repeat(mid)));
+        let mut candidate = value.clone();
+        candidate["effects"] = Value::Array(effects);
+        let len = serde_json::to_string(&candidate).unwrap().len();
+        if len <= budget {
+            best = candidate;
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    value = best;
+    let document = serde_json::to_string(&value).unwrap();
+    assert!(
+        document.len() <= jobs::JOB_DOC_SIZE_LIMIT,
+        "decode must succeed: {}",
+        document.len()
+    );
+    // Targets are duplicated in intent+receipt, so length steps by 2.
+    assert!(
+        document.len() + 1 >= budget,
+        "must sit near the limit: {} (budget {budget})",
+        document.len()
+    );
+    connection
+        .execute(
+            "UPDATE durable_jobs SET document=?2,state='running',version=9,generation=9,lease_until=?3 WHERE id=?1",
+            rusqlite::params![job_id, document, lease_until],
+        )
+        .unwrap();
+    document
+}
+
+fn assert_quarantined_sync(
+    sync: &Fixture,
+    job_id: &str,
+    document: &str,
+    resource_before: &str,
+    version: i64,
+    reason_needle: &str,
+) {
     let jobs::Outcome::Quarantined(rows) = sync
         .owner
         .jobs(policy())
@@ -1010,20 +1087,13 @@ fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
     };
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].job_id, job_id);
-    assert!(
-        rows[0].reason.contains("131072-byte limit"),
-        "{}",
-        rows[0].reason
-    );
-    assert_eq!(
-        rows[0].uncertain_resource.as_deref(),
-        Some(resource_before.as_str())
-    );
+    assert!(rows[0].reason.contains(reason_needle), "{}", rows[0].reason);
+    assert_eq!(rows[0].uncertain_resource.as_deref(), Some(resource_before));
     let stored: (String, String, String, i64, Option<i64>) = sync
         .connection()
         .query_row(
             "SELECT document,state,resource,version,lease_until FROM durable_jobs WHERE id=?1",
-            [&job_id],
+            [job_id],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -1038,19 +1108,17 @@ fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
     assert_eq!(stored.0, document);
     assert_eq!(stored.1, "quarantined");
     assert_eq!(stored.2, resource_before);
-    assert_eq!(stored.3, 10);
+    assert_eq!(stored.3, version);
     assert_eq!(stored.4, None);
     let event: String = sync
         .connection()
         .query_row(
             "SELECT event FROM durable_job_history WHERE job_id=?1 ORDER BY version DESC LIMIT 1",
-            [&job_id],
+            [job_id],
             |row| row.get(0),
         )
         .unwrap();
     assert_eq!(event, "document_quarantined_resource_uncertain");
-    assert_eq!(sync.targets(&job_id), targets_before);
-    assert_eq!(sync.batch(&job_id), batch_before);
     assert!(
         sync.owner
             .jobs(policy())
@@ -1058,7 +1126,7 @@ fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
             .submit(
                 Credential::Session(auth::Secret::new(sync.token.clone())),
                 UserOperation::Get {
-                    job_id: job_id.clone()
+                    job_id: job_id.to_owned()
                 },
                 &AtomicBool::new(false),
                 Duration::from_secs(5),
@@ -1068,6 +1136,72 @@ fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
             .is_err(),
         "quarantined Sync Job must not load through Get"
     );
+}
+
+fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
+    // per_resource: 1 so a quarantined Sync blocks another Job on the same Sources.
+    let admission = WorkerAdmission {
+        kinds: vec![(JobKind::Sync, 2)],
+        total: 2,
+        per_resource: 1,
+        ..admission()
+    };
+    let mut sync = Fixture::with_admission(admission.clone());
+    let [first, second] = ["First", "Second"].map(|name| sync.source(name));
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    if claimed {
+        drop(local(sync.next(&mut lease)));
+    }
+    drop(lease);
+    let targets_before = sync.targets(&job_id);
+    let batch_before = sync.batch(&job_id);
+    let resource_before: String = sync
+        .connection()
+        .query_row(
+            "SELECT resource FROM durable_jobs WHERE id=?1",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!resource_before.is_empty(), "{resource_before}");
+    // Live lease: 2_000_000_000 = 2033-05-18 UTC. Expired: 0.
+    // Startup cells reopen → recover(all=true). Expired-lease cells pad on the
+    // live owner and claim → recover_in(tx, false); they must not reopen.
+    let lease_until = if expired_lease { 0 } else { 2_000_000_000 };
+    let document = pad_running_sync_document_over_limit(&sync, &job_id, lease_until);
+    if expired_lease {
+        assert!(
+            sync.worker.claim_kind(JobKind::Sync).unwrap().is_none(),
+            "expired-lease cell must hit claim→recover_in(false)"
+        );
+    } else {
+        sync = reopen_with_admission(sync, admission);
+    }
+    assert_quarantined_sync(
+        &sync,
+        &job_id,
+        &document,
+        &resource_before,
+        10,
+        "131072-byte limit",
+    );
+    assert_eq!(sync.targets(&job_id), targets_before);
+    assert_eq!(sync.batch(&job_id), batch_before);
+    let same_source = sync
+        .user(UserOperation::Enqueue {
+            key: format!("blocked-overlap-{expired_lease}-{claimed}"),
+            payload_version: 1,
+            payload: Payload::Sync {
+                project_ids: Some(vec![first as u64]),
+            },
+        })
+        .job_id;
+    assert!(
+        sync.worker.claim_kind(JobKind::Sync).unwrap().is_none(),
+        "quarantined Sources must block admission of overlapping Sync work"
+    );
+    assert_eq!(sync.job(&same_source).state, PersistentState::Queued);
     let later_source = sync.source("Later work");
     let later = enqueue_later(&sync, later_source);
     let mut later_lease = sync.open();
@@ -1089,6 +1223,84 @@ fn oversized_sync_recovery_quarantines_on_startup_and_lease_expiry() {
             oversized_sync_recovery_quarantines(expired_lease, claimed);
         }
     }
+}
+
+#[test]
+fn halt_job_doc_too_large_quarantines_with_batch_and_targets() {
+    // Decode succeeds; halt_job writes batch/targets then save hits JobDocTooLarge;
+    // recover_in quarantines in the same transaction with the original document.
+    // Drive claim→recover_in(false) on the live owner: the pad uses more than 16
+    // effects (schema validate on reopen would refuse before recover).
+    let admission = WorkerAdmission {
+        kinds: vec![(JobKind::Sync, 2)],
+        total: 2,
+        per_resource: 1,
+        ..admission()
+    };
+    let sync = Fixture::with_admission(admission);
+    let [first, second] = ["First", "Second"].map(|name| sync.source(name));
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    drop(local(sync.next(&mut lease)));
+    drop(lease);
+    let resource_before: String = sync
+        .connection()
+        .query_row(
+            "SELECT resource FROM durable_jobs WHERE id=?1",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!resource_before.is_empty(), "{resource_before}");
+    let document = pad_running_sync_just_under_limit_for_halt(&sync, &job_id, 0);
+    assert!(
+        sync.worker.claim_kind(JobKind::Sync).unwrap().is_none(),
+        "claim must run recover_in(false) through halt_job→JobDocTooLarge"
+    );
+    // Stored document still decodes; list reason is the generic quarantine text.
+    // stderr from recover_in records the halted encode's JobDocTooLarge size.
+    assert_quarantined_sync(
+        &sync,
+        &job_id,
+        &document,
+        &resource_before,
+        10,
+        "Document quarantined; operator inspection required",
+    );
+    assert_eq!(
+        sync.targets(&job_id),
+        [
+            (
+                first,
+                "reconciliation_required".into(),
+                Some("local_settlement".into()),
+            ),
+            (second, "not_run".into(), Some("batch_halt".into())),
+        ]
+    );
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
+    let blocked = sync
+        .user(UserOperation::Enqueue {
+            key: "halt-blocked-overlap".into(),
+            payload_version: 1,
+            payload: Payload::Sync {
+                project_ids: Some(vec![first as u64]),
+            },
+        })
+        .job_id;
+    assert!(sync.worker.claim_kind(JobKind::Sync).unwrap().is_none());
+    assert_eq!(sync.job(&blocked).state, PersistentState::Queued);
+    let later_source = sync.source("Later work");
+    let later = enqueue_later(&sync, later_source);
+    let mut later_lease = sync.open();
+    assert_eq!(later_lease.job_id(), later);
+    assert_eq!(local(sync.next(&mut later_lease)).claim_generation, 1);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

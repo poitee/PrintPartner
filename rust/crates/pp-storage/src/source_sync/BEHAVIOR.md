@@ -28,8 +28,10 @@ closed batch. Unrelated queued work remains eligible for admission.
 in the same writer transaction: the original document bytes and resource column
 stay as stored, history records `document_quarantined_resource_uncertain` when a
 resource was held, and operator inspection is required before another Job can
-take those Sources. Startup recovery and expired-lease recovery share this path.
-Unrelated Sources stay admissible.
+take those Sources. Startup `recover(all=true)` and runtime
+`claim()`→`recover_in(tx,false)` share this path. Decode runs before the lease
+check, so an oversized running row is quarantined on the next claim even when its
+lease is still live. Unrelated Sources stay admissible.
 
 `halt_job` writes batch and target rows before it saves the Job document. When
 that save is the `JobDocTooLarge` failure, those batch and target writes remain
@@ -39,10 +41,18 @@ bounds, a terminal Sync halt that replaces a large recovery field typically
 shrinks the document, so the halt-then-quarantine interleaving is defensive.
 
 `oversized_sync_recovery_quarantines_on_startup_and_lease_expiry` stores a
-running Sync Job one byte over the document limit (live lease and expired lease),
-recovers through storage reopen, with and without a claimed target, and asserts
-quarantine, exact document retention, unchanged batch/target evidence, the
-uncertain resource, and later work on another Source.
+running Sync Job one byte over the document limit. Live-lease cells recover
+through storage reopen (`recover(all=true)`). Expired-lease cells pad on the live
+owner and claim (`recover_in(false)`); they do not reopen. Both claimed and
+unclaimed targets are covered. The test asserts quarantine, exact document
+retention, unchanged batch/target evidence on the decode path, blocked admission
+of overlapping Sources, the uncertain resource, and later work on another Source.
+`halt_job_doc_too_large_quarantines_with_batch_and_targets` keeps the document
+just under the limit with confirmed effects (a field `halt_job` does not rewrite),
+pads on the live owner, claims so `recover_in(false)` hits halt-then-quarantine,
+and asserts the Job is quarantined with the original running document while the
+batch is `reconciliation_required` and targets show the halt writes
+(`reconciliation_required` / `not_run`).
 
 ## Bind a claimed target
 
@@ -280,14 +290,14 @@ the Job state, target states, batch phase, one generation bump, retained effects
 reopen stability, and admission of later work on an unrelated Source. Fixtures use
 temporary directories and fake accounts and Sources.
 
-`oversized_sync_recovery_quarantines_on_startup_and_lease_expiry` covers the
-size-limit Sync recovery contract above. Check it with:
+The oversized Sync recovery quarantine tests cover the size-limit contract above.
+Check them with:
 
 ```sh
 CARGO_BUILD_JOBS=2 \
-CARGO_TARGET_DIR=/persist/targets/gre-957-sync-quarantine \
 cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
-  oversized_sync_recovery_quarantines_on_startup_and_lease_expiry
+  oversized_sync_recovery_quarantines_on_startup_and_lease_expiry \
+  halt_job_doc_too_large_quarantines_with_batch_and_targets
 ```
 
 `sync_candidate_requires_claim_and_current_source_proof` and
