@@ -20,6 +20,30 @@ batch closure for cancellation and retained generic effects from older Jobs.
 `halt_job` fences the attempt and saves it once. Reopening storage preserves the
 closed batch. Unrelated queued work remains eligible for admission.
 
+### Oversized Sync recovery quarantine
+
+`recover_in` quarantines a Sync Job when durable document handling returns
+`JobDocTooLarge`—either while decoding a stored row past the size limit, or when
+`recover_attempt` / `halt_job` cannot save a recovered document. Quarantine runs
+in the same writer transaction: the original document bytes and resource column
+stay as stored, history records `document_quarantined_resource_uncertain` when a
+resource was held, and operator inspection is required before another Job can
+take those Sources. Startup recovery and expired-lease recovery share this path.
+Unrelated Sources stay admissible.
+
+`halt_job` writes batch and target rows before it saves the Job document. When
+that save is the `JobDocTooLarge` failure, those batch and target writes remain
+with the quarantine commit. No second cleanup path rolls them back; a savepoint
+or preflight is not required for this contract. Under current payload and effect
+bounds, a terminal Sync halt that replaces a large recovery field typically
+shrinks the document, so the halt-then-quarantine interleaving is defensive.
+
+`oversized_sync_recovery_quarantines_on_startup_and_lease_expiry` stores a
+running Sync Job one byte over the document limit (live lease and expired lease),
+recovers through storage reopen, with and without a claimed target, and asserts
+quarantine, exact document retention, unchanged batch/target evidence, the
+uncertain resource, and later work on another Source.
+
 ## Bind a claimed target
 
 `ServerWorkerClient::bind_source_sync_target` checks a claimed Local target
@@ -255,6 +279,16 @@ through restart and lease expiry, with and without a claimed target. They assert
 the Job state, target states, batch phase, one generation bump, retained effects,
 reopen stability, and admission of later work on an unrelated Source. Fixtures use
 temporary directories and fake accounts and Sources.
+
+`oversized_sync_recovery_quarantines_on_startup_and_lease_expiry` covers the
+size-limit Sync recovery contract above. Check it with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-957-sync-quarantine \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  oversized_sync_recovery_quarantines_on_startup_and_lease_expiry
+```
 
 `sync_candidate_requires_claim_and_current_source_proof` and
 `sync_candidate_rejects_changed_basis` cover binding. They tamper with the held

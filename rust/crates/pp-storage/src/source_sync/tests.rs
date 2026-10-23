@@ -925,6 +925,164 @@ fn cancellation_recovery_closes_sync_batch() {
     terminal_recovery_closes_sync_batch("cancelled", false);
 }
 
+fn pad_running_sync_document_over_limit(sync: &Fixture, job_id: &str, lease_until: i64) -> String {
+    let connection = sync.connection();
+    let original: String = connection
+        .query_row(
+            "SELECT document FROM durable_jobs WHERE id=?1",
+            [job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut value: Value = serde_json::from_str(&original).unwrap();
+    value["state"] = "running".into();
+    value["state_version"] = 9.into();
+    value["generation"] = 9.into();
+    value["attempt"] = 1.into();
+    value["lease_until"] = lease_until.into();
+    value["_attempt_fence"] = "".into();
+    value["_attempt_worker"] = "".into();
+    value["recovery"] = "".into();
+    // One byte past the limit so recover_in decode hits JobDocTooLarge and
+    // quarantines before halt_job or re-queue can rewrite the document.
+    let width = jobs::JOB_DOC_SIZE_LIMIT + 1 - serde_json::to_string(&value).unwrap().len();
+    value["recovery"] = "x".repeat(width).into();
+    let document = serde_json::to_string(&value).unwrap();
+    assert!(document.len() > jobs::JOB_DOC_SIZE_LIMIT);
+    connection
+        .execute(
+            "UPDATE durable_jobs SET document=?2,state='running',version=9,generation=9,lease_until=?3 WHERE id=?1",
+            rusqlite::params![job_id, document, lease_until],
+        )
+        .unwrap();
+    document
+}
+
+fn oversized_sync_recovery_quarantines(expired_lease: bool, claimed: bool) {
+    let admission = WorkerAdmission {
+        kinds: vec![(JobKind::Sync, 2)],
+        total: 2,
+        per_resource: 2,
+        ..admission()
+    };
+    let mut sync = Fixture::with_admission(admission.clone());
+    let [first, second] = ["First", "Second"].map(|name| sync.source(name));
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    if claimed {
+        drop(local(sync.next(&mut lease)));
+    }
+    let targets_before = sync.targets(&job_id);
+    let batch_before = sync.batch(&job_id);
+    let resource_before: String = sync
+        .connection()
+        .query_row(
+            "SELECT resource FROM durable_jobs WHERE id=?1",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!resource_before.is_empty(), "{resource_before}");
+    // Startup recover(all=true) recovers every running Job. Expired-lease recovery
+    // uses the same recover_in body with lease_until already in the past.
+    // 2001-09-09 is a valid unix timestamp well after "now" for these fixtures.
+    let lease_until = if expired_lease { 0 } else { 2_000_000_000 };
+    let document = pad_running_sync_document_over_limit(&sync, &job_id, lease_until);
+    sync = reopen_with_admission(sync, admission);
+    let jobs::Outcome::Quarantined(rows) = sync
+        .owner
+        .jobs(policy())
+        .unwrap()
+        .submit(
+            Credential::Session(auth::Secret::new(sync.token.clone())),
+            UserOperation::Quarantined {
+                before: None,
+                limit: 200,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    else {
+        panic!("Expected quarantine list");
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].job_id, job_id);
+    assert!(
+        rows[0].reason.contains("131072-byte limit"),
+        "{}",
+        rows[0].reason
+    );
+    assert_eq!(
+        rows[0].uncertain_resource.as_deref(),
+        Some(resource_before.as_str())
+    );
+    let stored: (String, String, String, i64, Option<i64>) = sync
+        .connection()
+        .query_row(
+            "SELECT document,state,resource,version,lease_until FROM durable_jobs WHERE id=?1",
+            [&job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(stored.0, document);
+    assert_eq!(stored.1, "quarantined");
+    assert_eq!(stored.2, resource_before);
+    assert_eq!(stored.3, 10);
+    assert_eq!(stored.4, None);
+    let event: String = sync
+        .connection()
+        .query_row(
+            "SELECT event FROM durable_job_history WHERE job_id=?1 ORDER BY version DESC LIMIT 1",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(event, "document_quarantined_resource_uncertain");
+    assert_eq!(sync.targets(&job_id), targets_before);
+    assert_eq!(sync.batch(&job_id), batch_before);
+    assert!(
+        sync.owner
+            .jobs(policy())
+            .unwrap()
+            .submit(
+                Credential::Session(auth::Secret::new(sync.token.clone())),
+                UserOperation::Get {
+                    job_id: job_id.clone()
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .is_err(),
+        "quarantined Sync Job must not load through Get"
+    );
+    let later_source = sync.source("Later work");
+    let later = enqueue_later(&sync, later_source);
+    let mut later_lease = sync.open();
+    assert_eq!(later_lease.job_id(), later);
+    assert_eq!(local(sync.next(&mut later_lease)).claim_generation, 1);
+    assert_eq!(
+        sync.targets(&later),
+        [(later_source, "claimed".into(), None)]
+    );
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn oversized_sync_recovery_quarantines_on_startup_and_lease_expiry() {
+    for expired_lease in [false, true] {
+        for claimed in [false, true] {
+            oversized_sync_recovery_quarantines(expired_lease, claimed);
+        }
+    }
+}
+
 #[test]
 fn cancel_and_revoked_authority_close_the_batch() {
     for (revoke, claimed) in [(false, false), (false, true), (true, false), (true, true)] {
