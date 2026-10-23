@@ -52,6 +52,7 @@ pub(super) async fn save_kit(
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
+    let path = request.uri().path().to_owned();
     let bytes = match to_bytes(request.into_body(), KIT_BODY_LIMIT).await {
         Ok(bytes) => bytes,
         Err(_) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "Request body too large"),
@@ -60,6 +61,7 @@ pub(super) async fn save_kit(
         app,
         presented,
         Method::PUT,
+        path,
         BuildCommand::Manifest(ManifestOptionsCommand::SaveKit {
             build,
             request: bytes.to_vec(),
