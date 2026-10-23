@@ -282,6 +282,56 @@ async fn build_touch_uses_existing_command() {
     shutdown(owner, directory);
 }
 
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn build_layer_mutations_are_atomic() {
+    let (owner, directory) = open();
+    let snapshot = files(&directory);
+    let before = profiles(&directory);
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server
+        .send_json(
+            Method::PUT,
+            "/plans/1/layers/base",
+            &[],
+            &serde_json::json!({"project_id": 1}),
+        )
+        .await;
+    assert_eq!(status, 404);
+    assert!(body.get("layers").is_none());
+    server.stop().await;
+    assert_eq!(
+        (files(&directory), profiles(&directory)),
+        (snapshot, before)
+    );
+    shutdown(owner, directory);
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn build_layer_wrong_owner_has_no_effects() {
+    let (owner, directory) = open();
+    let snapshot = files(&directory);
+    let before = profiles(&directory);
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server
+        .send_json(
+            Method::POST,
+            "/plans/1/layers",
+            &[],
+            &serde_json::json!({"project_id": 1}),
+        )
+        .await;
+    assert_eq!(status, 404);
+    assert!(body.get("layers").is_none());
+    server.stop().await;
+    assert_eq!(
+        (files(&directory), profiles(&directory)),
+        (snapshot, before)
+    );
+    shutdown(owner, directory);
+}
+
 #[cfg(feature = "desktop_rebuild")]
 fn policy() -> pp_storage::auth::AuthPolicy {
     use pp_storage::auth::*;
@@ -1165,6 +1215,266 @@ async fn build_touch_uses_existing_command() {
     assert_eq!(files(&directory), snapshot);
     assert_eq!(profiles(&directory), before);
 
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn layer_rows(directory: &Path, profile_id: i64) -> Vec<(i64, String, Option<i64>)> {
+    let db = rusqlite::Connection::open_with_flags(
+        directory.join("print-partner.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let mut statement = db
+        .prepare(
+            "SELECT id, layer_type, project_id FROM profile_layers WHERE profile_id=?1 ORDER BY layer_order, id",
+        )
+        .unwrap();
+    statement
+        .query_map([profile_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn seed_project(directory: &Path, tenant: &str, name: &str) -> i64 {
+    let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    db.execute(
+        "INSERT INTO projects(tenant_id,name,url) VALUES(?1,?2,?3)",
+        rusqlite::params![tenant, name, format!("https://example.test/{name}")],
+    )
+    .unwrap();
+    db.last_insert_rowid()
+}
+
+/// One graph command per request; duplicate/missing refusals leave rows/files unchanged.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn build_layer_mutations_are_atomic() {
+    let (owner, directory) = open();
+    let (mut server, cookie_a, _) = spawn_builds_with_auth(&owner, "default").await;
+    let (status, created) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"MutatePlan"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let id = created["id"].as_i64().unwrap();
+    let tenant = profiles(&directory)
+        .into_iter()
+        .find(|row| row.1 == id)
+        .map(|row| row.0)
+        .expect("tenant");
+    let base = seed_project(&directory, &tenant, "Base");
+    let addon = seed_project(&directory, &tenant, "Addon");
+    let other = seed_project(&directory, &tenant, "Other");
+    let auth = [("Cookie", cookie_a.as_str())];
+
+    let (status, body) = server
+        .send_json(
+            Method::PUT,
+            &format!("/plans/{id}/layers/base"),
+            &auth,
+            &json!({"project_id": base}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["layers"].as_array().unwrap().len(), 1);
+    assert_eq!(body["layers"][0]["project_id"], base);
+
+    let (status, body) = server
+        .send_json(
+            Method::POST,
+            &format!("/api/v1/plans/{id}/layers"),
+            &auth,
+            &json!({"project_id": addon}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let layer_id = body["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layer| layer["layer_type"] == "addon")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let before = layer_rows(&directory, id);
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .send_json(
+            Method::POST,
+            &format!("/plans/{id}/layers"),
+            &auth,
+            &json!({"project_id": addon}),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (
+            409,
+            Some("Source \"Addon\" is already attached to this build")
+        )
+    );
+    assert_eq!(layer_rows(&directory, id), before);
+    assert_eq!(files(&directory), snapshot);
+
+    let (status, body) = server
+        .send_json(
+            Method::PUT,
+            &format!("/api/v2/plans/{id}/layers/{layer_id}"),
+            &auth,
+            &json!({"project_id": other}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["id"] == layer_id)
+            .unwrap()["project_id"],
+        other
+    );
+
+    let (status, body) = server
+        .send(
+            Method::DELETE,
+            &format!("/plans/{id}/layers/{layer_id}"),
+            &auth,
+        )
+        .await;
+    assert_eq!(status, 204, "{body}");
+    assert_eq!(
+        layer_rows(&directory, id),
+        vec![(before[0].0, "base".into(), Some(base))]
+    );
+
+    let before = layer_rows(&directory, id);
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .send_json(
+            Method::PUT,
+            &format!("/plans/{id}/layers/base"),
+            &auth,
+            &json!({"project_id": 9_007_199_254_740_991u64}),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Project not found"))
+    );
+    assert_eq!(layer_rows(&directory, id), before);
+    assert_eq!(files(&directory), snapshot);
+
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Cross-tenant / unauthenticated mutate answers refusal and leaves rows/files unchanged.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn build_layer_wrong_owner_has_no_effects() {
+    let (owner, directory) = open();
+    let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
+    let (status, created) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"OwnedLayers"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let id = created["id"].as_i64().unwrap();
+    let tenant = profiles(&directory)
+        .into_iter()
+        .find(|row| row.1 == id)
+        .map(|row| row.0)
+        .expect("tenant");
+    let base = seed_project(&directory, &tenant, "OwnerBase");
+    let addon = seed_project(&directory, &tenant, "OwnerAddon");
+    let (status, body) = server
+        .send_json(
+            Method::PUT,
+            &format!("/plans/{id}/layers/base"),
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"project_id": base}),
+        )
+        .await;
+    assert_eq!(status, 200, "{body}");
+    let layer_id = body["layers"][0]["id"].as_i64().unwrap();
+    let before_rows = profiles(&directory);
+    let before_layers = layer_rows(&directory, id);
+    let snapshot = files(&directory);
+    let project = json!({"project_id": addon});
+    let foreign = [("Cookie", cookie_b.as_str())];
+    let cases = [
+        (
+            Method::PUT,
+            format!("/plans/{id}/layers/base"),
+            Some(&project),
+            &foreign[..],
+            404,
+        ),
+        (
+            Method::POST,
+            format!("/plans/{id}/layers"),
+            Some(&project),
+            &foreign[..],
+            404,
+        ),
+        (
+            Method::PUT,
+            format!("/plans/{id}/layers/{layer_id}"),
+            Some(&project),
+            &foreign[..],
+            404,
+        ),
+        (
+            Method::DELETE,
+            format!("/plans/{id}/layers/{layer_id}"),
+            None,
+            &foreign[..],
+            404,
+        ),
+        (
+            Method::POST,
+            format!("/plans/{id}/layers"),
+            Some(&project),
+            &[][..],
+            401,
+        ),
+    ];
+    for (method, path, body, headers, status) in cases {
+        let (got, response) = match body {
+            Some(body) => server.send_json(method.clone(), &path, headers, body).await,
+            None => server.send(method.clone(), &path, headers).await,
+        };
+        assert_eq!(got, status, "{method} {path} {response}");
+        assert_eq!(
+            response["detail"].as_str(),
+            Some(if status == 401 {
+                "Authentication required"
+            } else {
+                "Profile not found"
+            })
+        );
+        assert_eq!(profiles(&directory), before_rows);
+        assert_eq!(layer_rows(&directory, id), before_layers);
+        assert_eq!(files(&directory), snapshot);
+    }
     server.stop().await;
     shutdown(owner, directory);
 }

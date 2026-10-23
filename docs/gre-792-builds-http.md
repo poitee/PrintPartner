@@ -5,8 +5,9 @@ With the default-off `desktop_rebuild` feature compiled, `POST /plans` and
 stored `PP_DESKTOP_REBUILD` value is exactly `1` or `true`. Otherwise those
 routes answer 404. List/detail reads remain as in GRE-791. Layer list and touch
 land in GRE-793. Kit-manifest ReadKit is GRE-801
-(`docs/gre-801-manifest-http.md`). Layer mutate, jobs, SaveKit, and
-ReadBuilder stay unregistered (later D25 children).
+(`docs/gre-801-manifest-http.md`). Layer mutate is
+`docs/gre-794-builds-http.md`. Jobs, SaveKit, and ReadBuilder stay unregistered
+(later D25 children).
 
 Admission matches GRE-791 (loopback Host/Origin, session cookie or API key with
 the configured tenant).
