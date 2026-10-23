@@ -172,42 +172,44 @@ describe("Spoolman deduction connector ownership", () => {
       { path: "/enabled/api/v1/spool/7/use", body: { use_length: 300 } },
     ]);
   });
-  it.each(["default", "disabled", "invalid", "foreign"])("skips %s Plan access before printer telemetry", async (mode) => {
-    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
-    saveIntegrations([integration("enabled", "spoolman", "2026-09-01T00:00:00Z")]);
-    const decisions = assignSpools(["enabled"]);
-    if (mode === "disabled") repo.setSetting("feature_toggles", '{"spoolman":false}');
-    if (mode === "invalid") repo.setSetting(`feature_toggles:plan:${profileId}`, "{");
-    if (mode === "foreign") repo.setSetting("feature_toggles", '{"spoolman":true}');
-    await deductSpoolmanFilamentAfterVerify(repo, "printer", mode === "foreign" ? 999999 : profileId, decisions, 1);
-    expect(printerReads).toBe(0);
-    expect(deductions).toEqual([]);
-  });
+  describe("worker-state matrix: spoolman background deduct", () => {
+    it.each(["default", "disabled", "invalid", "foreign"])("skips %s Plan access before printer telemetry", async (mode) => {
+      vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+      saveIntegrations([integration("enabled", "spoolman", "2026-09-01T00:00:00Z")]);
+      const decisions = assignSpools(["enabled"]);
+      if (mode === "disabled") repo.setSetting("feature_toggles", '{"spoolman":false}');
+      if (mode === "invalid") repo.setSetting(`feature_toggles:plan:${profileId}`, "{");
+      if (mode === "foreign") repo.setSetting("feature_toggles", '{"spoolman":true}');
+      await deductSpoolmanFilamentAfterVerify(repo, "printer", mode === "foreign" ? 999999 : profileId, decisions, 1);
+      expect(printerReads).toBe(0);
+      expect(deductions).toEqual([]);
+    });
 
-  it("rechecks Plan access after awaiting printer telemetry", async () => {
-    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
-    repo.setSetting("feature_toggles", '{"spoolman":false}');
-    repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":true}');
-    saveIntegrations([integration("enabled", "spoolman", "2026-09-01T00:00:00Z")]);
-    const decisions = assignSpools(["enabled"]);
-    onPrinterRead = () => repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":false}');
-    await deductSpoolmanFilamentAfterVerify(repo, "printer", profileId, decisions, 1);
-    expect(printerReads).toBe(1);
-    expect(deductions).toEqual([]);
-  });
+    it("rechecks Plan access after awaiting printer telemetry", async () => {
+      vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+      repo.setSetting("feature_toggles", '{"spoolman":false}');
+      repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":true}');
+      saveIntegrations([integration("enabled", "spoolman", "2026-09-01T00:00:00Z")]);
+      const decisions = assignSpools(["enabled"]);
+      onPrinterRead = () => repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":false}');
+      await deductSpoolmanFilamentAfterVerify(repo, "printer", profileId, decisions, 1);
+      expect(printerReads).toBe(1);
+      expect(deductions).toEqual([]);
+    });
 
-  it("rechecks access before every deduction write", async () => {
-    vi.stubEnv("PP_DESKTOP_REBUILD", "1");
-    repo.setSetting("feature_toggles", '{"spoolman":true}');
-    saveIntegrations([
-      integration("first", "spoolman", "2026-09-01T00:00:00Z"),
-      integration("second", "spoolman", "2026-09-01T00:00:00Z"),
-    ]);
-    const decisions = assignSpools(["first", "second"]);
-    onDeduction = () => repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":false}');
-    await deductSpoolmanFilamentAfterVerify(repo, "printer", profileId, decisions, 2);
-    expect(printerReads).toBe(1);
-    expect(deductions).toEqual([{ path: "/first/api/v1/spool/7/use", body: { use_length: 600 } }]);
+    it("rechecks access before every deduction write", async () => {
+      vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+      repo.setSetting("feature_toggles", '{"spoolman":true}');
+      saveIntegrations([
+        integration("first", "spoolman", "2026-09-01T00:00:00Z"),
+        integration("second", "spoolman", "2026-09-01T00:00:00Z"),
+      ]);
+      const decisions = assignSpools(["first", "second"]);
+      onDeduction = () => repo.setSetting(`feature_toggles:plan:${profileId}`, '{"spoolman":false}');
+      await deductSpoolmanFilamentAfterVerify(repo, "printer", profileId, decisions, 2);
+      expect(printerReads).toBe(1);
+      expect(deductions).toEqual([{ path: "/first/api/v1/spool/7/use", body: { use_length: 600 } }]);
+    });
   });
-
 });
+
