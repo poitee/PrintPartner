@@ -2055,6 +2055,11 @@ reads one live Sync target without writing or changing reservation ownership.
 Claimed targets report `Pending`; acknowledged successes and failures return
 their stored evidence. A foreign tenant row or Job mismatch is refused without
 writing.
+GRE-781 ports recovery read types and `inspect_retained` through
+`inspect_source_sync_recovery` so a credential-scoped caller validates retained
+target/result/observation bindings and reads each disposition without adopting
+or deleting evidence. A corrupt Source binding, incomplete success capture,
+batch-phase mismatch or stale version is refused without writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal

@@ -242,6 +242,8 @@ pub enum Outcome {
     SourceSyncHalted(JobRecord),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncInspection(crate::source_sync::SyncTargetInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncRecovery(crate::source_sync::SyncRecoveryInspection),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -444,6 +446,14 @@ pub(crate) enum Command {
         lease: AttemptLease,
         key: crate::source_sync::SyncTargetKey,
         policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectRetainedSourceSync {
+        credential: Credential,
+        policy: AuthPolicy,
+        job_id: String,
+        expected_version: i64,
+        storage: Arc<crate::Shared>,
     },
     Retain {
         per_tenant: usize,
@@ -731,6 +741,37 @@ impl AtomicJobClient {
         .receive()?
         {
             Outcome::Observed(subscription) => Ok(subscription),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Reads retained Sync recovery evidence for one Job at an exact version.
+    /// Validates target/result/observation bindings and reports dispositions
+    /// without adopting or deleting evidence.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn inspect_source_sync_recovery(
+        &self,
+        credential: Credential,
+        job_id: String,
+        expected_version: i64,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<crate::source_sync::SyncRecoveryInspection> {
+        match submit(
+            &self.storage,
+            Command::InspectRetainedSourceSync {
+                credential,
+                policy: self.policy,
+                job_id,
+                expected_version,
+                storage: self.storage.shared.clone(),
+            },
+            cancelled,
+            wait,
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncRecovery(value) => Ok(value),
             _ => unreachable!(),
         }
     }
@@ -1975,6 +2016,35 @@ pub(crate) fn execute(
         Command::InspectSourceSyncTarget { lease, key, policy } => TransactionDecision::Outcome(
             Outcome::SourceSyncInspection(crate::source_sync::inspect(&tx, &lease, &key, policy)?),
         ),
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectRetainedSourceSync {
+            credential,
+            policy,
+            job_id,
+            expected_version,
+            storage,
+        } => {
+            let (tenant, actor) = actor(&tx, credential, policy, &storage)?;
+            let job = owned(&tx, &job_id, &tenant)?;
+            let (subject, status) = match require_original_authority(&tx, &job, policy) {
+                Ok(authority) => (
+                    Some(authority.subject().to_owned()),
+                    crate::source_sync::OriginalAuthorityStatus::Valid,
+                ),
+                Err(error) => crate::source_sync::original_authority_status(&error).ok_or(error)?,
+            };
+            let access = crate::source_sync::AuthorizedSyncRead::new(
+                job,
+                tenant,
+                actor,
+                expected_version,
+                subject,
+                status,
+            )?;
+            TransactionDecision::Outcome(Outcome::SourceSyncRecovery(
+                crate::source_sync::inspect_retained(&tx, &access)?,
+            ))
+        }
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }

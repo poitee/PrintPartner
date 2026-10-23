@@ -172,6 +172,17 @@ then inspects the exact settled result twice with an unchanged database.
 `sync_inspect_is_read_only_and_tenant_scoped` checks those refusals and that
 successful inspection leaves every Sync row unchanged.
 
+## Inspect retained recovery evidence
+
+`AtomicJobClient::inspect_source_sync_recovery` reads one retained Sync Job at
+an exact version. It checks batch phase, sealed-basis bindings and result
+capture, then reports each disposition without writing. Authority capture,
+result digest and phase mismatches refuse without mutation.
+
+`sync_retained_inspection_reports_disposition` and
+`sync_retained_inspection_rejects_corrupt_binding` cover the happy path and
+those refusals.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
@@ -190,7 +201,7 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
   unacknowledged_failure_blocks_claim_after_restart
 ```
 
-Feature-off, settle, fail, acknowledge, adopt, halt, inspect and their tables are absent. The same check covers those commands:
+Feature-off, settle, fail, acknowledge, adopt, halt, inspect, retained recovery and their tables are absent. The same check covers those commands:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
@@ -238,6 +249,23 @@ CARGO_TARGET_DIR=/persist/targets/gre-780-sync-inspect \
 cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
   sync_inspect_returns_authorized_target \
   sync_inspect_is_read_only_and_tenant_scoped
+```
+
+Inspect retained recovery evidence with:
+
+`inspect_retained` validates each target through `validate_target_in_basis`
+(producer capture, observation digests, result/receipt provenance, and
+pending/claimed/failed/not-run/reconciliation rules) before reporting
+dispositions. Corrupt Source bindings, incomplete captures, and invalid
+observation digests are refused without writing.
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-781-sync-retained-inspect \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_retained_inspection_reports_disposition \
+  sync_retained_inspection_rejects_corrupt_binding \
+  sync_retained_inspection_reports_failed_and_reconciliation
 ```
 
 `durable_claim_returns_source_busy_after_restart` and

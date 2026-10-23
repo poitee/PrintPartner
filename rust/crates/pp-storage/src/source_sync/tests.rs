@@ -2934,3 +2934,529 @@ fn sync_inspect_is_read_only_and_tenant_scoped() {
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+fn recovery(sync: &Fixture, job_id: &str, version: i64) -> Result<SyncRecoveryInspection> {
+    sync.owner
+        .jobs(policy())
+        .unwrap()
+        .inspect_source_sync_recovery(
+            Credential::Session(auth::Secret::new(sync.token.clone())),
+            job_id.into(),
+            version,
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+}
+
+#[test]
+fn sync_retained_inspection_reports_disposition() {
+    let sync = Fixture::new();
+    let first = sync.source("Retained Success");
+    let second = sync.source("Retained Pending");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    let settled = sync
+        .worker
+        .settle_source_sync_target(&lease, &mut target, settlement(first))
+        .unwrap();
+    drop(target);
+    let cancelled = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    assert_eq!(cancelled.state, PersistentState::Cancelled);
+    let before = sync.snapshot();
+    let inspection = recovery(&sync, &job_id, cancelled.state_version).unwrap();
+    assert_eq!(inspection.state(), SyncRecoveryState::Cancelled);
+    assert_eq!(
+        inspection.original_authority(),
+        OriginalAuthorityStatus::Valid
+    );
+    assert_eq!(
+        inspection.targets()[0].disposition(),
+        SyncRecoveryDisposition::Succeeded
+    );
+    assert!(inspection.targets()[0].acknowledged());
+    assert_eq!(inspection.targets()[0].result(), Some(&settled.result));
+    assert_eq!(
+        inspection.targets()[1].disposition(),
+        SyncRecoveryDisposition::NotRun
+    );
+    assert_eq!(
+        inspection.targets()[1].failure(),
+        Some("Sync was cancelled")
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        recovery(&sync, &job_id, cancelled.state_version).unwrap(),
+        inspection
+    );
+    assert_eq!(
+        recovery(&sync, &job_id, cancelled.state_version - 1)
+            .unwrap_err()
+            .to_string(),
+        "Stale Sync recovery version"
+    );
+    assert_eq!(sync.snapshot(), before);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_retained_inspection_rejects_corrupt_binding() {
+    let sync = Fixture::new();
+    let first = sync.source("Bound Success");
+    let second = sync.source("Bound Sibling");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut target, settlement(first))
+        .unwrap();
+    drop(target);
+    let version = sync
+        .user(UserOperation::Cancel {
+            job_id: job_id.clone(),
+        })
+        .state_version;
+    let before = sync.snapshot();
+    let actor: String = sync
+        .connection()
+        .query_row(
+            "SELECT authority_actor FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let digest: String = sync
+        .connection()
+        .query_row(
+            "SELECT result_digest FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let path_digest: String = sync
+        .connection()
+        .query_row(
+            "SELECT path_observation_digest FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(sync.connection().execute(
+        "UPDATE source_sync_targets SET authority_actor='other-actor' WHERE job_id=?1 AND ordinal=0",
+        [&job_id]).unwrap(), 1);
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, version).unwrap_err().to_string(),
+        "Sync recovery authority capture mismatch"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET authority_actor=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![actor, job_id]
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET result_digest=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params!["cd".repeat(32), job_id]
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, version).unwrap_err().to_string(),
+        "Sync result digest mismatch"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET result_digest=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![digest, job_id]
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET path_observation_digest=NULL WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, version).unwrap_err().to_string(),
+        "Sync producer capture incomplete"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET path_observation_digest=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![path_digest, job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET path_observation_digest=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params!["AB".repeat(32), job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, version).unwrap_err().to_string(),
+        "Invalid Sync path digest"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET path_observation_digest=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![path_digest, job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET requested_source_id=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![second, job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, version).unwrap_err().to_string(),
+        "Sync selected Sources mismatch"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET requested_source_id=?1 WHERE job_id=?2 AND ordinal=0",
+                rusqlite::params![first, job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET state='pending',failure_code=NULL,failure_detail=NULL WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    // Clean pending shape, then refuse via the pending rule (ack=1).
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET reservation_acknowledged=1 WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, version).unwrap_err().to_string(),
+        "Invalid pending Sync target"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET state='not_run',failure_code='batch_halt',failure_detail='Sync was cancelled',reservation_acknowledged=0 WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(sync.connection().execute(
+        "UPDATE source_sync_batches SET phase='reconciliation_required',halt_code=NULL WHERE job_id=?1",
+        [&job_id]).unwrap(), 1);
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, version).unwrap_err().to_string(),
+        "Sync recovery batch phase mismatch"
+    );
+    assert_eq!(sync.snapshot(), after);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_retained_inspection_reports_failed_and_reconciliation() {
+    let sync = Fixture::new();
+    let first = sync.source("Failed Target");
+    let second = sync.source("Sibling Pending");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    sync.worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    drop(target);
+    // Unacked failed evidence keeps Cancel on the reconciliation path.
+    let halted = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    assert_eq!(halted.state, PersistentState::ReconciliationRequired);
+    let before = sync.snapshot();
+    let inspection = recovery(&sync, &job_id, halted.state_version).unwrap();
+    assert_eq!(
+        inspection.state(),
+        SyncRecoveryState::ReconciliationRequired
+    );
+    assert_eq!(
+        inspection.targets()[0].disposition(),
+        SyncRecoveryDisposition::Failed
+    );
+    assert_eq!(inspection.targets()[0].failure(), Some("disk read failed"));
+    assert!(!inspection.targets()[0].acknowledged());
+    assert_eq!(
+        inspection.targets()[1].disposition(),
+        SyncRecoveryDisposition::NotRun
+    );
+    assert_eq!(sync.snapshot(), before);
+    // batch_halt is DB-legal but not a failed-state code → unknown-code refusal.
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET failure_code='batch_halt' WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, halted.state_version)
+            .unwrap_err()
+            .to_string(),
+        "Invalid Sync failure code"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET failure_code='local_read' WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET reservation_acknowledged=1 WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, halted.state_version)
+            .unwrap_err()
+            .to_string(),
+        "Invalid not-run Sync target"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET reservation_acknowledged=0 WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    // Claimed-then-cancelled becomes reconciliation_required.
+    let sync = Fixture::new();
+    let first = sync.source("Claimed");
+    let second = sync.source("Pending");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let job = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    assert_eq!(job.state, PersistentState::ReconciliationRequired);
+    drop(target);
+    let before = sync.snapshot();
+    let inspection = recovery(&sync, &job_id, job.state_version).unwrap();
+    assert_eq!(
+        inspection.state(),
+        SyncRecoveryState::ReconciliationRequired
+    );
+    assert_eq!(
+        inspection.targets()[0].disposition(),
+        SyncRecoveryDisposition::ReconciliationRequired
+    );
+    assert_eq!(
+        inspection.targets()[0].failure(),
+        Some("Sync was cancelled")
+    );
+    assert_eq!(
+        inspection.targets()[1].disposition(),
+        SyncRecoveryDisposition::NotRun
+    );
+    assert_eq!(sync.snapshot(), before);
+
+    // Pending disposition after restoring a not_run row to a clean pending shape.
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET state='pending',failure_code=NULL,failure_detail=NULL WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    let inspection = recovery(&sync, &job_id, job.state_version).unwrap();
+    assert_eq!(
+        inspection.targets()[1].disposition(),
+        SyncRecoveryDisposition::Pending
+    );
+    assert_eq!(sync.snapshot(), after);
+    // Claimed with leftover failure_code is refused by the claimed rule.
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET state='claimed',failure_code='batch_halt',failure_detail=NULL WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, job.state_version)
+            .unwrap_err()
+            .to_string(),
+        "Invalid claimed Sync target"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET state='claimed',failure_code=NULL,failure_detail=NULL WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    let inspection = recovery(&sync, &job_id, job.state_version).unwrap();
+    assert_eq!(
+        inspection.targets()[0].disposition(),
+        SyncRecoveryDisposition::Claimed
+    );
+    assert_eq!(sync.snapshot(), after);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    // OriginalAuthorityStatus::Unavailable when the job's original authority is missing.
+    let sync = Fixture::new();
+    let id = sync.source("Authority");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut target, settlement(id))
+        .unwrap();
+    drop(target);
+    let _cancelled = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    let mut connection = sync.connection();
+    let tx = connection.transaction().unwrap();
+    let mut job = jobs::load(&tx, &job_id).unwrap().unwrap();
+    job.authority = None;
+    job.authority_disposition = jobs::AuthorityDisposition::LegacyMissing;
+    jobs::save(&tx, &mut job, "test_clear_authority").unwrap();
+    let version = job.state_version;
+    tx.commit().unwrap();
+    drop(connection);
+    let before = sync.snapshot();
+    let inspection = recovery(&sync, &job_id, version).unwrap();
+    assert_eq!(
+        inspection.original_authority(),
+        OriginalAuthorityStatus::Unavailable
+    );
+    assert_eq!(
+        inspection.targets()[0].disposition(),
+        SyncRecoveryDisposition::Succeeded
+    );
+    assert_eq!(sync.snapshot(), before);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+
+    // Refused: delete sessions so the credential is invalid, then re-login for a
+    // new session that is not the original authority subject/credential.
+    let mut sync = Fixture::new();
+    let id = sync.source("Refused");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let mut target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut target, settlement(id))
+        .unwrap();
+    drop(target);
+    let cancelled = sync.user(UserOperation::Cancel {
+        job_id: job_id.clone(),
+    });
+    let version = cancelled.state_version;
+    sync.connection()
+        .execute("DELETE FROM sessions", [])
+        .unwrap();
+    sync.login();
+    let before = sync.snapshot();
+    let inspection = recovery(&sync, &job_id, version).unwrap();
+    assert!(matches!(
+        inspection.original_authority(),
+        OriginalAuthorityStatus::Refused(_)
+    ));
+    assert_eq!(sync.snapshot(), before);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
