@@ -240,6 +240,8 @@ pub enum Outcome {
     SourceSyncAcknowledged(crate::source_sync::AcknowledgedSyncTarget),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncHalted(JobRecord),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncInspection(crate::source_sync::SyncTargetInspection),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -428,6 +430,12 @@ pub(crate) enum Command {
         lease: AttemptLease,
         halt: crate::source_sync::SourceSyncHalt,
         detail: String,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    InspectSourceSyncTarget {
+        lease: AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+        policy: AuthPolicy,
     },
     Retain {
         per_tenant: usize,
@@ -1249,6 +1257,33 @@ impl ServerWorkerClient {
             _ => unreachable!(),
         }
     }
+
+    /// Reads one live Sync target for this authorized attempt. Writes nothing
+    /// and leaves reservation ownership unchanged. A foreign tenant row or
+    /// stale attempt is refused without writing.
+    pub fn inspect_source_sync_target(
+        &self,
+        lease: &AttemptLease,
+        key: crate::source_sync::SyncTargetKey,
+    ) -> Result<crate::source_sync::SyncTargetInspection> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::InspectSourceSyncTarget {
+                lease: lease.clone(),
+                key,
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncInspection(inspection) => Ok(inspection),
+            _ => unreachable!(),
+        }
+    }
 }
 
 fn random() -> String {
@@ -1872,6 +1907,10 @@ pub(crate) fn execute(
                 .ok_or_else(|| anyhow!("Sync batch is not open"))?;
             TransactionDecision::Outcome(Outcome::SourceSyncHalted(job))
         }
+        #[cfg(feature = "desktop_rebuild")]
+        Command::InspectSourceSyncTarget { lease, key, policy } => TransactionDecision::Outcome(
+            Outcome::SourceSyncInspection(crate::source_sync::inspect(&tx, &lease, &key, policy)?),
+        ),
         Command::Retain { per_tenant, global } => {
             TransactionDecision::Outcome(Outcome::Retained(prune(&tx, per_tenant, global)?))
         }

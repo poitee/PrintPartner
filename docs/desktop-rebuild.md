@@ -2004,6 +2004,11 @@ GRE-779 ports `halt_after_error` and `HaltSourceSync` so a caller Source
 operation error closes through the existing batch halt path. The detail is the
 Job recovery message. Retained failures stay as recorded. A claimed target is
 kept for reconciliation. A stale attempt is refused without writing.
+GRE-780 ports `inspect` and `InspectSourceSyncTarget` so the authorized worker
+reads one live Sync target without writing or changing reservation ownership.
+Claimed targets report `Pending`; acknowledged successes and failures return
+their stored evidence. A foreign tenant row or Job mismatch is refused without
+writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
