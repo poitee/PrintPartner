@@ -843,14 +843,27 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     await act(async () => {
       await hook.result.current.preparePlan({ applyManifest: true });
     });
-    // Definitive rejection stays retained for Retry/discard, but applyManifest must
-    // reach prepare instead of resending the rejected payload.
+    // applyManifest must reach prepare without resending the rejected payload, and must
+    // consume the definitive snapshot so a later plain preparePlan does not stick it.
     expect(savePlanChoices).toHaveBeenCalledTimes(1);
     expect(vi.mocked(savePlanChoices).mock.calls[0]?.[2]).toBe(rejectedKey);
     expect(
       vi.mocked(applyPlanDraft).mock.calls.length +
         vi.mocked(abandonPlanDraft).mock.calls.length,
     ).toBeGreaterThan(0);
+    expect(hook.result.current.draftError).toBeNull();
+
+    const prepareCallsAfterApply =
+      vi.mocked(applyPlanDraft).mock.calls.length +
+      vi.mocked(abandonPlanDraft).mock.calls.length;
+    await act(async () => {
+      await hook.result.current.preparePlan();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(applyPlanDraft).mock.calls.length +
+        vi.mocked(abandonPlanDraft).mock.calls.length,
+    ).toBeGreaterThan(prepareCallsAfterApply);
     expect(hook.result.current.draftError).toBeNull();
   });
 

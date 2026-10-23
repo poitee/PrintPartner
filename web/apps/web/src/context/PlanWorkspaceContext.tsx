@@ -847,9 +847,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         ? null
         : failedOrdinarySaveByBuild.current.get(selectedProfileId) ?? null;
     // Deliberate Retry save (no applyManifest) replays retained ordinary-Save intent for
-    // both certainties. applyManifest must still reach prepare: a definitive rejection is
-    // shown and kept for Retry/discard, but must not stick prepare on that payload.
-    // Uncertain/pending still replay first because the outcome is ambiguous.
+    // both certainties. applyManifest must still reach prepare: skip definitive replay so
+    // prepare is not stuck on the rejected payload. Uncertain/pending still replay first
+    // because the outcome is ambiguous. After a successful applyManifest prepare that
+    // skipped definitive replay, consume the snapshot so later plain preparePlan callers
+    // (reconcile / pending files / Parts auto-prepare) do not stick that payload either.
+    const skippedDefinitiveReplay =
+      options?.applyManifest === true &&
+      pending == null &&
+      failed?.certainty === "definitive";
     const retained =
       pending ??
       (failed && (failed.certainty === "uncertain" || !options?.applyManifest)
@@ -860,6 +866,9 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       if (!options?.applyManifest) return;
     }
     await preparePlan(options);
+    if (skippedDefinitiveReplay && selectedProfileId != null) {
+      failedOrdinarySaveByBuild.current.delete(selectedProfileId);
+    }
   }, [editDraft, flushFileChoices, hasPendingFileChoices, preparePlan, selectedProfileId]);
 
   const reconcileActivePlanDraft = useCallback(
