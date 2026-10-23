@@ -2,10 +2,13 @@ use crate::DesktopRebuild;
 use anyhow::{Result, anyhow};
 use axum::Router;
 use pp_api::{
-    auth::{AuthHttpConfig, ProviderClient, ResetMailer, auth_router},
+    auth::auth_router,
     builds::{BuildHttpConfig, build_router},
     catalog::{CatalogHttpConfig, admit_catalog_routes},
 };
+// Re-export so desktop_rebuild integration tests can build AuthRoutes without a
+// non-optional pp-api [dev-dependencies] edge (gated boundary check).
+pub use pp_api::auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer};
 use pp_storage::{
     WriterOwner,
     auth::{AuthPolicy, rebuild::AuthLifetimes, rebuild::RebuildAuthClient},
@@ -126,7 +129,8 @@ pub fn read_router(
         let guard = owner
             .lock()
             .map_err(|_| anyhow!("rebuild owner lock poisoned"))?;
-        clients(rebuild, &guard, policy, auth.lifetimes)?.expect("flag on constructs clients")
+        clients(rebuild, &guard, policy, auth.lifetimes)?
+            .ok_or_else(|| anyhow!("flag on constructs clients"))?
     };
     // `_drafts` is opened with the bundle for GRE-818 parity; draft HTTP is GRE-820.
     let builds = build_router(
@@ -144,7 +148,6 @@ pub fn read_router(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pp_api::auth::CookieTransport;
     use pp_storage::{
         Limits,
         auth::{FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},

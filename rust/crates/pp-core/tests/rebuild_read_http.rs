@@ -11,9 +11,11 @@ mod without_feature {
 
 #[cfg(feature = "desktop_rebuild")]
 mod with_feature {
-    use pp_api::auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer};
     use pp_core::DesktopRebuild;
-    use pp_core::rebuild_api::{AuthRoutes, RebuildReadOwner, read_router};
+    use pp_core::rebuild_api::{
+        AuthHttpConfig, AuthRoutes, CookieTransport, ProviderClient, RebuildReadOwner, ResetMailer,
+        read_router,
+    };
     use pp_storage::{
         Limits, WriterOwner,
         auth::{
