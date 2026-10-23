@@ -6,8 +6,8 @@ and `/api/v2` only when the stored `PP_DESKTOP_REBUILD` value is exactly `1` or
 `true`. Otherwise those routes answer 404. List/detail/create/delete remain as
 in GRE-791/GRE-792. Kit-manifest ReadKit is GRE-801
 (`docs/gre-801-manifest-http.md`). Layer mutate (base/addon replace/detach) is
-`docs/gre-794-builds-http.md`. Jobs, SaveKit, and ReadBuilder stay unregistered
-(later D25 children).
+`docs/gre-794-builds-http.md`. Job list is `docs/gre-795-jobs-http.md`. SaveKit
+and ReadBuilder stay unregistered (later D25 children).
 
 Admission matches GRE-791 (loopback Host/Origin, session cookie or API key with
 the configured tenant).
