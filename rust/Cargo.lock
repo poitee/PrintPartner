@@ -3278,6 +3278,8 @@ dependencies = [
  "http-body",
  "lettre",
  "log",
+ "pp-contracts",
+ "pp-domain",
  "pp-storage",
  "reqwest",
  "rusqlite",
