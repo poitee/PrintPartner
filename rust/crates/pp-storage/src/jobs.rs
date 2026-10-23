@@ -244,6 +244,8 @@ pub enum Outcome {
     SourceSyncInspection(crate::source_sync::SyncTargetInspection),
     #[cfg(feature = "desktop_rebuild")]
     SourceSyncRecovery(crate::source_sync::SyncRecoveryInspection),
+    #[cfg(feature = "desktop_rebuild")]
+    SourceSyncFinish(crate::source_sync::SourceSyncFinishOutcome, LocalCommit),
     Job(JobRecord, LocalCommit),
     List(Vec<JobRecord>),
     #[cfg(feature = "desktop_rebuild")]
@@ -445,6 +447,11 @@ pub(crate) enum Command {
     InspectSourceSyncTarget {
         lease: AttemptLease,
         key: crate::source_sync::SyncTargetKey,
+        policy: AuthPolicy,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    FinishSourceSync {
+        lease: AttemptLease,
         policy: AuthPolicy,
     },
     #[cfg(feature = "desktop_rebuild")]
@@ -1362,6 +1369,31 @@ impl ServerWorkerClient {
             _ => unreachable!(),
         }
     }
+
+    /// Finishes an open Sync batch after every target has a valid acknowledged
+    /// terminal result. Exact retry returns the same aggregate and writes
+    /// nothing. An unsettled target is refused without writing.
+    pub fn finish_source_sync(
+        &self,
+        lease: &AttemptLease,
+    ) -> Result<crate::source_sync::SourceSyncFinishOutcome> {
+        ensure!(lease.worker == self.identity, "Foreign worker lease");
+        let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
+        match submit(
+            &self.storage,
+            Command::FinishSourceSync {
+                lease: lease.clone(),
+                policy,
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?
+        .receive()?
+        {
+            Outcome::SourceSyncFinish(outcome, _) => Ok(outcome),
+            _ => unreachable!(),
+        }
+    }
 }
 
 fn random() -> String {
@@ -2017,6 +2049,17 @@ pub(crate) fn execute(
             Outcome::SourceSyncInspection(crate::source_sync::inspect(&tx, &lease, &key, policy)?),
         ),
         #[cfg(feature = "desktop_rebuild")]
+        Command::FinishSourceSync { lease, policy } => {
+            let result = crate::source_sync::finish(&tx, &lease, policy)?;
+            let outcome = crate::source_sync::SourceSyncFinishOutcome::Completed(Box::new(
+                crate::source_sync::CompletedSourceSync {
+                    job: result.job,
+                    aggregate: result.value,
+                },
+            ));
+            TransactionDecision::Outcome(Outcome::SourceSyncFinish(outcome, result.commit))
+        }
+        #[cfg(feature = "desktop_rebuild")]
         Command::InspectRetainedSourceSync {
             credential,
             policy,
@@ -2055,6 +2098,8 @@ pub(crate) fn execute(
         }
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Outcome(Outcome::SourceSyncHalted(job)) => job.state.terminal(),
+        #[cfg(feature = "desktop_rebuild")]
+        TransactionDecision::Outcome(Outcome::SourceSyncFinish(_, LocalCommit::Committed)) => true,
         #[cfg(feature = "desktop_rebuild")]
         TransactionDecision::Refused(CommittedRefusal { job, .. }) => job.state.terminal(),
         #[cfg(feature = "desktop_rebuild")]

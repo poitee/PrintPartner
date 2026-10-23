@@ -3838,3 +3838,144 @@ fn sync_retained_inspection_reports_failed_and_reconciliation() {
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+fn refuse_finish(sync: &Fixture, lease: &AttemptLease) -> String {
+    let rows = sync.snapshot();
+    let error = sync.worker.finish_source_sync(lease).unwrap_err();
+    assert_eq!(sync.snapshot(), rows);
+    error.to_string()
+}
+
+fn completed_finish(sync: &Fixture, lease: &AttemptLease) -> Box<CompletedSourceSync> {
+    match sync.worker.finish_source_sync(lease).unwrap() {
+        SourceSyncFinishOutcome::Completed(completed) => completed,
+        SourceSyncFinishOutcome::NeedsReconciliation => {
+            panic!("ordinary Sync completion required reconciliation")
+        }
+    }
+}
+
+#[test]
+fn sync_finish_requires_all_targets_settled() {
+    let sync = Fixture::new();
+    let first = sync.source("Finish First");
+    let second = sync.source("Finish Second");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut first_target = local(sync.next(&mut lease));
+    let first_settlement = settlement(first);
+    let settled = sync
+        .worker
+        .settle_source_sync_target(&lease, &mut first_target, first_settlement.clone())
+        .unwrap();
+    drop(first_target);
+    assert_eq!(
+        refuse_finish(&sync, &lease),
+        "Sync target is not acknowledged"
+    );
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![
+            (first, "succeeded".into(), None),
+            (second, "pending".into(), None),
+        ]
+    );
+    let mut second_target = local(sync.next(&mut lease));
+    let second_settlement = settlement(second);
+    sync.worker
+        .settle_source_sync_target(&lease, &mut second_target, second_settlement.clone())
+        .unwrap();
+    drop(second_target);
+    assert!(matches!(sync.next(&mut lease), NextSyncTarget::Complete));
+    let completed = completed_finish(&sync, &lease);
+    assert_eq!(completed.job.job_id, job_id);
+    assert_eq!(completed.job.state, PersistentState::Succeeded);
+    assert_eq!(completed.job.progress, Some(100));
+    assert_eq!(
+        completed.aggregate,
+        jobs::SourceSyncResult {
+            synced: 2,
+            failed: 0,
+            results: vec![
+                first_settlement.result.clone(),
+                second_settlement.result.clone()
+            ],
+            failures: vec![],
+        }
+    );
+    assert_eq!(settled.result, first_settlement.result);
+    assert_eq!(
+        completed.job.public_result,
+        Some(jobs::CompletedResult::SourceSync(
+            completed.aggregate.clone()
+        ))
+    );
+    assert_eq!(sync.batch(&job_id), ("completed".into(), None));
+    let (phase, aggregate_json, aggregate_digest): (String, String, String) = sync
+        .connection()
+        .query_row(
+            "SELECT phase,aggregate_json,aggregate_digest FROM source_sync_batches WHERE job_id=?1",
+            [&job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(phase, "completed");
+    let stored: jobs::SourceSyncResult = serde_json::from_str(&aggregate_json).unwrap();
+    assert_eq!(stored, completed.aggregate);
+    assert_eq!(
+        digest(serde_json::to_string(&stored).unwrap().as_bytes()),
+        aggregate_digest
+    );
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_finish_replay_returns_same_aggregate() {
+    let sync = Fixture::new();
+    let first = sync.source("Replay First");
+    let second = sync.source("Replay Second");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let mut first_target = local(sync.next(&mut lease));
+    sync.worker
+        .settle_source_sync_target(&lease, &mut first_target, settlement(first))
+        .unwrap();
+    drop(first_target);
+    let second_target = local(sync.next(&mut lease));
+    sync.worker
+        .fail_source_sync_target(&mut lease, &second_target, "disk read failed")
+        .unwrap();
+    let observation = second_target.observation().clone();
+    sync.worker
+        .acknowledge_source_sync_target(&mut lease, &second_target, &observation)
+        .unwrap();
+    drop(second_target);
+    let finished = completed_finish(&sync, &lease);
+    assert_eq!(finished.job.state, PersistentState::Succeeded);
+    assert_eq!(finished.aggregate.synced, 1);
+    assert_eq!(finished.aggregate.failed, 1);
+    assert_eq!(
+        finished.aggregate.failures,
+        vec![jobs::SourceSyncFailure {
+            project_id: Some(second as u64),
+            name: Some("Replay Second".into()),
+            error: "disk read failed".into(),
+        }]
+    );
+    assert_eq!(sync.batch(&job_id), ("completed".into(), None));
+    let after = sync.snapshot();
+    let version = finished.job.state_version;
+    let replay = completed_finish(&sync, &lease);
+    assert_eq!(replay.job.state_version, version);
+    assert_eq!(replay.job.state, finished.job.state);
+    assert_eq!(replay.aggregate, finished.aggregate);
+    assert_eq!(replay.job.public_result, finished.job.public_result);
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(sync.batch(&job_id), ("completed".into(), None));
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
