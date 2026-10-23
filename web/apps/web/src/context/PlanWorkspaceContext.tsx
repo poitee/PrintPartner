@@ -137,6 +137,8 @@ type PlanWorkspaceValue = {
   progressSummary: string;
   refresh: () => Promise<void>;
   preparePlan: (options?: { applyManifest?: boolean }) => Promise<void>;
+  /** Deliberate Retry: resend a retained failed ordinary-Save for the selected Plan. */
+  retryPlanSave: (options?: { applyManifest?: boolean }) => Promise<void>;
   saving: boolean;
   mergeConflict: boolean;
   discardPendingEdits: () => Promise<void>;
@@ -571,7 +573,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  const preparePlan = useCallback((options?: { applyManifest?: boolean }) => {
+  const prepareCurrentPlan = useCallback((options?: { applyManifest?: boolean }) => {
     const profileId = selectedProfileId;
     if (profileId == null) return Promise.reject(new Error("Choose a Build first"));
     return enqueueDraftEdit(profileId, async () => {
@@ -835,7 +837,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
   const { choices: pendingFileChoices, saving: savingFiles, error: fileChoiceError, select: setFilesIncluded, flush: flushFileChoices, hasPending: hasPendingFileChoices, discard: discardFileChoices } = usePlanFileChoices(selectedProfileId, saveFileChoices);
   const setIncluded = useCallback((part: PlanEditablePart, included: boolean) => setFilesIncluded([part], included), [setFilesIncluded]);
-  const retryOrPreparePlan = useCallback(async (options?: { applyManifest?: boolean }) => {
+  const replayRetainedOrdinarySave = useCallback(async (options?: { applyManifest?: boolean }) => {
     if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
       await flushFileChoices(selectedProfileId);
       if (!options?.applyManifest) return;
@@ -846,12 +848,10 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       selectedProfileId == null
         ? null
         : failedOrdinarySaveByBuild.current.get(selectedProfileId) ?? null;
-    // Deliberate Retry save (no applyManifest) replays retained ordinary-Save intent for
-    // both certainties. applyManifest must still reach prepare: skip definitive replay so
-    // prepare is not stuck on the rejected payload. Uncertain/pending still replay first
-    // because the outcome is ambiguous. After a successful applyManifest prepare that
-    // skipped definitive replay, consume the snapshot so later plain preparePlan callers
-    // (reconcile / pending files / Parts auto-prepare) do not stick that payload either.
+    // applyManifest must still reach prepare: skip definitive replay so prepare is not stuck
+    // on the rejected payload. Uncertain/pending still replay first because the outcome is
+    // ambiguous. After a successful applyManifest prepare that skipped definitive replay,
+    // consume the snapshot so later plain preparePlan callers do not stick that payload.
     const skippedDefinitiveReplay =
       options?.applyManifest === true &&
       pending == null &&
@@ -865,11 +865,57 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       await editDraft(retained.edits, selectedProfileId);
       if (!options?.applyManifest) return;
     }
-    await preparePlan(options);
+    await prepareCurrentPlan(options);
     if (skippedDefinitiveReplay && selectedProfileId != null) {
       failedOrdinarySaveByBuild.current.delete(selectedProfileId);
     }
-  }, [editDraft, flushFileChoices, hasPendingFileChoices, preparePlan, selectedProfileId]);
+  }, [editDraft, flushFileChoices, hasPendingFileChoices, prepareCurrentPlan, selectedProfileId]);
+
+  // Navigation / auto prepare: keep each Plan's failed ordinary-Save intent, but do not
+  // automatically resend a definitive rejection. Uncertain outcomes still replay because
+  // the prior response was ambiguous. Deliberate Retry uses retryPlanSave instead.
+  const preparePlan = useCallback(async (options?: { applyManifest?: boolean }) => {
+    if (options?.applyManifest === true) {
+      await replayRetainedOrdinarySave(options);
+      return;
+    }
+    if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
+      await flushFileChoices(selectedProfileId);
+      return;
+    }
+    const pending =
+      selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId) ?? null;
+    const failed =
+      selectedProfileId == null
+        ? null
+        : failedOrdinarySaveByBuild.current.get(selectedProfileId) ?? null;
+    if (pending == null && failed?.certainty === "definitive") {
+      const message =
+        (selectedProfileId != null
+          ? draftUiByBuildRef.current.get(selectedProfileId)?.draftMutationError
+          : null) ?? "Save failed";
+      throw new Error(message);
+    }
+    const retained =
+      pending ?? (failed?.certainty === "uncertain" ? failed.command : null);
+    if (retained && selectedProfileId != null) {
+      await editDraft(retained.edits, selectedProfileId);
+      return;
+    }
+    await prepareCurrentPlan(options);
+  }, [
+    editDraft,
+    flushFileChoices,
+    hasPendingFileChoices,
+    prepareCurrentPlan,
+    replayRetainedOrdinarySave,
+    selectedProfileId,
+  ]);
+
+  const retryPlanSave = useCallback(
+    (options?: { applyManifest?: boolean }) => replayRetainedOrdinarySave(options),
+    [replayRetainedOrdinarySave],
+  );
 
   const reconcileActivePlanDraft = useCallback(
     async (decisions: RequiredUnitDecisionContract[]) => {
@@ -1043,7 +1089,8 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           ? draftListQuery.error.message
           : null),
       startPlanDraft,
-      preparePlan: retryOrPreparePlan,
+      preparePlan,
+      retryPlanSave,
       saving: saving || savingFiles,
       pendingFileChoices,
       mergeConflict,
@@ -1080,7 +1127,8 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       draftMutationError,
       fileChoiceError,
       startPlanDraft,
-      retryOrPreparePlan,
+      preparePlan,
+      retryPlanSave,
       saving,
       savingFiles,
       pendingFileChoices,
