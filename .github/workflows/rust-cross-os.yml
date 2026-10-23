@@ -199,16 +199,19 @@ jobs:
       - name: Archive nextest (desktop_rebuild on)
         # Main push / merge_group / workflow_dispatch: build once for slice partitions.
         # PRs never archive; they keep skipping the rebuild-on suite on pp-local.
+        # zstd level 11 shrinks transfer vs default 0 (upload previously >17–33m).
         id: archive-rebuild
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
         timeout-minutes: 45
-        run: cargo nextest archive --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --features desktop_rebuild -E "$NEXTEST_FILTER" --archive-file nextest-archive-desktop-rebuild.tar.zst
+        run: cargo nextest archive --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --features desktop_rebuild -E "$NEXTEST_FILTER" --archive-file nextest-archive-desktop-rebuild.tar.zst --zstd-level 11
       - name: Upload nextest desktop_rebuild archive
         if: ${{ !cancelled() && steps.archive-rebuild.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nextest-archive-linux-desktop-rebuild
           path: nextest-archive-desktop-rebuild.tar.zst
+          # Already zstd-compressed; skip artifact gzip re-compress (was the bulk of upload wall time).
+          compression-level: 0
           if-no-files-found: error
           retention-days: 1
       # Partitions must reuse the exact measured trees embedded in the archive
@@ -233,13 +236,14 @@ jobs:
           contracts_release=$(readlink "$GITHUB_WORKSPACE/web/packages/contracts/dist/current")
           domain_release=$(readlink "$GITHUB_WORKSPACE/web/packages/domain/dist/current")
           test -f "$GITHUB_WORKSPACE/web/apps/server/dist/${server_release}/desktop-resolution.js"
-          tar -C "$GITHUB_WORKSPACE" -cf desktop-release-assets.tar \
+          tar -C "$GITHUB_WORKSPACE" -cf - \
             rust/bundle-manifest.json \
             web/apps/web/dist \
             web/apps/server/dist \
             web/packages/contracts/dist \
-            web/packages/domain/dist
-          tar -tf desktop-release-assets.tar > desktop-release-assets.list
+            web/packages/domain/dist \
+            | zstd -T0 -11 -o desktop-release-assets.tar.zst
+          tar --use-compress-program=zstd -tf desktop-release-assets.tar.zst > desktop-release-assets.list
           grep -Fx 'web/apps/server/dist/current' desktop-release-assets.list
           grep -Fx "web/apps/server/dist/${server_release}/desktop-resolution.js" desktop-release-assets.list
           grep -Fx 'web/packages/contracts/dist/current' desktop-release-assets.list
@@ -247,14 +251,25 @@ jobs:
           grep -qF "web/packages/contracts/dist/${contracts_release}/" desktop-release-assets.list
           grep -qF "web/packages/domain/dist/${domain_release}/" desktop-release-assets.list
           grep -Fx 'web/apps/web/dist/desktop-build.json' desktop-release-assets.list
+          ls -lh desktop-release-assets.tar.zst
+          if [ -f nextest-archive-desktop-rebuild.tar.zst ]; then
+            ls -lh nextest-archive-desktop-rebuild.tar.zst
+          fi
       - name: Upload desktop release assets
         if: ${{ !cancelled() && steps.pack-assets.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-release-assets-linux
-          path: desktop-release-assets.tar
+          path: desktop-release-assets.tar.zst
+          compression-level: 0
           if-no-files-found: error
           retention-days: 1
+      - name: Remove partition archives from the workspace
+        if: ${{ always() && (steps.archive-rebuild.outcome == 'success' || steps.pack-assets.outcome == 'success') }}
+        run: |
+          set -euo pipefail
+          rm -f nextest-archive-desktop-rebuild.tar.zst \
+            desktop-release-assets.tar.zst desktop-release-assets.list
       - name: nextest (desktop_rebuild on)
         # Bound self-hosted Linux PR runtime only (pp-local ~67m). Windows PRs
         # keep rebuild-on nextest even when pp-local-win is self-hosted. Hosted
@@ -281,7 +296,7 @@ jobs:
   # merge_group, and workflow_dispatch; PRs keep skipping desktop_rebuild nextest.
   rust-linux-rebuild:
     name: rust (linux) rebuild ${{ matrix.partition }}/3
-    needs: [changes, rust-linux-build]
+    needs: [rust-linux-build]
     # Draft guard first (merge-group workflow tests). Event filter still keeps
     # partitions off pull_request; only push / merge_group / workflow_dispatch.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result == 'success' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'))
@@ -294,7 +309,7 @@ jobs:
       RUST_OS: linux
       NEXTEST_FILTER: all()
       NEXTEST_PROFILE: pp-local-linux
-    # Artifact download (~15m) plus a full slice can exceed 45m on pp-local.
+    # Compressed archive download plus a full slice must stay under this budget.
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -340,8 +355,8 @@ jobs:
       - name: Restore desktop release assets
         run: |
           set -euo pipefail
-          test -f desktop-release-assets.tar
-          tar -C "$GITHUB_WORKSPACE" -xf desktop-release-assets.tar
+          test -f desktop-release-assets.tar.zst
+          tar --use-compress-program=zstd -C "$GITHUB_WORKSPACE" -xf desktop-release-assets.tar.zst
           for link in \
             web/apps/server/dist/current \
             web/packages/contracts/dist/current \
@@ -380,23 +395,31 @@ jobs:
     name: rust (linux)
     needs: [rust-linux-build, rust-linux-rebuild]
     # Draft guard first. !cancelled() so cancel reports skipped, not aggregate fail.
-    # Rebuild may be skipped on PRs; build must not be skipped.
+    # Rebuild may be skipped on PRs/schedule; push / merge_group / dispatch require success.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result != 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require linux build and rebuild partitions
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BUILD_RESULT: ${{ needs.rust-linux-build.result }}
           REBUILD_RESULT: ${{ needs.rust-linux-rebuild.result }}
         run: |
           set -euo pipefail
           test "$BUILD_RESULT" = success
-          case "$REBUILD_RESULT" in
-            success|skipped) ;;
+          case "$EVENT_NAME" in
+            push|merge_group|workflow_dispatch)
+              test "$REBUILD_RESULT" = success
+              ;;
             *)
-              echo "rust-linux-rebuild result=$REBUILD_RESULT" >&2
-              exit 1
+              case "$REBUILD_RESULT" in
+                success|skipped) ;;
+                *)
+                  echo "rust-linux-rebuild result=$REBUILD_RESULT" >&2
+                  exit 1
+                  ;;
+              esac
               ;;
           esac
 

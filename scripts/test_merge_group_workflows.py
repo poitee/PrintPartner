@@ -118,6 +118,8 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                                     if step.get("uses", "").startswith("actions/checkout@"))
                     self.assertNotIn("ref", checkout.get("with", {}))
                 if filename == "rust-cross-os.yml":
+                    rebuild = jobs["rust-linux-rebuild"]
+                    self.assertEqual(rebuild["needs"], ["rust-linux-build"])
                     aggregate = jobs["rust-linux"]
                     self.assertEqual(aggregate.get("name"), "rust (linux)")
                     self.assertEqual(aggregate["needs"], ["rust-linux-build", "rust-linux-rebuild"])
@@ -127,6 +129,14 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                         "!github.event.pull_request.draft) && (!cancelled() && "
                         "needs.rust-linux-build.result != 'skipped')",
                     )
+                    require = next(
+                        step for step in aggregate["steps"]
+                        if step.get("name") == "Require linux build and rebuild partitions"
+                    )
+                    self.assertEqual(require["env"]["EVENT_NAME"], "${{ github.event_name }}")
+                    self.assertIn("push|merge_group|workflow_dispatch)", require["run"])
+                    self.assertIn('test "$REBUILD_RESULT" = success', require["run"])
+                    self.assertIn("success|skipped)", require["run"])
 
     def test_native_macos_plan_respects_paths_and_event(self):
         workflow = yaml.load((ROOT / ".github/workflows/desktop-native-macos.yml").read_text(),
