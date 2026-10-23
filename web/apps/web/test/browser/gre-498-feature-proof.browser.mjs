@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import console from "node:console";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import process from "node:process";
 import { fileURLToPath, URL } from "node:url";
 import { chromium } from "playwright-core";
 import { createServer } from "vite";
@@ -80,14 +82,16 @@ try {
 
     if (query.includes("surface=farm")) {
       await page.getByRole("heading", { name: "Production send queue" }).waitFor();
-      await page.waitForFunction(() => document.body.dataset.planFeaturesReady === "1");
+      await page.waitForFunction(
+        () => globalThis.document.body.dataset.planFeaturesReady === "1",
+      );
       const marker = page.locator('[aria-label="Send queue visible"]');
       await marker.waitFor({ state: "attached" });
       const queue = page.getByRole("region", { name: "Printer send queue" });
       const wantVisible = query.includes("enabled=1");
       await page.waitForFunction(
         ({ want }) => {
-          const el = document.querySelector('[aria-label="Send queue visible"]');
+          const el = globalThis.document.querySelector('[aria-label="Send queue visible"]');
           return el?.getAttribute("data-farm-queue-visible") === (want ? "yes" : "no");
         },
         { want: wantVisible },
