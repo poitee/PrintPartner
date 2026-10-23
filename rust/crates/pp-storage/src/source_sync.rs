@@ -299,6 +299,103 @@ pub(crate) fn original_authority_status(
     })
 }
 
+#[allow(dead_code)]
+struct ProducerCapture {
+    claim_generation: i64,
+    parent_generation: i64,
+    worker: String,
+    fence_digest: String,
+    incarnation: String,
+    token: String,
+    configuration_version: i64,
+    authority_actor: String,
+    authority_basis_digest: String,
+    activation_digest: String,
+    path_digest: String,
+}
+
+enum ValidatedTargetOutcome {
+    Pending,
+    Claimed,
+    Succeeded {
+        result: SourceScanResult,
+        _receipt: crate::jobs::ResultArtifact,
+    },
+    Failed {
+        #[allow(dead_code)]
+        failure: SourceSyncFailure,
+        #[allow(dead_code)]
+        code: String,
+    },
+    NotRun,
+    ReconciliationRequired {
+        result: Option<SourceScanResult>,
+    },
+}
+
+struct ValidatedTarget {
+    ordinal: u32,
+    source_id: i64,
+    acknowledged: bool,
+    failure_detail: Option<String>,
+    capture: Option<ProducerCapture>,
+    outcome: ValidatedTargetOutcome,
+}
+
+struct StoredSyncTargetRow {
+    requested_source_id: i64,
+    source_name: Option<String>,
+    state: String,
+    claim_generation: i64,
+    parent_generation: Option<i64>,
+    attempt_worker: Option<String>,
+    attempt_fence_digest: Option<String>,
+    reservation_incarnation: Option<String>,
+    reservation_token: Option<String>,
+    configuration_version: Option<i64>,
+    authority_actor: Option<String>,
+    authority_basis_digest: Option<String>,
+    activation_observation_digest: Option<String>,
+    path_observation_digest: Option<String>,
+    result_json: Option<String>,
+    result_digest: Option<String>,
+    receipt_id: Option<String>,
+    receipt_hash: Option<String>,
+    receipt_target: Option<String>,
+    failure_code: Option<String>,
+    failure_detail: Option<String>,
+    reservation_acknowledged: i64,
+}
+
+impl StoredSyncTargetRow {
+    fn decode(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            requested_source_id: row.get(0)?,
+            source_name: row.get(1)?,
+            state: row.get(2)?,
+            claim_generation: row.get(3)?,
+            parent_generation: row.get(4)?,
+            attempt_worker: row.get(5)?,
+            attempt_fence_digest: row.get(6)?,
+            reservation_incarnation: row.get(7)?,
+            reservation_token: row.get(8)?,
+            configuration_version: row.get(9)?,
+            authority_actor: row.get(10)?,
+            authority_basis_digest: row.get(11)?,
+            activation_observation_digest: row.get(12)?,
+            path_observation_digest: row.get(13)?,
+            result_json: row.get(14)?,
+            result_digest: row.get(15)?,
+            receipt_id: row.get(16)?,
+            receipt_hash: row.get(17)?,
+            receipt_target: row.get(18)?,
+            failure_code: row.get(19)?,
+            failure_detail: row.get(20)?,
+            reservation_acknowledged: row.get(21)?,
+        })
+    }
+}
+
 pub enum NextSyncTarget {
     Local(SyncTargetLease),
     /// The target failed before any reservation and needs no settlement.
@@ -455,12 +552,12 @@ fn validate_basis(tx: &Transaction<'_>, job: &JobRecord) -> Result<Vec<i64>> {
 /// Checks one bound candidate against the sealed basis and its recorded content.
 fn validate_target(tx: &Transaction<'_>, job: &JobRecord, bound: &BoundSyncTarget) -> Result<()> {
     let source_ids = validate_basis(tx, job)?;
-    validate_target_in_basis(tx, job, bound, &source_ids)
+    validate_bound_target_in_basis(tx, job, bound, &source_ids)
 }
 
 /// Checks revision identity, Source configuration, observation and result
 /// provenance for a candidate already placed in the sealed basis.
-fn validate_target_in_basis(
+fn validate_bound_target_in_basis(
     tx: &Transaction<'_>,
     job: &JobRecord,
     bound: &BoundSyncTarget,
@@ -583,6 +680,310 @@ fn validate_result_provenance(
         "Sync receipt Source mismatch"
     );
     Ok(())
+}
+
+/// Validates one retained target row against the sealed basis: producer capture,
+/// observation digests, result/receipt provenance, and per-state rules.
+fn validate_target_in_basis(
+    tx: &Transaction<'_>,
+    job: &JobRecord,
+    key: &SyncTargetKey,
+    source_ids: &[i64],
+) -> Result<ValidatedTarget> {
+    ensure!(job.kind == JobKind::Sync, "Job is not Sync");
+    ensure!(key.job_id == job.job_id, "Sync target Job mismatch");
+    let source_id = *source_ids
+        .get(usize::try_from(key.ordinal)?)
+        .ok_or_else(|| anyhow!("Sync target is outside the sealed basis"))?;
+    let StoredSyncTargetRow {
+        requested_source_id: stored_source_id,
+        source_name,
+        state,
+        claim_generation,
+        parent_generation,
+        attempt_worker: worker,
+        attempt_fence_digest: fence_digest,
+        reservation_incarnation: incarnation,
+        reservation_token: token,
+        configuration_version,
+        authority_actor,
+        authority_basis_digest,
+        activation_observation_digest: activation_digest,
+        path_observation_digest: path_digest,
+        result_json,
+        result_digest,
+        receipt_id,
+        receipt_hash,
+        receipt_target,
+        failure_code,
+        failure_detail,
+        reservation_acknowledged: acknowledged,
+    } = tx.query_row(
+        "SELECT requested_source_id,source_name,state,claim_generation,parent_generation,attempt_worker,attempt_fence_digest,reservation_incarnation,reservation_token,configuration_version,authority_actor,authority_basis_digest,activation_observation_digest,path_observation_digest,result_json,result_digest,receipt_id,receipt_hash,receipt_target,failure_code,failure_detail,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2 AND tenant=?3",
+        params![key.job_id, key.ordinal, job.tenant],
+        StoredSyncTargetRow::decode,
+    )?;
+    ensure!(stored_source_id == source_id, "Sync target Source mismatch");
+    ensure!(
+        matches!(acknowledged, 0 | 1),
+        "Invalid Sync acknowledgement state"
+    );
+    ensure!(claim_generation >= 0, "Invalid Sync claim generation");
+    let capture_values = [
+        parent_generation.is_some(),
+        worker.is_some(),
+        fence_digest.is_some(),
+        incarnation.is_some(),
+        token.is_some(),
+        configuration_version.is_some(),
+        authority_actor.is_some(),
+        authority_basis_digest.is_some(),
+        activation_digest.is_some(),
+        path_digest.is_some(),
+    ];
+    let capture = if capture_values.iter().any(|present| *present) {
+        ensure!(
+            capture_values.iter().all(|present| *present),
+            "Sync producer capture incomplete"
+        );
+        let parent_generation = parent_generation.expect("complete capture");
+        let worker = worker.expect("complete capture");
+        let fence_digest = fence_digest.expect("complete capture");
+        let incarnation = incarnation.expect("complete capture");
+        let token = token.expect("complete capture");
+        let configuration_version = configuration_version.expect("complete capture");
+        let authority_actor = authority_actor.expect("complete capture");
+        let authority_basis_digest = authority_basis_digest.expect("complete capture");
+        let activation_digest = activation_digest.expect("complete capture");
+        let path_digest = path_digest.expect("complete capture");
+        ensure!(
+            claim_generation > 0 && parent_generation > 0,
+            "Invalid Sync producer generation"
+        );
+        ensure!(
+            !worker.is_empty() && !authority_actor.is_empty(),
+            "Invalid Sync producer identity"
+        );
+        ensure!(
+            valid_digest(&fence_digest),
+            "Invalid Sync attempt fence digest"
+        );
+        ensure!(
+            valid_digest(&incarnation),
+            "Invalid Sync reservation incarnation"
+        );
+        ensure!(
+            valid_digest(&authority_basis_digest),
+            "Invalid Sync authority digest"
+        );
+        ensure!(
+            valid_digest(&activation_digest),
+            "Invalid Sync activation digest"
+        );
+        ensure!(valid_digest(&path_digest), "Invalid Sync path digest");
+        ensure!(
+            configuration_version > 0,
+            "Invalid Sync configuration version"
+        );
+        let parsed_token = u64::from_str_radix(&token, 16)?;
+        ensure!(
+            token == token_text(parsed_token)?,
+            "Invalid Sync reservation token"
+        );
+        Some(ProducerCapture {
+            claim_generation,
+            parent_generation,
+            worker,
+            fence_digest,
+            incarnation,
+            token,
+            configuration_version,
+            authority_actor,
+            authority_basis_digest,
+            activation_digest,
+            path_digest,
+        })
+    } else {
+        None
+    };
+    let receipt_values = [
+        receipt_id.is_some(),
+        receipt_hash.is_some(),
+        receipt_target.is_some(),
+    ];
+    ensure!(
+        receipt_values.iter().all(|present| *present)
+            || receipt_values.iter().all(|present| !*present),
+        "Sync receipt capture incomplete"
+    );
+    let receipt = match (receipt_id, receipt_hash, receipt_target) {
+        (Some(receipt_id), Some(content_hash), Some(target)) => {
+            ensure!(valid_digest(&content_hash), "Invalid Sync receipt digest");
+            ensure!(valid_receipt_id(&receipt_id), "Invalid Local receipt ID");
+            let receipt = crate::jobs::ResultArtifact {
+                receipt_id,
+                content_hash,
+                target,
+            };
+            ensure!(
+                receipt.target == format!("source:{source_id}"),
+                "Sync receipt Source mismatch"
+            );
+            Some(receipt)
+        }
+        (None, None, None) => None,
+        _ => unreachable!(),
+    };
+    let result = match (result_json, result_digest) {
+        (Some(result_json), Some(result_digest)) => {
+            ensure!(valid_digest(&result_digest), "Invalid Sync result digest");
+            let result: SourceScanResult = serde_json::from_str(&result_json)?;
+            let canonical_result = serde_json::to_string(&result)?;
+            ensure!(
+                result_json == canonical_result,
+                "Sync result is not canonical"
+            );
+            ensure!(
+                digest(canonical_result.as_bytes()) == result_digest,
+                "Sync result digest mismatch"
+            );
+            ensure!(
+                result.project_id == u64::try_from(source_id).ok(),
+                "Sync result Source mismatch"
+            );
+            Some(result)
+        }
+        (None, None) => None,
+        _ => return Err(anyhow!("Sync result capture incomplete")),
+    };
+    let failure = || -> Result<SourceSyncFailure> {
+        let detail = failure_detail
+            .clone()
+            .ok_or_else(|| anyhow!("Sync failure detail missing"))?;
+        ensure!(
+            !detail.is_empty() && detail.len() <= 1024,
+            "Invalid Sync failure detail"
+        );
+        Ok(SourceSyncFailure {
+            project_id: u64::try_from(source_id).ok(),
+            name: source_name.clone(),
+            error: detail,
+        })
+    };
+    let outcome = match state.as_str() {
+        "pending" => {
+            ensure!(
+                capture.is_none()
+                    && result.is_none()
+                    && receipt.is_none()
+                    && failure_code.is_none()
+                    && failure_detail.is_none()
+                    && acknowledged == 0,
+                "Invalid pending Sync target"
+            );
+            ValidatedTargetOutcome::Pending
+        }
+        "claimed" => {
+            ensure!(
+                capture.is_some()
+                    && result.is_none()
+                    && receipt.is_none()
+                    && failure_code.is_none()
+                    && failure_detail.is_none()
+                    && acknowledged == 0,
+                "Invalid claimed Sync target"
+            );
+            ValidatedTargetOutcome::Claimed
+        }
+        "succeeded" => {
+            ensure!(
+                capture.is_some() && failure_code.is_none() && failure_detail.is_none(),
+                "Invalid successful Sync target"
+            );
+            ValidatedTargetOutcome::Succeeded {
+                result: result.ok_or_else(|| anyhow!("Sync result missing"))?,
+                _receipt: receipt.ok_or_else(|| anyhow!("Sync receipt missing"))?,
+            }
+        }
+        "failed" => {
+            ensure!(
+                result.is_none() && receipt.is_none(),
+                "Failed Sync target retained success evidence"
+            );
+            let code = failure_code
+                .clone()
+                .ok_or_else(|| anyhow!("Sync failure code missing"))?;
+            match code.as_str() {
+                "unavailable" | "unsupported_kind" => {
+                    ensure!(
+                        capture.is_none() && acknowledged == 1,
+                        "Invalid unreserved Sync failure"
+                    );
+                }
+                "local_read"
+                | "local_settlement"
+                | "configuration_changed"
+                | "authority_refused" => {
+                    ensure!(
+                        capture.is_some(),
+                        "Reserved Sync failure lacks producer capture"
+                    );
+                }
+                _ => return Err(anyhow!("Invalid Sync failure code")),
+            }
+            ValidatedTargetOutcome::Failed {
+                failure: failure()?,
+                code,
+            }
+        }
+        "not_run" => {
+            ensure!(
+                capture.is_none()
+                    && result.is_none()
+                    && receipt.is_none()
+                    && failure_code.as_deref() == Some("batch_halt")
+                    && acknowledged == 0,
+                "Invalid not-run Sync target"
+            );
+            let _ = failure()?;
+            ValidatedTargetOutcome::NotRun
+        }
+        "reconciliation_required" => {
+            ensure!(
+                capture.is_some(),
+                "Sync reconciliation lacks producer capture"
+            );
+            ensure!(
+                matches!(
+                    failure_code.as_deref(),
+                    Some(
+                        "local_read"
+                            | "local_settlement"
+                            | "configuration_changed"
+                            | "authority_refused"
+                    )
+                ),
+                "Invalid Sync reconciliation reason"
+            );
+            if result.is_some() || receipt.is_some() {
+                ensure!(
+                    result.is_some() && receipt.is_some(),
+                    "Sync reconciliation receipt/result mismatch"
+                );
+            }
+            let _ = failure()?;
+            ValidatedTargetOutcome::ReconciliationRequired { result }
+        }
+        _ => return Err(anyhow!("Invalid Sync target state")),
+    };
+    Ok(ValidatedTarget {
+        ordinal: key.ordinal,
+        source_id,
+        acknowledged: acknowledged == 1,
+        failure_detail,
+        capture,
+        outcome,
+    })
 }
 
 /// Seals the batch's targets on first open. A later attempt revalidates the
@@ -1514,17 +1915,9 @@ pub(crate) fn inspect(
     }
 }
 
-fn retained_failure_detail(detail: Option<String>) -> Result<String> {
-    let detail = detail.ok_or_else(|| anyhow!("Sync failure detail missing"))?;
-    ensure!(
-        !detail.is_empty() && detail.len() <= 1024,
-        "Invalid Sync failure detail"
-    );
-    Ok(detail)
-}
-
-/// Reads one retained Sync Job. Validates batch phase, sealed-basis bindings
-/// and result capture, then reports dispositions without writing.
+/// Reads one retained Sync Job. Validates batch phase, sealed-basis bindings,
+/// producer capture, observation digests and result provenance, then reports
+/// dispositions without writing.
 pub(crate) fn inspect_retained(
     tx: &Transaction<'_>,
     access: &AuthorizedSyncRead,
@@ -1550,124 +1943,43 @@ pub(crate) fn inspect_retained(
         "Sync recovery batch phase mismatch"
     );
     let mut targets = Vec::with_capacity(source_ids.len());
-    for (ordinal, &source_id) in source_ids.iter().enumerate() {
-        let ordinal = u32::try_from(ordinal)?;
-        let row = tx.query_row(
-            "SELECT requested_source_id,state,authority_actor,result_json,result_digest,receipt_id,receipt_hash,receipt_target,failure_code,failure_detail,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2 AND tenant=?3",
-            params![job.job_id, ordinal, job.tenant],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, Option<String>>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, i64>(10)?,
-                ))
+    for ordinal in 0..source_ids.len() {
+        let target = validate_target_in_basis(
+            tx,
+            job,
+            &SyncTargetKey {
+                job_id: job.job_id.clone(),
+                ordinal: u32::try_from(ordinal)?,
             },
+            &source_ids,
         )?;
-        let (
-            stored_source_id,
-            state,
-            authority_actor,
-            result_json,
-            result_digest,
-            receipt_id,
-            receipt_hash,
-            receipt_target,
-            failure_code,
-            failure_detail,
-            acknowledged,
-        ) = row;
-        ensure!(stored_source_id == source_id, "Sync target Source mismatch");
-        ensure!(
-            matches!(acknowledged, 0 | 1),
-            "Invalid Sync acknowledgement state"
-        );
-        if let (Some(expected), Some(actor)) =
-            (access.original_subject(), authority_actor.as_deref())
+        if let (Some(expected), Some(capture)) =
+            (access.original_subject(), target.capture.as_ref())
         {
             ensure!(
-                expected == actor,
+                expected == capture.authority_actor,
                 "Sync recovery authority capture mismatch"
             );
         }
-        validate_result_provenance(
-            source_id,
-            result_json.clone(),
-            result_digest.clone(),
-            receipt_id.clone(),
-            receipt_hash.clone(),
-            receipt_target.clone(),
-        )?;
-        let result = match (result_json.as_ref(), result_digest.as_ref()) {
-            (Some(json), Some(_)) => Some(serde_json::from_str(json)?),
-            (None, None) => None,
-            _ => return Err(anyhow!("Sync result capture incomplete")),
-        };
-        let has_receipt =
-            receipt_id.is_some() || receipt_hash.is_some() || receipt_target.is_some();
-        let (disposition, failure) = match state.as_str() {
-            "pending" => (SyncRecoveryDisposition::Pending, None),
-            "claimed" => (SyncRecoveryDisposition::Claimed, None),
-            "succeeded" => {
-                ensure!(
-                    authority_actor.is_some()
-                        && result.is_some()
-                        && has_receipt
-                        && failure_code.is_none()
-                        && failure_detail.is_none(),
-                    "Invalid successful Sync target"
-                );
-                (SyncRecoveryDisposition::Succeeded, None)
+        let (disposition, result) = match target.outcome {
+            ValidatedTargetOutcome::Pending => (SyncRecoveryDisposition::Pending, None),
+            ValidatedTargetOutcome::Claimed => (SyncRecoveryDisposition::Claimed, None),
+            ValidatedTargetOutcome::Succeeded { result, .. } => {
+                (SyncRecoveryDisposition::Succeeded, Some(result))
             }
-            "failed" => {
-                ensure!(
-                    result.is_none() && !has_receipt,
-                    "Failed Sync target retained success evidence"
-                );
-                ensure!(failure_code.is_some(), "Sync failure code missing");
-                (
-                    SyncRecoveryDisposition::Failed,
-                    Some(retained_failure_detail(failure_detail)?),
-                )
+            ValidatedTargetOutcome::Failed { .. } => (SyncRecoveryDisposition::Failed, None),
+            ValidatedTargetOutcome::NotRun => (SyncRecoveryDisposition::NotRun, None),
+            ValidatedTargetOutcome::ReconciliationRequired { result } => {
+                (SyncRecoveryDisposition::ReconciliationRequired, result)
             }
-            "not_run" => {
-                ensure!(
-                    failure_code.as_deref() == Some("batch_halt")
-                        && result.is_none()
-                        && !has_receipt,
-                    "Invalid not-run Sync target"
-                );
-                (
-                    SyncRecoveryDisposition::NotRun,
-                    Some(retained_failure_detail(failure_detail)?),
-                )
-            }
-            "reconciliation_required" => {
-                ensure!(
-                    authority_actor.is_some(),
-                    "Sync reconciliation lacks producer capture"
-                );
-                (
-                    SyncRecoveryDisposition::ReconciliationRequired,
-                    Some(retained_failure_detail(failure_detail)?),
-                )
-            }
-            _ => return Err(anyhow!("Invalid Sync target state")),
         };
         targets.push(SyncRecoveryTarget {
-            ordinal,
-            requested_source_id: u64::try_from(source_id)?,
+            ordinal: target.ordinal,
+            requested_source_id: u64::try_from(target.source_id)?,
             disposition,
-            failure,
+            failure: target.failure_detail,
             result,
-            acknowledged: acknowledged == 1,
+            acknowledged: target.acknowledged,
         });
     }
     let state = match job.state {

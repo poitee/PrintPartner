@@ -253,12 +253,19 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
 
 Inspect retained recovery evidence with:
 
+`inspect_retained` validates each target through `validate_target_in_basis`
+(producer capture, observation digests, result/receipt provenance, and
+pending/claimed/failed/not-run/reconciliation rules) before reporting
+dispositions. Corrupt Source bindings, incomplete captures, and invalid
+observation digests are refused without writing.
+
 ```sh
 CARGO_BUILD_JOBS=2 \
 CARGO_TARGET_DIR=/persist/targets/gre-781-sync-retained-inspect \
 cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
   sync_retained_inspection_reports_disposition \
-  sync_retained_inspection_rejects_corrupt_binding
+  sync_retained_inspection_rejects_corrupt_binding \
+  sync_retained_inspection_reports_failed_and_reconciliation
 ```
 
 `durable_claim_returns_source_busy_after_restart` and
