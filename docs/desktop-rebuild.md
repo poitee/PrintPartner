@@ -641,6 +641,25 @@ not automatically resend a definitive rejection. Deliberate Retry uses
 npm run test -w @print-partner/web -- src/context/PlanSelection.integration.test.tsx src/context/PlanWorkspaceContext.test.tsx
 ```
 
+### D29 failed special-request and manifest Save intent (client)
+
+GRE-813 retains failed Build special-request and kit-manifest payloads for
+deliberate retry. Failed manifest saves keep the exact kit body from the
+refused request; a later retry does not rebuild from newer UI selections until
+the user makes a new edit. `BuildSaveFlushContext` allows multiple flush
+producers per Build so special-request and manifest autosave can register
+independently. `retryPlanSave` replays retained ordinary-Save intent from
+GRE-812, then retries auxiliary failures in first-failure order (special
+request before manifest when both failed). Web-only; no new Rust
+`desktop_rebuild` surface. Focused proofs:
+`failed_manifest_save_keeps_exact_payload` in `useKitManifestAutosave.test.ts`,
+`failed_special_request_retry_preserves_order` in
+`planAuxiliarySaveIntent.test.ts`.
+
+```sh
+npm run test -w @print-partner/web -- src/hooks/useKitManifestAutosave.test.ts src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/context/BuildSaveFlushContext.test.tsx
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.

@@ -2,7 +2,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import PlanSpecialRequestField from "./PlanSpecialRequestField";
+import PlanSpecialRequestField, { resetSpecialRequestSaveStateForTests } from "./PlanSpecialRequestField";
+import { BuildSaveFlushProvider } from "../context/BuildSaveFlushContext";
+import { resetAuxiliarySaveIntentForTests } from "../lib/planAuxiliarySaveIntent";
 
 const update = vi.hoisted(() => vi.fn());
 vi.mock("../queries/profiles", () => ({
@@ -12,16 +14,22 @@ vi.mock("../queries/profiles", () => ({
 afterEach(() => {
   cleanup();
   update.mockReset();
+  resetSpecialRequestSaveStateForTests();
+  resetAuxiliarySaveIntentForTests();
 });
 
-it("keeps a failed special request across navigation and retries it", async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  update.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(undefined);
-  const field = (value: string | null) => (
-    <QueryClientProvider client={client}>
-      <PlanSpecialRequestField profileId={9001} value={value} />
-    </QueryClientProvider>
+function field(value: string | null, profileId = 9001) {
+  return (
+    <BuildSaveFlushProvider>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <PlanSpecialRequestField profileId={profileId} value={value} />
+      </QueryClientProvider>
+    </BuildSaveFlushProvider>
   );
+}
+
+it("keeps a failed special request across navigation and retries it", async () => {
+  update.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(undefined);
   const page = render(field(null));
   fireEvent.change(screen.getByRole("textbox", { name: "Special request" }), { target: { value: "Audit offline request draft" } });
   fireEvent.blur(screen.getByRole("textbox", { name: "Special request" }));
@@ -39,29 +47,21 @@ it("keeps a failed special request across navigation and retries it", async () =
   returned.rerender(field("Audit offline request draft"));
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true);
-  client.clear();
 });
 
 it("keeps an unblurred request with its Build when switching Builds", async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   update.mockResolvedValue(undefined);
-  const field = (profileId: number, value: string | null) => (
-    <QueryClientProvider client={client}>
-      <PlanSpecialRequestField profileId={profileId} value={value} />
-    </QueryClientProvider>
-  );
-  const first = render(field(9002, null));
+  const first = render(field(null, 9002));
   fireEvent.change(screen.getByRole("textbox", { name: "Special request" }), { target: { value: "Keep with Build 9002" } });
   expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(false);
   first.unmount();
-  const other = render(field(9003, null));
+  const other = render(field(null, 9003));
   expect(screen.getByRole("textbox", { name: "Special request" })).toHaveProperty("value", "");
   other.unmount();
-  const returned = render(field(9002, null));
+  const returned = render(field(null, 9002));
   expect(screen.getByRole("textbox", { name: "Special request" })).toHaveProperty("value", "Keep with Build 9002");
   fireEvent.blur(screen.getByRole("textbox", { name: "Special request" }));
   await waitFor(() => expect(update).toHaveBeenCalledWith({ id: 9002, special_request: "Keep with Build 9002" }));
-  returned.rerender(field(9002, "Keep with Build 9002"));
+  returned.rerender(field("Keep with Build 9002", 9002));
   await waitFor(() => expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true));
-  client.clear();
 });

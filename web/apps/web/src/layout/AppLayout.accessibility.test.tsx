@@ -46,10 +46,10 @@ const saveRegistry = vi.hoisted(() => ({
 }));
 vi.mock("../context/BuildSaveFlushContext", () => ({
   useFlushBuildPageSaves: () => saveRegistry.flush,
-  useBuildSaveFlushRegistry: () => ({
-    registerFlush: (id: number, flush: () => Promise<void>) => saveRegistry.registered.set(id, flush),
-    unregisterFlush: (id: number) => saveRegistry.registered.delete(id),
-  }),
+  useBuildSaveFlushRegistry: () => (id: number, flush: () => Promise<void>) => {
+    saveRegistry.registered.set(id, flush);
+    return () => saveRegistry.registered.delete(id);
+  },
 }));
 vi.mock("../lib/persistedSidebarUi", () => ({
   readSidebarCollapsed: () => false,
