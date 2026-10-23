@@ -214,24 +214,37 @@ jobs:
       # Partitions must reuse the exact measured trees embedded in the archive
       # binaries (include_bytes! of bundle-manifest.json). Rebuilding web assets
       # on each partition runner changes digests and fails release verification.
+      # Dependency inventory follows workspace links into package trees and records
+      # dist/current as a symlink to dist/releases/<id> plus files under that
+      # release path. Pack the full dist/ trees without -h so restore keeps that
+      # topology; packing only current with -h flattens the link and mismatches.
       - name: Pack desktop release assets for partitions
         id: pack-assets
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
         run: |
           set -euo pipefail
-          # atomic-package-build publishes dist/current as a symlink to a release
-          # directory. Plain tar stores that link alone (dangling on restore).
-          # -h archives the resolved trees under the logical current/ paths.
           test -f "$GITHUB_WORKSPACE/rust/bundle-manifest.json"
           test -f "$GITHUB_WORKSPACE/web/apps/web/dist/desktop-build.json"
+          test -L "$GITHUB_WORKSPACE/web/apps/server/dist/current"
+          test -L "$GITHUB_WORKSPACE/web/packages/contracts/dist/current"
+          test -L "$GITHUB_WORKSPACE/web/packages/domain/dist/current"
           test -f "$GITHUB_WORKSPACE/web/apps/server/dist/current/desktop-resolution.js"
-          tar -C "$GITHUB_WORKSPACE" -h -cf desktop-release-assets.tar \
+          server_release=$(readlink "$GITHUB_WORKSPACE/web/apps/server/dist/current")
+          contracts_release=$(readlink "$GITHUB_WORKSPACE/web/packages/contracts/dist/current")
+          domain_release=$(readlink "$GITHUB_WORKSPACE/web/packages/domain/dist/current")
+          test -f "$GITHUB_WORKSPACE/web/apps/server/dist/${server_release}/desktop-resolution.js"
+          tar -C "$GITHUB_WORKSPACE" -cf desktop-release-assets.tar \
             rust/bundle-manifest.json \
             web/apps/web/dist \
-            web/apps/server/dist/current \
-            web/packages/contracts/dist/current \
-            web/packages/domain/dist/current
-          tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/server/dist/current/desktop-resolution.js'
+            web/apps/server/dist \
+            web/packages/contracts/dist \
+            web/packages/domain/dist
+          tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/server/dist/current'
+          tar -tf desktop-release-assets.tar | grep -Fx "web/apps/server/dist/${server_release}/desktop-resolution.js"
+          tar -tf desktop-release-assets.tar | grep -Fx 'web/packages/contracts/dist/current'
+          tar -tf desktop-release-assets.tar | grep -Fx 'web/packages/domain/dist/current'
+          tar -tf desktop-release-assets.tar | grep -F "web/packages/contracts/dist/${contracts_release}/" | head -n 1 | grep -q .
+          tar -tf desktop-release-assets.tar | grep -F "web/packages/domain/dist/${domain_release}/" | head -n 1 | grep -q .
           tar -tf desktop-release-assets.tar | grep -Fx 'web/apps/web/dist/desktop-build.json'
       - name: Upload desktop release assets
         if: ${{ !cancelled() && steps.pack-assets.outcome == 'success' }}
@@ -328,6 +341,17 @@ jobs:
           set -euo pipefail
           test -f desktop-release-assets.tar
           tar -C "$GITHUB_WORKSPACE" -xf desktop-release-assets.tar
+          for link in \
+            web/apps/server/dist/current \
+            web/packages/contracts/dist/current \
+            web/packages/domain/dist/current
+          do
+            if [ ! -L "$link" ]; then
+              echo "missing symlink after restore: $link" >&2
+              ls -la "$(dirname "$link")" >&2 || true
+              exit 1
+            fi
+          done
           for f in \
             rust/bundle-manifest.json \
             web/apps/web/dist/desktop-build.json \
