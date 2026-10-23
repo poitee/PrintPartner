@@ -1653,8 +1653,9 @@ JSON and generator pattern. Regenerate it from `web`:
 npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.mts apps/server > ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.json
 ```
 
-No HTTP route or runtime caller is added. GRE-644 still needs its HTTP slice
-with D25/GRE-620 build routes, including `PP_DESKTOP_REBUILD` admission.
+Storage commands landed without HTTP. GRE-801 registers gated ReadKit on the
+Build router (`docs/gre-801-manifest-http.md`). SaveKit and ReadBuilder HTTP
+remain GRE-802 / GRE-803.
 
 ## D11 required units (GRE-606)
 
