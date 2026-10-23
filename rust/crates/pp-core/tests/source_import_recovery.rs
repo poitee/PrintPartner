@@ -2,7 +2,9 @@
 //! Durable publish/activate recovery through SourceImports.
 use pp_core::uploads::{SourceImports, Through};
 use pp_source::{
-    SourcePath,
+    ArtifactBudget, LocalFiles, MAX_ENTRIES, Selection, SnapshotRequest, SourcePath, TenantRepos,
+    local_selection,
+    media::MediaLimits,
     retained_capture::{FreezeResult, RetainedCaptureId, RetainedCaptureVault},
 };
 use pp_storage::{
@@ -150,6 +152,12 @@ fn capture_target(name: &str) -> Target {
 /// Admits a captured import of one STL and freezes its retained capture.
 /// Returns the retained capture id.
 fn stage_frozen(fixture: &Fixture, key: &str) -> String {
+    stage_frozen_with_limits(fixture, key, capture_limits())
+}
+
+/// Admits a captured import of one STL under `limits` and freezes its retained
+/// capture. Returns the retained capture id.
+fn stage_frozen_with_limits(fixture: &Fixture, key: &str, limits: AdmissionLimits) -> String {
     let payload = CapturedPayloadV1::files(vec!["triangle.stl".into()]);
     let preflight = fixture
         .imports
@@ -158,7 +166,7 @@ fn stage_frozen(fixture: &Fixture, key: &str) -> String {
             key.into(),
             capture_target(key),
             payload.clone(),
-            capture_limits(),
+            limits,
         )
         .unwrap();
     let vault = RetainedCaptureVault::open(&fixture.root.join("data")).unwrap();
@@ -168,7 +176,7 @@ fn stage_frozen(fixture: &Fixture, key: &str) -> String {
         .write_file(
             SourcePath::try_from("triangle.stl".to_owned()).unwrap(),
             BYTES,
-            capture_limits().max_input_bytes,
+            limits.max_input_bytes,
         )
         .unwrap();
     let inventory = vec![File {
@@ -182,7 +190,7 @@ fn stage_frozen(fixture: &Fixture, key: &str) -> String {
             CaptureId::new(id.clone()).unwrap(),
             key.into(),
             payload,
-            capture_limits(),
+            limits,
             inventory,
         )
         .unwrap();
@@ -459,4 +467,246 @@ fn source_import_activation_is_fenced_and_idempotent() {
         .unwrap();
     assert!(read.cleanup_settled);
     assert_eq!(read.receipt, Some(receipt));
+}
+
+#[test]
+fn source_import_fails_after_consuming_retained_capture() {
+    let fixture = Fixture::open();
+    // The prepared reservation is smaller than the retained input, so
+    // publication fails deterministically after the owned-input phase has
+    // consumed the frozen capture.
+    let limits = AdmissionLimits {
+        reserved_bytes: 268_435_456 + 3 + 16 * 1024 * 1024,
+        max_input_bytes: 268_435_456,
+        max_prepared_bytes: 1,
+    };
+    let id = stage_frozen_with_limits(&fixture, "fail-after-capture", limits);
+    let error = fixture
+        .imports
+        .work_frozen(
+            open_frozen(&fixture, &id),
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+    assert!(!error.to_string().is_empty());
+    assert!(
+        try_open_frozen(&fixture, &id).is_err(),
+        "the attempt consumed the retained capture"
+    );
+
+    let op = fixture
+        .imports
+        .get(fixture.credential(), "fail-after-capture".into())
+        .unwrap();
+    assert_eq!(op.state, State::Failed);
+    assert!(op.cleanup_settled);
+    assert!(op.receipt.is_none());
+    let rows = fixture.observations(&op.key);
+    assert_eq!(
+        rows.iter().map(|row| row.3.as_str()).collect::<Vec<_>>(),
+        ["owned", "failed", "cleanup"]
+    );
+    assert!(
+        !fixture
+            .repos()
+            .join(".pp-imports")
+            .join(&op.job_id)
+            .exists()
+    );
+
+    // A settled failure is terminal: restart recovery does not requeue it.
+    let fixture = fixture.reopen();
+    assert!(
+        fixture
+            .imports
+            .work_operation(&op.job_id, None, Through::Settled, &AtomicBool::new(false),)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn source_import_refusal_keeps_existing_owned_state() {
+    let fixture = Fixture::open();
+    let id = stage_frozen(&fixture, "refusal-keeps-state");
+    let admitted = fixture
+        .imports
+        .get(fixture.credential(), "refusal-keeps-state".into())
+        .unwrap();
+    // State an earlier interrupted attempt could have left behind.
+    let owned = fixture.repos().join(".pp-imports").join(&admitted.job_id);
+    std::fs::create_dir_all(&owned).unwrap();
+    std::fs::write(owned.join("evidence.stl"), b"retained").unwrap();
+    let files = fixture.repo_files();
+
+    // Without its retained capture or supplied directory the call is refused.
+    let error = fixture
+        .imports
+        .work_operation(
+            &admitted.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "Import requires explicitly supplied input"
+    );
+    assert_eq!(fixture.repo_files(), files);
+    assert!(owned.join("evidence.stl").is_file());
+    assert_eq!(
+        fixture
+            .imports
+            .get(fixture.credential(), admitted.key.clone())
+            .unwrap()
+            .state,
+        State::Admitted
+    );
+    assert!(fixture.observations(&admitted.key).is_empty());
+    assert!(try_open_frozen(&fixture, &id).is_ok());
+}
+
+#[test]
+fn source_import_resumes_after_interrupted_publication() {
+    let fixture = Fixture::open();
+    let id = stage_frozen(&fixture, "interrupted-publication");
+    let owned = fixture
+        .imports
+        .work_frozen(
+            open_frozen(&fixture, &id),
+            Through::OwnedInput,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(owned.state, State::OwnedInputReady);
+    assert!(try_open_frozen(&fixture, &id).is_err());
+
+    // Simulate a crash between `materialize` and the `Phase::Published`
+    // journal write: the immutable revision exists on disk while the journal
+    // still records `OwnedInputReady`.
+    let owned_root = fixture.repos().join(".pp-imports").join(&owned.job_id);
+    let local = LocalFiles::open(&owned_root).unwrap();
+    let mut root = TenantRepos::open(owned.tenant.clone(), &fixture.repos())
+        .unwrap()
+        .source(owned.source_id.try_into().unwrap())
+        .unwrap();
+    let prepared = root
+        .prepare_media(
+            &local,
+            &local.paths().unwrap(),
+            &[],
+            MediaLimits {
+                max_total_bytes: owned.max_prepared_bytes,
+                max_output_bytes: owned.max_prepared_bytes.min(256 * 1024 * 1024),
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+    let (key, files) = prepared
+        .files()
+        .local_snapshot_selection(local_selection::SelectionLimits {
+            max_stl_files: MAX_ENTRIES as u64,
+            max_documentation_bytes: owned.max_prepared_bytes,
+            max_bytes: owned.max_prepared_bytes,
+        })
+        .unwrap();
+    let interrupted = root
+        .materialize(
+            SnapshotRequest {
+                upstream_revision_key: key,
+                files,
+                selection: Selection {
+                    max_stl_files: MAX_ENTRIES as u64,
+                    max_documentation_bytes: owned.max_prepared_bytes,
+                    omitted_files: vec![],
+                },
+            },
+            prepared.files(),
+            ArtifactBudget::new(owned.reserved_bytes, owned.max_prepared_bytes).unwrap(),
+        )
+        .unwrap();
+    prepared.discard().unwrap();
+    let prior = fixture.observations(&owned.key);
+    assert_eq!(
+        prior.iter().map(|row| row.3.as_str()).collect::<Vec<_>>(),
+        ["owned"]
+    );
+    let revisions = fixture
+        .repos()
+        .join(owned.source_id.to_string())
+        .join("revisions");
+    let revision_dirs = || {
+        std::fs::read_dir(&revisions)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+            .count()
+    };
+    assert_eq!(revision_dirs(), 1);
+
+    // Restart and resume at the durable phase. The runner adopts the revision
+    // that already exists instead of publishing a second one.
+    let fixture = fixture.reopen();
+    let resumed = fixture
+        .imports
+        .work_operation(
+            &owned.job_id,
+            None,
+            Through::Published,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.state, State::Published);
+    let artifact = resumed.artifact.as_ref().unwrap();
+    assert_eq!(artifact.locator, interrupted.snapshot_locator);
+    assert_eq!(artifact.upstream_key, interrupted.upstream_revision_key);
+    assert_eq!(artifact.stored_bytes, interrupted.stored_bytes);
+    assert_eq!(revision_dirs(), 1);
+    let after = fixture.observations(&owned.key);
+    assert_eq!(after[..prior.len()], prior);
+    assert_eq!(
+        after.iter().map(|row| row.3.as_str()).collect::<Vec<_>>(),
+        ["owned", "published"]
+    );
+
+    // Activation is journaled atomically with its side effects, so resuming
+    // from `Published` records exactly one activation and a restart adds none.
+    let fixture = fixture.reopen();
+    let activated = fixture
+        .imports
+        .work_operation(
+            &owned.job_id,
+            None,
+            Through::Activated,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(activated.state, State::Activated);
+    let activated_rows = fixture.observations(&owned.key);
+    assert_eq!(
+        activated_rows
+            .iter()
+            .filter(|row| row.3 == "activated")
+            .count(),
+        1
+    );
+    let fixture = fixture.reopen();
+    let again = fixture
+        .imports
+        .work_operation(
+            &owned.job_id,
+            None,
+            Through::Activated,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.receipt, activated.receipt);
+    assert_eq!(fixture.observations(&owned.key), activated_rows);
 }

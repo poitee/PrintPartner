@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow, ensure};
 use pp_source::{
-    ArtifactBudget, ContentFile, LocalFiles, Selection, SnapshotRequest, SourcePath, TenantRepos,
+    ArtifactBudget, ContentFile, LocalFiles, MAX_ENTRIES, Selection, SnapshotRequest, SourcePath,
+    TenantRepos,
     local_selection::{self, InputFile},
     media::MediaLimits,
     retained_capture::{FrozenCapture, RetainedInputTransfer},
@@ -310,7 +311,6 @@ impl SourceImports {
         through: Through,
         cancelled: &AtomicBool,
     ) -> Result<Option<Operation>> {
-        let retained_work = retained.is_some();
         let mut retained = retained;
         let ClaimedAttempt {
             job,
@@ -328,6 +328,12 @@ impl SourceImports {
                 return Ok(());
             }
             if op.state == State::Admitted {
+                // Refuse a missing input before touching `repos/.pp-imports`:
+                // a refused call must leave every file as it found it.
+                ensure!(
+                    retained.is_some() || supplied.is_some(),
+                    "Import requires explicitly supplied input"
+                );
                 local_selection::discard_owned(&self.repos, &op.job_id)?;
                 let inventory = if let Some((frozen, paths)) = retained.as_ref() {
                     frozen
@@ -415,14 +421,22 @@ impl SourceImports {
                     },
                     cancelled,
                 )?;
-                let (key, files) = prepared.files().local_snapshot_selection()?;
+                let (key, files) = prepared.files().local_snapshot_selection(
+                    local_selection::SelectionLimits {
+                        // The number of STL files is structurally capped by the
+                        // entry limit; the byte budgets come from the operation.
+                        max_stl_files: MAX_ENTRIES as u64,
+                        max_documentation_bytes: op.max_prepared_bytes,
+                        max_bytes: op.max_prepared_bytes,
+                    },
+                )?;
                 let snapshot = root.materialize(
                     SnapshotRequest {
                         upstream_revision_key: key,
                         files,
                         selection: Selection {
-                            max_stl_files: 500,
-                            max_documentation_bytes: 1024 * 1024 * 1024,
+                            max_stl_files: MAX_ENTRIES as u64,
+                            max_documentation_bytes: op.max_prepared_bytes,
                             omitted_files: vec![],
                         },
                     },
@@ -460,8 +474,10 @@ impl SourceImports {
         })();
         // A captured import that is still admitted keeps its retained capture
         // as the only copy, so a failed attempt leaves it for `work_frozen`.
+        // Once the retained capture is consumed, a deterministic failure is
+        // terminal: it must reach `Fail` and cleanup instead of requeueing
+        // forever.
         if result.is_err()
-            && !retained_work
             && !(op.state == State::Admitted && matches!(op.input, Input::Captured(_)))
             && op.receipt.is_none()
             && op.state != State::Published

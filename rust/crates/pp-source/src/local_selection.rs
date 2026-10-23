@@ -1,6 +1,6 @@
 use crate::{
-    Directory, Error, FileKind, LocalFiles, MAX_CONTENT_BYTES, MAX_ENTRIES, PathCollisions, Result,
-    SelectedFile, SourcePath, SourceRoot,
+    Directory, Error, FileKind, LocalFiles, MAX_ENTRIES, PathCollisions, Result, SelectedFile,
+    SourcePath, SourceRoot,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -166,21 +166,35 @@ impl LocalFiles {
     }
 
     /// Classifies retained files into a snapshot selection and an upstream key.
-    pub fn local_snapshot_selection(&self) -> Result<(String, Vec<SelectedFile>)> {
+    ///
+    /// The caller supplies the operation's limits. A file whose kind cannot be
+    /// classified is refused rather than dropped, so a revision never claims to
+    /// be complete while omitting a stored file.
+    pub fn local_snapshot_selection(
+        &self,
+        limits: SelectionLimits,
+    ) -> Result<(String, Vec<SelectedFile>)> {
         let mut paths = self.paths()?;
-        paths.retain(|path| classify(path.as_str()).is_some());
         paths.sort_by(|a, b| crate::compare_paths(a.as_str(), b.as_str()));
-        let inventory = self.inventory(&paths, MAX_CONTENT_BYTES)?;
+        let inventory = self.inventory(&paths, limits.max_bytes)?;
         let mut hash = Sha256::new();
         let mut files = Vec::new();
-        let mut stls = 0;
+        let mut stls = 0u64;
+        let mut documentation_bytes = 0u64;
         for file in inventory {
             let kind = classify(file.path.as_str()).ok_or(Error::InvalidIdentity)?;
             if kind == FileKind::Stl {
                 stls += 1;
-            }
-            if stls > 500 || (file.path.as_str() == "pp-phases.json" && file.size > 1024 * 1024) {
-                return Err(Error::Limit);
+                if stls > limits.max_stl_files {
+                    return Err(Error::Limit);
+                }
+            } else {
+                documentation_bytes = documentation_bytes
+                    .checked_add(file.size)
+                    .ok_or(Error::Limit)?;
+                if documentation_bytes > limits.max_documentation_bytes {
+                    return Err(Error::Limit);
+                }
             }
             hash.update(serde_json::to_vec(&file)?);
             hash.update(b"\n");
@@ -195,6 +209,17 @@ impl LocalFiles {
         }
         Ok((hex::encode(hash.finalize()), files))
     }
+}
+
+/// Snapshot selection caps taken from an import operation's reservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectionLimits {
+    /// Largest number of STL files the revision may contain.
+    pub max_stl_files: u64,
+    /// Largest number of non-STL bytes the revision may contain.
+    pub max_documentation_bytes: u64,
+    /// Largest number of bytes the inventory may read.
+    pub max_bytes: u64,
 }
 
 fn classify(path: &str) -> Option<FileKind> {
@@ -277,4 +302,78 @@ fn validate_paths(paths: &[SourcePath]) -> Result<()> {
         collisions.insert(path, false)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn open_local(files: &[(&str, &[u8])]) -> (tempfile::TempDir, LocalFiles) {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, bytes) in files {
+            let path = dir.path().join(path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, bytes).unwrap();
+        }
+        let local = LocalFiles::open(dir.path()).unwrap();
+        (dir, local)
+    }
+
+    fn limits(max_stl_files: u64, max_documentation_bytes: u64) -> SelectionLimits {
+        SelectionLimits {
+            max_stl_files,
+            max_documentation_bytes,
+            max_bytes: 16 * 1024 * 1024,
+        }
+    }
+
+    #[test]
+    fn local_snapshot_selection_applies_supplied_operation_limits() {
+        // 501 tiny STLs exceed the old hardcoded cap of 500 but fit the byte
+        // budget and count the caller supplies.
+        let names = (0..501)
+            .map(|index| format!("model-{index:03}.stl"))
+            .collect::<Vec<_>>();
+        let files = names
+            .iter()
+            .map(|name| (name.as_str(), b"solid\n".as_slice()))
+            .collect::<Vec<_>>();
+        let (_dir, local) = open_local(&files);
+        assert!(matches!(
+            local.local_snapshot_selection(limits(500, 1024 * 1024)),
+            Err(Error::Limit)
+        ));
+        let (_, selected) = local
+            .local_snapshot_selection(limits(501, 8 * 1024 * 1024))
+            .unwrap();
+        assert_eq!(selected.len(), 501);
+
+        // A phase manifest above the old 1 MiB hardcode passes when the
+        // operation's documentation budget allows it.
+        let phases = vec![b'x'; 1024 * 1024 + 1];
+        let (_dir, local) = open_local(&[("pp-phases.json", phases.as_slice())]);
+        assert!(matches!(
+            local.local_snapshot_selection(limits(500, 1024 * 1024)),
+            Err(Error::Limit)
+        ));
+        let (_, selected) = local
+            .local_snapshot_selection(limits(500, 4 * 1024 * 1024))
+            .unwrap();
+        assert_eq!(selected.len(), 1);
+    }
+
+    #[test]
+    fn local_snapshot_selection_refuses_unclassified_owned_files() {
+        let (_dir, local) = open_local(&[
+            ("triangle.stl", b"solid triangle".as_slice()),
+            ("notes.txt", b"not a snapshot kind".as_slice()),
+        ]);
+        assert!(matches!(
+            local.local_snapshot_selection(limits(500, 4 * 1024 * 1024)),
+            Err(Error::InvalidIdentity)
+        ));
+    }
 }
