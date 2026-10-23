@@ -361,6 +361,8 @@ async fn refuse_mounted_reads(server: &Server) {
         "/api/v1/sources/1/naming",
         "/settings/source-categories",
         "/api/v1/settings/source-categories",
+        "/settings/stl-naming",
+        "/api/v1/settings/stl-naming",
     ] {
         let (status, body) = server.send(Method::GET, path, &[]).await;
         assert_eq!(status, 404, "{path}");
@@ -372,6 +374,7 @@ async fn refuse_mounted_reads(server: &Server) {
                 && body.get("rules").is_none()
                 && body.get("use_defaults").is_none()
                 && body.get("effective").is_none()
+                && body.get("profile").is_none()
         );
     }
     for path in ["/sources/1", "/api/v1/sources/1"] {
@@ -436,6 +439,18 @@ async fn refuse_mounted_reads(server: &Server) {
             .await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("rules").is_none());
+    }
+    for path in ["/settings/stl-naming", "/api/v1/settings/stl-naming"] {
+        let (status, body) = server
+            .exchange(
+                Method::PUT,
+                path,
+                &[],
+                Some(&json!({"profile":{"quantity":{"default":2}}})),
+            )
+            .await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("profile").is_none());
     }
 }
 
@@ -1012,6 +1027,146 @@ fn storage_preview(owner: &WriterOwner, relative_path: &str, profile: Option<Val
         Outcome::Preview(preview) => serde_json::to_value(preview).unwrap(),
         _ => panic!("preview"),
     }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_global_naming_round_trip() {
+    use pp_storage::catalog::{Outcome, Request};
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let default = default_naming_profile();
+    let (status, got) = server
+        .send(Method::GET, "/settings/stl-naming", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!(status, 200, "{got}");
+    assert_eq!(got, json!({"profile": default}));
+    let storage = {
+        let guard = owner.lock().unwrap();
+        match guard
+            .local_source_catalog()
+            .execute(Request::GetGlobalNaming {})
+            .unwrap()
+        {
+            Outcome::Data(value) => value,
+            _ => panic!("global naming"),
+        }
+    };
+    assert_eq!(got["profile"], storage);
+    let mut profile = default_naming_profile();
+    profile["quantity"]["default"] = json!(9);
+    profile["roles"][0]["label"] = json!("Main");
+    for prefix in ["", "/api/v1"] {
+        let (status, saved) = server
+            .exchange(
+                Method::PUT,
+                &format!("{prefix}/settings/stl-naming"),
+                &[("Cookie", &cookie)],
+                Some(&json!({"profile": profile})),
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix} {saved}");
+        assert_eq!(saved, json!({"profile": profile}));
+        let (status, again) = server
+            .send(
+                Method::GET,
+                &format!("{prefix}/settings/stl-naming"),
+                &[("Cookie", &cookie)],
+            )
+            .await;
+        assert_eq!((status, again), (200, saved));
+    }
+    let (status, reset) = server
+        .exchange(
+            Method::PUT,
+            "/settings/stl-naming",
+            &[("Cookie", &cookie)],
+            Some(&json!({})),
+        )
+        .await;
+    assert_eq!(status, 200, "{reset}");
+    assert_eq!(reset, json!({"profile": default}));
+    let before_bytes = database_bytes(&directory);
+    let snapshot = files(&directory);
+    let mut blank = default_naming_profile();
+    blank["roles"][0]["label"] = json!(" ");
+    let (status, refused) = server
+        .exchange(
+            Method::PUT,
+            "/api/v1/settings/stl-naming",
+            &[("Cookie", &cookie)],
+            Some(&json!({"profile": blank})),
+        )
+        .await;
+    assert_eq!(
+        (status, refused["detail"].as_str()),
+        (400, Some("Blank naming label"))
+    );
+    assert_eq!(database_bytes(&directory), before_bytes);
+    assert_eq!(files(&directory), snapshot);
+    let (status, after) = server
+        .send(Method::GET, "/settings/stl-naming", &[("Cookie", &cookie)])
+        .await;
+    assert_eq!((status, after), (200, reset));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn catalog_global_naming_preserves_source_override() {
+    let (owner, directory, mut server, cookie) = serve(false).await;
+    let created = post_source(&server, &cookie, "Override").await;
+    let id = created["id"].as_i64().unwrap();
+    let mut override_profile = default_naming_profile();
+    override_profile["quantity"]["default"] = json!(4);
+    override_profile["roles"][1]["markers"] = json!(["[x]"]);
+    let (status, saved) = server
+        .exchange(
+            Method::PUT,
+            &format!("/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"use_defaults":false,"override":override_profile})),
+        )
+        .await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(saved["use_defaults"], false);
+    assert_eq!(saved["effective"]["quantity"]["default"], 4);
+    let before_naming = saved.clone();
+    let mut global = default_naming_profile();
+    global["quantity"]["default"] = json!(11);
+    global["roles"][0]["label"] = json!("Global");
+    let (status, updated) = server
+        .exchange(
+            Method::PUT,
+            "/settings/stl-naming",
+            &[("Cookie", &cookie)],
+            Some(&json!({"profile": global})),
+        )
+        .await;
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["profile"]["quantity"]["default"], 11);
+    let (status, after) = server
+        .send(
+            Method::GET,
+            &format!("/api/v1/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+        )
+        .await;
+    assert_eq!((status, after), (200, before_naming));
+    let (status, defaults) = server
+        .exchange(
+            Method::PUT,
+            &format!("/sources/{id}/naming"),
+            &[("Cookie", &cookie)],
+            Some(&json!({"use_defaults":true})),
+        )
+        .await;
+    assert_eq!(status, 200, "{defaults}");
+    assert_eq!(defaults["use_defaults"], true);
+    assert_eq!(defaults["effective"]["quantity"]["default"], 11);
+    assert_eq!(defaults["effective"]["roles"][0]["label"], "Global");
+    server.stop().await;
+    shutdown(owner, directory);
 }
 
 #[cfg(feature = "desktop_rebuild")]

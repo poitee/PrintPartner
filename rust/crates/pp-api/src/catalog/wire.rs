@@ -57,6 +57,21 @@ pub(super) fn naming_preview_body(preview: NamingPreview) -> Result<Value, serde
     serde_json::to_value(preview)
 }
 
+/// Storage returns a bare `NamingProfile`; HTTP wraps `{ "profile": ... }`
+/// to match Node `GET`/`PUT /settings/stl-naming`.
+pub(super) fn global_naming(profile: Value) -> Value {
+    json!({ "profile": profile })
+}
+
+/// Node PUT body: `{ profile?: NamingProfile }`. Missing or null `profile`
+/// becomes the default profile; a non-object `profile` is refused.
+pub(super) fn global_naming_save(body: &Value) -> Option<NamingProfile> {
+    match body.get("profile") {
+        None | Some(Value::Null) => Some(NamingProfile::default()),
+        Some(value) => serde_json::from_value(value.clone()).ok(),
+    }
+}
+
 /// Node PUT body: `{ rules?: string[] }`. Missing or null `rules` becomes `[]`.
 /// Each rule uses Node `String()` coercion; a non-array `rules` is refused.
 pub(super) fn import_rules_save(body: &Value) -> Option<Vec<String>> {
