@@ -13,24 +13,36 @@ const originalPassword = "original-password-873";
 const replacementPassword = "replacement-password-873";
 const email = "password-parity@example.test";
 const valid = { current_password: originalPassword, new_password: replacementPassword };
+const empty = {};
+/** @typedef {"absent"|"valid"|"invalid"|"revoked"} SessionKind */
 const inputs = [
-  { id: "missing_session", session: false, body: valid },
-  { id: "wrong_current", body: { ...valid, current_password: "incorrect-password-873" } },
-  { id: "valid_change", body: valid },
-  { id: "missing_both", body: {} },
-  { id: "missing_current", body: { new_password: replacementPassword } },
-  { id: "missing_new", body: { current_password: originalPassword } },
+  { id: "missing_session", session: "absent", body: valid },
+  { id: "wrong_current", session: "valid", body: { ...valid, current_password: "incorrect-password-873" } },
+  { id: "valid_change", session: "valid", body: valid },
+  { id: "missing_both", session: "valid", body: empty },
+  { id: "missing_current", session: "valid", body: { new_password: replacementPassword } },
+  { id: "missing_new", session: "valid", body: { current_password: originalPassword } },
   ...["current_password", "new_password"].flatMap((field) => [
     ...[["null", null], ["number", 873], ["boolean", true], ["array", []], ["object", {}]]
-      .map(([kind, value]) => ({ id: `${field}_${kind}`, body: { ...valid, [field]: value } })),
-    { id: `${field}_empty`, body: { ...valid, [field]: "" } },
-    { id: `${field}_short`, body: { ...valid, [field]: "short" } },
+      .map(([kind, value]) => ({
+        id: `${field}_${kind}`,
+        session: "valid",
+        body: { ...valid, [field]: value },
+      })),
+    { id: `${field}_empty`, session: "valid", body: { ...valid, [field]: "" } },
+    { id: `${field}_short`, session: "valid", body: { ...valid, [field]: "short" } },
   ]),
+  // Stale cookies must 401 before field validation (Node onRequest resolve).
+  { id: "invalid_session_valid_body", session: "invalid", body: valid },
+  { id: "invalid_session_missing_both", session: "invalid", body: empty },
+  { id: "revoked_session_valid_body", session: "revoked", body: valid },
+  { id: "revoked_session_missing_both", session: "revoked", body: empty },
 ].map((input) => ({
-  session: true,
   ...input,
-  proposed_password: typeof input.body.new_password === "string" && input.body.new_password.length > 0
-    ? input.body.new_password : replacementPassword,
+  proposed_password:
+    typeof input.body.new_password === "string" && input.body.new_password.length > 0
+      ? input.body.new_password
+      : replacementPassword,
 }));
 
 if (process.argv.includes("--probe")) {
@@ -64,8 +76,24 @@ if (process.argv.includes("--probe")) {
         payload: { email, password: originalPassword, display_name: "Password parity" },
       });
       assert.equal(registration.statusCode, 200, input.id);
-      const session = registration.cookies.find((entry) => entry.name === "pp_session");
-      assert.ok(session?.value, input.id);
+      const issued = registration.cookies.find((entry) => entry.name === "pp_session");
+      assert.ok(issued?.value, input.id);
+      /** @type {Record<string, string>|undefined} */
+      let cookies;
+      if (input.session === "valid") {
+        cookies = { pp_session: issued.value };
+      } else if (input.session === "invalid") {
+        cookies = { pp_session: "invalid-session-token-873" };
+      } else if (input.session === "revoked") {
+        const logout = await app.inject({
+          method: "POST", url: "/auth/logout", payload: {},
+          cookies: { pp_session: issued.value },
+        });
+        assert.equal(logout.statusCode, 200, input.id);
+        cookies = { pp_session: issued.value };
+      } else {
+        cookies = undefined;
+      }
       const login = async (password) => {
         const response = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password } });
         assert.ok([200, 400, 401].includes(response.statusCode), response.body);
@@ -82,7 +110,7 @@ if (process.argv.includes("--probe")) {
       const before = await logins();
       const changed = await app.inject({
         method: "POST", url: "/auth/change-password", payload: input.body,
-        cookies: input.session ? { pp_session: session.value } : {},
+        cookies,
       });
       const observation = {
         before,
@@ -93,6 +121,10 @@ if (process.argv.includes("--probe")) {
       assert.deepEqual(before, { old: true, new: false }, input.id);
       assert.equal(changed.statusCode === 200, success, input.id);
       assert.deepEqual(observation.after, { old: !success, new: success }, input.id);
+      if (input.session === "invalid" || input.session === "revoked" || input.session === "absent") {
+        assert.equal(changed.statusCode, 401, input.id);
+        assert.deepEqual(changed.json(), { detail: "Authentication required" }, input.id);
+      }
       cases.push({ ...input, observation });
     } finally {
       await app.close();

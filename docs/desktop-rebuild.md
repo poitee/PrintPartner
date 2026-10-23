@@ -2108,6 +2108,23 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core --features desktop_rebuild
 ```
 
+### Password-change response parity, GRE-873
+
+`fixtures/parity/auth-password-change/` records Node's public
+`POST /auth/change-password` status and body together with whether the old and
+new passwords still authenticate. The corpus covers missing cookies, wrong
+current passwords, valid changes, malformed fields, and nonempty invalid or
+revoked cookies (including empty bodies). Rust resolves the session before
+field validation so those stale cookies return
+`401 {"detail":"Authentication required"}` instead of a 400 field error.
+Password and session policy stay unchanged. The focused suite requires
+`desktop_rebuild`.
+
+```sh
+node fixtures/parity/auth-password-change/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test auth_password_change_parity
+```
+
 ### D30 catalog HTTP reads, GRE-804
 
 `pp-api` gains `catalog`, compiled only with `desktop_rebuild`.
