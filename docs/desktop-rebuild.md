@@ -277,8 +277,9 @@ Use their `into_json_body().into_bytes()` methods. The complete outcome uses
 `Outcome::into_json_body()?.into_bytes()`.
 
 This first core unit ports the read-only seam. The writes section below covers
-Part edits and abandon. Preparation and recompute have their own sections. Save
-and rebase remain GRE-608. There is no HTTP route or default-feature change.
+Part edits and abandon. Preparation and recompute have their own sections. The
+ordinary Save writer is GRE-861 (below). Rebase and siblings remain GRE-608.
+There is no HTTP route or default-feature change.
 
 The operation tests call the public client against Node-written databases.
 Their literal expected JSON comes from `getPlanDraft`, `listPlanDraftIdentities`,
@@ -428,8 +429,8 @@ storage-issued observation requests with the shared preparation budget.
 Naming rules charge their definitions and per-path comparisons. Spoolman
 defaults follow user and Plan feature choices; disabled or invalid choices drop
 Spoolman references from new Parts without changing accepted decisions.
-Recompute consumes it. Save and rebase remain GRE-608. Existing GRE-668,
-GRE-669 and GRE-670 follow-ups remain open.
+Recompute consumes it. Ordinary Save is GRE-861 (below). Rebase and siblings
+remain GRE-608. Existing GRE-668, GRE-669 and GRE-670 follow-ups remain open.
 
 Quantity JSON uses the existing `ryu-js` formatter at the shared Part encoding
 boundary, including the bytes sorted and hashed by the planning digest.
@@ -588,6 +589,42 @@ python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 The mutation runner copies the workspace into `/persist/tmp` and reuses
 `CARGO_TARGET_DIR` when supplied. Run it separately from other Cargo commands
 when you reuse a target directory. Only an executed failing test counts as a kill.
+
+### D13 ordinary Save writer
+
+GRE-861 ports `WorkingDraftClient::save` behind default-off `desktop_rebuild`
+(#1063, `ccc32252`). Callers build `save::SaveCommand` with the session or API
+key, Plan profile, `SavePlanChoicesRequest`, and idempotency key (trimmed;
+non-empty; at most 200 UTF-16 units). The client needs observations from
+`WriterOwner::working_drafts_with_observations`. Service callers also require
+`PP_DESKTOP_REBUILD` exactly `1` or `true`. There is no HTTP route in this
+slice. Manifest, rebase, and siblings remain GRE-608.
+
+A Save runs on the writer thread:
+
+1. An immediate transaction admits the principal, resolves preparation and
+   Required-unit reconciliation, applies Plan choices, publishes through
+   `AuthenticatedPublicationContext`, closes the expected open draft when
+   present, and writes the atomic `ApplyPlanDraftReceipt`. Stale, missing, or
+   colliding inputs refuse without writes. A publication failure rolls the
+   snapshot, reconciliation, and Source closure back together.
+2. After commit, capture builds the published authority. If that capture fails,
+   the receipt and closed-draft IDs stay committed and surface as
+   `CommittedSaveCaptureFailure`; a retry with the same key replays the
+   receipt without a second publication. Cancellation or a preparation budget
+   limit before commit leaves the database unchanged.
+
+Focused proofs live in `working_draft_save` (atomic receipt and exact-key
+replay, changed-payload refusal, publication rollback, post-commit capture
+retry, Source budget and cancellation). Default builds omit the module; run
+package checks with and without `desktop_rebuild`:
+
+```sh
+cargo check -p pp-storage --manifest-path rust/Cargo.toml --locked --no-default-features
+cargo check -p pp-storage --manifest-path rust/Cargo.toml --locked --features desktop_rebuild --tests
+cargo nextest run -p pp-storage --manifest-path rust/Cargo.toml --locked --features desktop_rebuild \
+  -E 'binary(working_draft_save)'
+```
 
 ### D4 media reconciliation
 
