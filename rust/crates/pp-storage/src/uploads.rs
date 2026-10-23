@@ -764,7 +764,15 @@ impl Observed {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "GRE-771 prepare/admit_prepared consumes credential, tenant, actor, and target"
+)]
 pub struct PreflightedCapture {
+    pub(crate) credential: jobs::Credential,
+    pub(crate) tenant: String,
+    pub(crate) actor: String,
+    pub(crate) target: Target,
     pub(crate) replay: Option<Box<Operation>>,
 }
 
@@ -1210,7 +1218,13 @@ pub(crate) fn execute(
                     disk_bytes,
                 },
             )?;
-            UploadsOutcome::Preflighted(PreflightedCapture { replay })
+            UploadsOutcome::Preflighted(PreflightedCapture {
+                credential,
+                tenant,
+                actor,
+                target,
+                replay,
+            })
         }
         Command::Phase {
             lease,

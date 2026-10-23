@@ -1680,7 +1680,11 @@ queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
 The expansion loop also checks cancellation once per Part. There is no timing
-target.
+target. Unexpected transaction failures surface Node's
+`Plan draft update failed` on the client, with the source retained through
+`.context`, matching the publication client and Node's reconcile route.
+Authentication failures and admission outcomes (`Cancelled`, `QueueFull`,
+`Stopped`, `OutcomeUnknown`) stay typed and unwrapped.
 
 Selection refuses a draft before it expands assignments when the sum of part
 quantities is above 230. The error is "Reconciliation row limit exceeded".
