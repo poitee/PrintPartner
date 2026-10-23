@@ -1280,11 +1280,23 @@ and either returns an exact prior operation (same actor and `intent_digest`) or
 writes one journal row, quota reservation, and supplied import job
 (`input_version` 2). Credential-path `admit` still refuses `Input::Captured`.
 A stale basis after preflight refuses without changing journal rows or
-non-database files. Correlation and resolved claims stay on GRE-772.
+non-database files.
+
+### D14 capture correlation and resolved claims
+
+GRE-772 adds `ImportClient::correlate_capture_manifest` and
+`ServerWorkerClient::claim_resolved_import` behind `desktop_rebuild`. Correlation
+reads the journal and durable jobs only: it returns `Absent`,
+`ExactAdmitted(ResolvedCapturedClaim)`, `ExactOwnedOrLater`, or
+`MismatchRepairRequired` without admitting or charging. A resolved claim is
+revalidated in the claim transaction against the admitted operation, inventory,
+captured job payload, and Source; a changed inventory or other mismatch refuses
+with `Captured import requires repair` and leaves queued job rows unchanged.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_correlation
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```

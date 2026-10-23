@@ -497,6 +497,10 @@ pub struct CapturedInputV2 {
 }
 
 impl CapturedInputV2 {
+    pub(crate) fn capture_id(&self) -> &CaptureId {
+        &self.capture_id
+    }
+
     pub fn bind(
         capture_id: CaptureId,
         payload: CapturedPayloadV1,
@@ -779,6 +783,23 @@ pub struct PreparedCapturedAdmission {
     manifest: Vec<u8>,
 }
 
+/// Retained capture claim that still matches an admitted journal row.
+pub struct ResolvedCapturedClaim {
+    manifest: Vec<u8>,
+    inventory: Vec<File>,
+    tenant: String,
+    operation_key: String,
+    job_id: String,
+}
+
+/// How a capture manifest lines up with the upload journal and import jobs.
+pub enum CaptureJournalCorrelation {
+    ExactAdmitted(ResolvedCapturedClaim),
+    ExactOwnedOrLater,
+    Absent,
+    MismatchRepairRequired,
+}
+
 impl PreflightedCapture {
     pub fn replay(&self) -> Option<&Operation> {
         self.replay.as_deref()
@@ -828,6 +849,7 @@ impl PreparedCapturedAdmission {
 pub(crate) enum UploadsOutcome {
     Operation(Box<Operation>),
     Preflighted(PreflightedCapture),
+    CaptureCorrelation(CaptureJournalCorrelation),
 }
 
 pub(crate) enum AdmissionAuthority {
@@ -854,6 +876,10 @@ pub(crate) enum Command {
         disk_bytes: u64,
         quota: u64,
     },
+    CorrelateCapture {
+        manifest: Vec<u8>,
+        inventory: Vec<File>,
+    },
     Phase {
         lease: jobs::AttemptLease,
         source_work: catalog::SourceWorkProof,
@@ -879,6 +905,7 @@ impl Command {
             self,
             Self::Get { .. }
                 | Self::PreflightCapture { .. }
+                | Self::CorrelateCapture { .. }
                 | Self::Phase {
                     phase: Phase::Read,
                     ..
@@ -964,7 +991,9 @@ impl ImportClient {
             cancelled,
         )? {
             UploadsOutcome::Operation(operation) => Ok(*operation),
-            UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
+            UploadsOutcome::Preflighted(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
         }
     }
 
@@ -989,7 +1018,9 @@ impl ImportClient {
             &AtomicBool::new(false),
         )? {
             UploadsOutcome::Operation(operation) => Ok(*operation),
-            UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
+            UploadsOutcome::Preflighted(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
         }
     }
 
@@ -1021,7 +1052,32 @@ impl ImportClient {
             &AtomicBool::new(false),
         )? {
             UploadsOutcome::Preflighted(preflight) => Ok(preflight),
-            UploadsOutcome::Operation(_) => Err(anyhow!("Unexpected import reply")),
+            UploadsOutcome::Operation(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected import reply"))
+            }
+        }
+    }
+
+    /// Correlate retained capture-manifest bytes and inventory with the journal
+    /// without admitting or charging. Distinguishes absent, exact admitted,
+    /// owned-or-later, and conflicting rows.
+    pub fn correlate_capture_manifest(
+        &self,
+        manifest: Vec<u8>,
+        inventory: Vec<File>,
+    ) -> Result<CaptureJournalCorrelation> {
+        match submit(
+            &self.storage,
+            Command::CorrelateCapture {
+                manifest,
+                inventory,
+            },
+            &AtomicBool::new(false),
+        )? {
+            UploadsOutcome::CaptureCorrelation(correlation) => Ok(correlation),
+            UploadsOutcome::Operation(_) | UploadsOutcome::Preflighted(_) => {
+                Err(anyhow!("Unexpected capture correlation reply"))
+            }
         }
     }
 
@@ -1037,7 +1093,9 @@ impl ImportClient {
             &AtomicBool::new(false),
         )? {
             UploadsOutcome::Operation(operation) => Ok(*operation),
-            UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
+            UploadsOutcome::Preflighted(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
         }
     }
 }
@@ -1222,6 +1280,10 @@ pub(crate) fn execute(
                 replay,
             })
         }
+        Command::CorrelateCapture {
+            manifest,
+            inventory,
+        } => UploadsOutcome::CaptureCorrelation(correlate_capture(&tx, manifest, inventory)?),
         Command::Phase {
             lease,
             source_work,
@@ -2120,6 +2182,101 @@ fn load(tx: &Transaction<'_>, tenant: &str, key: &str) -> Result<Option<Operatio
         Ok(op)
     })
     .transpose()
+}
+
+pub(crate) fn correlate_capture(
+    tx: &Transaction<'_>,
+    manifest: Vec<u8>,
+    inventory: Vec<File>,
+) -> Result<CaptureJournalCorrelation> {
+    let identity = capture_manifest::capture_manifest_identity(&manifest)?;
+    let documents = tx
+        .prepare("SELECT document FROM source_import_operations ORDER BY rowid")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for document in documents {
+        let operation: Operation = serde_json::from_str(&document)?;
+        validate_operation(&operation)?;
+        let Input::Captured(captured) = &operation.input else {
+            continue;
+        };
+        if captured.capture_id() != &identity.capture_id {
+            continue;
+        }
+        if operation.key != identity.operation_key || operation.actor != identity.actor {
+            return Ok(CaptureJournalCorrelation::MismatchRepairRequired);
+        }
+        if capture_manifest::capture_claim_matches(&manifest, &operation, &inventory).is_err() {
+            return Ok(CaptureJournalCorrelation::MismatchRepairRequired);
+        }
+        if operation.state == State::Admitted {
+            return Ok(CaptureJournalCorrelation::ExactAdmitted(
+                ResolvedCapturedClaim {
+                    manifest,
+                    inventory,
+                    tenant: operation.tenant,
+                    operation_key: operation.key,
+                    job_id: operation.job_id,
+                },
+            ));
+        }
+        return Ok(CaptureJournalCorrelation::ExactOwnedOrLater);
+    }
+
+    let jobs = tx
+        .prepare("SELECT document FROM durable_jobs ORDER BY rowid")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for document in jobs {
+        let job = jobs::decode(&document)?;
+        if matches!(
+            &job.payload,
+            jobs::Payload::SuppliedSourceImport {
+                operation_key,
+                input_version: 2,
+                ..
+            } if operation_key == &identity.operation_key
+        ) {
+            return Ok(CaptureJournalCorrelation::MismatchRepairRequired);
+        }
+    }
+    Ok(CaptureJournalCorrelation::Absent)
+}
+
+pub(crate) fn validate_resolved_claim(
+    tx: &Transaction<'_>,
+    claim: &ResolvedCapturedClaim,
+) -> Result<String> {
+    (|| {
+        let operation =
+            load(tx, &claim.tenant, &claim.operation_key)?.ok_or_else(|| anyhow!("missing"))?;
+        ensure!(
+            operation.state == State::Admitted && operation.job_id == claim.job_id,
+            "mismatch"
+        );
+        capture_manifest::capture_claim_matches(&claim.manifest, &operation, &claim.inventory)?;
+        let job = jobs::load_for_capture_claim(tx, &claim.job_id)?;
+        ensure!(
+            job.tenant == operation.tenant
+                && job.job_id == operation.job_id
+                && matches!(
+                    &job.payload,
+                    jobs::Payload::SuppliedSourceImport {
+                        project_id,
+                        operation_key,
+                        input_version: 2,
+                    } if u64::try_from(operation.source_id).is_ok_and(|id| id == *project_id)
+                        && operation_key == &operation.key
+                ),
+            "mismatch"
+        );
+        ensure!(
+            catalog::get(tx, &operation.tenant, operation.source_id)?.is_some(),
+            "mismatch"
+        );
+        Ok(claim.job_id.clone())
+    })()
+    .map_err(|_| anyhow!("Captured import requires repair"))
 }
 
 fn basis(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Basis> {

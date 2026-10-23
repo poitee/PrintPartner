@@ -329,6 +329,14 @@ pub(crate) enum Command {
         #[cfg(feature = "desktop_rebuild")]
         storage: SettingsClient,
     },
+    #[cfg(feature = "desktop_rebuild")]
+    ClaimResolved {
+        claim: crate::uploads::ResolvedCapturedClaim,
+        worker: String,
+        admission: Arc<WorkerAdmission>,
+        policy: Option<AuthPolicy>,
+        storage: SettingsClient,
+    },
     Worker {
         lease: AttemptLease,
         operation: WorkerOperation,
@@ -831,11 +839,35 @@ impl ServerWorkerClient {
             &AtomicBool::new(false),
         )? {
             crate::uploads::UploadsOutcome::Operation(operation) => Ok(*operation),
-            crate::uploads::UploadsOutcome::Preflighted(_) => {
+            crate::uploads::UploadsOutcome::Preflighted(_)
+            | crate::uploads::UploadsOutcome::CaptureCorrelation(_) => {
                 Err(anyhow!("Unexpected capture preflight reply"))
             }
         }
     }
+
+    /// Claims a queued captured import only after the retained claim still
+    /// matches the admitted journal row, job payload, inventory, and Source.
+    #[cfg(feature = "desktop_rebuild")]
+    pub fn claim_resolved_import(
+        &self,
+        claim: crate::uploads::ResolvedCapturedClaim,
+    ) -> Result<Option<ClaimedAttempt>> {
+        PendingClaim(submit(
+            &self.storage,
+            Command::ClaimResolved {
+                claim,
+                worker: self.identity.clone(),
+                admission: self.admission.clone(),
+                policy: self.policy,
+                storage: self.storage.clone(),
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )?)
+        .receive()
+    }
+
     /// Revalidates the original credential of a live attempt. The check does
     /// not change the job.
     #[cfg(feature = "desktop_rebuild")]
@@ -1458,6 +1490,11 @@ pub(crate) fn load(tx: &Transaction<'_>, id: &str) -> Result<Option<JobRecord>> 
         })
         .transpose()
 }
+
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn load_for_capture_claim(tx: &Transaction<'_>, id: &str) -> Result<JobRecord> {
+    load(tx, id)?.ok_or_else(|| anyhow!("Captured import job requires repair"))
+}
 fn owned(tx: &Transaction<'_>, id: &str, tenant: &str) -> Result<JobRecord> {
     #[cfg(not(feature = "desktop_rebuild"))]
     let missing = || anyhow!("Job not found");
@@ -1721,6 +1758,28 @@ pub(crate) fn execute(
             catalog_state,
             storage,
         )?,
+        #[cfg(feature = "desktop_rebuild")]
+        Command::ClaimResolved {
+            claim: resolved,
+            worker,
+            admission,
+            policy,
+            storage,
+        } => {
+            let job_id = crate::uploads::validate_resolved_claim(&tx, &resolved)?.to_owned();
+            claim(
+                &tx,
+                &worker,
+                &admission,
+                ClaimFilter {
+                    job_id: Some(&job_id),
+                    kind: Some(JobKind::SuppliedSourceImport),
+                },
+                policy,
+                catalog_state,
+                storage,
+            )?
+        }
         #[cfg(not(feature = "desktop_rebuild"))]
         Command::Worker {
             lease,
