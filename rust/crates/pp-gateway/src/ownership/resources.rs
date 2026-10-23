@@ -119,6 +119,16 @@ enum ReviewedEntry {
     ListBuildDifferences { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_draft")]
     GetPlanDraft { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_build_brief")]
+    ProposeUpdateBuildBrief { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_resolve_build_differences")]
+    ProposeResolveBuildDifferences { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_build_source_roles")]
+    ProposeSetBuildSourceRoles { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_rebuild_plan")]
+    ProposeRebuildPlan { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_apply_plan_draft")]
+    ProposeApplyPlanDraft { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -377,6 +387,31 @@ impl ReviewedEntry {
                 "tool.get_plan_draft",
                 resources,
                 planning_brief_with_draft(),
+            ),
+            Self::ProposeUpdateBuildBrief { resources } => (
+                "tool.propose_update_build_brief",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeResolveBuildDifferences { resources } => (
+                "tool.propose_resolve_build_differences",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeSetBuildSourceRoles { resources } => (
+                "tool.propose_set_build_source_roles",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeRebuildPlan { resources } => (
+                "tool.propose_rebuild_plan",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeApplyPlanDraft { resources } => (
+                "tool.propose_apply_plan_draft",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
             ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
@@ -649,6 +684,11 @@ impl Declarations {
             "tool.get_build_planning_state",
             "tool.list_build_differences",
             "tool.get_plan_draft",
+            "tool.propose_update_build_brief",
+            "tool.propose_resolve_build_differences",
+            "tool.propose_set_build_source_roles",
+            "tool.propose_rebuild_plan",
+            "tool.propose_apply_plan_draft",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

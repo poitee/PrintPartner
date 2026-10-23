@@ -1155,6 +1155,36 @@
             "name": "plan_draft_required_unit_assignments"
           }
         ]
+      },
+      {
+        "operation": "tool.propose_update_build_brief",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_resolve_build_differences",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_set_build_source_roles",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_rebuild_plan",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_apply_plan_draft",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
       }
     ],
     "unresolved": [
@@ -1536,17 +1566,12 @@
       "tool.list_example_builds",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_source",
-      "tool.propose_apply_plan_draft",
       "tool.propose_assign_role_filament",
       "tool.propose_edit_plan_draft_parts",
       "tool.propose_exclude_replaced_parts",
       "tool.propose_import_build_inputs",
-      "tool.propose_rebuild_plan",
-      "tool.propose_resolve_build_differences",
       "tool.propose_restore_snapshot",
-      "tool.propose_set_build_source_roles",
       "tool.propose_source_mapping",
-      "tool.propose_update_build_brief",
       "tool.remove_layer",
       "tool.search_plan_parts",
       "tool.set_base",

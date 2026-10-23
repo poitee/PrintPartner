@@ -325,6 +325,33 @@ fn ticket_t_7_ownership_build_planning_reads_refuse_invalid_admission_before_eff
 }
 
 #[test]
+fn ticket_t_7_ownership_build_planning_proposals_have_complete_node_owned_resources() {
+    let settings = json!([{"kind": "table", "name": "app_settings"}]);
+    for id in [
+        "tool.propose_update_build_brief",
+        "tool.propose_resolve_build_differences",
+        "tool.propose_set_build_source_roles",
+        "tool.propose_rebuild_plan",
+        "tool.propose_apply_plan_draft",
+    ] {
+        assert_sqlite_tool_resources(id, settings.clone());
+    }
+}
+
+#[test]
+fn ticket_t_7_ownership_build_planning_proposals_refuse_invalid_admission_before_effects() {
+    for id in [
+        "tool.propose_update_build_brief",
+        "tool.propose_resolve_build_differences",
+        "tool.propose_set_build_source_roles",
+        "tool.propose_rebuild_plan",
+        "tool.propose_apply_plan_draft",
+    ] {
+        assert_tool_invalid_admission(id);
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_list_sources_has_complete_node_owned_resources() {
     assert_sqlite_tool_resources(
         "tool.list_sources",
@@ -645,6 +672,11 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_build_planning_state",
         "tool.list_build_differences",
         "tool.get_plan_draft",
+        "tool.propose_update_build_brief",
+        "tool.propose_resolve_build_differences",
+        "tool.propose_set_build_source_roles",
+        "tool.propose_rebuild_plan",
+        "tool.propose_apply_plan_draft",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -668,8 +700,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 45);
-    assert_eq!(unresolved.len(), 398);
+    assert_eq!(reviewed.len(), 50);
+    assert_eq!(unresolved.len(), 393);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -952,6 +984,11 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_build_planning_state",
         "tool.list_build_differences",
         "tool.get_plan_draft",
+        "tool.propose_update_build_brief",
+        "tool.propose_resolve_build_differences",
+        "tool.propose_set_build_source_roles",
+        "tool.propose_rebuild_plan",
+        "tool.propose_apply_plan_draft",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1075,6 +1112,20 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.list_build_differences",
         ),
         ("tool.list_build_differences", "tool.get_plan_draft"),
+        ("tool.get_plan_draft", "tool.propose_update_build_brief"),
+        (
+            "tool.propose_update_build_brief",
+            "tool.propose_resolve_build_differences",
+        ),
+        (
+            "tool.propose_resolve_build_differences",
+            "tool.propose_set_build_source_roles",
+        ),
+        (
+            "tool.propose_set_build_source_roles",
+            "tool.propose_rebuild_plan",
+        ),
+        ("tool.propose_rebuild_plan", "tool.propose_apply_plan_draft"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_job_status", "tool.ui_highlight_part"),
