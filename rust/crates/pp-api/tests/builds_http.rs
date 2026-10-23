@@ -155,10 +155,6 @@ const READ_PATHS: &[&str] = &[
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_reads_flag_off_are_404() {
-    assert!(
-        !cfg!(feature = "desktop_rebuild"),
-        "feature-off arm must run without desktop_rebuild"
-    );
     let (owner, directory) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
@@ -179,7 +175,6 @@ async fn build_reads_flag_off_are_404() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_reads_are_authenticated_and_tenant_scoped() {
-    assert!(!cfg!(feature = "desktop_rebuild"));
     let (owner, directory) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
@@ -348,16 +343,18 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
 
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
-    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let (auth, graph) = {
+        let locked = owner.lock().unwrap();
+        (
+            locked.auth_with_policy(chosen).unwrap(),
+            locked.build_graph_with_policy(chosen).unwrap(),
+        )
+    };
     let mut server = Server::spawn(
         bound,
         build_router(
             BuildHttpConfig::from_startup(&origin, &tenant_a, Some("1")).unwrap(),
-            owner
-                .lock()
-                .unwrap()
-                .build_graph_with_policy(chosen)
-                .unwrap(),
+            graph,
         )
         .merge(auth_router(
             AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
@@ -379,7 +376,8 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
     assert_eq!(files(&directory), snapshot);
     assert_eq!(profiles(&directory), before);
 
-    let refusals: &[(&str, &[(&str, &str)], u16, &str)] = &[
+    type Refusal<'a> = (&'a str, &'a [(&'a str, &'a str)], u16, &'a str);
+    let refusals: &[Refusal<'_>] = &[
         (
             "/plans",
             &[("Cookie", cookie_a.as_str()), ("Host", "evil.test")],
@@ -423,13 +421,13 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
             "Authentication required",
         ),
     ];
-    for (path, headers, status, detail) in refusals {
+    for &(path, headers, status, detail) in refusals {
         let before_files = files(&directory);
         let before_rows = profiles(&directory);
         let (got_status, body) = server.send(Method::GET, path, headers).await;
         assert_eq!(
             (got_status, body["detail"].as_str()),
-            (*status, Some(*detail)),
+            (status, Some(detail)),
             "{path} {headers:?}"
         );
         assert_eq!(files(&directory), before_files, "refusal mutated files");
