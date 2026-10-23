@@ -4,7 +4,10 @@ use axum::Router;
 use pp_api::auth::{AuthHttpConfig, ProviderClient, ResetMailer, auth_router};
 use pp_storage::{
     WriterOwner,
-    auth::{AuthPolicy, rebuild::AuthLifetimes},
+    auth::{AuthPolicy, rebuild::AuthLifetimes, rebuild::RebuildAuthClient},
+    build_graph::BuildGraphClient,
+    catalog::SourceCatalogClient,
+    working_drafts::WorkingDraftClient,
 };
 
 pub struct AuthRoutes {
@@ -13,6 +16,39 @@ pub struct AuthRoutes {
     pub lifetimes: AuthLifetimes,
     pub providers: ProviderClient,
     pub mail: ResetMailer,
+}
+
+/// Opted-in rebuild HTTP storage clients. Constructed only when the stored
+/// `DesktopRebuild` setting is on. Does not mount routes (GRE-819).
+pub struct RebuildHttpClients {
+    pub auth: RebuildAuthClient,
+    pub drafts: WorkingDraftClient,
+    pub builds: BuildGraphClient,
+    pub catalog: SourceCatalogClient,
+}
+
+impl RebuildHttpClients {
+    /// Drop owned client handles. Storage shutdown stays with `WriterOwner`.
+    pub fn close(self) {}
+}
+
+/// Compose draft, Build, and catalog clients (plus auth) without mounting.
+/// Returns `None` before creating any client unless the stored setting is on.
+pub fn clients(
+    rebuild: DesktopRebuild,
+    owner: &WriterOwner,
+    policy: AuthPolicy,
+    lifetimes: AuthLifetimes,
+) -> Result<Option<RebuildHttpClients>> {
+    if !rebuild.enabled() {
+        return Ok(None);
+    }
+    Ok(Some(RebuildHttpClients {
+        auth: owner.rebuild_auth_with_policy(policy, lifetimes)?,
+        drafts: owner.working_drafts_with_policy(policy)?,
+        builds: owner.build_graph_with_policy(policy)?,
+        catalog: owner.local_source_catalog(),
+    }))
 }
 
 /// Rust HTTP routes for the desktop rebuild, served by the rebuild auth client.
@@ -41,24 +77,29 @@ mod tests {
     use pp_storage::{
         Limits,
         auth::{FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::{Outcome, Request},
     };
     use serde_json::{Value, json};
     use std::time::Duration;
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::FirstAccountOnly,
+            first_user: FirstUserTenant::NewUser,
+            session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        }
+    }
+
+    fn lifetimes() -> AuthLifetimes {
+        AuthLifetimes::shorter(Duration::from_secs(3600), Some(Duration::from_secs(600))).unwrap()
+    }
 
     fn routes(origin: &str) -> AuthRoutes {
         AuthRoutes {
             http: AuthHttpConfig::new(origin, CookieTransport::LoopbackHttp, false, None, false)
                 .unwrap(),
-            policy: AuthPolicy {
-                registration: RegistrationPolicy::FirstAccountOnly,
-                first_user: FirstUserTenant::NewUser,
-                session_tenant: SessionTenantPolicy::SingleAccountDefault,
-            },
-            lifetimes: AuthLifetimes::shorter(
-                Duration::from_secs(3600),
-                Some(Duration::from_secs(600)),
-            )
-            .unwrap(),
+            policy: policy(),
+            lifetimes: lifetimes(),
             providers: ProviderClient::new(None, None).unwrap(),
             mail: ResetMailer::disabled(),
         }
@@ -87,6 +128,46 @@ mod tests {
                 "{value:?}"
             );
         }
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn application_host_flag_off_constructs_no_rebuild_clients() {
+        let (owner, directory) = owner();
+        for value in [None, Some("0"), Some("false"), Some("TRUE")] {
+            assert!(
+                clients(
+                    DesktopRebuild::from_value(value),
+                    &owner,
+                    policy(),
+                    lifetimes(),
+                )
+                .unwrap()
+                .is_none(),
+                "{value:?}"
+            );
+        }
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn application_host_closes_owned_clients() {
+        let (owner, directory) = owner();
+        let bundle = clients(
+            DesktopRebuild::from_value(Some("1")),
+            &owner,
+            policy(),
+            lifetimes(),
+        )
+        .unwrap()
+        .expect("flag on constructs clients");
+        match bundle.catalog.execute(Request::List {}).unwrap() {
+            Outcome::Sources(rows) => assert!(rows.is_empty()),
+            other => panic!("unexpected catalog outcome: {other:?}"),
+        }
+        bundle.close();
         owner.shutdown().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
