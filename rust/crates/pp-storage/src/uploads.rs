@@ -783,7 +783,7 @@ impl PreflightedCapture {
 }
 
 pub(crate) enum UploadsOutcome {
-    Operation(Operation),
+    Operation(Box<Operation>),
     Preflighted(PreflightedCapture),
 }
 
@@ -915,7 +915,7 @@ impl ImportClient {
             }),
             cancelled,
         )? {
-            UploadsOutcome::Operation(operation) => Ok(operation),
+            UploadsOutcome::Operation(operation) => Ok(*operation),
             UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
         }
     }
@@ -963,7 +963,7 @@ impl ImportClient {
             },
             &AtomicBool::new(false),
         )? {
-            UploadsOutcome::Operation(operation) => Ok(operation),
+            UploadsOutcome::Operation(operation) => Ok(*operation),
             UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
         }
     }
@@ -1005,42 +1005,52 @@ pub(crate) fn validate_capture_target(
     }
 }
 
+pub(crate) struct PreflightCaptureCheck<'a> {
+    pub tenant: &'a str,
+    pub actor: &'a str,
+    pub operation_key: &'a str,
+    pub target: &'a mut Target,
+    pub payload: &'a CapturedPayloadV1,
+    pub limits: AdmissionLimits,
+    pub quota: Option<u64>,
+    pub disk_bytes: u64,
+}
+
 pub(crate) fn preflight_capture_target(
     tx: &Transaction<'_>,
-    tenant: &str,
-    actor: &str,
-    operation_key: &str,
-    target: &mut Target,
-    payload: &CapturedPayloadV1,
-    limits: AdmissionLimits,
-    quota: Option<u64>,
-    disk_bytes: u64,
+    check: PreflightCaptureCheck<'_>,
 ) -> Result<Option<Box<Operation>>> {
-    validate_admission_limits(limits, quota)?;
+    validate_admission_limits(check.limits, check.quota)?;
     ensure!(
-        !operation_key.is_empty()
-            && operation_key.len() <= 128
-            && !operation_key.chars().any(char::is_control),
+        !check.operation_key.is_empty()
+            && check.operation_key.len() <= 128
+            && !check.operation_key.chars().any(char::is_control),
         "Invalid operation key"
     );
-    if let Some(prior) = load(tx, tenant, operation_key)? {
-        ensure!(prior.actor == actor, "Import belongs to another actor");
+    if let Some(prior) = load(tx, check.tenant, check.operation_key)? {
+        ensure!(
+            prior.actor == check.actor,
+            "Import belongs to another actor"
+        );
         let Input::Captured(captured) = &prior.input else {
             anyhow::bail!("Import idempotency conflict");
         };
-        ensure!(&captured.payload == payload, "Import idempotency conflict");
+        ensure!(
+            &captured.payload == check.payload,
+            "Import idempotency conflict"
+        );
         captured.validate(
-            actor,
-            operation_key,
-            Some(target),
-            limits,
+            check.actor,
+            check.operation_key,
+            Some(check.target),
+            check.limits,
             &prior.requested_files,
         )?;
         Ok(Some(Box::new(prior)))
     } else {
-        validate_capture_target(tx, tenant, target)?;
-        if let Some(quota) = quota {
-            ensure_owner_import_quota(tx, disk_bytes, limits.reserved_bytes, quota)?;
+        validate_capture_target(tx, check.tenant, check.target)?;
+        if let Some(quota) = check.quota {
+            ensure_owner_import_quota(tx, check.disk_bytes, check.limits.reserved_bytes, quota)?;
         }
         Ok(None)
     }
@@ -1101,9 +1111,11 @@ pub(crate) fn execute(
             let (tenant, actor) = jobs::actor(&tx, credential, policy, &storage)?;
             let op = load(&tx, &tenant, &key)?.ok_or_else(|| anyhow!("Import not found"))?;
             ensure!(op.actor == actor, "Import belongs to another actor");
-            UploadsOutcome::Operation(op)
+            UploadsOutcome::Operation(Box::new(op))
         }
-        Command::Admit(command) => UploadsOutcome::Operation(admit(&tx, catalog_state, command)?),
+        Command::Admit(command) => {
+            UploadsOutcome::Operation(Box::new(admit(&tx, catalog_state, command)?))
+        }
         Command::PreflightCapture {
             credential,
             policy,
@@ -1118,14 +1130,16 @@ pub(crate) fn execute(
             let (tenant, actor) = capture_actor(&tx, &credential, policy, &storage)?;
             let replay = preflight_capture_target(
                 &tx,
-                &tenant,
-                &actor,
-                &operation_key,
-                &mut target,
-                &payload,
-                limits,
-                Some(quota),
-                disk_bytes,
+                PreflightCaptureCheck {
+                    tenant: &tenant,
+                    actor: &actor,
+                    operation_key: &operation_key,
+                    target: &mut target,
+                    payload: &payload,
+                    limits,
+                    quota: Some(quota),
+                    disk_bytes,
+                },
             )?;
             UploadsOutcome::Preflighted(PreflightedCapture {
                 credential,
@@ -1190,11 +1204,11 @@ pub(crate) fn execute(
                 }
                 return Err(error);
             }
-            UploadsOutcome::Operation(if cleanup_retry {
+            UploadsOutcome::Operation(Box::new(if cleanup_retry {
                 op
             } else {
                 advance(&tx, catalog_state, &lease, job, op, phase)?
-            })
+            }))
         }
     };
     tx.commit()?;

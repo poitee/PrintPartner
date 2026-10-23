@@ -814,7 +814,7 @@ impl ServerWorkerClient {
             },
             &AtomicBool::new(false),
         )? {
-            crate::uploads::UploadsOutcome::Operation(operation) => Ok(operation),
+            crate::uploads::UploadsOutcome::Operation(operation) => Ok(*operation),
             crate::uploads::UploadsOutcome::Preflighted(_) => {
                 Err(anyhow!("Unexpected capture preflight reply"))
             }
