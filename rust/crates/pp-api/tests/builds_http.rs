@@ -99,12 +99,35 @@ impl Server {
     }
 
     async fn send(&self, method: Method, path: &str, headers: &[(&str, &str)]) -> (u16, Value) {
+        self.send_body(method, path, headers, None).await
+    }
+
+    async fn send_json(
+        &self,
+        method: Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &Value,
+    ) -> (u16, Value) {
+        self.send_body(method, path, headers, Some(body)).await
+    }
+
+    async fn send_body(
+        &self,
+        method: Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<&Value>,
+    ) -> (u16, Value) {
         let mut request = self
             .client
             .request(method, format!("{}{path}", self.origin))
             .header("Origin", &self.origin);
         for (name, value) in headers {
             request = request.header(*name, *value);
+        }
+        if let Some(body) = body {
+            request = request.json(body);
         }
         let response = request.send().await.unwrap();
         (
@@ -182,6 +205,45 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
     let (status, body) = server.send(Method::GET, "/plans", &[]).await;
     assert_eq!(status, 404);
     assert!(body.get("profiles").is_none());
+    server.stop().await;
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+    shutdown(owner, directory);
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn build_create_matches_node_contract() {
+    let (owner, directory) = open();
+    let snapshot = files(&directory);
+    let before = profiles(&directory);
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[],
+            &serde_json::json!({"name":"X"}),
+        )
+        .await;
+    assert_eq!(status, 404);
+    assert!(body.get("id").is_none());
+    server.stop().await;
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+    shutdown(owner, directory);
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn build_delete_refusal_preserves_plan() {
+    let (owner, directory) = open();
+    let snapshot = files(&directory);
+    let before = profiles(&directory);
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server.send(Method::DELETE, "/plans/1", &[]).await;
+    assert_eq!(status, 404);
+    assert!(body.get("id").is_none());
     server.stop().await;
     assert_eq!(files(&directory), snapshot);
     assert_eq!(profiles(&directory), before);
@@ -540,6 +602,273 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
         (404, Some("Profile not found"))
     );
     assert_eq!(profiles(&directory), before);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn spawn_builds_with_auth(
+    owner: &Arc<Mutex<WriterOwner>>,
+    tenant: &str,
+) -> (Server, String, String) {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        builds::{BuildHttpConfig, build_router},
+    };
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie_a = register(&bootstrap, "builds-create-a@example.test").await;
+    let cookie_b = register(&bootstrap, "builds-create-b@example.test").await;
+    bootstrap.stop().await;
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let (auth, graph) = {
+        let locked = owner.lock().unwrap();
+        (
+            locked.auth_with_policy(chosen).unwrap(),
+            locked.build_graph_with_policy(chosen).unwrap(),
+        )
+    };
+    let server = Server::spawn(
+        bound,
+        build_router(
+            BuildHttpConfig::from_startup(&origin, tenant, Some("1")).unwrap(),
+            graph,
+        )
+        .merge(auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        )),
+    )
+    .await;
+    (server, cookie_a, cookie_b)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn assert_created_shape(body: &Value, name: &str) {
+    assert_eq!(body["name"], name);
+    assert!(body["id"].as_i64().unwrap() > 0);
+    assert!(body.get("order_number").is_some());
+    assert!(body.get("special_request").is_some());
+    assert_eq!(body["part_count"], 0);
+    assert!(body["accepted_progress"].is_object());
+    assert_eq!(body["build_stale"], false);
+    assert!(body["freshness"].is_object());
+    assert!(body.get("archived_at").is_some());
+    assert!(body.get("last_used_at").is_some());
+    assert!(body["layers"].as_array().is_some());
+}
+
+/// POST /plans matches Node: summary fields plus `layers`, duplicate/base refusals.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn build_create_matches_node_contract() {
+    let (owner, directory) = open();
+    let (mut server, cookie_a, _) = spawn_builds_with_auth(&owner, "default").await;
+
+    let (status, created) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"  Kit  "}),
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    assert_created_shape(&created, "Kit");
+    assert_eq!(created["layers"].as_array().unwrap().len(), 0);
+
+    for prefix in ["", "/api/v1", "/api/v2"] {
+        let name = format!("Alias{prefix}");
+        let (status, body) = server
+            .send_json(
+                Method::POST,
+                &format!("{prefix}/plans"),
+                &[("Cookie", cookie_a.as_str())],
+                &json!({"name": name}),
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix}");
+        assert_created_shape(&body, &name);
+        assert_eq!(body["layers"].as_array().unwrap().len(), 0);
+    }
+
+    let before = profiles(&directory);
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"Kit"}),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Profile already exists: Kit"))
+    );
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+
+    let (status, body) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"MissingBase","base_project_id":9_007_199_254_740_991u64}),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Project not found"))
+    );
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+
+    let (status, body) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"   "}),
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (400, Some("Profile name is required"))
+    );
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+
+    let (status, body) = server
+        .send_json(Method::POST, "/plans", &[], &json!({"name":"Anon"}))
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (401, Some("Authentication required"))
+    );
+    assert_eq!(profiles(&directory), before);
+
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// DELETE refusals leave Plan rows and files unchanged; success returns 204.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn build_delete_refusal_preserves_plan() {
+    let (owner, directory) = open();
+    let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
+
+    let (status, created) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"KeepMe"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let id = created["id"].as_i64().unwrap();
+
+    let before = profiles(&directory);
+    let snapshot = files(&directory);
+    let path = format!("/plans/{id}");
+    let missing = format!("/plans/{}", id + 1_000_000);
+
+    type Refusal<'a> = (&'a str, &'a [(&'a str, &'a str)], u16, Option<&'a str>);
+    let refusals: &[Refusal<'_>] = &[
+        (path.as_str(), &[], 401, Some("Authentication required")),
+        (
+            path.as_str(),
+            &[("Cookie", cookie_b.as_str())],
+            404,
+            Some("Profile not found"),
+        ),
+        (
+            missing.as_str(),
+            &[("Cookie", cookie_a.as_str())],
+            404,
+            Some("Profile not found"),
+        ),
+        (
+            path.as_str(),
+            &[("Cookie", cookie_a.as_str()), ("Host", "evil.test")],
+            403,
+            Some("Invalid request host"),
+        ),
+    ];
+    for &(path, headers, status, detail) in refusals {
+        let before_files = files(&directory);
+        let before_rows = profiles(&directory);
+        let (got_status, body) = server.send(Method::DELETE, path, headers).await;
+        assert_eq!(
+            (got_status, body["detail"].as_str()),
+            (status, detail),
+            "{path} {headers:?}"
+        );
+        assert_eq!(files(&directory), before_files, "refusal mutated files");
+        assert_eq!(profiles(&directory), before_rows, "refusal mutated rows");
+    }
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+
+    for prefix in ["", "/api/v1", "/api/v2"] {
+        let (status, created) = server
+            .send_json(
+                Method::POST,
+                &format!("{prefix}/plans"),
+                &[("Cookie", cookie_a.as_str())],
+                &json!({"name": format!("Del{prefix}")}),
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix}");
+        let del_id = created["id"].as_i64().unwrap();
+        let (status, body) = server
+            .send(
+                Method::DELETE,
+                &format!("{prefix}/plans/{del_id}"),
+                &[("Cookie", cookie_a.as_str())],
+            )
+            .await;
+        assert_eq!(status, 204, "{prefix}");
+        assert!(body.is_null());
+        let (status, body) = server
+            .send(
+                Method::GET,
+                &format!("{prefix}/plans/{del_id}"),
+                &[("Cookie", cookie_a.as_str())],
+            )
+            .await;
+        assert_eq!(
+            (status, body["detail"].as_str()),
+            (404, Some("Profile not found")),
+            "{prefix}"
+        );
+    }
+
+    assert!(
+        profiles(&directory)
+            .iter()
+            .any(|row| row.1 == id && row.2 == "KeepMe")
+    );
     server.stop().await;
     shutdown(owner, directory);
 }
