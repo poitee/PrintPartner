@@ -1099,11 +1099,21 @@ mod capture_binding {
 
 mod capture_manifest {
     use super::super::{
-        AdmissionLimits, CaptureId, CapturedPayloadV1, File, Target, capture_manifest,
-        inspect_capture_manifest,
+        Admission, AdmissionLimits, CaptureId, CapturedPayloadV1, File, Input, Target,
+        capture_manifest, inspect_capture_manifest, resolve_capture_manifest,
     };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::Connection;
     use serde_json::Value;
     use sha2::{Digest, Sha256};
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
 
     fn limits() -> AdmissionLimits {
         AdmissionLimits {
@@ -1131,6 +1141,115 @@ mod capture_manifest {
             &Target::Existing { source_id: 42 },
             limits(),
             &files(),
+        )
+        .unwrap()
+    }
+
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection
+            .query_row(JOURNAL_SQL, [], |row| row.get(0))
+            .unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    fn admit_journal(
+        root_label: &str,
+    ) -> (std::path::PathBuf, WriterOwner, super::super::Operation) {
+        let root = directory(root_label);
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner
+            .imports(
+                AuthPolicy {
+                    registration: RegistrationPolicy::Open,
+                    session_tenant: SessionTenantPolicy::AccountTenant,
+                    first_user: FirstUserTenant::NewUser,
+                },
+                16 * 1024 * 1024 * 1024,
+            )
+            .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let operation = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-resolve".into(),
+                    target: Target::Create {
+                        metadata: Box::new(CreateSource {
+                            name: "CaptureResolve".into(),
+                            ..Default::default()
+                        }),
+                    },
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        (root, owner, operation)
+    }
+
+    fn bind_for_operation(
+        operation: &super::super::Operation,
+    ) -> capture_manifest::BoundCaptureManifest {
+        capture_manifest::bind_capture_manifest(
+            CaptureId::new("ab".repeat(32)).unwrap(),
+            CapturedPayloadV1::files(
+                operation
+                    .requested_files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect(),
+            ),
+            &operation.actor,
+            &operation.key,
+            &Target::Existing {
+                source_id: operation.source_id,
+            },
+            AdmissionLimits {
+                reserved_bytes: operation.reserved_bytes,
+                max_input_bytes: operation.max_input_bytes,
+                max_prepared_bytes: operation.max_prepared_bytes,
+            },
+            &operation.requested_files,
         )
         .unwrap()
     }
@@ -1223,7 +1342,7 @@ mod capture_manifest {
         assert!(inspect_capture_manifest(br#"{}"#).is_err());
         assert!(inspect_capture_manifest(br#"[]"#).is_err());
 
-        let mut bad_limits = value;
+        let mut bad_limits = value.clone();
         bad_limits["admission_limits"]["max_input_bytes"] = Value::from(268_435_457u64);
         let error =
             inspect_capture_manifest(&serde_json::to_vec(&bad_limits).unwrap()).unwrap_err();
@@ -1231,5 +1350,98 @@ mod capture_manifest {
             format!("{error:#}").contains("Invalid import limits"),
             "{error:#}"
         );
+
+        let mut stale = value;
+        stale["requested_files"][0]["path"] = Value::from("other.stl");
+        let error = inspect_capture_manifest(&serde_json::to_vec(&stale).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture inventory mismatch")
+                || format!("{error:#}").contains("Capture requested digest mismatch"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn capture_manifest_resolves_exact_journal() {
+        let (_root, owner, operation) = admit_journal("capture-manifest-resolve");
+        let bound = bind_for_operation(&operation);
+        let inventory = resolve_capture_manifest(bound.bytes(), &operation).unwrap();
+        assert_eq!(
+            inventory.paths(),
+            operation
+                .requested_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(inventory.max_input_bytes(), operation.max_input_bytes);
+        assert_eq!(inspect_capture_manifest(bound.bytes()).unwrap(), inventory);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_manifest_mismatch_preserves_journal() {
+        let (root, owner, operation) = admit_journal("capture-manifest-mismatch");
+        let before = journal_and_files(&root);
+        let bound = bind_for_operation(&operation);
+        let value: Value = serde_json::from_slice(bound.bytes()).unwrap();
+
+        let mut wrong_actor = value.clone();
+        wrong_actor["actor"] = Value::from("other-actor");
+        let error =
+            resolve_capture_manifest(&serde_json::to_vec(&wrong_actor).unwrap(), &operation)
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture") && format!("{error:#}").contains("mismatch"),
+            "{error:#}"
+        );
+
+        let mut wrong_key = value.clone();
+        wrong_key["operation_key"] = Value::from("other-key");
+        assert!(
+            resolve_capture_manifest(&serde_json::to_vec(&wrong_key).unwrap(), &operation).is_err()
+        );
+
+        let mut wrong_target = value.clone();
+        wrong_target["target"]["source_id"] = Value::from(operation.source_id + 1);
+        assert!(
+            resolve_capture_manifest(&serde_json::to_vec(&wrong_target).unwrap(), &operation)
+                .is_err()
+        );
+
+        let mut stale_inventory = value.clone();
+        stale_inventory["requested_files"][0]["path"] = Value::from("other.stl");
+        let error =
+            resolve_capture_manifest(&serde_json::to_vec(&stale_inventory).unwrap(), &operation)
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture inventory mismatch")
+                || format!("{error:#}").contains("Capture requested digest mismatch"),
+            "{error:#}"
+        );
+
+        let mut stale_digest = value;
+        stale_digest["requested_digest"] = Value::from("0".repeat(64));
+        let error =
+            resolve_capture_manifest(&serde_json::to_vec(&stale_digest).unwrap(), &operation)
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture requested digest mismatch"),
+            "{error:#}"
+        );
+
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(
+            resolve_capture_manifest(bound.bytes(), &operation)
+                .unwrap()
+                .paths(),
+            &operation
+                .requested_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>()[..]
+        );
+        assert_eq!(journal_and_files(&root), before);
+        owner.shutdown().unwrap();
     }
 }

@@ -20,7 +20,9 @@ mod tests;
 mod capture_manifest;
 mod captured;
 
-pub use capture_manifest::{CaptureManifestInventory, inspect_capture_manifest};
+pub use capture_manifest::{
+    CaptureManifestInventory, inspect_capture_manifest, resolve_capture_manifest,
+};
 pub use captured::{CaptureId, CapturedPayloadV1};
 
 const COLUMNS: &str = include_str!("remote_sources/columns38.sql");

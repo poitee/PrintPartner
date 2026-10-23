@@ -1197,7 +1197,28 @@ policy, target, and manifest digests. `validate` rejects a changed component.
 Repeated inputs produce the same digests. The payload decodes as version 2.
 Supplied inputs stay version 1, and `ImportClient::admit` still accepts only
 those. Refusal leaves the admitted journal row and non-database files unchanged.
-Manifest bytes and captured preflight stay later.
+
+### D14 capture manifests: inspect, serialize, and journal resolve
+
+GRE-768 adds `inspect_capture_manifest` and `bind_capture_manifest` behind
+`desktop_rebuild`. A closed v1 wire document carries capture id, operation key,
+actor, target, digests, admission limits, and requested inventory.
+`inspect_capture_manifest` returns paths and `max_input_bytes` only after
+recomputing `requested_digest`, `policy_digest`, and `target_digest`, validating
+the payload policy, and checking that payload paths match `requested_files`.
+
+GRE-769 adds `resolve_capture_manifest`. It runs the same integrity checks, then
+compares actor, operation key, target, admission limits, inventory, and digests
+with an admitted journal `Operation`. Exact rebound bytes must match the
+presented document. A mismatch or integrity failure refuses without writing;
+journal rows and non-database files stay unchanged. Captured admission preflight
+stays on GRE-770.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_manifest
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
+```
 
 ### D14 uploads: import phases
 
