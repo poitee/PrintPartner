@@ -4,7 +4,7 @@ use std::{
     io::Write,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
-    process::{Command, Output, Stdio},
+    process::{Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -58,7 +58,7 @@ impl Drop for Fixture {
 
 // The binary's arguments are fields of its single JSON command on stdin.
 fn invoke(fixture: &Fixture, command: &Value) -> Output {
-    let mut child = Command::new(support::bin_exe("pp-source"))
+    let mut child = support::command(support::bin_exe("pp-source"))
         .current_dir(&fixture.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -170,7 +170,7 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
             "zipPath": "upload.zip",
             "revisionKey": revision_key,
         });
-        let mut child = Command::new(support::bin_exe("pp-source-archive"))
+        let mut child = support::command(support::bin_exe("pp-source-archive"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
