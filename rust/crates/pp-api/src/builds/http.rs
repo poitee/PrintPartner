@@ -125,10 +125,13 @@ async fn guard(
     next: Next,
 ) -> Response {
     let Ok(_permit) = app.admission.try_acquire() else {
-        return failure(503, "Build service temporarily unavailable");
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Build service temporarily unavailable",
+        );
     };
     if request.uri().to_string().len() > 16_384 {
-        return failure(414, "Request target too long");
+        return failure(StatusCode::URI_TOO_LONG, "Request target too long");
     }
     if let Err((status, detail)) = admit(
         &app.config.origin,
@@ -136,10 +139,10 @@ async fn guard(
         &app.config.api_key_tenant,
         &request,
     ) {
-        return failure(status.as_u16(), detail);
+        return failure(status, detail);
     }
     let Some(presented) = principal(request.headers(), &app.config.api_key_tenant) else {
-        return failure(401, "Authentication required");
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     request.extensions_mut().insert(presented);
     next.run(request).await
@@ -159,19 +162,19 @@ async fn detail(
         .ok()
         .and_then(|value| PositiveId::new(value).ok())
     else {
-        return failure(400, "Request is invalid");
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
     };
     execute(app, request, BuildCommand::Read { build }).await
 }
 
 async fn execute(app: App, request: axum::extract::Request, command: BuildCommand) -> Response {
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
-        return failure(401, "Authentication required");
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     let method = request.method().clone();
     let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
         return json_response(
-            503,
+            StatusCode::SERVICE_UNAVAILABLE,
             &json!({"detail":"Build service temporarily unavailable","code":"writer_queue_full"}),
             false,
         );
@@ -188,7 +191,10 @@ async fn execute(app: App, request: axum::extract::Request, command: BuildComman
     {
         Ok(Ok(outcome)) => present(&method, outcome),
         Ok(Err(error)) => domain_error(error),
-        Err(_) => failure(500, "Build service unavailable"),
+        Err(_) => failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Build service unavailable",
+        ),
     }
 }
 
@@ -196,13 +202,18 @@ fn present(method: &Method, outcome: BuildOutcome) -> Response {
     let head = *method == Method::HEAD;
     match outcome {
         BuildOutcome::Listed { profiles } => json_response(
-            200,
+            StatusCode::OK,
             &json!({"profiles": profiles.into_iter().map(profile).collect::<Vec<_>>()}),
             head,
         ),
-        BuildOutcome::Read { profile: value } => json_response(200, &profile(*value), head),
-        BuildOutcome::MissingBuild => failure(404, "Profile not found"),
-        _ => failure(500, "Build service unavailable"),
+        BuildOutcome::Read { profile: value } => {
+            json_response(StatusCode::OK, &profile(*value), head)
+        }
+        BuildOutcome::MissingBuild => failure(StatusCode::NOT_FOUND, "Profile not found"),
+        _ => failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Build service unavailable",
+        ),
     }
 }
 
@@ -344,11 +355,17 @@ fn domain_error(error: anyhow::Error) -> Response {
         return match auth {
             AuthFailure::SessionRequired
             | AuthFailure::InvalidCredentials
-            | AuthFailure::CredentialChanged => failure(401, "Authentication required"),
-            AuthFailure::OwnerMappingRequired => {
-                failure(403, "Explicit account owner mapping is required")
+            | AuthFailure::CredentialChanged => {
+                failure(StatusCode::UNAUTHORIZED, "Authentication required")
             }
-            _ => failure(500, "Build service unavailable"),
+            AuthFailure::OwnerMappingRequired => failure(
+                StatusCode::FORBIDDEN,
+                "Explicit account owner mapping is required",
+            ),
+            _ => failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Build service unavailable",
+            ),
         };
     }
     if let Some(kind) = error.downcast_ref::<BuildFailure>() {
@@ -357,29 +374,58 @@ fn domain_error(error: anyhow::Error) -> Response {
             BuildFailure::QueueFull => "writer_queue_full",
             BuildFailure::Stopped => "writer_stopped",
             BuildFailure::OutcomeUnknown => "outcome_unknown",
-            _ => return failure(500, "Build service unavailable"),
+            _ => {
+                return failure(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Build service unavailable",
+                );
+            }
         };
         return json_response(
-            503,
+            StatusCode::SERVICE_UNAVAILABLE,
             &json!({"detail":"Build service temporarily unavailable","code":code}),
             false,
         );
     }
-    failure(500, "Build service unavailable")
+    failure(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Build service unavailable",
+    )
 }
 
-fn json_response(status: u16, value: &impl serde::Serialize, head: bool) -> Response {
-    let body = serde_json::to_vec(value).expect("build JSON");
+fn json_response(status: StatusCode, value: &impl serde::Serialize, head: bool) -> Response {
+    match encode_json_response(status, value, head) {
+        Ok(response) => response,
+        Err(()) => encode_unavailable(),
+    }
+}
+
+fn encode_json_response(
+    status: StatusCode,
+    value: &impl serde::Serialize,
+    head: bool,
+) -> std::result::Result<Response, ()> {
+    let body = serde_json::to_vec(value).map_err(|_| ())?;
     let length = body.len();
     Response::builder()
-        .status(StatusCode::from_u16(status).expect("status"))
+        .status(status)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::CONTENT_LENGTH, length)
         .body(axum::body::Body::from(if head { Vec::new() } else { body }))
-        .expect("build response")
+        .map_err(|_| ())
 }
 
-fn failure(status: u16, detail: &str) -> Response {
+fn encode_unavailable() -> Response {
+    const BODY: &[u8] = br#"{"detail":"Build service unavailable"}"#;
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, BODY.len())
+        .body(axum::body::Body::from(BODY))
+        .unwrap_or_else(|_| Response::new(axum::body::Body::from(BODY)))
+}
+
+fn failure(status: StatusCode, detail: &str) -> Response {
     json_response(status, &json!({"detail": detail}), false)
 }
 
