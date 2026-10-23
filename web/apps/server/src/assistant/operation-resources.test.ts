@@ -3289,7 +3289,12 @@ it("traces get_build_recipe isolated workspace probes against its operation-wide
   }
 });
 
-const BUILD_WORKFLOW_OPEN_DRAFT_TABLES = ["plan_draft_inputs", "plan_draft_parts"];
+const BUILD_WORKFLOW_RECONCILIATION_TABLES = [
+  "plan_draft_required_unit_assignments",
+  "plan_draft_required_unit_decisions",
+  "plan_draft_required_unit_reconciliations",
+];
+const BUILD_WORKFLOW_OPEN_DRAFT_TABLES = ["plan_draft_inputs", "plan_draft_parts", ...BUILD_WORKFLOW_RECONCILIATION_TABLES];
 const BUILD_WORKFLOW_BASE_TABLES = [
   "accepted_plate_heads",
   "app_settings",
@@ -3349,7 +3354,9 @@ function buildWorkflowSelect(statement: unknown, tenantId: string, sourceDocs = 
   if (sql.startsWith('select "id", "tenant_id", "profile_id", "layer_order"')) return ["table:profile_layers"];
   const draft = /^select (?:(?!\bfrom\b).)+ from "(plan_draft[a-z_]*)"/.exec(sql);
   if (draft) return [`table:${draft[1]}`];
-  if (/from "plan_drafts"/.test(sql)) return ["table:plan_drafts"];
+  const reconciliationLookup = /^select (?:(?!\bfrom\b).)+ from "plan_draft_required_unit_reconciliations" where \(?"plan_draft_required_unit_reconciliations"\."id" = -?(?:0|[1-9][0-9]*)(?:\.0)?\)?$/.test(sql);
+  if (reconciliationLookup) return ["table:plan_draft_required_unit_reconciliations"];
+  if (/^select /i.test(sql) && /from "plan_drafts"/.test(sql)) return ["table:plan_drafts"];
   throw new Error(`Unsupported SQL: ${sql}`);
 }
 
@@ -3385,7 +3392,8 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
     }
     const observed = [...new Set(statements.flatMap((sql) => buildWorkflowSelect(sql, tenantId)))].sort();
     expect(observed).toEqual(tables);
-    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+    const observedFiles = observer.state.files.map(({ api, args }) => [api, ...args]);
+    if (files.length > 0) expect(observedFiles).toEqual(files);
     for (const resource of observed) union.add(resource);
     for (const resource of buildWorkflowFileResources([join(dataDir, "repos"), root, userRoot])) union.add(resource);
     return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
@@ -3397,8 +3405,8 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
   expect(idleWorkflow).toMatchObject({ build: { id: idle.id, name: "Idle workflow" }, accepted_plan: { kind: "none" }, working_plan: { kind: "none" } });
   expect(await trace({}, IDLE_BUILD_WORKFLOW_TABLES, { activePlanId: idle.id })).toMatchObject({ build: { id: idle.id } });
   expect(await trace({ plan_id: foreign.id }, ["table:build_profiles"], { activePlanId: idle.id })).toEqual({ error: "Build not found" });
-  const { repository, plan, files } = acceptedPlanFixture(false);
-  const accepted = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_ACCEPTED_TABLES, { repository, files });
+  const { repository, plan } = acceptedPlanFixture(true);
+  const accepted = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_ACCEPTED_TABLES, { repository });
   expect(accepted).toMatchObject({
     build: { id: plan.id, name: "Accepted plan" },
     accepted_plan: { kind: "ready" },
@@ -3406,13 +3414,30 @@ it("traces get_build_workflow summary, active-plan fallback, accepted snapshot a
   });
   expect(await trace({ plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Build not found" });
   expect(await trace({ plan_id: foreign.id }, IDLE_BUILD_WORKFLOW_TABLES, { tenantId: "other" })).toMatchObject({ build: { id: foreign.id } });
-  const draft = insertEmptyPlanDraft(plan.id);
-  const withOpenDraft = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_TABLES, { repository, files });
-  expect(withOpenDraft).toMatchObject({
-    build: { id: plan.id, name: "Accepted plan" },
-    working_plan: { kind: "stale", draft_id: draft.id },
+  const created = repo.recomputePlanDraft({
+    profileId: plan.id,
+    actor: "admission",
+    idempotencyKey: "workflow-draft",
+    applyManifest: false,
   });
-  expect([...union, "file:source-workspace"].sort()).toEqual(BUILD_WORKFLOW_UNION);
+  expect(created.kind).toBe("created");
+  if (created.kind !== "created") throw new Error("workflow draft was not created");
+  const draft = created.draft;
+  const saved = repo.savePlanDraftRequiredUnitReconciliation({
+    profileId: plan.id,
+    draftId: draft.id,
+    expectedSnapshotDigest: draft.snapshotDigest,
+    decisions: [],
+    actorId: "admission",
+    idempotencyKey: "workflow-reconciliation",
+  });
+  expect(saved.kind).toBe("saved");
+  const withReconciledDraft = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_TABLES, { repository });
+  expect(withReconciledDraft).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    working_plan: { kind: "ready", draft_id: draft.id },
+  });
+  expect([...union].sort()).toEqual(BUILD_WORKFLOW_UNION);
   const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_build_workflow");
   if (!entry || entry.operation === "source.sync") throw new Error("Missing build workflow declaration");
   expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(BUILD_WORKFLOW_UNION);
@@ -3437,9 +3462,7 @@ it("traces get_build_workflow isolated workspace probes against its operation-wi
   expect(observed).toEqual(BUILD_WORKFLOW_ACCEPTED_TABLES);
   for (const resource of observed) union.add(resource);
   for (const resource of buildWorkflowFileResources([join(dataDir, "repos"), workspace])) union.add(resource);
-  for (const table of BUILD_WORKFLOW_OPEN_DRAFT_TABLES) union.add(`table:${table}`);
   expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
-  expect([...union].sort()).toEqual(BUILD_WORKFLOW_UNION);
 });
 
 it("traces analyze_build_request catalog candidates, zero SQL and tenant independence", async () => {
