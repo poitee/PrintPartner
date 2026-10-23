@@ -430,17 +430,9 @@ async fn refuse_mounted_reads(server: &Server) {
         assert_eq!(status, 404, "{path}");
         assert!(body.get("use_defaults").is_none() && body.get("effective").is_none());
     }
-    for path in [
-        "/sources/1/import-rules",
-        "/api/v1/sources/1/import-rules",
-    ] {
+    for path in ["/sources/1/import-rules", "/api/v1/sources/1/import-rules"] {
         let (status, body) = server
-            .exchange(
-                Method::PUT,
-                path,
-                &[],
-                Some(&json!({"rules":["parts/"]})),
-            )
+            .exchange(Method::PUT, path, &[], Some(&json!({"rules":["parts/"]})))
             .await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("rules").is_none());
@@ -1215,10 +1207,7 @@ async fn catalog_import_rules_round_trip() {
         )
         .await;
     assert_eq!(status, 200, "{empty}");
-    assert_eq!(
-        empty,
-        json!({"rules":[],"legacy_import_all":true})
-    );
+    assert_eq!(empty, json!({"rules":[],"legacy_import_all":true}));
     let body = json!({"rules":[" /STLs ","\\STLs","a.STL",12,""]});
     let (status, saved) = server
         .exchange(
@@ -1229,7 +1218,7 @@ async fn catalog_import_rules_round_trip() {
         )
         .await;
     assert_eq!(status, 200, "{saved}");
-    assert_eq!(saved["rules"], json!(["STLs/","a.STL","12/"]));
+    assert_eq!(saved["rules"], json!(["STLs/", "a.STL", "12/"]));
     let (status, got) = server
         .send(
             Method::GET,
@@ -1356,11 +1345,7 @@ async fn catalog_activity_limit_matches_node() {
                 && event.as_object().unwrap().contains_key("source_id")
                 && event.as_object().unwrap().contains_key("detail")
         }));
-        assert!(
-            events
-                .iter()
-                .all(|event| event["source_name"] != "Foreign")
-        );
+        assert!(events.iter().all(|event| event["source_name"] != "Foreign"));
     }
     let (status, zero) = server
         .send(
