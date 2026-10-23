@@ -973,6 +973,43 @@
         ]
       },
       {
+        "operation": "tool.get_build_recipe",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          },
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_plan_snapshot",
         "resources": [
           {
@@ -1568,7 +1605,6 @@
       "tool.detect_build_decisions",
       "tool.duplicate_plan",
       "tool.find_filament_matches",
-      "tool.get_build_recipe",
       "tool.get_build_workflow",
       "tool.get_farm_status",
       "tool.get_interaction_graph",
