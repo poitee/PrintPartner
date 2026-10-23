@@ -2,13 +2,20 @@
 //! The synchronous supplied-import client over disposable storage and input
 //! directories.
 use pp_core::uploads::SourceImports;
+use pp_source::{
+    SourcePath,
+    retained_capture::{FreezeResult, RetainedCaptureId, RetainedCaptureVault},
+};
 use pp_storage::{
     Limits, WriterOwner,
     auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
     catalog::CreateSource,
-    jobs::Credential,
-    uploads::{Admission, File, Input, State, Target},
+    jobs::{Credential, PersistentState},
+    uploads::{
+        Admission, AdmissionLimits, CaptureId, CapturedPayloadV1, File, Input, State, Target,
+    },
 };
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -283,4 +290,143 @@ fn source_import_client_refuses_invalid_directory_input() {
     let admitted = fixture.admit(request("refused", directory)).unwrap();
     assert_eq!(admitted.requested_files, [input("part.stl", b"solid a")]);
     assert_eq!(fixture.rows(), [rows[0] + 1, 1, 1, rows[3] + 1]);
+}
+
+fn capture_limits() -> AdmissionLimits {
+    AdmissionLimits {
+        reserved_bytes: 3_506_438_144,
+        max_input_bytes: 268_435_456,
+        max_prepared_bytes: 1_073_741_824,
+    }
+}
+
+fn capture_target(name: &str) -> Target {
+    Target::Create {
+        metadata: Box::new(CreateSource {
+            name: name.into(),
+            source_kind: Some("local".into()),
+            source_type: Some("local".into()),
+            ..Default::default()
+        }),
+    }
+}
+
+fn data_files(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let relative = path.strip_prefix(root).unwrap().display().to_string();
+            if path.is_dir() {
+                out.insert(format!("{relative}/"), vec![]);
+                walk(root, &path, out);
+            } else {
+                let name = relative.as_str();
+                if name.ends_with(".db") || name.ends_with("-wal") || name.ends_with("-shm") {
+                    continue;
+                }
+                out.insert(relative, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    walk(root, root, &mut files);
+    files
+}
+
+struct StagedFrozen {
+    id: String,
+    operation: pp_storage::uploads::Operation,
+}
+
+fn stage_frozen(fixture: &Fixture, key: &str) -> StagedFrozen {
+    let bytes = b"solid triangle";
+    let payload = CapturedPayloadV1::files(vec!["triangle.stl".into()]);
+    let preflight = fixture
+        .imports
+        .preflight_capture(
+            fixture.credential(),
+            key.into(),
+            capture_target(key),
+            payload.clone(),
+            capture_limits(),
+        )
+        .unwrap();
+    let vault = RetainedCaptureVault::open(&fixture.root.join("data")).unwrap();
+    let mut candidate = vault.allocate().unwrap();
+    let id = candidate.capture_id().as_str().to_owned();
+    candidate
+        .write_file(
+            SourcePath::try_from("triangle.stl".to_owned()).unwrap(),
+            bytes,
+            capture_limits().max_input_bytes,
+        )
+        .unwrap();
+    let inventory = vec![File {
+        path: "triangle.stl".into(),
+        size: bytes.len() as u64,
+        sha256: hex::encode(Sha256::digest(bytes)),
+        kind: "input".into(),
+    }];
+    let prepared = preflight
+        .prepare(
+            CaptureId::new(id.clone()).unwrap(),
+            key.into(),
+            payload,
+            capture_limits(),
+            inventory,
+        )
+        .unwrap();
+    let manifest = prepared.manifest().to_vec();
+    assert!(matches!(
+        candidate.freeze_owned(&manifest),
+        FreezeResult::Frozen(_)
+    ));
+    let operation = fixture.imports.admit_captured(prepared).unwrap();
+    StagedFrozen { id, operation }
+}
+
+#[test]
+fn source_import_frozen_claim_matches_manifest() {
+    let fixture = Fixture::open();
+    let staged = stage_frozen(&fixture, "frozen-match");
+    let vault = RetainedCaptureVault::open(&fixture.root.join("data")).unwrap();
+    let frozen = vault
+        .open_frozen(&RetainedCaptureId::parse(staged.id).unwrap())
+        .unwrap();
+
+    let claimed = fixture.imports.prepare_frozen_claim(&frozen).unwrap();
+    assert_eq!(claimed.job.job_id, staged.operation.job_id);
+    assert_eq!(claimed.job.state, PersistentState::Running);
+    assert!(claimed.source_work.is_some());
+    assert_eq!(staged.operation.input_version, 2);
+    assert_eq!(fixture.rows()[1], 1);
+}
+
+#[test]
+fn source_import_frozen_claim_rejects_stale_source() {
+    let fixture = Fixture::open();
+    let staged = stage_frozen(&fixture, "frozen-stale");
+
+    let connection = Connection::open(fixture.root.join("data/print-partner.db")).unwrap();
+    connection
+        .execute(
+            "DELETE FROM projects WHERE tenant_id=?1 AND id=?2",
+            params!["default", staged.operation.source_id],
+        )
+        .unwrap();
+    drop(connection);
+
+    let before_rows = fixture.rows();
+    let before_files = data_files(&fixture.root.join("data"));
+    let vault = RetainedCaptureVault::open(&fixture.root.join("data")).unwrap();
+    let frozen = vault
+        .open_frozen(&RetainedCaptureId::parse(staged.id).unwrap())
+        .unwrap();
+    let refused = match fixture.imports.prepare_frozen_claim(&frozen) {
+        Ok(_) => panic!("stale Source must refuse frozen claim"),
+        Err(error) => error.to_string(),
+    };
+    assert_eq!(refused, "Captured import requires repair");
+    assert_eq!(fixture.rows(), before_rows);
+    assert_eq!(data_files(&fixture.root.join("data")), before_files);
 }

@@ -1,20 +1,26 @@
-use anyhow::{Result, ensure};
-use pp_source::{LocalFiles, SourcePath, local_selection};
+use anyhow::{Result, anyhow, ensure};
+use pp_source::{LocalFiles, SourcePath, local_selection, retained_capture::FrozenCapture};
 use pp_storage::{
     WriterOwner,
     auth::AuthPolicy,
-    jobs::Credential,
-    uploads::{Admission, File, ImportClient, Input, Operation},
+    jobs::{ClaimedAttempt, Credential, JobKind, ServerWorkerClient, WorkerAdmission},
+    uploads::{
+        Admission, AdmissionLimits, CaptureJournalCorrelation, CapturedPayloadV1, File,
+        ImportClient, Input, Operation, PreflightedCapture, PreparedCapturedAdmission, Target,
+        inspect_capture_manifest,
+    },
 };
 use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
 
-/// Synchronous admission and lookup for supplied Source imports. It reads the
-/// supplied directory but never runs the import.
+/// Synchronous admission and lookup for Source imports. Supplied admits hash a
+/// directory. Captured admits preflight, prepare, and claim a frozen capture
+/// through a policy-aware worker; they never copy retained inputs.
 pub struct SourceImports {
     client: ImportClient,
+    worker: ServerWorkerClient,
     repos: PathBuf,
 }
 
@@ -22,6 +28,7 @@ impl SourceImports {
     pub fn new(owner: &WriterOwner, policy: AuthPolicy, quota: u64) -> Result<Self> {
         Ok(Self {
             client: owner.imports(policy, quota)?,
+            worker: owner.job_worker_with_policy(policy, source_worker_admission())?,
             repos: owner.import_repos_root()?,
         })
     }
@@ -54,12 +61,7 @@ impl SourceImports {
         let inventory = local.inventory_until(&paths, request.max_input_bytes, cancelled);
         let expected_files = scanned(cancelled, inventory)?
             .into_iter()
-            .map(|file| File {
-                path: file.path.as_str().into(),
-                size: file.size,
-                sha256: file.sha256,
-                kind: "input".into(),
-            })
+            .map(input_file)
             .collect();
         let accounting_epoch = self.client.accounting_epoch();
         let disk = scanned(
@@ -76,6 +78,67 @@ impl SourceImports {
         )
     }
 
+    /// Preflights a captured import without writing journal rows or files.
+    pub fn preflight_capture(
+        &self,
+        credential: Credential,
+        operation_key: String,
+        target: Target,
+        payload: CapturedPayloadV1,
+        limits: AdmissionLimits,
+    ) -> Result<PreflightedCapture> {
+        let disk = local_selection::stored_bytes(&self.repos, &AtomicBool::new(false))?;
+        self.client
+            .preflight_capture(credential, operation_key, target, payload, limits, disk)
+    }
+
+    /// Admits a prepared captured import once per key.
+    pub fn admit_captured(&self, prepared: PreparedCapturedAdmission) -> Result<Operation> {
+        let accounting_epoch = self.client.accounting_epoch();
+        let disk = local_selection::stored_bytes(&self.repos, &AtomicBool::new(false))?;
+        self.client.admit_prepared(prepared, disk, accounting_epoch)
+    }
+
+    /// Correlates a frozen capture with the journal and claims it only when the
+    /// retained claim still matches and a current Source proof is available.
+    /// Refuses before any retained-input file copy.
+    pub fn prepare_frozen_claim(&self, frozen: &FrozenCapture) -> Result<ClaimedAttempt> {
+        let manifest = frozen.manifest()?;
+        let inspected = inspect_capture_manifest(&manifest)?;
+        let paths = inspected
+            .paths()
+            .iter()
+            .cloned()
+            .map(SourcePath::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let inventory = frozen
+            .inventory(&paths, inspected.max_input_bytes())?
+            .into_iter()
+            .map(input_file)
+            .collect();
+        match self
+            .client
+            .correlate_capture_manifest(manifest, inventory)?
+        {
+            CaptureJournalCorrelation::ExactAdmitted(claim) => {
+                let claimed = self
+                    .worker
+                    .claim_resolved_import(claim)?
+                    .ok_or_else(|| anyhow!("Captured import claim unavailable"))?;
+                ensure!(
+                    claimed.source_work.is_some(),
+                    "Supplied import claim missing Source authority"
+                );
+                Ok(claimed)
+            }
+            CaptureJournalCorrelation::MismatchRepairRequired
+            | CaptureJournalCorrelation::Absent
+            | CaptureJournalCorrelation::ExactOwnedOrLater => {
+                Err(anyhow!("Retained capture requires repair"))
+            }
+        }
+    }
+
     pub fn get(&self, credential: Credential, key: String) -> Result<Operation> {
         self.client.get(credential, key)
     }
@@ -89,6 +152,24 @@ impl SourceImports {
                 .map(String::from)
                 .collect(),
         })
+    }
+}
+
+fn source_worker_admission() -> WorkerAdmission {
+    WorkerAdmission {
+        kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+        total: 1,
+        per_resource: 1,
+        lease_seconds: 60,
+    }
+}
+
+fn input_file(file: pp_source::local_selection::InputFile) -> File {
+    File {
+        path: file.path.as_str().into(),
+        size: file.size,
+        sha256: file.sha256,
+        kind: "input".into(),
     }
 }
 
