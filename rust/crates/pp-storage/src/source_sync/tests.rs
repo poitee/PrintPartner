@@ -3173,13 +3173,12 @@ fn sync_retained_inspection_rejects_corrupt_binding() {
             .unwrap(),
         1
     );
-    // pending with leftover not_run fields cleared — but result still null; should succeed as Pending
-    // Force invalid pending by attaching a result digest alone:
+    // Clean pending shape, then refuse via the pending rule (ack=1).
     assert_eq!(
         sync.connection()
             .execute(
-                "UPDATE source_sync_targets SET result_digest=?1 WHERE job_id=?2 AND ordinal=1",
-                rusqlite::params!["ef".repeat(32), job_id],
+                "UPDATE source_sync_targets SET reservation_acknowledged=1 WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
             )
             .unwrap(),
         1
@@ -3187,13 +3186,13 @@ fn sync_retained_inspection_rejects_corrupt_binding() {
     let after = sync.snapshot();
     assert_eq!(
         recovery(&sync, &job_id, version).unwrap_err().to_string(),
-        "Sync result capture incomplete"
+        "Invalid pending Sync target"
     );
     assert_eq!(sync.snapshot(), after);
     assert_eq!(
         sync.connection()
             .execute(
-                "UPDATE source_sync_targets SET state='not_run',result_digest=NULL,failure_code='batch_halt',failure_detail='Sync was cancelled' WHERE job_id=?1 AND ordinal=1",
+                "UPDATE source_sync_targets SET state='not_run',failure_code='batch_halt',failure_detail='Sync was cancelled',reservation_acknowledged=0 WHERE job_id=?1 AND ordinal=1",
                 [&job_id],
             )
             .unwrap(),
@@ -3248,6 +3247,64 @@ fn sync_retained_inspection_reports_failed_and_reconciliation() {
         SyncRecoveryDisposition::NotRun
     );
     assert_eq!(sync.snapshot(), before);
+    // batch_halt is DB-legal but not a failed-state code → unknown-code refusal.
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET failure_code='batch_halt' WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, halted.state_version)
+            .unwrap_err()
+            .to_string(),
+        "Invalid Sync failure code"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET failure_code='local_read' WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET reservation_acknowledged=1 WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, halted.state_version)
+            .unwrap_err()
+            .to_string(),
+        "Invalid not-run Sync target"
+    );
+    assert_eq!(sync.snapshot(), after);
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET reservation_acknowledged=0 WHERE job_id=?1 AND ordinal=1",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(sync.snapshot(), before);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 
     // Claimed-then-cancelled becomes reconciliation_required.
     let sync = Fixture::new();
@@ -3291,13 +3348,31 @@ fn sync_retained_inspection_reports_failed_and_reconciliation() {
             .unwrap(),
         1
     );
+    let after = sync.snapshot();
     let inspection = recovery(&sync, &job_id, job.state_version).unwrap();
     assert_eq!(
         inspection.targets()[1].disposition(),
         SyncRecoveryDisposition::Pending
     );
-    // Invalid claimed: attach a result while state stays claimed on ordinal 0 after forcing claimed.
-    // ordinal 0 is reconciliation_required; force claimed with leftover failure → refuse.
+    assert_eq!(sync.snapshot(), after);
+    // Claimed with leftover failure_code is refused by the claimed rule.
+    assert_eq!(
+        sync.connection()
+            .execute(
+                "UPDATE source_sync_targets SET state='claimed',failure_code='batch_halt',failure_detail=NULL WHERE job_id=?1 AND ordinal=0",
+                [&job_id],
+            )
+            .unwrap(),
+        1
+    );
+    let after = sync.snapshot();
+    assert_eq!(
+        recovery(&sync, &job_id, job.state_version)
+            .unwrap_err()
+            .to_string(),
+        "Invalid claimed Sync target"
+    );
+    assert_eq!(sync.snapshot(), after);
     assert_eq!(
         sync.connection()
             .execute(
@@ -3308,13 +3383,15 @@ fn sync_retained_inspection_reports_failed_and_reconciliation() {
         1
     );
     let after = sync.snapshot();
-    // claimed with capture present and no result should be Claimed
     let inspection = recovery(&sync, &job_id, job.state_version).unwrap();
     assert_eq!(
         inspection.targets()[0].disposition(),
         SyncRecoveryDisposition::Claimed
     );
     assert_eq!(sync.snapshot(), after);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 
     // OriginalAuthorityStatus::Unavailable when the job's original authority is missing.
     let sync = Fixture::new();
@@ -3349,6 +3426,9 @@ fn sync_retained_inspection_reports_failed_and_reconciliation() {
         SyncRecoveryDisposition::Succeeded
     );
     assert_eq!(sync.snapshot(), before);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
 
     // Refused: delete sessions so the credential is invalid, then re-login for a
     // new session that is not the original authority subject/credential.
