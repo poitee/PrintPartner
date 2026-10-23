@@ -921,8 +921,8 @@ fn unknown_resource_syntax_and_competing_import_fail_closed() {
         ),
         (
             "/resources/reviewed/1/operation",
-            json!("tool.get_build_workflow"),
-            "unknown variant `tool.get_build_workflow`",
+            json!("tool.audit_build_coverage"),
+            "unknown variant `tool.audit_build_coverage`",
         ),
         ("/resources/extra", json!(true), "unknown field `extra`"),
     ] {
@@ -1003,6 +1003,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_kit_catalog",
         "tool.analyze_build_request",
         "tool.get_build_recipe",
+        "tool.get_build_workflow",
         "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
@@ -1028,9 +1029,10 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
                 .as_array_mut()
                 .unwrap()
                 .retain(|name| format!("tool.{}", name.as_str().unwrap()) != id);
-            regroup(&mut value, id, &["tool.get_build_workflow"]);
+            let stand_in = "tool.audit_build_coverage";
+            regroup(&mut value, id, &[stand_in]);
             let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-            unresolved.retain(|operation| operation != "tool.get_build_workflow");
+            unresolved.retain(|operation| operation != stand_in);
             if !participants.is_empty() {
                 unresolved.push(json!("tool.regrouped"));
             }
@@ -1191,13 +1193,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.get_build_workflow", "tool.audit_build_coverage"],
+        &["tool.audit_build_coverage", "tool.compare_plans"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.get_build_workflow" && id != "tool.audit_build_coverage");
+    unresolved.retain(|id| id != "tool.audit_build_coverage" && id != "tool.compare_plans");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.get_build_workflow", "tool.audit_build_coverage"] {
+    for id in ["tool.audit_build_coverage", "tool.compare_plans"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
