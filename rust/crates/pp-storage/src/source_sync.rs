@@ -130,6 +130,18 @@ impl SourceSyncHalt {
     }
 }
 
+/// Read-only view of one Sync target for the live attempt. Pending and claimed
+/// targets share [`Self::Pending`]. Unacknowledged terminal rows report
+/// reconciliation instead of a settled result or failure.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SyncTargetInspection {
+    Pending,
+    Succeeded(SourceScanResult),
+    Failed(SourceSyncFailure),
+    Halted,
+    ReconciliationRequired,
+}
+
 pub enum NextSyncTarget {
     Local(SyncTargetLease),
     /// The target failed before any reservation and needs no settlement.
@@ -1249,6 +1261,100 @@ fn ordinary_failure(tx: &Transaction<'_>, mut job: JobRecord, key: &SyncTargetKe
         NextSyncTarget::OrdinaryFailure(failure),
         job.state_version,
     ))
+}
+
+struct InspectedSyncTargetRow {
+    source_id: i64,
+    tenant: String,
+    source_name: Option<String>,
+    state: String,
+    result_json: Option<String>,
+    result_digest: Option<String>,
+    receipt_id: Option<String>,
+    receipt_hash: Option<String>,
+    receipt_target: Option<String>,
+    failure_detail: Option<String>,
+    acknowledged: i64,
+}
+
+/// Reads one live Sync target through the authorized attempt. The batch basis
+/// and target tenant must match the Job. Writes nothing and does not touch
+/// reservation ownership.
+pub(crate) fn inspect(
+    tx: &Transaction<'_>,
+    lease: &AttemptLease,
+    key: &SyncTargetKey,
+    policy: crate::auth::AuthPolicy,
+) -> Result<SyncTargetInspection> {
+    let job = require_sync_job(tx, lease)?;
+    ensure!(key.job_id == job.job_id, "Sync target Job mismatch");
+    crate::jobs::require_original_authority(tx, &job, policy)?;
+    let source_ids = validate_basis(tx, &job)?;
+    let source_id = *source_ids
+        .get(usize::try_from(key.ordinal)?)
+        .ok_or_else(|| anyhow!("Sync target is outside the sealed basis"))?;
+    let row = tx
+        .query_row(
+            "SELECT requested_source_id,tenant,source_name,state,result_json,result_digest,receipt_id,receipt_hash,receipt_target,failure_detail,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2",
+            params![key.job_id, key.ordinal],
+            |row| {
+                Ok(InspectedSyncTargetRow {
+                    source_id: row.get(0)?,
+                    tenant: row.get(1)?,
+                    source_name: row.get(2)?,
+                    state: row.get(3)?,
+                    result_json: row.get(4)?,
+                    result_digest: row.get(5)?,
+                    receipt_id: row.get(6)?,
+                    receipt_hash: row.get(7)?,
+                    receipt_target: row.get(8)?,
+                    failure_detail: row.get(9)?,
+                    acknowledged: row.get(10)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("Sync target not found"))?;
+    ensure!(row.tenant == job.tenant, "Sync target tenant mismatch");
+    ensure!(row.source_id == source_id, "Sync target Source mismatch");
+    if matches!(row.state.as_str(), "succeeded" | "failed") && row.acknowledged == 0 {
+        return Ok(SyncTargetInspection::ReconciliationRequired);
+    }
+    match row.state.as_str() {
+        "pending" | "claimed" => Ok(SyncTargetInspection::Pending),
+        "succeeded" => {
+            validate_result_provenance(
+                source_id,
+                row.result_json.clone(),
+                row.result_digest,
+                row.receipt_id,
+                row.receipt_hash,
+                row.receipt_target,
+            )?;
+            let result_json = row
+                .result_json
+                .ok_or_else(|| anyhow!("Sync result missing"))?;
+            let result: SourceScanResult = serde_json::from_str(&result_json)?;
+            Ok(SyncTargetInspection::Succeeded(result))
+        }
+        "failed" => {
+            let detail = row
+                .failure_detail
+                .ok_or_else(|| anyhow!("Sync failure detail missing"))?;
+            ensure!(
+                !detail.is_empty() && detail.len() <= 1024,
+                "Invalid Sync failure detail"
+            );
+            Ok(SyncTargetInspection::Failed(SourceSyncFailure {
+                project_id: u64::try_from(source_id).ok(),
+                name: row.source_name,
+                error: detail,
+            }))
+        }
+        "not_run" => Ok(SyncTargetInspection::Halted),
+        "reconciliation_required" => Ok(SyncTargetInspection::ReconciliationRequired),
+        _ => Err(anyhow!("Invalid Sync target state")),
+    }
 }
 
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
