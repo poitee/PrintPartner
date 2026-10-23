@@ -2675,3 +2675,133 @@ fn sync_adopt_rejects_failed_target() {
         "Sync target is not an acknowledged success"
     );
 }
+
+#[test]
+fn sync_halt_after_error_retains_primary_failure() {
+    let sync = Fixture::new();
+    let first = sync.source("Primary");
+    let second = sync.source("Sibling");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    sync.worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    drop(target);
+    let retained = failed_hold(&sync, &job_id);
+    assert_eq!(
+        (
+            retained.0.as_str(),
+            retained.1.as_str(),
+            retained.2.as_str(),
+            retained.3,
+        ),
+        ("failed", "local_read", "disk read failed", 0)
+    );
+    let stale = lease.clone();
+    sync.worker
+        .update(&mut lease, WorkerOperation::Progress(1))
+        .unwrap();
+    let before = sync.snapshot();
+    let refused = sync
+        .worker
+        .halt_source_sync(
+            &stale,
+            SourceSyncHalt::Fatal,
+            "primary source operation failed".into(),
+        )
+        .err()
+        .unwrap();
+    assert_eq!(refused.to_string(), "Stale attempt fence");
+    assert_eq!(sync.snapshot(), before);
+    assert_eq!(failed_hold(&sync, &job_id), retained);
+    let detail = "primary source operation failed";
+    let halted = sync
+        .worker
+        .halt_source_sync(&lease, SourceSyncHalt::Fatal, detail.into())
+        .unwrap();
+    assert_eq!(halted.state, PersistentState::ReconciliationRequired);
+    assert_eq!(halted.recovery.as_deref(), Some(detail));
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
+    assert_eq!(
+        sync.targets(&job_id),
+        [
+            (first, "failed".into(), Some("local_read".into())),
+            (second, "not_run".into(), Some("batch_halt".into())),
+        ]
+    );
+    assert_eq!(failed_hold(&sync, &job_id), retained);
+    let reopened = sync.job(&job_id);
+    assert_eq!(reopened.state, PersistentState::ReconciliationRequired);
+    assert_eq!(reopened.recovery.as_deref(), Some(detail));
+    assert_eq!(failed_hold(&sync, &job_id), retained);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_halt_after_error_keeps_target_for_reconciliation() {
+    let sync = Fixture::new();
+    let first = sync.source("Claimed");
+    let second = sync.source("Pending");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    let claim = sync
+        .connection()
+        .query_row(
+            "SELECT state,claim_generation,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(claim.0, "claimed");
+    let detail = "settlement reply unresolved";
+    let halted = sync
+        .worker
+        .halt_source_sync(&lease, SourceSyncHalt::UncertainTarget, detail.into())
+        .unwrap();
+    assert_eq!(halted.state, PersistentState::ReconciliationRequired);
+    assert_eq!(halted.recovery.as_deref(), Some(detail));
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
+    assert_eq!(
+        sync.targets(&job_id),
+        [
+            (
+                first,
+                "reconciliation_required".into(),
+                Some("local_settlement".into()),
+            ),
+            (second, "not_run".into(), Some("batch_halt".into())),
+        ]
+    );
+    let kept: (String, String, i64, String) = sync
+        .connection()
+        .query_row(
+            "SELECT state,failure_code,claim_generation,reservation_token FROM source_sync_targets WHERE job_id=?1 AND ordinal=0",
+            [&job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(kept.0, "reconciliation_required");
+    assert_eq!(kept.1, "local_settlement");
+    assert_eq!(kept.2, claim.1);
+    assert_eq!(kept.3, claim.2);
+    drop(target);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

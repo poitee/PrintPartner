@@ -1955,6 +1955,10 @@ failure stays retained evidence. GRE-777 acknowledges that retained failure when
 the presented observation matches the claim. GRE-778 adopts an already-
 acknowledged successful result when the live Source observation still matches
 the claim capture, and refuses mismatched provenance without writing.
+GRE-779 ports `halt_after_error` and `HaltSourceSync` so a caller Source
+operation error closes through the existing batch halt path. The detail is the
+Job recovery message. Retained failures stay as recorded. A claimed target is
+kept for reconciliation. A stale attempt is refused without writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal

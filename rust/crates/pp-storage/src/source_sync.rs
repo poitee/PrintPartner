@@ -113,6 +113,23 @@ pub(crate) struct AcknowledgedSyncRelease {
     pub(crate) binding: SourceBinding,
 }
 
+/// Caller-facing Sync halt after a Source operation error. Maps onto the
+/// existing batch halt codes used by Cancel, authority refusal and worker Fail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceSyncHalt {
+    Fatal,
+    UncertainTarget,
+}
+
+impl SourceSyncHalt {
+    pub(crate) fn stored(self) -> &'static str {
+        match self {
+            Self::Fatal => "fatal",
+            Self::UncertainTarget => "uncertain_target",
+        }
+    }
+}
+
 pub enum NextSyncTarget {
     Local(SyncTargetLease),
     /// The target failed before any reservation and needs no settlement.
@@ -475,6 +492,35 @@ fn progress(tx: &Transaction<'_>, job_id: &str) -> Result<u8> {
     } else {
         u8::try_from((done * 100) / total)?
     })
+}
+
+/// Halts the live Sync attempt after a caller Source operation error. The
+/// attempt must still own the Job. When no batch exists yet, returns `None`
+/// without writing. Otherwise closes through [`halt_job`], preserving retained
+/// target evidence and recording `detail` as the Job recovery message.
+pub(crate) fn halt_after_error(
+    tx: &Transaction<'_>,
+    lease: &AttemptLease,
+    code: &str,
+    detail: &str,
+) -> Result<Option<JobRecord>> {
+    ensure!(
+        matches!(
+            code,
+            "cancelled" | "authority_refused" | "fatal" | "uncertain_target"
+        ),
+        "Invalid Sync halt code"
+    );
+    let job = require_sync_job(tx, lease)?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM source_sync_batches WHERE job_id=?1)",
+        [&job.job_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(None);
+    }
+    halt_job(tx, job, code, detail).map(Some)
 }
 
 /// Ends the Job and closes its batch. Pending targets become not-run. A
