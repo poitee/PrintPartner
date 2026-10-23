@@ -812,7 +812,7 @@ impl ServerWorkerClient {
     ) -> Result<crate::uploads::Operation> {
         ensure!(lease.worker == self.identity, "Foreign worker lease");
         let policy = self.policy.ok_or(auth::AuthorityFailure::PolicyRequired)?;
-        crate::uploads::submit(
+        match crate::uploads::submit(
             &self.storage,
             crate::uploads::Command::Phase {
                 lease: lease.clone(),
@@ -821,7 +821,12 @@ impl ServerWorkerClient {
                 policy,
             },
             &AtomicBool::new(false),
-        )
+        )? {
+            crate::uploads::UploadsOutcome::Operation(operation) => Ok(*operation),
+            crate::uploads::UploadsOutcome::Preflighted(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
+        }
     }
     /// Revalidates the original credential of a live attempt. The check does
     /// not change the job.

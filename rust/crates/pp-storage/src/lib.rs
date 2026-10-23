@@ -134,7 +134,7 @@ enum Envelope {
     #[cfg(feature = "desktop_rebuild")]
     Uploads {
         command: uploads::Command,
-        reply: mpsc::Sender<Result<uploads::Operation>>,
+        reply: mpsc::Sender<Result<uploads::UploadsOutcome>>,
     },
     #[cfg(feature = "desktop_rebuild")]
     Checkoff {

@@ -41,6 +41,9 @@ impl SourceImports {
         let requested = match &request.input {
             Input::Files { paths } => paths.clone(),
             Input::Zip { path } => vec![path.clone()],
+            Input::Captured(_) => {
+                anyhow::bail!("Captured imports require prepared admission")
+            }
         };
         let paths = requested
             .into_iter()
