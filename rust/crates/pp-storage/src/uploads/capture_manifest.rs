@@ -6,8 +6,8 @@
 //! and resolves presented bytes against an admitted journal [`Operation`].
 
 use super::{
-    AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Operation, Sha256Digest,
-    Target, serialized_digest, target_digest, validate_admission_limits,
+    AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input, Operation,
+    Sha256Digest, Target, serialized_digest, target_digest, validate_admission_limits,
 };
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -129,6 +129,23 @@ fn verify_capture_manifest(bytes: &[u8]) -> Result<CaptureManifestV1> {
     Ok(manifest)
 }
 
+pub(super) struct CaptureManifestIdentity {
+    pub capture_id: CaptureId,
+    pub operation_key: String,
+    pub actor: String,
+}
+
+/// Decode capture id, operation key, and actor without full digest verification.
+pub(super) fn capture_manifest_identity(bytes: &[u8]) -> Result<CaptureManifestIdentity> {
+    let manifest: CaptureManifestV1 =
+        serde_json::from_slice(bytes).map_err(|_| anyhow::anyhow!("Invalid capture manifest"))?;
+    Ok(CaptureManifestIdentity {
+        capture_id: manifest.capture_id,
+        operation_key: manifest.operation_key,
+        actor: manifest.actor,
+    })
+}
+
 /// Inspect capture-manifest bytes without admitting an import.
 pub fn inspect_capture_manifest(bytes: &[u8]) -> Result<CaptureManifestInventory> {
     Ok(inventory_of(&verify_capture_manifest(bytes)?))
@@ -215,6 +232,69 @@ pub fn resolve_capture_manifest(
     Ok(inventory_of(&manifest))
 }
 
+/// Correlate retained capture bytes with an admitted operation and inventory.
+///
+/// Unlike [`resolve_capture_manifest`], a Create-target manifest may still match
+/// after admission created the Source. Existing targets must name that Source.
+pub(super) fn capture_claim_matches(
+    bytes: &[u8],
+    operation: &Operation,
+    inventory: &[File],
+) -> Result<()> {
+    let Input::Captured(captured) = &operation.input else {
+        return Err(anyhow::anyhow!("Capture manifest mismatch"));
+    };
+    let limits = AdmissionLimits {
+        reserved_bytes: operation.reserved_bytes,
+        max_input_bytes: operation.max_input_bytes,
+        max_prepared_bytes: operation.max_prepared_bytes,
+    };
+    captured
+        .validate(
+            &operation.actor,
+            &operation.key,
+            None,
+            limits,
+            &operation.requested_files,
+        )
+        .map_err(|_| anyhow::anyhow!("Capture manifest mismatch"))?;
+    let manifest = verify_capture_manifest(bytes)?;
+    ensure!(
+        operation.input_version == 2
+            && manifest.capture_id == *captured.capture_id()
+            && manifest.operation_key == operation.key
+            && manifest.actor == operation.actor
+            && manifest.input == captured.payload
+            && manifest.admission_limits == limits
+            && manifest.policy_digest == captured.policy_digest
+            && manifest.target_digest == captured.target_digest
+            && manifest.requested_files == operation.requested_files
+            && manifest.requested_files == inventory
+            && manifest.requested_digest == Sha256Digest::new(operation.requested_digest.clone())?,
+        "Capture manifest mismatch"
+    );
+    if let Target::Existing { source_id } = &manifest.target {
+        ensure!(
+            *source_id == operation.source_id,
+            "Capture manifest mismatch"
+        );
+    }
+    let rebound = bind_capture_manifest(
+        manifest.capture_id,
+        manifest.input,
+        &manifest.actor,
+        &manifest.operation_key,
+        &manifest.target,
+        manifest.admission_limits,
+        &manifest.requested_files,
+    )?;
+    ensure!(
+        rebound.bytes() == bytes && rebound.input().manifest_digest == captured.manifest_digest,
+        "Capture manifest mismatch"
+    );
+    Ok(())
+}
+
 pub(crate) struct BoundCaptureManifest {
     input: CapturedInputV2,
     bytes: Vec<u8>,
@@ -229,7 +309,6 @@ impl BoundCaptureManifest {
         &self.bytes
     }
 
-    #[cfg(test)]
     pub(crate) fn into_parts(self) -> (CapturedInputV2, Vec<u8>) {
         (self.input, self.bytes)
     }

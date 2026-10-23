@@ -651,6 +651,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
     let reviewed = BTreeSet::from([
         "source.sync",
         "tool.get_workflow_help",
+        "tool.web_search",
+        "tool.fetch_web_page",
         "tool.get_job_status",
         "tool.check_hardware_interfaces",
         "tool.propose_add_custom_filament",
@@ -701,8 +703,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 51);
-    assert_eq!(unresolved.len(), 392);
+    assert_eq!(reviewed.len(), 53);
+    assert_eq!(unresolved.len(), 390);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -964,6 +966,8 @@ fn regroup(value: &mut Value, operation: &str, participants: &[&str]) {
 fn reviewed_participants_cannot_move_to_unresolved_operations() {
     for id in [
         "tool.get_workflow_help",
+        "tool.web_search",
+        "tool.fetch_web_page",
         "tool.get_job_status",
         "tool.check_hardware_interfaces",
         "tool.propose_add_custom_filament",
@@ -1131,6 +1135,9 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),
+        ("tool.get_workflow_help", "tool.web_search"),
+        ("tool.web_search", "tool.fetch_web_page"),
+        ("tool.fetch_web_page", "tool.get_job_status"),
         ("tool.get_job_status", "tool.ui_highlight_part"),
         ("tool.ui_highlight_part", "tool.ui_focus_stl_search"),
         ("tool.ui_focus_stl_search", "tool.ui_navigate"),
@@ -1431,6 +1438,42 @@ fn ticket_t_7_ownership_job_status_has_reviewed_empty_node_resources() {
 #[test]
 fn ticket_t_7_ownership_job_status_refuses_invalid_admission_before_effects() {
     assert_tool_invalid_admission("tool.get_job_status");
+}
+
+#[test]
+fn ticket_t_7_ownership_web_search_has_reviewed_empty_node_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.web_search";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(index.resources_for(id), Ok(&ResourceSet::new()));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&ResourceSet::new()));
+}
+
+#[test]
+fn ticket_t_7_ownership_web_search_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.web_search");
+}
+
+#[test]
+fn ticket_t_7_ownership_fetch_web_page_has_reviewed_empty_node_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.fetch_web_page";
+    let index = admit_bundled_manifest().unwrap();
+    assert_eq!(index.resources_for(id), Ok(&ResourceSet::new()));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&ResourceSet::new()));
+}
+
+#[test]
+fn ticket_t_7_ownership_fetch_web_page_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.fetch_web_page");
 }
 
 #[test]

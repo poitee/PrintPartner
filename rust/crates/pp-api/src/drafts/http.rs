@@ -10,14 +10,14 @@ use axum::{
     http::{Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use pp_storage::{
     auth::{self, AuthFailure, Secret, rebuild::RebuildAuthClient},
     required_units::{AdmissionFailure, Outcome as WorkspaceOutcome},
     working_drafts::{
-        DraftIdentity, DraftList, EditRequest, Failure, Outcome, PositiveId, Request,
-        WorkingDraftClient,
+        AbandonOutcome, AbandonRequest, DraftIdentity, DraftList, EditRequest, Failure, Outcome,
+        PositiveId, Request, WorkingDraftClient,
     },
 };
 use serde_json::{Value, json};
@@ -230,8 +230,8 @@ enum ReadError {
     Storage(anyhow::Error),
 }
 
-/// Mounts list/workspace reads and part edits when the startup gate is on.
-/// Storage accepts the presented credential before a handler runs.
+/// Mounts list/workspace reads, part edits, and abandon when the startup gate
+/// is on. Storage accepts the presented credential before a handler runs.
 /// API-key reads also resolve the key so `lastUsedAt` commits as Node does.
 /// A disabled gate mounts nothing.
 pub fn draft_router(
@@ -279,6 +279,7 @@ fn mount(
         .route("/plans/{id}/drafts", get(list))
         .route("/plans/{id}/drafts/{draft_id}", get(workspace))
         .route("/plans/{id}/drafts/{draft_id}/parts", patch(edit))
+        .route("/plans/{id}/drafts/{draft_id}/abandon", post(abandon))
         .route_layer(middleware::from_fn_with_state(app, authorize));
     admit_draft_routes(config, routes)
 }
@@ -530,6 +531,14 @@ async fn run_edit(
 }
 
 fn edit_target(path: &str) -> Option<(PositiveId, PositiveId)> {
+    write_target(path, "parts")
+}
+
+fn abandon_target(path: &str) -> Option<(PositiveId, PositiveId)> {
+    write_target(path, "abandon")
+}
+
+fn write_target(path: &str, action: &str) -> Option<(PositiveId, PositiveId)> {
     let path = path.strip_prefix("/api/v2").unwrap_or(path);
     let mut parts = path.split('/').filter(|part| !part.is_empty());
     if parts.next()? != "plans" {
@@ -540,10 +549,111 @@ fn edit_target(path: &str) -> Option<(PositiveId, PositiveId)> {
         return None;
     }
     let draft_id = path_id(parts.next()?)?;
-    if parts.next()? != "parts" || parts.next().is_some() {
+    if parts.next()? != action || parts.next().is_some() {
         return None;
     }
     Some((profile, draft_id))
+}
+
+async fn abandon(
+    Extension(app): Extension<App>,
+    Extension(presented): Extension<PresentedCredential>,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let Some((profile, draft_id)) = abandon_target(uri.path()) else {
+        return invalid_request();
+    };
+    let Ok(request) = serde_json::from_slice::<AbandonRequest>(&body) else {
+        return invalid_request();
+    };
+    match run_abandon(&app, presented, profile, draft_id, request).await {
+        Ok(outcome) => present_abandon(outcome),
+        Err(error) => {
+            let (class, response) = match error {
+                ReadError::Worker => ("worker_failure", edit_internal_error()),
+                ReadError::Storage(error) => (
+                    error_class(&error),
+                    storage_failure_with(&error, EDIT_DETAIL),
+                ),
+                ReadError::Busy => (
+                    "read_pool_exhausted",
+                    failure(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Draft service temporarily unavailable",
+                    ),
+                ),
+            };
+            if response.status().is_server_error() {
+                log::error!(
+                    target: "pp_api::drafts",
+                    "Draft HTTP failed; operation=abandon profile_id={profile:?} draft_id={draft_id:?} error_class={class}"
+                );
+            }
+            response
+        }
+    }
+}
+
+async fn run_abandon(
+    app: &App,
+    presented: PresentedCredential,
+    profile: PositiveId,
+    draft_id: PositiveId,
+    request: AbandonRequest,
+) -> std::result::Result<AbandonOutcome, ReadError> {
+    let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
+        return Err(ReadError::Busy);
+    };
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut cancel = CancelOnDrop {
+        flag: Arc::clone(&flag),
+        armed: true,
+    };
+    let client = app.client.clone();
+    let wait = app.wait;
+    #[cfg(test)]
+    let hold = app.hold.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        #[cfg(test)]
+        if let Some(hold) = hold {
+            hold();
+        }
+        if flag.load(Ordering::Acquire) {
+            return Err(anyhow::Error::new(Failure::Cancelled));
+        }
+        client.abandon(
+            presented.into_credential(),
+            profile,
+            draft_id,
+            request,
+            flag,
+            wait,
+        )
+    })
+    .await;
+    cancel.armed = false;
+    match joined {
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(error)) => Err(ReadError::Storage(error)),
+        Err(_) => Err(ReadError::Worker),
+    }
+}
+
+/// Maps abandon outcomes to Node's `sendFailure` shapes in `plan-drafts.ts`.
+/// Ready returns the draft identity. 409 is `{code}` plus `workspace` with no
+/// synthetic conflict `detail`.
+fn present_abandon(outcome: AbandonOutcome) -> Response {
+    match outcome {
+        AbandonOutcome::Ready { draft } => json_response(StatusCode::OK, draft),
+        AbandonOutcome::ProfileNotFound => profile_missing(),
+        AbandonOutcome::DraftNotFound => draft_missing(),
+        AbandonOutcome::DraftChanged { workspace } => {
+            conflict("draft_changed", Some(json!(workspace)))
+        }
+        AbandonOutcome::NotOpen { workspace } => conflict("not_open", Some(json!(workspace))),
+    }
 }
 
 /// Maps edit outcomes to Node's `sendFailure` shapes in `plan-drafts.ts`.

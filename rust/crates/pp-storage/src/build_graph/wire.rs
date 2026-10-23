@@ -5,15 +5,26 @@
 //! direct `pp-contracts` edge.
 
 pub use pp_contracts::build_identity::{
-    AcceptedProgressSummary, AcceptedProgressUnavailableReason, FreshnessReasons, PlanFreshness,
-    PlanStaleReason, PlanUntrackedReason, ProfileSummary,
+    AcceptedProgressSummary, AcceptedProgressUnavailableReason, CreateBuildRequest,
+    FreshnessReasons, PlanFreshness, PlanStaleReason, PlanUntrackedReason, ProfileLayer,
+    ProfileSummary,
 };
 
 use super::{
     AcceptedProgress, AcceptedProgressUnavailable, PlanFreshness as DomainFreshness,
     PlanStaleReason as DomainStaleReason, PlanUntrackedReason as DomainUntrackedReason,
-    ProfileSummary as DomainSummary,
+    ProfileLayer as DomainLayer, ProfileSummary as DomainSummary,
 };
+
+pub fn layer(value: DomainLayer) -> ProfileLayer {
+    ProfileLayer {
+        id: value.id,
+        layer_order: value.layer_order,
+        layer_type: value.layer_type,
+        project_id: value.project_id,
+        project_name: value.project_name,
+    }
+}
 
 pub fn profile_summary(value: DomainSummary) -> ProfileSummary {
     ProfileSummary {

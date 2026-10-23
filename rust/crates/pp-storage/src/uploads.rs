@@ -497,6 +497,10 @@ pub struct CapturedInputV2 {
 }
 
 impl CapturedInputV2 {
+    pub(crate) fn capture_id(&self) -> &CaptureId {
+        &self.capture_id
+    }
+
     pub fn bind(
         capture_id: CaptureId,
         payload: CapturedPayloadV1,
@@ -764,10 +768,6 @@ impl Observed {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "GRE-771 prepare/admit_prepared consumes credential, tenant, actor, and target"
-)]
 pub struct PreflightedCapture {
     pub(crate) credential: jobs::Credential,
     pub(crate) tenant: String,
@@ -776,15 +776,85 @@ pub struct PreflightedCapture {
     pub(crate) replay: Option<Box<Operation>>,
 }
 
+pub struct PreparedCapturedAdmission {
+    preflight: PreflightedCapture,
+    request: Admission,
+    expected_files: Vec<File>,
+    manifest: Vec<u8>,
+}
+
+/// Retained capture claim that still matches an admitted journal row.
+pub struct ResolvedCapturedClaim {
+    manifest: Vec<u8>,
+    inventory: Vec<File>,
+    tenant: String,
+    operation_key: String,
+    job_id: String,
+}
+
+/// How a capture manifest lines up with the upload journal and import jobs.
+pub enum CaptureJournalCorrelation {
+    ExactAdmitted(ResolvedCapturedClaim),
+    ExactOwnedOrLater,
+    Absent,
+    MismatchRepairRequired,
+}
+
 impl PreflightedCapture {
     pub fn replay(&self) -> Option<&Operation> {
         self.replay.as_deref()
+    }
+
+    pub fn prepare(
+        self,
+        capture_id: CaptureId,
+        operation_key: String,
+        payload: CapturedPayloadV1,
+        limits: AdmissionLimits,
+        expected_files: Vec<File>,
+    ) -> Result<PreparedCapturedAdmission> {
+        let bound = capture_manifest::bind_capture_manifest(
+            capture_id,
+            payload,
+            &self.actor,
+            &operation_key,
+            &self.target,
+            limits,
+            &expected_files,
+        )?;
+        let (captured, manifest) = bound.into_parts();
+        let request = Admission {
+            key: operation_key,
+            target: self.target.clone(),
+            input: Input::Captured(captured),
+            reserved_bytes: limits.reserved_bytes,
+            max_input_bytes: limits.max_input_bytes,
+            max_prepared_bytes: limits.max_prepared_bytes,
+        };
+        Ok(PreparedCapturedAdmission {
+            preflight: self,
+            request,
+            expected_files,
+            manifest,
+        })
+    }
+}
+
+impl PreparedCapturedAdmission {
+    pub fn manifest(&self) -> &[u8] {
+        &self.manifest
     }
 }
 
 pub(crate) enum UploadsOutcome {
     Operation(Box<Operation>),
     Preflighted(PreflightedCapture),
+    CaptureCorrelation(CaptureJournalCorrelation),
+}
+
+pub(crate) enum AdmissionAuthority {
+    Credential(jobs::Credential),
+    Preflighted(Box<PreflightedCapture>),
 }
 
 pub(crate) enum Command {
@@ -806,6 +876,10 @@ pub(crate) enum Command {
         disk_bytes: u64,
         quota: u64,
     },
+    CorrelateCapture {
+        manifest: Vec<u8>,
+        inventory: Vec<File>,
+    },
     Phase {
         lease: jobs::AttemptLease,
         source_work: catalog::SourceWorkProof,
@@ -815,7 +889,7 @@ pub(crate) enum Command {
 }
 
 pub(crate) struct Admit {
-    credential: jobs::Credential,
+    authority: AdmissionAuthority,
     policy: AuthPolicy,
     storage: Arc<crate::Shared>,
     request: Admission,
@@ -831,6 +905,7 @@ impl Command {
             self,
             Self::Get { .. }
                 | Self::PreflightCapture { .. }
+                | Self::CorrelateCapture { .. }
                 | Self::Phase {
                     phase: Phase::Read,
                     ..
@@ -904,7 +979,7 @@ impl ImportClient {
         match submit(
             &self.storage,
             Command::Admit(Admit {
-                credential,
+                authority: AdmissionAuthority::Credential(credential),
                 policy: self.policy,
                 storage: self.storage.shared.clone(),
                 request,
@@ -916,7 +991,36 @@ impl ImportClient {
             cancelled,
         )? {
             UploadsOutcome::Operation(operation) => Ok(*operation),
-            UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
+            UploadsOutcome::Preflighted(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
+        }
+    }
+
+    pub fn admit_prepared(
+        &self,
+        prepared: PreparedCapturedAdmission,
+        disk_bytes: u64,
+        accounting_epoch: u64,
+    ) -> Result<Operation> {
+        match submit(
+            &self.storage,
+            Command::Admit(Admit {
+                authority: AdmissionAuthority::Preflighted(Box::new(prepared.preflight)),
+                policy: self.policy,
+                storage: self.storage.shared.clone(),
+                request: prepared.request,
+                expected_files: prepared.expected_files,
+                disk_bytes,
+                accounting_epoch,
+                quota: self.quota,
+            }),
+            &AtomicBool::new(false),
+        )? {
+            UploadsOutcome::Operation(operation) => Ok(*operation),
+            UploadsOutcome::Preflighted(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
         }
     }
 
@@ -948,7 +1052,32 @@ impl ImportClient {
             &AtomicBool::new(false),
         )? {
             UploadsOutcome::Preflighted(preflight) => Ok(preflight),
-            UploadsOutcome::Operation(_) => Err(anyhow!("Unexpected import reply")),
+            UploadsOutcome::Operation(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected import reply"))
+            }
+        }
+    }
+
+    /// Correlate retained capture-manifest bytes and inventory with the journal
+    /// without admitting or charging. Distinguishes absent, exact admitted,
+    /// owned-or-later, and conflicting rows.
+    pub fn correlate_capture_manifest(
+        &self,
+        manifest: Vec<u8>,
+        inventory: Vec<File>,
+    ) -> Result<CaptureJournalCorrelation> {
+        match submit(
+            &self.storage,
+            Command::CorrelateCapture {
+                manifest,
+                inventory,
+            },
+            &AtomicBool::new(false),
+        )? {
+            UploadsOutcome::CaptureCorrelation(correlation) => Ok(correlation),
+            UploadsOutcome::Operation(_) | UploadsOutcome::Preflighted(_) => {
+                Err(anyhow!("Unexpected capture correlation reply"))
+            }
         }
     }
 
@@ -964,7 +1093,9 @@ impl ImportClient {
             &AtomicBool::new(false),
         )? {
             UploadsOutcome::Operation(operation) => Ok(*operation),
-            UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
+            UploadsOutcome::Preflighted(_) | UploadsOutcome::CaptureCorrelation(_) => {
+                Err(anyhow!("Unexpected capture preflight reply"))
+            }
         }
     }
 }
@@ -1149,6 +1280,10 @@ pub(crate) fn execute(
                 replay,
             })
         }
+        Command::CorrelateCapture {
+            manifest,
+            inventory,
+        } => UploadsOutcome::CaptureCorrelation(correlate_capture(&tx, manifest, inventory)?),
         Command::Phase {
             lease,
             source_work,
@@ -1806,7 +1941,7 @@ fn admit(
     command: Admit,
 ) -> Result<Operation> {
     let Admit {
-        credential,
+        authority,
         policy,
         storage,
         mut request,
@@ -1819,8 +1954,22 @@ fn admit(
         storage.import_epoch.load(Ordering::Acquire) == accounting_epoch,
         "Import accounting changed; retry admission"
     );
-    let (tenant, actor, authority) =
-        crate::auth::authority::admit(tx, credential, policy, &storage)?;
+    let (tenant, actor, durable_authority, prepared_capture) = match authority {
+        AdmissionAuthority::Credential(credential) => {
+            let (tenant, actor, durable_authority) =
+                crate::auth::authority::admit(tx, credential, policy, &storage)?;
+            (tenant, actor, durable_authority, false)
+        }
+        AdmissionAuthority::Preflighted(preflight) => {
+            let (tenant, actor, durable_authority) =
+                crate::auth::authority::admit(tx, preflight.credential, policy, &storage)?;
+            ensure!(
+                tenant == preflight.tenant && actor == preflight.actor,
+                "Capture authority changed"
+            );
+            (tenant, actor, durable_authority, true)
+        }
+    };
     ensure!(
         !request.key.is_empty()
             && request.key.len() <= 128
@@ -1854,9 +2003,32 @@ fn admit(
     match &mut request.input {
         Input::Files { paths } => paths.iter_mut().for_each(|path| *path = canonical(path)),
         Input::Zip { path } => *path = canonical(path),
-        Input::Captured(_) => {
+        Input::Captured(_) if !prepared_capture => {
             return Err(anyhow!("Captured imports require prepared admission"));
         }
+        Input::Captured(_) => {}
+    }
+    if let Input::Captured(captured) = &request.input {
+        ensure!(
+            request.input.requested_paths()
+                == expected_files
+                    .iter()
+                    .map(|file| file.path.as_str())
+                    .collect::<Vec<_>>()
+                && expected_files.iter().all(|file| file.kind == "input"),
+            "Capture inventory mismatch"
+        );
+        captured.validate(
+            &actor,
+            &request.key,
+            Some(&request.target),
+            AdmissionLimits {
+                reserved_bytes: request.reserved_bytes,
+                max_input_bytes: request.max_input_bytes,
+                max_prepared_bytes: request.max_prepared_bytes,
+            },
+            &expected_files,
+        )?;
     }
     files(&expected_files, request.max_input_bytes)?;
     let requested_digest = serialized_digest(&expected_files)?;
@@ -1876,6 +2048,7 @@ fn admit(
     }
     validate_limits(&request, quota)?;
     ensure_owner_import_quota(tx, disk_bytes, request.reserved_bytes, quota)?;
+    let input_version = request.input.version();
     let source_id = match request.target {
         Target::Existing { source_id } => source_id,
         Target::Create { metadata } => match catalog::run(
@@ -1909,7 +2082,7 @@ fn admit(
         tx,
         &tenant,
         &actor,
-        authority,
+        durable_authority,
         jobs::UserOperation::Enqueue {
             key: format!(
                 "source-import:{}",
@@ -1919,7 +2092,7 @@ fn admit(
             payload: jobs::Payload::SuppliedSourceImport {
                 project_id: source_id.try_into()?,
                 operation_key: request.key.clone(),
-                input_version: 1,
+                input_version,
             },
         },
     )?
@@ -1933,7 +2106,7 @@ fn admit(
         intent_digest,
         source_id,
         job_id: job.job_id,
-        input_version: 1,
+        input_version,
         input: request.input,
         requested_files: expected_files,
         requested_digest,
@@ -2009,6 +2182,101 @@ fn load(tx: &Transaction<'_>, tenant: &str, key: &str) -> Result<Option<Operatio
         Ok(op)
     })
     .transpose()
+}
+
+pub(crate) fn correlate_capture(
+    tx: &Transaction<'_>,
+    manifest: Vec<u8>,
+    inventory: Vec<File>,
+) -> Result<CaptureJournalCorrelation> {
+    let identity = capture_manifest::capture_manifest_identity(&manifest)?;
+    let documents = tx
+        .prepare("SELECT document FROM source_import_operations ORDER BY rowid")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for document in documents {
+        let operation: Operation = serde_json::from_str(&document)?;
+        validate_operation(&operation)?;
+        let Input::Captured(captured) = &operation.input else {
+            continue;
+        };
+        if captured.capture_id() != &identity.capture_id {
+            continue;
+        }
+        if operation.key != identity.operation_key || operation.actor != identity.actor {
+            return Ok(CaptureJournalCorrelation::MismatchRepairRequired);
+        }
+        if capture_manifest::capture_claim_matches(&manifest, &operation, &inventory).is_err() {
+            return Ok(CaptureJournalCorrelation::MismatchRepairRequired);
+        }
+        if operation.state == State::Admitted {
+            return Ok(CaptureJournalCorrelation::ExactAdmitted(
+                ResolvedCapturedClaim {
+                    manifest,
+                    inventory,
+                    tenant: operation.tenant,
+                    operation_key: operation.key,
+                    job_id: operation.job_id,
+                },
+            ));
+        }
+        return Ok(CaptureJournalCorrelation::ExactOwnedOrLater);
+    }
+
+    let jobs = tx
+        .prepare("SELECT document FROM durable_jobs ORDER BY rowid")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for document in jobs {
+        let job = jobs::decode(&document)?;
+        if matches!(
+            &job.payload,
+            jobs::Payload::SuppliedSourceImport {
+                operation_key,
+                input_version: 2,
+                ..
+            } if operation_key == &identity.operation_key
+        ) {
+            return Ok(CaptureJournalCorrelation::MismatchRepairRequired);
+        }
+    }
+    Ok(CaptureJournalCorrelation::Absent)
+}
+
+pub(crate) fn validate_resolved_claim(
+    tx: &Transaction<'_>,
+    claim: &ResolvedCapturedClaim,
+) -> Result<String> {
+    (|| {
+        let operation =
+            load(tx, &claim.tenant, &claim.operation_key)?.ok_or_else(|| anyhow!("missing"))?;
+        ensure!(
+            operation.state == State::Admitted && operation.job_id == claim.job_id,
+            "mismatch"
+        );
+        capture_manifest::capture_claim_matches(&claim.manifest, &operation, &claim.inventory)?;
+        let job = jobs::load_for_capture_claim(tx, &claim.job_id)?;
+        ensure!(
+            job.tenant == operation.tenant
+                && job.job_id == operation.job_id
+                && matches!(
+                    &job.payload,
+                    jobs::Payload::SuppliedSourceImport {
+                        project_id,
+                        operation_key,
+                        input_version: 2,
+                    } if u64::try_from(operation.source_id).is_ok_and(|id| id == *project_id)
+                        && operation_key == &operation.key
+                ),
+            "mismatch"
+        );
+        ensure!(
+            catalog::get(tx, &operation.tenant, operation.source_id)?.is_some(),
+            "mismatch"
+        );
+        Ok(claim.job_id.clone())
+    })()
+    .map_err(|_| anyhow!("Captured import requires repair"))
 }
 
 fn basis(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<Basis> {

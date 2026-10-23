@@ -89,7 +89,7 @@ Slices land in this order. Linear tracks each one under GRE-595. A slice is one 
 | D21 | GRE-616 | pp-storage read_model context and graph |
 | D22 | GRE-618 | pp-storage read_model workflow and views |
 | D23 | GRE-617 | pp-api auth HTTP |
-| D24 | GRE-619 | pp-api drafts HTTP (list/read/edit landed; abandon GRE-988) |
+| D24 | GRE-619 | pp-api drafts HTTP (list/read/edit/abandon; abandon GRE-988) |
 | D25 | GRE-620 | pp-api builds HTTP and jobs |
 | D26 | GRE-621 | Web and server wiring behind the flag |
 
@@ -1267,10 +1267,36 @@ or enqueue a job. A matching prior captured journal entry may be returned as
 `replay` without re-checking owner-wide quota; a supplied prior with the same
 key refuses with an idempotency conflict. Refusal and success both leave
 journal rows, non-database files, and the accounting epoch unchanged.
-`prepare` and `admit_prepared` stay on GRE-771.
+
+### D14 captured prepare and admit
+
+GRE-771 adds `PreflightedCapture::prepare` and `ImportClient::admit_prepared`
+behind `desktop_rebuild`. `prepare` binds the capture manifest (GRE-768/769)
+into a `PreparedCapturedAdmission` with `Input::Captured`. `admit_prepared`
+submits writer `Admit` under `AdmissionAuthority::Preflighted`, re-admits the
+preflight credential in the write transaction (`Capture authority changed` on
+mismatch), revalidates the target basis, checks captured inventory and binding,
+and either returns an exact prior operation (same actor and `intent_digest`) or
+writes one journal row, quota reservation, and supplied import job
+(`input_version` 2). Credential-path `admit` still refuses `Input::Captured`.
+A stale basis after preflight refuses without changing journal rows or
+non-database files.
+
+### D14 capture correlation and resolved claims
+
+GRE-772 adds `ImportClient::correlate_capture_manifest` and
+`ServerWorkerClient::claim_resolved_import` behind `desktop_rebuild`. Correlation
+reads the journal and durable jobs only: it returns `Absent`,
+`ExactAdmitted(ResolvedCapturedClaim)`, `ExactOwnedOrLater`, or
+`MismatchRepairRequired` without admitting or charging. A resolved claim is
+revalidated in the claim transaction against the admitted operation, inventory,
+captured job payload, and Source; a changed inventory or other mismatch refuses
+with `Captured import requires repair` and leaves queued job rows unchanged.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_correlation
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
 ```
@@ -1627,8 +1653,9 @@ JSON and generator pattern. Regenerate it from `web`:
 npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.mts apps/server > ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.json
 ```
 
-No HTTP route or runtime caller is added. GRE-644 still needs its HTTP slice
-with D25/GRE-620 build routes, including `PP_DESKTOP_REBUILD` admission.
+Storage commands landed without HTTP. GRE-801 registers gated ReadKit on the
+Build router (`docs/gre-801-manifest-http.md`). SaveKit and ReadBuilder HTTP
+remain GRE-802 / GRE-803.
 
 ## D11 required units (GRE-606)
 
@@ -1666,7 +1693,11 @@ queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
 The expansion loop also checks cancellation once per Part. There is no timing
-target.
+target. Unexpected transaction failures surface Node's
+`Plan draft update failed` on the client, with the source retained through
+`.context`, matching the publication client and Node's reconcile route.
+Authentication failures and admission outcomes (`Cancelled`, `QueueFull`,
+`Stopped`, `OutcomeUnknown`) stay typed and unwrapped.
 
 Selection refuses a draft before it expands assignments when the sum of part
 quantities is above 230. The error is "Reconciliation row limit exceeded".
@@ -2233,7 +2264,7 @@ Landed replacement slices for the superseded #635 monolith:
 | b | GRE-940 | List and workspace reads |
 | c | GRE-941 | API-key `ResolveKey` so `lastUsedAt` commits; foreign-tenant keys 401 |
 | d | GRE-942 | Part edits with Node conflict shapes |
-| e | GRE-988 | Abandon (deferred; needs the storage lifecycle token) |
+| e | GRE-988 | Abandon with storage lifecycle token |
 
 With both gates on, `draft_router` serves these paths at the root and
 `/api/v2`:
@@ -2243,15 +2274,16 @@ With both gates on, `draft_router` serves these paths at the root and
 | GET | `/plans/{id}/drafts` | `WorkingDraftClient` list |
 | GET | `/plans/{id}/drafts/{draft_id}` | workspace read |
 | PATCH | `/plans/{id}/drafts/{draft_id}/parts` | `edit` with typed `EditRequest` |
+| POST | `/plans/{id}/drafts/{draft_id}/abandon` | `abandon` with typed `AbandonRequest` |
 
 `admit_draft_routes` buffers each body before routing, disables Axum's 2 MiB
 default, and applies the guard's limits: 16 KiB request target, 1 MiB for
 reads, 8 MiB for PATCH, 5 s body timeout, 64 admission permits. Loopback
 transport is required. Host must match the configured listener; forwarded and
-`x-forwarded-*` headers are refused. Session-cookie PATCH needs a matching
-Origin; GETs and API-key PATCH may omit it, but any Origin sent must match.
+`x-forwarded-*` headers are refused. Session-cookie writes (PATCH/POST) need a matching
+Origin; GETs and API-key writes may omit it, but any Origin sent must match.
 A foreign or `null` Origin, or `sec-fetch-site: cross-site`, returns 403.
-Ambiguous credentials return 401, or 403 on an Origin-less PATCH. Exactly one
+Ambiguous credentials return 401, or 403 on an Origin-less write. Exactly one
 of session cookie, `Authorization: Bearer`, or `x-print-partner-api-key` is
 accepted. API keys use the configured tenant, not a request header.
 
@@ -2270,10 +2302,16 @@ synthetic conflict `detail`; 422 `domain_error` is `{ code }` only. 404 and
 503 keep their Node `detail`. Server failures use
 `{ detail: "Plan draft update failed", code: "internal_error" }`.
 
-`POST /plans/{id}/drafts/{draft_id}/abandon` stays unregistered. Storage
-already implements abandon behind the lifecycle version token; the HTTP
-adapter is [GRE-988](https://linear.app/greetz/issue/GRE-988). The desktop
-gateway does not mount this router; D26 does.
+`POST /plans/{id}/drafts/{draft_id}/abandon` takes
+`{ expected_lifecycle_version }` (`AbandonRequest`). Success returns 200 with
+the draft identity (`state: abandoned`, lifecycle advanced). A retry with the
+same expected lifecycle version is idempotent (`Ready`). A stale token returns
+409 `{ code: "draft_changed", workspace }` with no synthetic `detail`; a
+consumed or already-closed draft that is not the idempotent retry returns
+409 `{ code: "not_open", workspace }`. Invalid bodies return 400
+`invalid_request` before mutation. Server failures use the same
+`Plan draft update failed` detail as edit. The desktop gateway does not mount
+this router; D26 does.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --lib
