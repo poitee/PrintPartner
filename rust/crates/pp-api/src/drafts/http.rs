@@ -3,17 +3,18 @@ use axum::{
     Json, Router,
     body::{Body, Bytes, to_bytes},
     extract::{ConnectInfo, DefaultBodyLimit, Extension, State},
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, patch},
 };
 use pp_storage::{
     auth::{self, AuthFailure, Secret, rebuild::RebuildAuthClient},
     read_model::Credential,
-    required_units::AdmissionFailure,
+    required_units::{AdmissionFailure, Outcome as WorkspaceOutcome},
     working_drafts::{
-        DraftIdentity, DraftList, Failure, Outcome, PositiveId, Request, WorkingDraftClient,
+        DraftIdentity, DraftList, EditRequest, Failure, Outcome, PositiveId, Request,
+        WorkingDraftClient,
     },
 };
 use serde_json::{Value, json};
@@ -31,6 +32,7 @@ const TARGET_LIMIT: usize = 16 * 1024;
 const READ_BODY_LIMIT: usize = 1024 * 1024;
 const BODY_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_DETAIL: &str = "Plan draft data is inconsistent";
+const EDIT_DETAIL: &str = "Plan draft update failed";
 
 #[derive(Clone)]
 pub struct DraftHttpConfig {
@@ -39,7 +41,7 @@ pub struct DraftHttpConfig {
     api_key_tenant: String,
     enabled: bool,
     body_limit: usize,
-    /// Storage wait; GRE-940 read handlers consume it.
+    /// Storage wait; read and edit handlers consume it.
     wait: Duration,
 }
 
@@ -333,8 +335,8 @@ enum ReadError {
     Storage(anyhow::Error),
 }
 
-/// Mounts list and workspace reads when the startup gate is on.
-/// Storage accepts the presented credential before either handler runs.
+/// Mounts list/workspace reads and part edits when the startup gate is on.
+/// Storage accepts the presented credential before a handler runs.
 /// API-key reads also resolve the key so `lastUsedAt` commits as Node does.
 /// A disabled gate mounts nothing.
 pub fn draft_router(
@@ -381,6 +383,7 @@ fn mount(
     let routes = Router::new()
         .route("/plans/{id}/drafts", get(list))
         .route("/plans/{id}/drafts/{draft_id}", get(workspace))
+        .route("/plans/{id}/drafts/{draft_id}/parts", patch(edit))
         .route_layer(middleware::from_fn_with_state(app, authorize));
     admit_draft_routes(config, routes)
 }
@@ -406,6 +409,10 @@ async fn authorize(
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     if !matches!(*request.method(), Method::GET | Method::HEAD) {
+        // Handlers must not take `State<App>` — that would type the router as
+        // `Router<App>` and break `admit_draft_routes`'s `Router<()>`.
+        request.extensions_mut().insert(app);
+        request.extensions_mut().insert(presented);
         return next.run(request).await;
     }
     let path = request.uri().path().to_owned();
@@ -553,6 +560,141 @@ async fn workspace(Extension(read): Extension<Authorized>) -> Response {
     }
 }
 
+async fn edit(
+    Extension(app): Extension<App>,
+    Extension(presented): Extension<PresentedCredential>,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    let Some((profile, draft_id)) = edit_target(uri.path()) else {
+        return invalid_request();
+    };
+    let Ok(request) = serde_json::from_slice::<EditRequest>(&body) else {
+        return invalid_request();
+    };
+    match run_edit(&app, presented, profile, draft_id, request).await {
+        Ok(outcome) => present_edit(outcome),
+        Err(error) => {
+            let (class, response) = match error {
+                ReadError::Worker => ("worker_failure", edit_internal_error()),
+                ReadError::Storage(error) => (
+                    error_class(&error),
+                    storage_failure_with(&error, EDIT_DETAIL),
+                ),
+                ReadError::Busy => (
+                    "read_pool_exhausted",
+                    failure(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Draft service temporarily unavailable",
+                    ),
+                ),
+            };
+            if response.status().is_server_error() {
+                log::error!(
+                    target: "pp_api::drafts",
+                    "Draft HTTP failed; operation=edit profile_id={profile:?} draft_id={draft_id:?} error_class={class}"
+                );
+            }
+            response
+        }
+    }
+}
+
+async fn run_edit(
+    app: &App,
+    presented: PresentedCredential,
+    profile: PositiveId,
+    draft_id: PositiveId,
+    request: EditRequest,
+) -> std::result::Result<WorkspaceOutcome, ReadError> {
+    let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
+        return Err(ReadError::Busy);
+    };
+    let flag = Arc::new(AtomicBool::new(false));
+    let mut cancel = CancelOnDrop {
+        flag: Arc::clone(&flag),
+        armed: true,
+    };
+    let client = app.client.clone();
+    let wait = app.wait;
+    #[cfg(test)]
+    let hold = app.hold.clone();
+    let joined = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        #[cfg(test)]
+        if let Some(hold) = hold {
+            hold();
+        }
+        if flag.load(Ordering::Acquire) {
+            return Err(anyhow::Error::new(Failure::Cancelled));
+        }
+        client.edit(
+            presented.into_credential(),
+            profile,
+            draft_id,
+            request,
+            flag,
+            wait,
+        )
+    })
+    .await;
+    cancel.armed = false;
+    match joined {
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(error)) => Err(ReadError::Storage(error)),
+        Err(_) => Err(ReadError::Worker),
+    }
+}
+
+fn edit_target(path: &str) -> Option<(PositiveId, PositiveId)> {
+    let path = path.strip_prefix("/api/v2").unwrap_or(path);
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    if parts.next()? != "plans" {
+        return None;
+    }
+    let profile = path_id(parts.next()?)?;
+    if parts.next()? != "drafts" {
+        return None;
+    }
+    let draft_id = path_id(parts.next()?)?;
+    if parts.next()? != "parts" || parts.next().is_some() {
+        return None;
+    }
+    Some((profile, draft_id))
+}
+
+/// Maps edit outcomes to Node's `sendFailure` shapes in `plan-drafts.ts`.
+/// 409 is `{code}` plus `workspace` only when one exists; 422 domain_error is
+/// `{code}` only. 404/503 keep their Node `detail`.
+fn present_edit(outcome: WorkspaceOutcome) -> Response {
+    match outcome {
+        WorkspaceOutcome::Ready { workspace } => json_response(StatusCode::OK, workspace),
+        WorkspaceOutcome::ProfileNotFound => profile_missing(),
+        WorkspaceOutcome::DraftNotFound => draft_missing(),
+        WorkspaceOutcome::DraftChanged { workspace } => {
+            conflict("draft_changed", workspace.map(|workspace| json!(workspace)))
+        }
+        WorkspaceOutcome::BaseChanged { workspace } => {
+            conflict("base_changed", Some(json!(workspace)))
+        }
+        WorkspaceOutcome::NotOpen { workspace } => conflict("not_open", Some(json!(workspace))),
+        WorkspaceOutcome::AcceptedBaselineRequired => conflict("accepted_baseline_required", None),
+        WorkspaceOutcome::IdempotencyConflict => conflict("idempotency_conflict", None),
+        WorkspaceOutcome::DomainError { code } => {
+            json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"code": code}))
+        }
+    }
+}
+
+fn conflict(code: &str, workspace: Option<Value>) -> Response {
+    let mut body = serde_json::Map::new();
+    body.insert("code".into(), json!(code));
+    if let Some(workspace) = workspace {
+        body.insert("workspace".into(), workspace);
+    }
+    json_response(StatusCode::CONFLICT, body)
+}
+
 fn listed(profile: PositiveId, drafts: &DraftList) -> Value {
     json!({
         "profile_id": profile,
@@ -587,6 +729,10 @@ fn error_class(error: &anyhow::Error) -> &'static str {
 }
 
 fn storage_failure(error: &anyhow::Error) -> Response {
+    storage_failure_with(error, READ_DETAIL)
+}
+
+fn storage_failure_with(error: &anyhow::Error, detail: &str) -> Response {
     if let Some(auth) = error.downcast_ref::<AuthFailure>() {
         return match auth {
             AuthFailure::SessionRequired
@@ -601,7 +747,7 @@ fn storage_failure(error: &anyhow::Error) -> Response {
             AuthFailure::QueueFull => unavailable("writer_queue_full"),
             AuthFailure::Stopped => unavailable("writer_stopped"),
             AuthFailure::CommitUnknown => unavailable("outcome_unknown"),
-            _ => internal_error(),
+            _ => coded(StatusCode::INTERNAL_SERVER_ERROR, detail, "internal_error"),
         };
     }
     if let Some(draft) = error.downcast_ref::<Failure>() {
@@ -610,7 +756,9 @@ fn storage_failure(error: &anyhow::Error) -> Response {
             Failure::QueueFull => unavailable("writer_queue_full"),
             Failure::Stopped => unavailable("writer_stopped"),
             Failure::OutcomeUnknown => unavailable("outcome_unknown"),
-            Failure::CorruptOrigin => internal_error(),
+            Failure::CorruptOrigin => {
+                coded(StatusCode::INTERNAL_SERVER_ERROR, detail, "internal_error")
+            }
         };
     }
     if let Some(admission) = error.downcast_ref::<AdmissionFailure>() {
@@ -633,7 +781,7 @@ fn storage_failure(error: &anyhow::Error) -> Response {
             "Plan draft update is unavailable",
             "transaction_unavailable",
         ),
-        _ => internal_error(),
+        _ => coded(StatusCode::INTERNAL_SERVER_ERROR, detail, "internal_error"),
     }
 }
 
@@ -641,6 +789,13 @@ fn internal_error() -> Response {
     coded(
         StatusCode::INTERNAL_SERVER_ERROR,
         READ_DETAIL,
+        "internal_error",
+    )
+}
+fn edit_internal_error() -> Response {
+    coded(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        EDIT_DETAIL,
         "internal_error",
     )
 }

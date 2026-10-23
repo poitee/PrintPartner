@@ -78,7 +78,7 @@ pub(crate) fn rows(
     rows_checked(tx, sql, args, &|| Ok(()))
 }
 
-fn rows_checked(
+pub(crate) fn rows_checked(
     tx: &Transaction<'_>,
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
