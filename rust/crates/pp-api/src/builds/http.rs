@@ -103,9 +103,9 @@ impl Drop for Cancellation {
 }
 
 /// Mounts Plan list/detail GET+HEAD, create/delete, layer list/mutate, touch,
-/// and kit-manifest ReadKit plus SaveKit (`PUT`) at `/`, `/api/v1`, and `/api/v2`
-/// when `PP_DESKTOP_REBUILD` was exactly `1` or `true`. Otherwise mounts nothing.
-/// Jobs and ReadBuilder stay unregistered.
+/// kit-manifest ReadKit plus SaveKit (`PUT`), and plan-manifest-builder ReadBuilder
+/// at `/`, `/api/v1`, and `/api/v2` when `PP_DESKTOP_REBUILD` was exactly `1` or
+/// `true`. Otherwise mounts nothing. Jobs stay unregistered.
 pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -129,6 +129,10 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
         .route(
             "/plans/{id}/kit-manifest",
             get(super::manifest_options::read_kit).put(super::manifest_options::save_kit),
+        )
+        .route(
+            "/plans/{id}/plan-manifest-builder",
+            get(super::manifest_options::read_builder),
         );
     Router::new()
         .merge(routes.clone())
