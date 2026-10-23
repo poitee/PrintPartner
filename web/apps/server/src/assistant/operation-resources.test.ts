@@ -31,6 +31,7 @@ import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { getLogger } from "../services/logger.js";
 import { loadManifestYaml } from "../services/manifest-apply.js";
 import { inferOptionGroupsFromPaths } from "../services/path-hints.js";
+import type { AssistantRuntimeConfig } from "./resolve-assistant.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
@@ -589,7 +590,7 @@ it("traces fetch_web_page as an explicitly resource-free operation", async () =>
       disabled = await tenantStorage.run("default", () =>
         invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, {
           repo,
-          runtime: { assistantAllowUrlIngest: false },
+          runtime: { assistantAllowUrlIngest: false } as AssistantRuntimeConfig,
         }),
       );
     } finally { observer.state.active = false; }
