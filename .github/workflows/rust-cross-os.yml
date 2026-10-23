@@ -282,10 +282,9 @@ jobs:
   rust-linux-rebuild:
     name: rust (linux) rebuild ${{ matrix.partition }}/3
     needs: [changes, rust-linux-build]
-    if: |
-      !cancelled() &&
-      needs.rust-linux-build.result == 'success' &&
-      (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
+    # Draft guard first (merge-group workflow tests). Event filter still keeps
+    # partitions off pull_request; only push / merge_group / workflow_dispatch.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result == 'success' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'))
     runs-on: ${{ fromJSON('["self-hosted","linux","x64","pp-local"]') }}
     strategy:
       fail-fast: false
@@ -379,8 +378,9 @@ jobs:
   rust-linux:
     name: rust (linux)
     needs: [rust-linux-build, rust-linux-rebuild]
-    # !cancelled() so a cancelled workflow reports skipped/cancel, not aggregate failure.
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.rust-linux-build.result != 'skipped' }}
+    # Draft guard first. !cancelled() so cancel reports skipped, not aggregate fail.
+    # Rebuild may be skipped on PRs; build must not be skipped.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result != 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

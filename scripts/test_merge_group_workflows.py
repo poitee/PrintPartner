@@ -86,7 +86,9 @@ class MergeGroupWorkflowTests(unittest.TestCase):
     def test_required_lint_and_rust_jobs_use_the_filter(self):
         for filename, kind, contexts in (
             ("actionlint.yml", "actions", {"actionlint": "actionlint", "zizmor": "zizmor"}),
-            ("rust-cross-os.yml", "rust", {"rust-linux": "rust (linux)",
+            # Path filter runs on rust-linux-build; rust-linux is the required
+            # aggregate check over build + optional rebuild partitions.
+            ("rust-cross-os.yml", "rust", {"rust-linux-build": "rust (linux) build",
                                            "rust-windows": "rust (windows)"}),
         ):
             with self.subTest(workflow=filename):
@@ -115,6 +117,16 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                     checkout = next(step for step in job["steps"]
                                     if step.get("uses", "").startswith("actions/checkout@"))
                     self.assertNotIn("ref", checkout.get("with", {}))
+                if filename == "rust-cross-os.yml":
+                    aggregate = jobs["rust-linux"]
+                    self.assertEqual(aggregate.get("name"), "rust (linux)")
+                    self.assertEqual(aggregate["needs"], ["rust-linux-build", "rust-linux-rebuild"])
+                    self.assertEqual(
+                        aggregate["if"],
+                        "(github.event_name != 'pull_request' || "
+                        "!github.event.pull_request.draft) && (!cancelled() && "
+                        "needs.rust-linux-build.result != 'skipped')",
+                    )
 
     def test_native_macos_plan_respects_paths_and_event(self):
         workflow = yaml.load((ROOT / ".github/workflows/desktop-native-macos.yml").read_text(),
