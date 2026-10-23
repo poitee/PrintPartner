@@ -7,6 +7,9 @@ routes answer 404 and do not open the build graph. Create, delete, layers,
 touch, jobs, and kit/builder manifests stay unregistered (later D25 children).
 The desktop gateway does not mount this router in this slice.
 
+Admission (loopback Host/Origin, principal, forwarded-header refusal) is shared
+with drafts through the crate-private `loopback` module.
+
 List responses are `{ "profiles": [ <ProfileSummary>, ... ] }`. Detail
 responses are a bare `ProfileSummary` (`id`, `name`, `order_number`,
 `special_request`, `part_count`, `accepted_progress`, `build_stale`,
@@ -15,12 +18,16 @@ responses are a bare `ProfileSummary` (`id`, `name`, `order_number`,
 `"Authentication required"`. HEAD shares status and auth with GET and returns
 an empty body.
 
+`freshness.status: "unavailable"` with a `code` (for example `accepted_inputs`)
+is an integrity failure while evaluating freshness. It is not rewritten as
+`untracked` / `no_accepted_inputs`.
+
 The session cookie or one API key selects the tenant. API keys use the
 configured tenant, not a request header.
 
 ```sh
 umask 022
-export CARGO_TARGET_DIR=/persist/targets/cursor/gre-791-build-reads
+export CARGO_TARGET_DIR=/persist/targets/cursor-gre-791-build-reads-2106
 export CARGO_BUILD_JOBS=2
 
 cargo check -p pp-api --locked --manifest-path rust/Cargo.toml --no-default-features

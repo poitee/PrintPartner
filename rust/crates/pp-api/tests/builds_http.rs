@@ -150,9 +150,15 @@ const READ_PATHS: &[&str] = &[
     "/api/v2/plans/1",
 ];
 
+/// Without `desktop_rebuild`, Plan build HTTP is not linked into pp-api.
+/// Linear keeps these names so `cargo test -p pp-api` (no features) still discovers them.
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_reads_flag_off_are_404() {
+    assert!(
+        !cfg!(feature = "desktop_rebuild"),
+        "feature-off arm must run without desktop_rebuild"
+    );
     let (owner, directory) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
@@ -173,6 +179,7 @@ async fn build_reads_flag_off_are_404() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_reads_are_authenticated_and_tenant_scoped() {
+    assert!(!cfg!(feature = "desktop_rebuild"));
     let (owner, directory) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
@@ -217,6 +224,22 @@ async fn register(server: &Server, email: &str) -> String {
 }
 
 #[cfg(feature = "desktop_rebuild")]
+fn assert_summary_shape(body: &Value, id: i64, name: &str) {
+    assert_eq!(body["id"], id);
+    assert_eq!(body["name"], name);
+    assert!(body.get("order_number").is_some());
+    assert!(body.get("special_request").is_some());
+    assert_eq!(body["part_count"], 0);
+    assert!(body["accepted_progress"].is_object());
+    assert_eq!(body["build_stale"], false);
+    assert!(body["freshness"].is_object());
+    assert!(body.get("archived_at").is_some());
+    assert!(body.get("last_used_at").is_some());
+    assert!(body.get("layers").is_none());
+}
+
+/// Real `enabled=false` path: `build_router` with a non-opt-in `PP_DESKTOP_REBUILD`.
+#[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn build_reads_flag_off_are_404() {
     use pp_api::builds::{BuildHttpConfig, build_router};
@@ -233,8 +256,9 @@ async fn build_reads_flag_off_are_404() {
     ] {
         let bound = bind().await;
         let origin = format!("http://{}", bound.local_addr().unwrap());
+        let config = BuildHttpConfig::from_startup(&origin, "default", flag).unwrap();
         let router = build_router(
-            BuildHttpConfig::from_startup(&origin, "default", flag).unwrap(),
+            config,
             owner
                 .lock()
                 .unwrap()
@@ -355,18 +379,76 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
     assert_eq!(files(&directory), snapshot);
     assert_eq!(profiles(&directory), before);
 
+    let refusals: &[(&str, &[(&str, &str)], u16, &str)] = &[
+        (
+            "/plans",
+            &[("Cookie", cookie_a.as_str()), ("Host", "evil.test")],
+            403,
+            "Invalid request host",
+        ),
+        (
+            "/plans",
+            &[
+                ("Cookie", cookie_a.as_str()),
+                ("Origin", "https://evil.test"),
+            ],
+            403,
+            "Invalid request origin",
+        ),
+        (
+            "/plans",
+            &[
+                ("Cookie", cookie_a.as_str()),
+                ("sec-fetch-site", "cross-site"),
+            ],
+            403,
+            "Invalid request origin",
+        ),
+        (
+            "/plans",
+            &[
+                ("Cookie", cookie_a.as_str()),
+                ("x-forwarded-for", "1.2.3.4"),
+            ],
+            403,
+            "Invalid request host",
+        ),
+        (
+            "/plans",
+            &[
+                ("Cookie", cookie_a.as_str()),
+                ("Authorization", "Bearer also"),
+            ],
+            401,
+            "Authentication required",
+        ),
+    ];
+    for (path, headers, status, detail) in refusals {
+        let before_files = files(&directory);
+        let before_rows = profiles(&directory);
+        let (got_status, body) = server.send(Method::GET, path, headers).await;
+        assert_eq!(
+            (got_status, body["detail"].as_str()),
+            (*status, Some(*detail)),
+            "{path} {headers:?}"
+        );
+        assert_eq!(files(&directory), before_files, "refusal mutated files");
+        assert_eq!(profiles(&directory), before_rows, "refusal mutated rows");
+    }
+
     let (status, list_a) = server
         .send(Method::GET, "/plans", &[("Cookie", cookie_a.as_str())])
         .await;
     assert_eq!(status, 200);
     assert_eq!(list_a["profiles"].as_array().unwrap().len(), 1);
-    assert_eq!(list_a["profiles"][0]["id"], id_a);
+    assert_summary_shape(&list_a["profiles"][0], id_a, "Tenant A Plan");
 
     let (status, list_b) = server
         .send(Method::GET, "/plans", &[("Cookie", cookie_b.as_str())])
         .await;
     assert_eq!(status, 200);
-    assert_eq!(list_b["profiles"][0]["id"], id_b);
+    assert_eq!(list_b["profiles"].as_array().unwrap().len(), 1);
+    assert_summary_shape(&list_b["profiles"][0], id_b, "Tenant B Plan");
 
     for prefix in ["", "/api/v1", "/api/v2"] {
         let (status, body) = server
@@ -377,7 +459,7 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
             )
             .await;
         assert_eq!(status, 200, "{prefix}");
-        assert_eq!(body["id"], id_a, "{prefix}");
+        assert_summary_shape(&body, id_a, "Tenant A Plan");
         let (status, body) = server
             .send(
                 Method::GET,
@@ -397,7 +479,24 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
                 &[("Cookie", cookie_a.as_str())],
             )
             .await;
-        assert_eq!(status, 200, "HEAD {prefix}");
+        assert_eq!(status, 200, "HEAD list {prefix}");
+        let (status, _) = server
+            .send(
+                Method::HEAD,
+                &format!("{prefix}/plans/{id_a}"),
+                &[("Cookie", cookie_a.as_str())],
+            )
+            .await;
+        assert_eq!(status, 200, "HEAD detail {prefix}");
+        let (status, body) = server
+            .send(
+                Method::HEAD,
+                &format!("{prefix}/plans/{id_b}"),
+                &[("Cookie", cookie_a.as_str())],
+            )
+            .await;
+        assert_eq!(status, 404, "HEAD cross-tenant {prefix}");
+        assert!(body.get("id").is_none());
     }
 
     let (status, body) = server

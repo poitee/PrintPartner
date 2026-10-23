@@ -1,8 +1,12 @@
-use anyhow::{Result, ensure};
+use crate::loopback::{
+    LoopbackOrigin, PresentedCredential, admit, principal, rebuild_flag_enabled,
+    require_api_key_tenant,
+};
+use anyhow::Result;
 use axum::{
     Router,
-    extract::{ConnectInfo, Path, State},
-    http::{HeaderMap, Method, StatusCode, header},
+    extract::{Path, State},
+    http::{Method, StatusCode, header},
     middleware::{self, Next},
     response::Response,
     routing::get,
@@ -13,7 +17,7 @@ use pp_contracts::build_identity::{
 };
 use pp_domain::PositiveId;
 use pp_storage::{
-    auth::{AuthFailure, Secret},
+    auth::AuthFailure,
     build_graph::{
         AcceptedProgress as DomainProgress,
         AcceptedProgressUnavailable as DomainProgressUnavailable, BuildCommand, BuildGraphClient,
@@ -21,11 +25,9 @@ use pp_storage::{
         PlanStaleReason as DomainStaleReason, PlanUntrackedReason as DomainUntrackedReason,
         ProfileSummary as DomainSummary,
     },
-    read_model::Credential,
 };
 use serde_json::json;
 use std::{
-    net::{IpAddr, SocketAddr},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -39,7 +41,6 @@ pub struct BuildHttpConfig {
     host: String,
     api_key_tenant: String,
     enabled: bool,
-    body_limit: usize,
     wait: Duration,
 }
 
@@ -54,50 +55,19 @@ impl BuildHttpConfig {
 
     /// `flag` is the process `PP_DESKTOP_REBUILD` value captured at startup.
     pub fn from_startup(origin: &str, api_key_tenant: &str, flag: Option<&str>) -> Result<Self> {
-        let url = reqwest::Url::parse(origin)?;
-        ensure!(
-            url.path() == "/"
-                && url.query().is_none()
-                && url.fragment().is_none()
-                && url.username().is_empty()
-                && url.password().is_none(),
-            "Listener must be an origin"
-        );
-        let ip: IpAddr = url
-            .host_str()
-            .unwrap_or("")
-            .trim_matches(['[', ']'])
-            .parse()?;
-        ensure!(
-            ip.is_loopback() && matches!(url.scheme(), "http" | "https"),
-            "Listener must be loopback HTTP"
-        );
-        ensure!(
-            !api_key_tenant.trim().is_empty() && api_key_tenant.len() <= 512,
-            "Invalid API key tenant"
-        );
-        let origin = url.origin().ascii_serialization();
-        let host = origin
-            .split_once("://")
-            .ok_or_else(|| anyhow::anyhow!("Listener must be an origin"))?
-            .1
-            .to_owned();
+        let listener = LoopbackOrigin::parse(origin)?;
+        require_api_key_tenant(api_key_tenant)?;
         Ok(Self {
-            origin,
-            host,
+            origin: listener.origin,
+            host: listener.host,
             api_key_tenant: api_key_tenant.into(),
-            enabled: matches!(flag, Some("1" | "true")),
-            body_limit: 1024 * 1024,
+            enabled: rebuild_flag_enabled(flag),
             wait: Duration::from_millis(100),
         })
     }
 
-    pub fn with_limits(mut self, body_limit: usize, wait: Duration) -> Result<Self> {
-        ensure!(
-            (1..=self.body_limit).contains(&body_limit) && wait <= self.wait,
-            "Build HTTP limits may only be reduced"
-        );
-        self.body_limit = body_limit;
+    pub fn with_wait(mut self, wait: Duration) -> Result<Self> {
+        anyhow::ensure!(wait <= self.wait, "Build HTTP wait may only be reduced");
         self.wait = wait;
         Ok(self)
     }
@@ -109,24 +79,6 @@ struct App {
     client: BuildGraphClient,
     admission: Arc<tokio::sync::Semaphore>,
     waiters: Arc<tokio::sync::Semaphore>,
-}
-
-#[derive(Clone)]
-enum Principal {
-    Session(String),
-    ApiKey { tenant: String, secret: String },
-}
-
-impl Principal {
-    fn credential(self) -> Credential {
-        match self {
-            Self::Session(secret) => Credential::Session(Secret::new(secret)),
-            Self::ApiKey { tenant, secret } => Credential::ApiKey {
-                routed_tenant: tenant,
-                secret: Secret::new(secret),
-            },
-        }
-    }
 }
 
 struct Cancellation(Arc<AtomicBool>);
@@ -178,92 +130,19 @@ async fn guard(
     if request.uri().to_string().len() > 16_384 {
         return failure(414, "Request target too long");
     }
-    if let Err((status, detail)) = admit(&app.config, &request) {
+    if let Err((status, detail)) = admit(
+        &app.config.origin,
+        &app.config.host,
+        &app.config.api_key_tenant,
+        &request,
+    ) {
         return failure(status.as_u16(), detail);
     }
-    let Some(principal) = principal(request.headers(), &app.config.api_key_tenant) else {
+    let Some(presented) = principal(request.headers(), &app.config.api_key_tenant) else {
         return failure(401, "Authentication required");
     };
-    request.extensions_mut().insert(principal);
+    request.extensions_mut().insert(presented);
     next.run(request).await
-}
-
-fn admit(
-    config: &BuildHttpConfig,
-    request: &axum::extract::Request,
-) -> std::result::Result<(), (StatusCode, &'static str)> {
-    let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() else {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Transport identity unavailable",
-        ));
-    };
-    if !peer.ip().is_loopback() {
-        return Err((StatusCode::FORBIDDEN, "Loopback transport required"));
-    }
-    let headers = request.headers();
-    let host = headers.get("host").and_then(|value| value.to_str().ok());
-    if headers.get_all("host").iter().count() != 1
-        || host != Some(config.host.as_str())
-        || request
-            .uri()
-            .authority()
-            .is_some_and(|authority| authority.as_str() != config.host)
-        || headers
-            .keys()
-            .any(|key| key == "forwarded" || key.as_str().starts_with("x-forwarded-"))
-    {
-        return Err((StatusCode::FORBIDDEN, "Invalid request host"));
-    }
-    let origin = headers.get("origin").and_then(|value| value.to_str().ok());
-    if headers.get_all("origin").iter().count() > 1
-        || (headers.contains_key("origin") && origin != Some(config.origin.as_str()))
-        || headers
-            .get_all("sec-fetch-site")
-            .iter()
-            .any(|value| value == "cross-site")
-    {
-        return Err((StatusCode::FORBIDDEN, "Invalid request origin"));
-    }
-    Ok(())
-}
-
-fn principal(headers: &HeaderMap, tenant: &str) -> Option<Principal> {
-    let mut session = None;
-    for header in headers.get_all("cookie") {
-        for item in header.to_str().ok()?.split(';') {
-            if let Some(("pp_session", value)) = item.trim().split_once('=')
-                && session.replace(value).is_some()
-            {
-                return None;
-            }
-        }
-    }
-    let authorization = headers.get("authorization");
-    let custom = headers.get("x-print-partner-api-key");
-    if headers.get_all("authorization").iter().count() > 1
-        || headers.get_all("x-print-partner-api-key").iter().count() > 1
-        || usize::from(session.is_some())
-            + usize::from(authorization.is_some())
-            + usize::from(custom.is_some())
-            != 1
-    {
-        return None;
-    }
-    if let Some(value) = session {
-        return (!value.is_empty() && value.len() <= 4096)
-            .then(|| Principal::Session(value.into()));
-    }
-    let key = if let Some(value) = authorization {
-        value.to_str().ok()?.strip_prefix("Bearer ")?
-    } else {
-        custom?.to_str().ok()?
-    }
-    .trim();
-    (!key.is_empty() && key.len() <= 4096).then(|| Principal::ApiKey {
-        tenant: tenant.into(),
-        secret: key.into(),
-    })
 }
 
 async fn list(State(app): State<App>, request: axum::extract::Request) -> Response {
@@ -286,7 +165,7 @@ async fn detail(
 }
 
 async fn execute(app: App, request: axum::extract::Request, command: BuildCommand) -> Response {
-    let Some(principal) = request.extensions().get::<Principal>().cloned() else {
+    let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
         return failure(401, "Authentication required");
     };
     let method = request.method().clone();
@@ -303,7 +182,7 @@ async fn execute(app: App, request: axum::extract::Request, command: BuildComman
     let cancelled = cancellation.flag();
     match tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        client.execute(principal.credential(), command, cancelled, wait)
+        client.execute(presented.into_credential(), command, cancelled, wait)
     })
     .await
     {
@@ -359,6 +238,7 @@ fn profile(value: DomainSummary) -> ProfileSummary {
         },
         build_stale: value.build_stale,
         freshness: match value.freshness {
+            DomainFreshness::Unavailable { code } => PlanFreshness::Unavailable { code },
             DomainFreshness::Current {
                 accepted_input_set_id,
                 accepted_at,
@@ -401,11 +281,6 @@ fn profile(value: DomainSummary) -> ProfileSummary {
                 .unwrap_or_else(|_| {
                     FreshnessReasons::new(PlanUntrackedReason::NoAcceptedInputs, vec![])
                 }),
-            },
-            DomainFreshness::Unavailable { .. } => PlanFreshness::Untracked {
-                accepted_input_set_id: None,
-                accepted_at: None,
-                reasons: FreshnessReasons::new(PlanUntrackedReason::NoAcceptedInputs, vec![]),
             },
         },
         archived_at: value.archived_at,
@@ -506,4 +381,40 @@ fn json_response(status: u16, value: &impl serde::Serialize, head: bool) -> Resp
 
 fn failure(status: u16, detail: &str) -> Response {
     json_response(status, &json!({"detail": detail}), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pp_storage::build_graph::{AcceptedProgress, PlanFreshness as DomainFreshness};
+
+    #[test]
+    fn unavailable_freshness_preserves_integrity_code() {
+        let summary = profile(DomainSummary {
+            id: 7,
+            name: "Broken".into(),
+            order_number: None,
+            special_request: None,
+            part_count: 0,
+            accepted_progress: AcceptedProgress::Unavailable(DomainProgressUnavailable::Integrity),
+            build_stale: false,
+            freshness: DomainFreshness::Unavailable {
+                code: "accepted_inputs".into(),
+            },
+            archived_at: None,
+            last_used_at: None,
+        });
+        assert_eq!(summary.id, 7);
+        assert!(matches!(
+            summary.accepted_progress,
+            AcceptedProgressSummary::Unavailable {
+                reason: AcceptedProgressUnavailableReason::Integrity
+            }
+        ));
+        let wire = serde_json::to_value(&summary.freshness).unwrap();
+        assert_eq!(
+            wire,
+            json!({"status":"unavailable","code":"accepted_inputs"})
+        );
+    }
 }
