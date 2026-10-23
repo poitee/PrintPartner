@@ -577,9 +577,10 @@ async fn edit(
         Err(error) => {
             let (class, response) = match error {
                 ReadError::Worker => ("worker_failure", edit_internal_error()),
-                ReadError::Storage(error) => {
-                    (error_class(&error), storage_failure_with(&error, EDIT_DETAIL))
-                }
+                ReadError::Storage(error) => (
+                    error_class(&error),
+                    storage_failure_with(&error, EDIT_DETAIL),
+                ),
                 ReadError::Busy => (
                     "read_pool_exhausted",
                     failure(
@@ -670,17 +671,14 @@ fn present_edit(outcome: WorkspaceOutcome) -> Response {
         WorkspaceOutcome::Ready { workspace } => json_response(StatusCode::OK, workspace),
         WorkspaceOutcome::ProfileNotFound => profile_missing(),
         WorkspaceOutcome::DraftNotFound => draft_missing(),
-        WorkspaceOutcome::DraftChanged { workspace } => conflict(
-            "draft_changed",
-            workspace.map(|workspace| json!(workspace)),
-        ),
+        WorkspaceOutcome::DraftChanged { workspace } => {
+            conflict("draft_changed", workspace.map(|workspace| json!(workspace)))
+        }
         WorkspaceOutcome::BaseChanged { workspace } => {
             conflict("base_changed", Some(json!(workspace)))
         }
         WorkspaceOutcome::NotOpen { workspace } => conflict("not_open", Some(json!(workspace))),
-        WorkspaceOutcome::AcceptedBaselineRequired => {
-            conflict("accepted_baseline_required", None)
-        }
+        WorkspaceOutcome::AcceptedBaselineRequired => conflict("accepted_baseline_required", None),
         WorkspaceOutcome::IdempotencyConflict => conflict("idempotency_conflict", None),
         WorkspaceOutcome::DomainError { code } => {
             json_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"code": code}))

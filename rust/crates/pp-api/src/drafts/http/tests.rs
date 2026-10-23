@@ -1327,8 +1327,7 @@ async fn failed_selection_keeps_committed_edit_and_sanitizes_errors() {
     );
     assert_eq!(server.included(5), 1);
     assert_eq!(
-        json_reply(server.request(Method::GET, "/plans/1/drafts/2"), 200).await["parts"][1]
-            ["included"],
+        json_reply(server.request(Method::GET, "/plans/1/drafts/2"), 200).await["parts"][1]["included"],
         true
     );
     server.close().await;
@@ -1348,10 +1347,7 @@ async fn present_edit_matches_node_conflict_and_domain_shapes() {
     assert_eq!(domain.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let domain_body: Value =
         serde_json::from_slice(&to_bytes(domain.into_body(), 4096).await.unwrap()).unwrap();
-    assert_eq!(
-        domain_body,
-        json!({"code":"required_unit_set_unavailable"})
-    );
+    assert_eq!(domain_body, json!({"code":"required_unit_set_unavailable"}));
     let baseline = present_edit(WorkspaceOutcome::AcceptedBaselineRequired);
     assert_eq!(baseline.status(), StatusCode::CONFLICT);
     let baseline_body: Value =
