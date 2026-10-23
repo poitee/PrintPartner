@@ -250,6 +250,38 @@ async fn build_delete_refusal_preserves_plan() {
     shutdown(owner, directory);
 }
 
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn build_layer_read_preserves_stale_reasons() {
+    let (owner, directory) = open();
+    let snapshot = files(&directory);
+    let before = profiles(&directory);
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server.send(Method::GET, "/plans/1/layers", &[]).await;
+    assert_eq!(status, 404);
+    assert!(body.get("layers").is_none());
+    server.stop().await;
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+    shutdown(owner, directory);
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn build_touch_uses_existing_command() {
+    let (owner, directory) = open();
+    let snapshot = files(&directory);
+    let before = profiles(&directory);
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server.send(Method::POST, "/plans/1/touch", &[]).await;
+    assert_eq!(status, 404);
+    assert!(body.get("id").is_none());
+    server.stop().await;
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+    shutdown(owner, directory);
+}
+
 #[cfg(feature = "desktop_rebuild")]
 fn policy() -> pp_storage::auth::AuthPolicy {
     use pp_storage::auth::*;
@@ -869,6 +901,270 @@ async fn build_delete_refusal_preserves_plan() {
             .iter()
             .any(|row| row.1 == id && row.2 == "KeepMe")
     );
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn last_used_and_config(directory: &Path, id: i64) -> (Option<String>, Option<String>) {
+    let db = rusqlite::Connection::open_with_flags(
+        directory.join("print-partner.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    db.query_row(
+        "SELECT last_used_at, config_modified_at FROM build_profiles WHERE id=?1",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .unwrap()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn seed_base_layer(directory: &Path, tenant: &str, profile_id: i64, source_name: &str) -> i64 {
+    let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    db.execute(
+        "INSERT INTO projects(tenant_id,name,url) VALUES(?1,?2,?3)",
+        rusqlite::params![tenant, source_name, "https://example.test/layer"],
+    )
+    .unwrap();
+    let project_id = db.last_insert_rowid();
+    db.execute(
+        "INSERT INTO profile_layers(tenant_id,profile_id,layer_order,layer_type,project_id) VALUES(?1,?2,0,'base',?3)",
+        rusqlite::params![tenant, profile_id, project_id],
+    )
+    .unwrap();
+    project_id
+}
+
+/// GET layers returns ordered layer detail; detail/touch keep domain freshness reasons.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn build_layer_read_preserves_stale_reasons() {
+    use pp_storage::{
+        auth::Secret,
+        build_graph::{BuildCommand, BuildOutcome, PositiveId, wire::profile_summary},
+        read_model::Credential,
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let (owner, directory) = open();
+    let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
+
+    let (status, created) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"LayerPlan"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let id = created["id"].as_i64().unwrap();
+    let tenant = profiles(&directory)
+        .into_iter()
+        .find(|row| row.1 == id)
+        .map(|row| row.0)
+        .expect("tenant");
+    let project_id = seed_base_layer(&directory, &tenant, id, "Base Source");
+
+    for prefix in ["", "/api/v1", "/api/v2"] {
+        let (status, body) = server
+            .send(
+                Method::GET,
+                &format!("{prefix}/plans/{id}/layers"),
+                &[("Cookie", cookie_a.as_str())],
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix} {body}");
+        assert_eq!(body["profile_id"], id);
+        let layers = body["layers"].as_array().unwrap();
+        assert_eq!(layers.len(), 1);
+        assert_eq!(layers[0]["layer_order"], 0);
+        assert_eq!(layers[0]["layer_type"], "base");
+        assert_eq!(layers[0]["project_id"], project_id);
+        assert_eq!(layers[0]["project_name"], "Base Source");
+        let (status, _) = server
+            .send(
+                Method::HEAD,
+                &format!("{prefix}/plans/{id}/layers"),
+                &[("Cookie", cookie_a.as_str())],
+            )
+            .await;
+        assert_eq!(status, 200, "HEAD layers {prefix}");
+    }
+
+    let token = cookie_a.strip_prefix("pp_session=").unwrap();
+    let domain = {
+        let client = owner
+            .lock()
+            .unwrap()
+            .build_graph_with_policy(policy())
+            .unwrap();
+        match client
+            .execute(
+                Credential::Session(Secret::new(token.into())),
+                BuildCommand::Read {
+                    build: PositiveId::new(id as u64).unwrap(),
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(2),
+            )
+            .unwrap()
+        {
+            BuildOutcome::Read { profile } => {
+                serde_json::to_value(profile_summary(*profile)).unwrap()
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+
+    let (status, detail) = server
+        .send(
+            Method::GET,
+            &format!("/plans/{id}"),
+            &[("Cookie", cookie_a.as_str())],
+        )
+        .await;
+    assert_eq!(status, 200, "{detail}");
+    assert_eq!(detail["freshness"], domain["freshness"]);
+    assert_eq!(detail["build_stale"], domain["build_stale"]);
+    assert!(
+        detail["freshness"]["reasons"].is_array()
+            && !detail["freshness"]["reasons"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+        "domain freshness reasons must reach HTTP unchanged: {detail}"
+    );
+
+    let (status, touched) = server
+        .send(
+            Method::POST,
+            &format!("/plans/{id}/touch"),
+            &[("Cookie", cookie_a.as_str())],
+        )
+        .await;
+    assert_eq!(status, 200, "{touched}");
+    assert_eq!(
+        touched["freshness"]["reasons"],
+        detail["freshness"]["reasons"]
+    );
+    assert_eq!(
+        touched["freshness"]["untracked_sources"],
+        detail["freshness"]["untracked_sources"]
+    );
+    assert!(touched.get("layers").is_none());
+
+    let before = profiles(&directory);
+    let snapshot = files(&directory);
+    let (status, body) = server
+        .send(
+            Method::GET,
+            &format!("/plans/{id}/layers"),
+            &[("Cookie", cookie_b.as_str())],
+        )
+        .await;
+    assert_eq!(
+        (status, body["detail"].as_str()),
+        (404, Some("Profile not found"))
+    );
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// POST touch drives `BuildCommand::Touch`: bumps last_used_at only.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn build_touch_uses_existing_command() {
+    let (owner, directory) = open();
+    let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
+
+    let (status, created) = server
+        .send_json(
+            Method::POST,
+            "/plans",
+            &[("Cookie", cookie_a.as_str())],
+            &json!({"name":"TouchPlan"}),
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let id = created["id"].as_i64().unwrap();
+    {
+        let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+        db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+        db.execute(
+            "UPDATE build_profiles SET last_used_at='old', config_modified_at='old' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+    }
+
+    for prefix in ["", "/api/v1", "/api/v2"] {
+        let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+        db.execute(
+            "UPDATE build_profiles SET last_used_at='old' WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        drop(db);
+        let (status, body) = server
+            .send(
+                Method::POST,
+                &format!("{prefix}/plans/{id}/touch"),
+                &[("Cookie", cookie_a.as_str())],
+            )
+            .await;
+        assert_eq!(status, 200, "{prefix} {body}");
+        assert_summary_shape(&body, id, "TouchPlan");
+        assert_ne!(body["last_used_at"], "old");
+        let (last_used, config) = last_used_and_config(&directory, id);
+        assert_ne!(last_used.as_deref(), Some("old"));
+        assert_eq!(config.as_deref(), Some("old"));
+    }
+
+    let before = profiles(&directory);
+    let snapshot = files(&directory);
+    let path = format!("/plans/{id}/touch");
+    let missing = format!("/plans/{}/touch", id + 1_000_000);
+    type Refusal<'a> = (&'a str, &'a [(&'a str, &'a str)], u16, Option<&'a str>);
+    let refusals: &[Refusal<'_>] = &[
+        (path.as_str(), &[], 401, Some("Authentication required")),
+        (
+            path.as_str(),
+            &[("Cookie", cookie_b.as_str())],
+            404,
+            Some("Profile not found"),
+        ),
+        (
+            missing.as_str(),
+            &[("Cookie", cookie_a.as_str())],
+            404,
+            Some("Profile not found"),
+        ),
+    ];
+    for &(path, headers, status, detail) in refusals {
+        let before_files = files(&directory);
+        let before_rows = profiles(&directory);
+        let (last_used, config) = last_used_and_config(&directory, id);
+        let (got_status, body) = server.send(Method::POST, path, headers).await;
+        assert_eq!(
+            (got_status, body["detail"].as_str()),
+            (status, detail),
+            "{path} {headers:?}"
+        );
+        assert_eq!(files(&directory), before_files);
+        assert_eq!(profiles(&directory), before_rows);
+        assert_eq!(last_used_and_config(&directory, id), (last_used, config));
+    }
+    assert_eq!(files(&directory), snapshot);
+    assert_eq!(profiles(&directory), before);
+
     server.stop().await;
     shutdown(owner, directory);
 }

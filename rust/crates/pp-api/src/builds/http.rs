@@ -10,7 +10,7 @@ use axum::{
     http::{Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use pp_storage::{
     auth::AuthFailure,
@@ -102,10 +102,10 @@ impl Drop for Cancellation {
     }
 }
 
-/// Mounts Plan list/detail GET+HEAD, create/delete, and kit-manifest ReadKit
-/// at `/`, `/api/v1`, and `/api/v2` when `PP_DESKTOP_REBUILD` was exactly `1`
-/// or `true`. Otherwise mounts nothing. Layers, jobs, SaveKit, and ReadBuilder
-/// stay unregistered.
+/// Mounts Plan list/detail GET+HEAD, create/delete, layer list GET+HEAD, touch,
+/// and kit-manifest ReadKit at `/`, `/api/v1`, and `/api/v2` when
+/// `PP_DESKTOP_REBUILD` was exactly `1` or `true`. Otherwise mounts nothing.
+/// Layer mutate, jobs, SaveKit, and ReadBuilder stay unregistered.
 pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -119,6 +119,8 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
     let routes = Router::new()
         .route("/plans", get(list).post(create))
         .route("/plans/{id}", get(detail).delete(remove))
+        .route("/plans/{id}/layers", get(list_layers))
+        .route("/plans/{id}/touch", post(touch))
         .route(
             "/plans/{id}/kit-manifest",
             get(super::manifest_options::read_kit),
@@ -218,6 +220,28 @@ async fn remove(
     execute(app, request, BuildCommand::Delete { build }).await
 }
 
+async fn list_layers(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = parse_build_id(&id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    execute(app, request, BuildCommand::ListLayers { build }).await
+}
+
+async fn touch(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(build) = parse_build_id(&id) else {
+        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    };
+    execute(app, request, BuildCommand::Touch { build }).await
+}
+
 fn parse_build_id(id: &str) -> Option<PositiveId> {
     id.parse::<u64>()
         .ok()
@@ -276,7 +300,7 @@ fn present(method: &Method, outcome: BuildOutcome) -> Response {
             &json!({"profiles": profiles.into_iter().map(profile_summary).collect::<Vec<_>>()}),
             head,
         ),
-        BuildOutcome::Read { profile: value } => {
+        BuildOutcome::Read { profile: value } | BuildOutcome::Touched { profile: value } => {
             json_response(StatusCode::OK, &profile_summary(*value), head)
         }
         BuildOutcome::Created {
@@ -290,6 +314,14 @@ fn present(method: &Method, outcome: BuildOutcome) -> Response {
             body["layers"] = json!(layers.into_iter().map(layer).collect::<Vec<_>>());
             json_response(StatusCode::OK, &body, false)
         }
+        BuildOutcome::Layers { profile_id, layers } => json_response(
+            StatusCode::OK,
+            &json!({
+                "profile_id": profile_id,
+                "layers": layers.into_iter().map(layer).collect::<Vec<_>>(),
+            }),
+            head,
+        ),
         BuildOutcome::Deleted if *method == Method::DELETE => {
             StatusCode::NO_CONTENT.into_response()
         }
@@ -402,6 +434,7 @@ mod tests {
     use super::*;
     use pp_storage::build_graph::{
         AcceptedProgress, AcceptedProgressUnavailable, PlanFreshness as DomainFreshness,
+        PlanStaleReason as DomainStaleReason, PlanUntrackedReason as DomainUntrackedReason,
         ProfileSummary as DomainSummary, wire::AcceptedProgressSummary,
         wire::AcceptedProgressUnavailableReason,
     };
@@ -436,5 +469,63 @@ mod tests {
             wire,
             json!({"status":"unavailable","code":"accepted_inputs"})
         );
+    }
+
+    #[test]
+    fn touch_presenter_preserves_stale_and_untracked_reasons() {
+        let wire = serde_json::to_value(profile_summary(DomainSummary {
+            id: 3,
+            name: "Stale".into(),
+            order_number: None,
+            special_request: None,
+            part_count: 0,
+            accepted_progress: AcceptedProgress::Empty,
+            build_stale: true,
+            freshness: DomainFreshness::Stale {
+                accepted_input_set_id: 11,
+                accepted_at: "accepted".into(),
+                reasons: vec![
+                    DomainStaleReason::PlanConfigurationChanged,
+                    DomainStaleReason::SourceRevisionChanged {
+                        source_id: 1,
+                        source_name: "Source".into(),
+                        accepted_revision_id: 2,
+                        current_revision_id: 3,
+                    },
+                ],
+                untracked_sources: vec![DomainUntrackedReason::SourceRevisionUntracked {
+                    source_id: 7,
+                    source_name: "Untracked".into(),
+                }],
+            },
+            archived_at: None,
+            last_used_at: Some("used".into()),
+        }))
+        .unwrap();
+        assert_eq!(wire["build_stale"], true);
+        assert_eq!(
+            wire["freshness"],
+            json!({
+                "status": "stale",
+                "accepted_input_set_id": 11,
+                "accepted_at": "accepted",
+                "reasons": [
+                    {"kind": "plan_configuration_changed"},
+                    {
+                        "kind": "source_revision_changed",
+                        "source_id": 1,
+                        "source_name": "Source",
+                        "accepted_revision_id": 2,
+                        "current_revision_id": 3
+                    }
+                ],
+                "untracked_sources": [{
+                    "kind": "source_revision_untracked",
+                    "source_id": 7,
+                    "source_name": "Untracked"
+                }]
+            })
+        );
+        assert!(wire.get("layers").is_none());
     }
 }
