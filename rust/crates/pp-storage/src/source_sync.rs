@@ -142,6 +142,126 @@ pub enum SyncTargetInspection {
     ReconciliationRequired,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncAuthorityRefusal {
+    CredentialInvalid,
+    PolicyChanged,
+    TenantChanged,
+    SubjectChanged,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginalAuthorityStatus {
+    Valid,
+    Refused(SyncAuthorityRefusal),
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncRecoveryDisposition {
+    Pending,
+    Claimed,
+    Succeeded,
+    Failed,
+    NotRun,
+    ReconciliationRequired,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncRecoveryState {
+    Completed,
+    Failed,
+    Cancelled,
+    ReconciliationRequired,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SyncRecoveryTarget {
+    ordinal: u32,
+    requested_source_id: u64,
+    disposition: SyncRecoveryDisposition,
+    failure: Option<String>,
+    result: Option<SourceScanResult>,
+    acknowledged: bool,
+}
+
+impl SyncRecoveryTarget {
+    pub fn ordinal(&self) -> u32 { self.ordinal }
+    pub fn requested_source_id(&self) -> u64 { self.requested_source_id }
+    pub fn disposition(&self) -> SyncRecoveryDisposition { self.disposition }
+    pub fn failure(&self) -> Option<&str> { self.failure.as_deref() }
+    pub fn result(&self) -> Option<&SourceScanResult> { self.result.as_ref() }
+    pub fn acknowledged(&self) -> bool { self.acknowledged }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SyncRecoveryInspection {
+    job_id: String,
+    version: i64,
+    state: SyncRecoveryState,
+    targets: Vec<SyncRecoveryTarget>,
+    original_authority: OriginalAuthorityStatus,
+}
+
+impl SyncRecoveryInspection {
+    pub fn job_id(&self) -> &str { &self.job_id }
+    pub fn version(&self) -> i64 { self.version }
+    pub fn state(&self) -> SyncRecoveryState { self.state }
+    pub fn targets(&self) -> &[SyncRecoveryTarget] { &self.targets }
+    pub fn original_authority(&self) -> OriginalAuthorityStatus { self.original_authority }
+}
+
+pub(crate) struct AuthorizedSyncRead {
+    job: JobRecord,
+    original_subject: Option<String>,
+    original_authority: OriginalAuthorityStatus,
+}
+
+impl AuthorizedSyncRead {
+    pub(crate) fn new(
+        job: JobRecord,
+        tenant: String,
+        _actor: String,
+        expected_version: i64,
+        original_subject: Option<String>,
+        original_authority: OriginalAuthorityStatus,
+    ) -> Result<Self> {
+        ensure!(job.tenant == tenant, "Sync recovery tenant mismatch");
+        ensure!(job.kind == JobKind::Sync, "Job is not Sync");
+        ensure!(job.state_version == expected_version, "Stale Sync recovery version");
+        ensure!(
+            job.state == PersistentState::ReconciliationRequired || job.state.terminal(),
+            "Sync recovery is not retained"
+        );
+        Ok(Self { job, original_subject, original_authority })
+    }
+
+    pub(crate) fn job(&self) -> &JobRecord { &self.job }
+    pub(crate) fn original_subject(&self) -> Option<&str> { self.original_subject.as_deref() }
+}
+
+pub(crate) fn original_authority_status(
+    error: &anyhow::Error,
+) -> Option<(Option<String>, OriginalAuthorityStatus)> {
+    use crate::auth::AuthorityFailure;
+    Some(match error.downcast_ref::<AuthorityFailure>()? {
+        AuthorityFailure::CredentialInvalid => {
+            (None, OriginalAuthorityStatus::Refused(SyncAuthorityRefusal::CredentialInvalid))
+        }
+        AuthorityFailure::PolicyChanged => {
+            (None, OriginalAuthorityStatus::Refused(SyncAuthorityRefusal::PolicyChanged))
+        }
+        AuthorityFailure::TenantChanged => {
+            (None, OriginalAuthorityStatus::Refused(SyncAuthorityRefusal::TenantChanged))
+        }
+        AuthorityFailure::SubjectChanged => {
+            (None, OriginalAuthorityStatus::Refused(SyncAuthorityRefusal::SubjectChanged))
+        }
+        AuthorityFailure::Missing => (None, OriginalAuthorityStatus::Unavailable),
+        AuthorityFailure::PolicyRequired => return None,
+    })
+}
+
 pub enum NextSyncTarget {
     Local(SyncTargetLease),
     /// The target failed before any reservation and needs no settlement.
@@ -1355,6 +1475,150 @@ pub(crate) fn inspect(
         "reconciliation_required" => Ok(SyncTargetInspection::ReconciliationRequired),
         _ => Err(anyhow!("Invalid Sync target state")),
     }
+}
+
+fn retained_failure_detail(detail: Option<String>) -> Result<String> {
+    let detail = detail.ok_or_else(|| anyhow!("Sync failure detail missing"))?;
+    ensure!(!detail.is_empty() && detail.len() <= 1024, "Invalid Sync failure detail");
+    Ok(detail)
+}
+
+/// Reads one retained Sync Job. Validates batch phase, sealed-basis bindings
+/// and result capture, then reports dispositions without writing.
+pub(crate) fn inspect_retained(
+    tx: &Transaction<'_>,
+    access: &AuthorizedSyncRead,
+) -> Result<SyncRecoveryInspection> {
+    let job = access.job();
+    let source_ids = validate_basis(tx, job)?;
+    let batch_phase: String = tx.query_row(
+        "SELECT phase FROM source_sync_batches WHERE job_id=?1 AND tenant=?2",
+        params![job.job_id, job.tenant],
+        |row| row.get(0),
+    )?;
+    ensure!(
+        matches!(
+            (job.state, batch_phase.as_str()),
+            (PersistentState::Succeeded, "completed")
+                | (PersistentState::Failed, "failed" | "halted")
+                | (PersistentState::Cancelled, "halted")
+                | (PersistentState::ReconciliationRequired, "reconciliation_required")
+        ),
+        "Sync recovery batch phase mismatch"
+    );
+    let mut targets = Vec::with_capacity(source_ids.len());
+    for (ordinal, &source_id) in source_ids.iter().enumerate() {
+        let ordinal = u32::try_from(ordinal)?;
+        let row = tx.query_row(
+            "SELECT requested_source_id,state,authority_actor,result_json,result_digest,receipt_id,receipt_hash,receipt_target,failure_code,failure_detail,reservation_acknowledged FROM source_sync_targets WHERE job_id=?1 AND ordinal=?2 AND tenant=?3",
+            params![job.job_id, ordinal, job.tenant],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(10)?,
+                ))
+            },
+        )?;
+        let (
+            stored_source_id,
+            state,
+            authority_actor,
+            result_json,
+            result_digest,
+            receipt_id,
+            receipt_hash,
+            receipt_target,
+            failure_code,
+            failure_detail,
+            acknowledged,
+        ) = row;
+        ensure!(stored_source_id == source_id, "Sync target Source mismatch");
+        ensure!(matches!(acknowledged, 0 | 1), "Invalid Sync acknowledgement state");
+        if let (Some(expected), Some(actor)) = (access.original_subject(), authority_actor.as_deref())
+        {
+            ensure!(expected == actor, "Sync recovery authority capture mismatch");
+        }
+        validate_result_provenance(
+            source_id,
+            result_json.clone(),
+            result_digest.clone(),
+            receipt_id.clone(),
+            receipt_hash.clone(),
+            receipt_target.clone(),
+        )?;
+        let result = match (result_json.as_ref(), result_digest.as_ref()) {
+            (Some(json), Some(_)) => Some(serde_json::from_str(json)?),
+            (None, None) => None,
+            _ => return Err(anyhow!("Sync result capture incomplete")),
+        };
+        let has_receipt = receipt_id.is_some() || receipt_hash.is_some() || receipt_target.is_some();
+        let (disposition, failure) = match state.as_str() {
+            "pending" => (SyncRecoveryDisposition::Pending, None),
+            "claimed" => (SyncRecoveryDisposition::Claimed, None),
+            "succeeded" => {
+                ensure!(
+                    authority_actor.is_some()
+                        && result.is_some()
+                        && has_receipt
+                        && failure_code.is_none()
+                        && failure_detail.is_none(),
+                    "Invalid successful Sync target"
+                );
+                (SyncRecoveryDisposition::Succeeded, None)
+            }
+            "failed" => {
+                ensure!(result.is_none() && !has_receipt, "Failed Sync target retained success evidence");
+                ensure!(failure_code.is_some(), "Sync failure code missing");
+                (SyncRecoveryDisposition::Failed, Some(retained_failure_detail(failure_detail)?))
+            }
+            "not_run" => {
+                ensure!(
+                    failure_code.as_deref() == Some("batch_halt") && result.is_none() && !has_receipt,
+                    "Invalid not-run Sync target"
+                );
+                (SyncRecoveryDisposition::NotRun, Some(retained_failure_detail(failure_detail)?))
+            }
+            "reconciliation_required" => {
+                ensure!(authority_actor.is_some(), "Sync reconciliation lacks producer capture");
+                (
+                    SyncRecoveryDisposition::ReconciliationRequired,
+                    Some(retained_failure_detail(failure_detail)?),
+                )
+            }
+            _ => return Err(anyhow!("Invalid Sync target state")),
+        };
+        targets.push(SyncRecoveryTarget {
+            ordinal,
+            requested_source_id: u64::try_from(source_id)?,
+            disposition,
+            failure,
+            result,
+            acknowledged: acknowledged == 1,
+        });
+    }
+    let state = match job.state {
+        PersistentState::Succeeded => SyncRecoveryState::Completed,
+        PersistentState::Failed => SyncRecoveryState::Failed,
+        PersistentState::Cancelled => SyncRecoveryState::Cancelled,
+        PersistentState::ReconciliationRequired => SyncRecoveryState::ReconciliationRequired,
+        _ => return Err(anyhow!("Sync recovery Job is not retained")),
+    };
+    Ok(SyncRecoveryInspection {
+        job_id: job.job_id.clone(),
+        version: job.state_version,
+        state,
+        targets,
+        original_authority: access.original_authority,
+    })
 }
 
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {
