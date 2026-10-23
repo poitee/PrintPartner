@@ -349,3 +349,15 @@ fn untracked_freshness_never_emits_an_empty_reason_list() {
         json!([{"kind":"no_accepted_inputs"}])
     );
 }
+
+#[test]
+fn unavailable_freshness_keeps_integrity_code() {
+    use pp_contracts::build_identity::PlanFreshness;
+    let value = PlanFreshness::Unavailable {
+        code: "accepted_inputs".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(value).unwrap(),
+        json!({"status":"unavailable","code":"accepted_inputs"})
+    );
+}

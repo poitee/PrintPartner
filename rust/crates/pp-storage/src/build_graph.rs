@@ -1,11 +1,12 @@
 pub mod manifest_options;
 mod model;
+pub mod wire;
 pub use manifest_options::{ManifestOptionsCommand, ManifestOptionsOutcome};
 pub(crate) mod projection;
 use crate::{Envelope, Shared, WriterOwner, auth, read_model};
 use anyhow::{Result, anyhow, ensure};
 pub use model::*;
-use pp_domain::PositiveId;
+pub use pp_domain::PositiveId;
 pub use pp_domain::build_identity::BuildName;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::{

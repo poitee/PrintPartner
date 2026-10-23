@@ -1,16 +1,19 @@
+use crate::loopback::{
+    LoopbackOrigin, PresentedCredential, admit, principal, rebuild_flag_enabled,
+    require_api_key_tenant,
+};
 use anyhow::{Result, ensure};
 use axum::{
     Json, Router,
     body::{Body, Bytes, to_bytes},
-    extract::{ConnectInfo, DefaultBodyLimit, Extension, State},
-    http::{HeaderMap, Method, StatusCode, Uri},
+    extract::{DefaultBodyLimit, Extension, State},
+    http::{Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, patch},
 };
 use pp_storage::{
     auth::{self, AuthFailure, Secret, rebuild::RebuildAuthClient},
-    read_model::Credential,
     required_units::{AdmissionFailure, Outcome as WorkspaceOutcome},
     working_drafts::{
         DraftIdentity, DraftList, EditRequest, Failure, Outcome, PositiveId, Request,
@@ -18,7 +21,6 @@ use pp_storage::{
     },
 };
 use serde_json::{Value, json};
-use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,39 +57,13 @@ impl DraftHttpConfig {
     }
 
     fn from_startup(origin: &str, api_key_tenant: &str, flag: Option<&str>) -> Result<Self> {
-        let url = reqwest::Url::parse(origin)?;
-        ensure!(
-            url.path() == "/"
-                && url.query().is_none()
-                && url.fragment().is_none()
-                && url.username().is_empty()
-                && url.password().is_none(),
-            "Listener must be an origin"
-        );
-        let ip: IpAddr = url
-            .host_str()
-            .unwrap_or("")
-            .trim_matches(['[', ']'])
-            .parse()?;
-        ensure!(
-            ip.is_loopback() && matches!(url.scheme(), "http" | "https"),
-            "Listener must be loopback HTTP"
-        );
-        ensure!(
-            !api_key_tenant.trim().is_empty() && api_key_tenant.len() <= 512,
-            "Invalid API key tenant"
-        );
-        let origin = url.origin().ascii_serialization();
-        let host = origin
-            .split_once("://")
-            .ok_or_else(|| anyhow::anyhow!("Listener must be an origin"))?
-            .1
-            .to_owned();
+        let listener = LoopbackOrigin::parse(origin)?;
+        require_api_key_tenant(api_key_tenant)?;
         Ok(Self {
-            origin,
-            host,
+            origin: listener.origin,
+            host: listener.host,
             api_key_tenant: api_key_tenant.into(),
-            enabled: matches!(flag, Some("1" | "true")),
+            enabled: rebuild_flag_enabled(flag),
             body_limit: 8 * 1024 * 1024,
             wait: Duration::from_millis(100),
         })
@@ -146,7 +122,7 @@ async fn guard(
     if request.uri().to_string().len() > TARGET_LIMIT {
         return failure(StatusCode::URI_TOO_LONG, "Request target too long");
     }
-    if let Err((status, detail)) = admit(&config, &request) {
+    if let Err((status, detail)) = admit_request(&config, &request) {
         return failure(status, detail);
     }
     let Some(presented) = principal(request.headers(), &config.api_key_tenant) else {
@@ -200,97 +176,16 @@ impl http_body::Body for AdmittedBody {
     }
 }
 
-fn admit(
+fn admit_request(
     config: &DraftHttpConfig,
     request: &axum::extract::Request,
 ) -> std::result::Result<(), (StatusCode, &'static str)> {
-    let Some(ConnectInfo(peer)) = request.extensions().get::<ConnectInfo<SocketAddr>>() else {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Transport identity unavailable",
-        ));
-    };
-    if !peer.ip().is_loopback() {
-        return Err((StatusCode::FORBIDDEN, "Loopback transport required"));
-    }
-    let headers = request.headers();
-    let authority = request.uri().authority().map(|value| value.as_str());
-    let host = headers.get("host").and_then(|value| value.to_str().ok());
-    if headers.get_all("host").iter().count() > 1
-        || (headers.contains_key("host") && host != Some(&config.host))
-        || authority.or(host) != Some(&config.host)
-        || headers
-            .keys()
-            .any(|key| key == "forwarded" || key.as_str().starts_with("x-forwarded-"))
-    {
-        return Err((StatusCode::FORBIDDEN, "Invalid request host"));
-    }
-    let origin = headers.get("origin").and_then(|value| value.to_str().ok());
-    if headers.get_all("origin").iter().count() > 1
-        || (headers.contains_key("origin") && origin != Some(&config.origin))
-        || (!matches!(
-            *request.method(),
-            Method::GET | Method::HEAD | Method::OPTIONS
-        ) && origin != Some(&config.origin)
-            && !matches!(
-                principal(headers, &config.api_key_tenant),
-                Some(PresentedCredential::ApiKey { .. })
-            ))
-        || headers
-            .get_all("sec-fetch-site")
-            .iter()
-            .any(|value| value == "cross-site")
-    {
-        return Err((StatusCode::FORBIDDEN, "Invalid request origin"));
-    }
-    Ok(())
-}
-
-/// The one credential a draft request presented. API keys route to the
-/// configured tenant; request headers cannot select another tenant.
-/// Storage accepts it before a read handler runs.
-#[derive(Clone)]
-enum PresentedCredential {
-    Session(String),
-    ApiKey { tenant: String, secret: String },
-}
-
-fn principal(headers: &HeaderMap, tenant: &str) -> Option<PresentedCredential> {
-    let mut session = None;
-    for header in headers.get_all("cookie") {
-        for item in header.to_str().ok()?.split(';') {
-            if let Some(("pp_session", value)) = item.trim().split_once('=')
-                && session.replace(value).is_some()
-            {
-                return None;
-            }
-        }
-    }
-    let auth = headers.get("authorization");
-    let custom = headers.get("x-print-partner-api-key");
-    if headers.get_all("authorization").iter().count() > 1
-        || headers.get_all("x-print-partner-api-key").iter().count() > 1
-        || usize::from(session.is_some())
-            + usize::from(auth.is_some())
-            + usize::from(custom.is_some())
-            != 1
-    {
-        return None;
-    }
-    if let Some(value) = session {
-        return (!value.is_empty() && value.len() <= 4096)
-            .then(|| PresentedCredential::Session(value.into()));
-    }
-    let key = if let Some(value) = auth {
-        value.to_str().ok()?.strip_prefix("Bearer ")?
-    } else {
-        custom?.to_str().ok()?
-    }
-    .trim();
-    (!key.is_empty() && key.len() <= 4096).then(|| PresentedCredential::ApiKey {
-        tenant: tenant.into(),
-        secret: key.into(),
-    })
+    admit(
+        &config.origin,
+        &config.host,
+        &config.api_key_tenant,
+        request,
+    )
 }
 
 fn failure(status: StatusCode, detail: &str) -> Response {
@@ -386,18 +281,6 @@ fn mount(
         .route("/plans/{id}/drafts/{draft_id}/parts", patch(edit))
         .route_layer(middleware::from_fn_with_state(app, authorize));
     admit_draft_routes(config, routes)
-}
-
-impl PresentedCredential {
-    fn into_credential(self) -> Credential {
-        match self {
-            Self::Session(value) => Credential::Session(Secret::new(value)),
-            Self::ApiKey { tenant, secret } => Credential::ApiKey {
-                routed_tenant: tenant,
-                secret: Secret::new(secret),
-            },
-        }
-    }
 }
 
 async fn authorize(

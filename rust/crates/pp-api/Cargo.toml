@@ -7,7 +7,11 @@ license.workspace = true
 
 [features]
 default = []
-desktop_rebuild = ["pp-storage/desktop_rebuild", "dep:http-body", "dep:ryu-js"]
+desktop_rebuild = [
+    "pp-storage/desktop_rebuild",
+    "dep:http-body",
+    "dep:ryu-js",
+]
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
