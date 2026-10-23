@@ -11,16 +11,10 @@ desktop_rebuild = [
     "pp-storage/desktop_rebuild",
     "dep:http-body",
     "dep:ryu-js",
-    "dep:pp-contracts",
-    "pp-contracts/desktop_rebuild",
-    "dep:pp-domain",
-    "pp-domain/desktop_rebuild",
 ]
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
-pp-contracts = { path = "../pp-contracts", optional = true }
-pp-domain = { path = "../pp-domain", optional = true }
 anyhow.workspace = true
 log = "=0.4.34"
 axum.workspace = true

@@ -11,19 +11,11 @@ use axum::{
     response::Response,
     routing::get,
 };
-use pp_contracts::build_identity::{
-    AcceptedProgressSummary, AcceptedProgressUnavailableReason, FreshnessReasons, PlanFreshness,
-    PlanStaleReason, PlanUntrackedReason, ProfileSummary,
-};
-use pp_domain::PositiveId;
 use pp_storage::{
     auth::AuthFailure,
     build_graph::{
-        AcceptedProgress as DomainProgress,
-        AcceptedProgressUnavailable as DomainProgressUnavailable, BuildCommand, BuildGraphClient,
-        BuildOutcome, Failure as BuildFailure, PlanFreshness as DomainFreshness,
-        PlanStaleReason as DomainStaleReason, PlanUntrackedReason as DomainUntrackedReason,
-        ProfileSummary as DomainSummary,
+        BuildCommand, BuildGraphClient, BuildOutcome, Failure as BuildFailure, PositiveId,
+        wire::profile_summary,
     },
 };
 use serde_json::json;
@@ -203,150 +195,17 @@ fn present(method: &Method, outcome: BuildOutcome) -> Response {
     match outcome {
         BuildOutcome::Listed { profiles } => json_response(
             StatusCode::OK,
-            &json!({"profiles": profiles.into_iter().map(profile).collect::<Vec<_>>()}),
+            &json!({"profiles": profiles.into_iter().map(profile_summary).collect::<Vec<_>>()}),
             head,
         ),
         BuildOutcome::Read { profile: value } => {
-            json_response(StatusCode::OK, &profile(*value), head)
+            json_response(StatusCode::OK, &profile_summary(*value), head)
         }
         BuildOutcome::MissingBuild => failure(StatusCode::NOT_FOUND, "Profile not found"),
         _ => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Build service unavailable",
         ),
-    }
-}
-
-fn profile(value: DomainSummary) -> ProfileSummary {
-    ProfileSummary {
-        id: value.id,
-        name: value.name,
-        order_number: value.order_number,
-        special_request: value.special_request,
-        part_count: value.part_count,
-        accepted_progress: match value.accepted_progress {
-            DomainProgress::Ready {
-                total_units,
-                remaining_units,
-            } => AcceptedProgressSummary::Ready {
-                total_units,
-                remaining_units,
-            },
-            DomainProgress::Empty => AcceptedProgressSummary::Empty,
-            DomainProgress::Unavailable(reason) => AcceptedProgressSummary::Unavailable {
-                reason: match reason {
-                    DomainProgressUnavailable::CompatibilityDirty => {
-                        AcceptedProgressUnavailableReason::CompatibilityDirty
-                    }
-                    DomainProgressUnavailable::Uninitialized => {
-                        AcceptedProgressUnavailableReason::Uninitialized
-                    }
-                    DomainProgressUnavailable::Integrity => {
-                        AcceptedProgressUnavailableReason::Integrity
-                    }
-                },
-            },
-        },
-        build_stale: value.build_stale,
-        freshness: match value.freshness {
-            DomainFreshness::Unavailable { code } => PlanFreshness::Unavailable { code },
-            DomainFreshness::Current {
-                accepted_input_set_id,
-                accepted_at,
-            } => PlanFreshness::Current {
-                accepted_input_set_id,
-                accepted_at,
-            },
-            DomainFreshness::Stale {
-                accepted_input_set_id,
-                accepted_at,
-                reasons,
-                untracked_sources,
-            } => PlanFreshness::Stale {
-                accepted_input_set_id,
-                accepted_at,
-                reasons: FreshnessReasons::try_from(
-                    reasons.into_iter().map(stale_reason).collect::<Vec<_>>(),
-                )
-                .unwrap_or_else(|_| {
-                    FreshnessReasons::new(PlanStaleReason::PlanInputsInvalid, vec![])
-                }),
-                untracked_sources: untracked_sources
-                    .into_iter()
-                    .map(untracked_reason)
-                    .collect(),
-            },
-            DomainFreshness::Untracked {
-                accepted_input_set_id,
-                accepted_at,
-                reasons,
-            } => PlanFreshness::Untracked {
-                accepted_input_set_id,
-                accepted_at,
-                reasons: FreshnessReasons::try_from(
-                    reasons
-                        .into_iter()
-                        .map(untracked_reason)
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap_or_else(|_| {
-                    FreshnessReasons::new(PlanUntrackedReason::NoAcceptedInputs, vec![])
-                }),
-            },
-        },
-        archived_at: value.archived_at,
-        last_used_at: value.last_used_at,
-    }
-}
-
-fn stale_reason(value: DomainStaleReason) -> PlanStaleReason {
-    match value {
-        DomainStaleReason::SourceRevisionChanged {
-            source_id,
-            source_name,
-            accepted_revision_id,
-            current_revision_id,
-        } => PlanStaleReason::SourceRevisionChanged {
-            source_id,
-            source_name,
-            accepted_revision_id,
-            current_revision_id,
-        },
-        DomainStaleReason::SourceRevisionUnavailable {
-            source_id,
-            source_name,
-            accepted_revision_id,
-        } => PlanStaleReason::SourceRevisionUnavailable {
-            source_id,
-            source_name,
-            accepted_revision_id,
-        },
-        DomainStaleReason::NamingRulesChanged {
-            source_id,
-            source_name,
-            accepted_digest,
-            current_digest,
-        } => PlanStaleReason::NamingRulesChanged {
-            source_id,
-            source_name,
-            accepted_digest,
-            current_digest,
-        },
-        DomainStaleReason::PlanInputsInvalid => PlanStaleReason::PlanInputsInvalid,
-        DomainStaleReason::PlanConfigurationChanged => PlanStaleReason::PlanConfigurationChanged,
-    }
-}
-
-fn untracked_reason(value: DomainUntrackedReason) -> PlanUntrackedReason {
-    match value {
-        DomainUntrackedReason::NoAcceptedInputs => PlanUntrackedReason::NoAcceptedInputs,
-        DomainUntrackedReason::SourceRevisionUntracked {
-            source_id,
-            source_name,
-        } => PlanUntrackedReason::SourceRevisionUntracked {
-            source_id,
-            source_name,
-        },
     }
 }
 
@@ -432,17 +291,23 @@ fn failure(status: StatusCode, detail: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pp_storage::build_graph::{AcceptedProgress, PlanFreshness as DomainFreshness};
+    use pp_storage::build_graph::{
+        AcceptedProgress, AcceptedProgressUnavailable, PlanFreshness as DomainFreshness,
+        ProfileSummary as DomainSummary, wire::AcceptedProgressSummary,
+        wire::AcceptedProgressUnavailableReason,
+    };
 
     #[test]
     fn unavailable_freshness_preserves_integrity_code() {
-        let summary = profile(DomainSummary {
+        let summary = profile_summary(DomainSummary {
             id: 7,
             name: "Broken".into(),
             order_number: None,
             special_request: None,
             part_count: 0,
-            accepted_progress: AcceptedProgress::Unavailable(DomainProgressUnavailable::Integrity),
+            accepted_progress: AcceptedProgress::Unavailable(
+                AcceptedProgressUnavailable::Integrity,
+            ),
             build_stale: false,
             freshness: DomainFreshness::Unavailable {
                 code: "accepted_inputs".into(),
