@@ -1096,3 +1096,140 @@ mod capture_binding {
         owner.shutdown().unwrap();
     }
 }
+
+mod capture_manifest {
+    use super::super::{
+        AdmissionLimits, CaptureId, CapturedPayloadV1, File, Target, capture_manifest,
+        inspect_capture_manifest,
+    };
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: hex::encode(Sha256::digest(b"mesh")),
+            kind: "input".into(),
+        }]
+    }
+
+    fn bind_existing() -> capture_manifest::BoundCaptureManifest {
+        capture_manifest::bind_capture_manifest(
+            CaptureId::new("ab".repeat(32)).unwrap(),
+            CapturedPayloadV1::files(vec!["nested/part.stl".into()]),
+            "actor",
+            "operation-key",
+            &Target::Existing { source_id: 42 },
+            limits(),
+            &files(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn capture_manifest_inventory_round_trip() {
+        let bound = bind_existing();
+        let inventory = inspect_capture_manifest(bound.bytes()).unwrap();
+        assert_eq!(inventory.paths(), &["nested/part.stl".to_string()]);
+        assert_eq!(inventory.max_input_bytes(), limits().max_input_bytes);
+
+        let wire: Value = serde_json::from_slice(bound.bytes()).unwrap();
+        let keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            [
+                "manifest_version",
+                "capture_id",
+                "operation_key",
+                "actor",
+                "target",
+                "target_digest",
+                "input",
+                "admission_limits",
+                "policy_digest",
+                "requested_files",
+                "requested_digest",
+            ]
+        );
+        assert_eq!(wire["manifest_version"], 1);
+        assert_eq!(wire["actor"], "actor");
+        assert_eq!(wire["operation_key"], "operation-key");
+        assert_eq!(wire["target"]["source_id"], 42);
+        assert_eq!(
+            wire["policy_digest"],
+            "7163d9f0439e36702b872b901c23a8f40f37683c30ce246faff1cbd666d5129a"
+        );
+        assert_eq!(
+            wire["requested_digest"],
+            hex::encode(Sha256::digest(serde_json::to_vec(&files()).unwrap()))
+        );
+
+        let rebound = capture_manifest::bind_capture_manifest(
+            CaptureId::new("ab".repeat(32)).unwrap(),
+            CapturedPayloadV1::files(vec!["nested/part.stl".into()]),
+            "actor",
+            "operation-key",
+            &Target::Existing { source_id: 42 },
+            limits(),
+            &files(),
+        )
+        .unwrap();
+        assert_eq!(rebound.bytes(), bound.bytes());
+        assert_eq!(rebound.input(), bound.input());
+        let _ = bound.into_parts();
+    }
+
+    #[test]
+    fn capture_manifest_rejects_unknown_fields_and_version() {
+        let bound = bind_existing();
+        let value: Value = serde_json::from_slice(bound.bytes()).unwrap();
+
+        let mut unknown = value.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("future".into(), Value::Bool(true));
+        let error = inspect_capture_manifest(&serde_json::to_vec(&unknown).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid capture manifest"),
+            "{error:#}"
+        );
+
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("actor");
+        let error = inspect_capture_manifest(&serde_json::to_vec(&missing).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid capture manifest"),
+            "{error:#}"
+        );
+
+        let mut future = value.clone();
+        future["manifest_version"] = Value::from(2);
+        let error = inspect_capture_manifest(&serde_json::to_vec(&future).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid capture manifest"),
+            "{error:#}"
+        );
+
+        assert!(inspect_capture_manifest(br#"{}"#).is_err());
+        assert!(inspect_capture_manifest(br#"[]"#).is_err());
+
+        let mut bad_limits = value;
+        bad_limits["admission_limits"]["max_input_bytes"] = Value::from(268_435_457u64);
+        let error =
+            inspect_capture_manifest(&serde_json::to_vec(&bad_limits).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid import limits"),
+            "{error:#}"
+        );
+    }
+}
