@@ -1033,7 +1033,10 @@ async fn build_layer_read_preserves_stale_reasons() {
     assert_eq!(detail["build_stale"], domain["build_stale"]);
     assert!(
         detail["freshness"]["reasons"].is_array()
-            && !detail["freshness"]["reasons"].as_array().unwrap().is_empty(),
+            && !detail["freshness"]["reasons"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
         "domain freshness reasons must reach HTTP unchanged: {detail}"
     );
 
@@ -1045,7 +1048,10 @@ async fn build_layer_read_preserves_stale_reasons() {
         )
         .await;
     assert_eq!(status, 200, "{touched}");
-    assert_eq!(touched["freshness"]["reasons"], detail["freshness"]["reasons"]);
+    assert_eq!(
+        touched["freshness"]["reasons"],
+        detail["freshness"]["reasons"]
+    );
     assert_eq!(
         touched["freshness"]["untracked_sources"],
         detail["freshness"]["untracked_sources"]
