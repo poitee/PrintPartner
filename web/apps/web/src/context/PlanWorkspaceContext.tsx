@@ -63,6 +63,7 @@ import {
   WorkingPlanChangedError,
 } from "../lib/workingPlanChanged";
 import { useProfileSelection } from "./ProfileContext";
+import { retryFailedAuxiliarySaves } from "../lib/planAuxiliarySaveIntent";
 import { usePlanFileChoices, type PlanFileChoice } from "../hooks/usePlanFileChoices";
 
 /** The Plan row being edited — enough identity to find it in the saved draft. */
@@ -913,8 +914,13 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   ]);
 
   const retryPlanSave = useCallback(
-    (options?: { applyManifest?: boolean }) => replayRetainedOrdinarySave(options),
-    [replayRetainedOrdinarySave],
+    async (options?: { applyManifest?: boolean }) => {
+      await replayRetainedOrdinarySave(options);
+      if (selectedProfileId != null) {
+        await retryFailedAuxiliarySaves(selectedProfileId);
+      }
+    },
+    [replayRetainedOrdinarySave, selectedProfileId],
   );
 
   const reconcileActivePlanDraft = useCallback(

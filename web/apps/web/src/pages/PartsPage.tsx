@@ -108,7 +108,7 @@ export default function PartsPage() {
         <p className="text-sm text-muted-foreground">{saving || loading || draftLoading ? "Loading your files…" : "Your files will appear here once the sources are ready."}</p>
       ) : (
         <>
-          <KitManifestOptions profileId={selectedProfileId} disabled={disabled} onUpdated={() => preparePlan({ applyManifest: true })} compact />
+          <KitManifestOptions key={selectedProfileId} profileId={selectedProfileId} disabled={disabled} onUpdated={() => preparePlan({ applyManifest: true })} compact />
           <PlanFileSelection profileId={selectedProfileId} disabled={loading} />
           <section id="materials" className="space-y-2">
             <h2 className="text-sm font-semibold">Colors and materials</h2>
