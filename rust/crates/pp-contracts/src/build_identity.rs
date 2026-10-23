@@ -54,6 +54,8 @@ pub enum AcceptedProgressUnavailableReason {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PlanFreshness {
+    /// Integrity failure while evaluating freshness; `code` names the broken input.
+    Unavailable { code: String },
     Current {
         accepted_input_set_id: i64,
         accepted_at: String,

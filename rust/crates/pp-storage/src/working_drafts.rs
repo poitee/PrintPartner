@@ -4,7 +4,7 @@ use crate::{
     read_model::Credential,
     required_units::{
         self, Outcome as WorkspaceOutcome, ReconciliationCommand, model,
-        storage::{self, Draft, draft, num, one, rows, text},
+        storage::{self, Draft, draft, num, one, rows, rows_checked, text},
         view::workspace,
     },
     writer_admission,
@@ -31,6 +31,7 @@ mod preparation;
 #[cfg(test)]
 mod preparation_tests;
 mod rebase;
+pub mod save;
 pub use rebase::{
     Conflict as RebaseConflict, Field as RebaseField, RebaseArgs, RebaseOutcome, RebaseRequest,
 };
@@ -483,6 +484,12 @@ pub(super) struct Write {
     operation: Operation,
 }
 enum Operation {
+    Save {
+        request: pp_contracts::autosave::SavePlanChoicesRequest,
+        key: String,
+        observations: Observations,
+        reply: mpsc::Sender<Result<save::Outcome>>,
+    },
     Edit {
         draft_id: PositiveId,
         request: EditRequest,
@@ -818,6 +825,7 @@ pub(super) fn write(
     connection: &mut Connection,
     command: Write,
     admission: writer_admission::Deadline,
+    tokens: &mut dyn crate::plan_publication::RequiredUnitTokenAllocator,
 ) {
     let Write {
         credential,
@@ -827,6 +835,29 @@ pub(super) fn write(
         operation,
     } = command;
     match operation {
+        Operation::Save {
+            request,
+            key,
+            observations,
+            reply,
+        } => {
+            let _ = reply.send(save::execute(
+                connection,
+                save::Command {
+                    input: save::SaveCommand {
+                        credential,
+                        profile,
+                        request,
+                        key,
+                    },
+                    policy,
+                    observations,
+                    cancelled,
+                },
+                tokens,
+                admission,
+            ));
+        }
         Operation::Edit {
             draft_id,
             request,
@@ -1418,8 +1449,10 @@ fn charge_open_draft(
 /// caller keeps the current draft, replace the prepared values. Returns
 /// whether any Part changed.
 ///
-/// This runs under the writer lock, so `charge_open_draft` charges what
-/// loading each open draft reads to the recompute's budget first.
+/// This runs under the writer lock. `charge_open_draft` charges what loading
+/// each open draft reads to the recompute's budget first. A default-grant
+/// carry or a budget refusal can occupy the lock for seconds; there is no
+/// elapsed-time guarantee. GRE-706 callers must size wait and UX for that.
 fn carry_open_edits(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -1429,10 +1462,14 @@ fn carry_open_edits(
     budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<bool> {
     let mut edits = HashMap::new();
-    for open in rows(
+    for open in rows_checked(
         tx,
         "SELECT id FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open' ORDER BY created_at,id",
         &[&tenant, &profile],
+        &|| {
+            budget.check()?;
+            Ok(())
+        },
     )? {
         charge_open_draft(tx, tenant, num(&open, "id")?, budget)?;
         let Some(open) = storage::draft_checked(tx, tenant, profile, num(&open, "id")?, &|| {
@@ -1819,5 +1856,31 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    /// Cancels on the first budget check inside the open-draft ID query, before
+    /// `charge_open_draft` runs.
+    #[test]
+    fn cancellation_during_the_open_draft_id_query_writes_nothing() {
+        let (_database, mut connection) = Database::new();
+        let before = connection.total_changes();
+        let tx = connection.transaction().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let mut budget = observation::PreparationBudget::new(
+            &cancelled,
+            observation::PreparationLimits::default(),
+        )
+        .unwrap();
+        budget.cancel_after_checks(0);
+        let error = carry_open_edits(&tx, "default", 1, &mut [], true, &mut budget).unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref(),
+                Some(observation::ReadFailure::Cancelled)
+            ),
+            "{error:?}"
+        );
+        tx.rollback().unwrap();
+        assert_eq!(connection.total_changes(), before);
     }
 }

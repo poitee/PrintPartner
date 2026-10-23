@@ -31,6 +31,7 @@ import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { getLogger } from "../services/logger.js";
 import { loadManifestYaml } from "../services/manifest-apply.js";
 import { inferOptionGroupsFromPaths } from "../services/path-hints.js";
+import type { AssistantRuntimeConfig } from "./resolve-assistant.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
@@ -77,7 +78,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -491,6 +492,131 @@ it("rejects an undeclared read against the empty get_workflow_help resource set"
   if (!entry || entry.operation === "source.sync") throw new Error("Missing workflow help declaration");
   const declared = entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort();
   expect(() => expect(observed).toEqual(declared)).toThrow();
+});
+
+
+it("traces web_search as an explicitly resource-free operation", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.web_search");
+  expect(entry).toEqual({ operation: "tool.web_search", resources: [] });
+  const outbound = await import("../lib/outbound-url.js");
+  const html = `
+      <a class="result__a" href="https://example.com/a">Title A</a>
+      <a class="result__snippet">Snippet A</a>
+    `;
+  const spy = vi.spyOn(outbound, "safeOutboundFetch").mockImplementation(async () =>
+    new Response(html, { status: 200 }),
+  );
+  try {
+    for (const tenantId of ["default", "tenant-b"]) {
+      for (const input of [{ query: "voron tap" }, { query: " voron tap ", site: "printables.com" }]) {
+        statements = [];
+        observer.state.files = [];
+        observer.state.active = true;
+        let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+        try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("web_search", input, { repo })); }
+        finally { observer.state.active = false; }
+        const raw = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+        expect(raw.untrusted_banner).toMatch(/UNTRUSTED/i);
+        expect(Array.isArray(raw.hits)).toBe(true);
+        expect(statements).toEqual([]);
+        expect(observer.state.files).toEqual([]);
+      }
+    }
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let blank: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { blank = await tenantStorage.run("default", () => invokeAssistantTool("web_search", { query: "  " }, { repo })); }
+    finally { observer.state.active = false; }
+    expect(JSON.parse(blank.content)).toEqual({ error: "query required" });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("rejects observed reads against the empty web_search declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("web_search", { query: "x" }, { repo });
+    repo.listSources();
+  } finally { observer.state.active = false; }
+  const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql)))].sort();
+  expect(observed).toEqual(["table:projects", "table:source_docs"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.web_search");
+  expect(entry).toEqual({ operation: "tool.web_search", resources: [] });
+  expect(() => expect(observed).toEqual([])).toThrow();
+});
+
+it("traces fetch_web_page as an explicitly resource-free operation", async () => {
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.fetch_web_page");
+  expect(entry).toEqual({ operation: "tool.fetch_web_page", resources: [] });
+  const outbound = await import("../lib/outbound-url.js");
+  const html = `<html><head><title>Kit Docs</title></head><body><p>Hello kit world</p></body></html>`;
+  const spy = vi.spyOn(outbound, "safeOutboundFetch").mockImplementation(async () =>
+    new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
+  );
+  try {
+    for (const tenantId of ["default", "tenant-b"]) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, { repo })); }
+      finally { observer.state.active = false; }
+      const raw = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+      expect(raw.ok).toBe(true);
+      expect(raw.title).toBe("Kit Docs");
+      expect(statements).toEqual([]);
+      expect(observer.state.files).toEqual([]);
+    }
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let blank: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { blank = await tenantStorage.run("default", () => invokeAssistantTool("fetch_web_page", { url: "  " }, { repo })); }
+    finally { observer.state.active = false; }
+    expect(JSON.parse(blank.content)).toEqual({ error: "url required" });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let disabled: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      disabled = await tenantStorage.run("default", () =>
+        invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, {
+          repo,
+          runtime: { assistantAllowUrlIngest: false } as AssistantRuntimeConfig,
+        }),
+      );
+    } finally { observer.state.active = false; }
+    expect(JSON.parse(disabled.content)).toEqual({
+      error: "URL fetch disabled (ASSISTANT_ALLOW_URL_INGEST=0)",
+    });
+    expect(statements).toEqual([]);
+    expect(observer.state.files).toEqual([]);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("rejects observed reads against the empty fetch_web_page declaration", async () => {
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  try {
+    await invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, { repo });
+    repo.listSources();
+  } finally { observer.state.active = false; }
+  const observed = [...new Set(statements.map((sql) => tableForObservedSelect(sql)))].sort();
+  expect(observed).toEqual(["table:projects", "table:source_docs"]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.fetch_web_page");
+  expect(entry).toEqual({ operation: "tool.fetch_web_page", resources: [] });
+  expect(() => expect(observed).toEqual([])).toThrow();
 });
 
 it("traces check_hardware_interfaces inputs, comparisons and tenants against its reviewed empty union", async () => {
@@ -2922,6 +3048,315 @@ it("traces get_kit_catalog real catalogs, fallbacks and tenant independence with
   expect(() => kitCatalogResources([...candidates, ...shipped])).toThrow();
 });
 
+const BUILD_RECIPE_TABLES = [
+  "table:app_settings",
+  "table:build_profiles",
+  "table:plan_decisions",
+  "table:profile_layers",
+  "table:projects",
+  "table:source_docs",
+];
+const BUILD_RECIPE_UNION = ["file:kit-catalog", "file:source-workspace", ...BUILD_RECIPE_TABLES];
+
+function recipeSelect(statement: unknown, tenantId: string, planId?: number): string {
+  const sql = z.string().parse(statement);
+  if (planId !== undefined) {
+    if (sql === `select "id" from "build_profiles" where ("build_profiles"."tenant_id" = '${tenantId}' and "build_profiles"."id" = ${planId}.0)`) {
+      return "table:build_profiles";
+    }
+    if (sql === `select "id", "tenant_id", "profile_id", "layer_order", "layer_type", "project_id" from "profile_layers" where "profile_layers"."profile_id" = ${planId}.0 order by "profile_layers"."layer_order" asc`) {
+      return "table:profile_layers";
+    }
+  }
+  return tableForObservedSelect(sql, tenantId);
+}
+
+function recipeFileResources(candidates: string[], workspaceRoots: string[]): string[] {
+  const resources = new Set<string>();
+  for (const { api, args } of observer.state.files) {
+    const path = z.string().parse(args[0]);
+    if (api === "readFileSync" && candidates.includes(path)) {
+      expect(args).toEqual([path, "utf8"]);
+      resources.add("file:kit-catalog");
+      continue;
+    }
+    expect(["realpathSync", "lstatSync", "statSync"], `Unsupported recipe filesystem call ${api}`).toContain(api);
+    expect(workspaceRoots.some((root) => under(root, path) || path === root), `${api} ${path}`).toBe(true);
+    resources.add("file:source-workspace");
+  }
+  return [...resources];
+}
+
+it("traces get_build_recipe layers, kit, decisions, catalog and tenant isolation", async () => {
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  const catalogPaths = [...candidates, ...shipped];
+  const plan = repo.createProfile("Recipe", sourceId);
+  repo.addAddonLayer(plan.id, userId);
+  const empty = repo.createProfile("Empty recipe");
+  const foreign = tenantStorage.run("other", () => {
+    const otherSource = repo.createSource({ name: "OtherFixture", source_kind: "local", local_path: root }).id;
+    const profile = repo.createProfile("Foreign recipe", otherSource);
+    repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ selections: { size: "hidden" } }));
+    repo.createPlanDecision({ planId: profile.id, actor: "user", kind: "dismissed_action", summary: "Private" });
+    return profile;
+  });
+  repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({
+    selections: { size: "large" },
+    include: ["a.stl"],
+    exclude: [],
+  }));
+  const first = repo.createPlanDecision({ planId: plan.id, actor: "assistant", kind: "applied_action", summary: "First recipe decision" });
+  const last = repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", summary: "Last recipe decision" });
+  sqlite.prepare("UPDATE plan_decisions SET created_at = ? WHERE id = ?").run("2026-01-01T00:00:00Z", first.id);
+  sqlite.prepare("UPDATE plan_decisions SET created_at = ? WHERE id = ?").run("2026-01-02T00:00:00Z", last.id);
+  const catalog = {
+    version: 1,
+    bases: { fixture: { source_name: "Fixture" } },
+    addon_categories: {},
+    stack_presets: { fixture_stack: { base: "fixture", addon_sources: ["UserLocal"] } },
+  };
+  fs.mkdirSync(join(dataDir, "manifests"), { recursive: true });
+  fs.writeFileSync(candidates[0]!, JSON.stringify(catalog));
+  const union = new Set<string>();
+  async function trace({
+    input = {},
+    tables,
+    files = [["readFileSync", candidates[0]!, "utf8"]] as [string, ...unknown[]][],
+    tenantId = "default",
+    activePlanId,
+    planId,
+    repository = repo,
+  }: {
+    input?: Record<string, unknown>;
+    tables: string[];
+    files?: [string, ...unknown[]][];
+    tenantId?: string;
+    activePlanId?: number;
+    planId?: number;
+    repository?: AppRepository;
+  }) {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      output = await tenantStorage.run(tenantId, () =>
+        invokeAssistantTool("get_build_recipe", input, { repo: repository, activePlanId }),
+      );
+    } finally {
+      observer.state.active = false;
+    }
+    const observed = [...new Set(statements.map((sql) => recipeSelect(sql, tenantId, planId)))].sort();
+    expect(observed).toEqual(tables);
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual(files);
+    for (const resource of observed) union.add(resource);
+    for (const resource of recipeFileResources(catalogPaths, [join(dataDir, "repos"), root, userRoot])) union.add(resource);
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    expect(await trace({ input: {}, tables: [], files: [] })).toEqual({ error: "plan_id required" });
+    expect(await trace({ input: { plan_id: "invalid" }, tables: [], files: [] })).toEqual({ error: "plan_id required" });
+    expect(await trace({ input: { plan_id: 999999 }, tables: ["table:build_profiles"], files: [] })).toEqual({ error: "plan_id required" });
+    expect(await trace({ input: { plan_id: foreign.id }, tables: ["table:build_profiles"], files: [] })).toEqual({ error: "plan_id required" });
+    const layered = await trace({
+      input: { plan_id: plan.id },
+      tables: BUILD_RECIPE_TABLES,
+      planId: plan.id,
+    });
+    expect(layered).toMatchObject({
+      plan_id: plan.id,
+      plan_name: "Recipe",
+      base: { source_name: "Fixture", project_id: sourceId },
+      addons: [{ source_name: "UserLocal", project_id: userId }],
+      stack_preset: "fixture_stack",
+      kit_selections: { size: "large" },
+      include: ["a.stl"],
+      exclude: [],
+      decision_count: 2,
+    });
+    expect(String(layered.markdown)).toContain("Last recipe decision");
+    expect(await trace({
+      input: { plan_id: String(plan.id) },
+      tables: BUILD_RECIPE_TABLES,
+      planId: plan.id,
+      activePlanId: empty.id,
+    })).toMatchObject({ plan_id: plan.id, plan_name: "Recipe" });
+    expect(await trace({
+      input: {},
+      tables: BUILD_RECIPE_TABLES,
+      planId: plan.id,
+      activePlanId: plan.id,
+    })).toMatchObject({ plan_id: plan.id });
+    expect(await trace({
+      input: { plan_id: foreign.id },
+      tables: BUILD_RECIPE_TABLES,
+      planId: plan.id,
+      activePlanId: plan.id,
+    })).toMatchObject({ plan_id: plan.id });
+    const emptyRecipe = await trace({
+      input: { plan_id: empty.id },
+      tables: ["table:app_settings", "table:build_profiles", "table:plan_decisions", "table:profile_layers"],
+      planId: empty.id,
+    });
+    expect(emptyRecipe).toMatchObject({
+      plan_id: empty.id,
+      plan_name: "Empty recipe",
+      base: { source_name: null, project_id: null },
+      addons: [],
+      kit_selections: {},
+      decision_count: 0,
+    });
+    expect(await trace({
+      input: { plan_id: foreign.id },
+      tables: BUILD_RECIPE_TABLES,
+      planId: foreign.id,
+      tenantId: "other",
+    })).toMatchObject({ plan_id: foreign.id, plan_name: "Foreign recipe" });
+    expect(await trace({
+      input: { plan_id: plan.id },
+      tables: ["table:build_profiles"],
+      files: [],
+      tenantId: "other",
+    })).toEqual({ error: "plan_id required" });
+    fs.rmSync(candidates[0]!);
+    const shippedRecipe = await trace({
+      input: { plan_id: plan.id },
+      tables: BUILD_RECIPE_TABLES,
+      planId: plan.id,
+      files: [...candidates, ...shipped.slice(0, 2)].map((path): [string, ...unknown[]] => ["readFileSync", path, "utf8"]),
+    });
+    expect(shippedRecipe).toMatchObject({ plan_id: plan.id, stack_preset: null });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  // Trusted traces never probe the workspace; the operation-wide declaration still includes it.
+  expect([...union].sort()).toEqual(["file:kit-catalog", ...BUILD_RECIPE_TABLES]);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_build_recipe");
+  expect(entry).toEqual({
+    operation: "tool.get_build_recipe",
+    resources: [
+      { kind: "table", name: "build_profiles" },
+      { kind: "table", name: "profile_layers" },
+      { kind: "table", name: "projects" },
+      { kind: "table", name: "source_docs" },
+      { kind: "table", name: "app_settings" },
+      { kind: "table", name: "plan_decisions" },
+      { kind: "file", name: "kit-catalog" },
+      { kind: "file", name: "source-workspace" },
+    ],
+  });
+});
+
+it("traces get_build_recipe isolated workspace probes against its operation-wide union", async () => {
+  const repos = join(dataDir, "repos");
+  const workspace = join(repos, String(sourceId));
+  fs.mkdirSync(workspace, { recursive: true });
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  fs.mkdirSync(join(dataDir, "manifests"), { recursive: true });
+  fs.writeFileSync(candidates[0]!, JSON.stringify({ version: 1, bases: {}, addon_categories: {}, stack_presets: {} }));
+  const isolated = new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, {
+    sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM,
+  });
+  const plan = repo.createProfile("Isolated recipe", sourceId);
+  sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspace, sourceId);
+  const union = new Set<string>();
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      output = await tenantStorage.run("default", () =>
+        invokeAssistantTool("get_build_recipe", { plan_id: plan.id }, { repo: isolated }),
+      );
+    } finally {
+      observer.state.active = false;
+    }
+    expect(JSON.parse(output.content)).toMatchObject({ plan_id: plan.id, plan_name: "Isolated recipe" });
+    const observed = [...new Set(statements.map((sql) => recipeSelect(sql, "default", plan.id)))].sort();
+    expect(observed).toEqual(BUILD_RECIPE_TABLES);
+    for (const resource of observed) union.add(resource);
+    for (const resource of recipeFileResources([...candidates, ...shipped], [repos, workspace])) union.add(resource);
+    expect(observer.state.files.some(({ api }) => api === "readFileSync")).toBe(true);
+    expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
+    expect([...union].sort()).toEqual(BUILD_RECIPE_UNION);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("traces analyze_build_request catalog candidates, zero SQL and tenant independence", async () => {
+  const candidates = deploymentCatalogCandidates(dataDir);
+  const shipped = SHIPPED_CATALOG_CANDIDATES;
+  const union = new Set<string>();
+  const catalog = {
+    version: 1,
+    bases: {},
+    addon_categories: { toolhead: { rule: "pick_one", sources: [{ name: "Addon" }] }, extruder: { rule: "pick_one", sources: [] } },
+    stack_presets: {},
+  };
+  const request = "Build a Voron with toolhead";
+  const baseBody = {
+    special_request: request,
+    requirements: [
+      { key: "project", value: "Voron", status: "unverified" },
+      { key: "requested_feature_1", value: "toolhead", status: "unverified" },
+    ],
+    evidence: [],
+    build_scoped_slots_allowed: true,
+    supported_inputs: {
+      links: ["public Git repositories", "Printables", "MakerWorld", "public web pages"],
+      uploads: [".zip", ".stl", ".3mf", "supporting project files"],
+      upload_workflow:
+        "Create a local/model-library Source, upload files with POST /sources/:id/upload-files or an archive with POST /sources/:id/upload-zip, then attach the returned Source id with propose_import_build_inputs.",
+    },
+    contribution_instruction:
+      "Reuse a functional slot when its responsibility fits. Otherwise propose a snake_case Build-scoped slot with path scope, evidence, and confidence.",
+  };
+  async function trace(expected: unknown, reads: string[], catalogDir: string | null = dataDir) {
+    for (const tenantId of ["default", "other"]) {
+      statements = [];
+      observer.state.files = [];
+      observer.state.active = true;
+      let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+      try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("analyze_build_request", { request }, { repo, dataDir: catalogDir })); }
+      finally { observer.state.active = false; }
+      expect(JSON.parse(output.content)).toEqual(expected);
+      expect(statements).toEqual([]);
+      if (reads.length) for (const resource of kitCatalogResources([...candidates, ...shipped])) union.add(resource);
+      expect(observer.state.files.map(({ args }) => args[0])).toEqual(reads);
+    }
+  }
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let blank: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { blank = await tenantStorage.run("default", () => invokeAssistantTool("analyze_build_request", { request: "  " }, { repo, dataDir })); }
+  finally { observer.state.active = false; }
+  expect(blank).toEqual({ content: JSON.stringify({ error: "request required" }) });
+  expect(statements).toEqual([]);
+  expect(observer.state.files).toEqual([]);
+  fs.mkdirSync(join(dataDir, "manifests"), { recursive: true });
+  fs.writeFileSync(candidates[0]!, JSON.stringify(catalog));
+  await trace({ ...baseBody, functional_slot_vocabulary: ["toolhead", "extruder"] }, candidates.slice(0, 1));
+  fs.rmSync(candidates[0]!);
+  await trace(
+    {
+      ...baseBody,
+      functional_slot_vocabulary: ["toolhead", "extruder", "hotend", "toolhead_electronics", "probe", "controller", "cable_routing", "z_drives", "skirts_panels", "accent"],
+    },
+    [...candidates, ...shipped.slice(0, 2)],
+  );
+  expect([...union]).toEqual(["file:kit-catalog"]);
+  expect(manifest.resources.reviewed.find((entry) => entry.operation === "tool.analyze_build_request")).toEqual({
+    operation: "tool.analyze_build_request", resources: [{ kind: "file", name: "kit-catalog" }],
+  });
+});
+
 const OPTION_GROUP_TABLES = ["table:app_settings", "table:build_profiles", "table:profile_layers", "table:projects"];
 const OPTION_GROUP_UNION = ["file:community-manifests", "file:path-hints", "file:source-workspace", ...OPTION_GROUP_TABLES];
 const SHIPPED_PATH_HINTS = fileURLToPath(new URL("../data/path-hints.yaml", import.meta.url));
@@ -4162,4 +4597,163 @@ it("traces a reconciliation-selected plan draft through both planning reads", as
     expect([...unions.get(tool) ?? []].sort()).toEqual(RECONCILED_DRAFT_TABLES);
     expect(declaredPlanningResources(tool)).toEqual(RECONCILED_DRAFT_DECLARATION);
   }
+});
+
+
+type PlanningProposalTool =
+  | "propose_update_build_brief"
+  | "propose_resolve_build_differences"
+  | "propose_set_build_source_roles"
+  | "propose_rebuild_plan"
+  | "propose_apply_plan_draft";
+const PLANNING_PROPOSAL_TOOLS = [
+  "propose_update_build_brief",
+  "propose_resolve_build_differences",
+  "propose_set_build_source_roles",
+  "propose_rebuild_plan",
+  "propose_apply_plan_draft",
+] as const satisfies readonly PlanningProposalTool[];
+const PLANNING_PROPOSAL_SETTINGS = ["table:app_settings"] as const;
+
+function planningProposalLabel(tool: PlanningProposalTool): string {
+  return tool.replace(/^propose_/, "").replaceAll("_", " ");
+}
+
+function planningProposal(tool: PlanningProposalTool, planId: number, params: Record<string, unknown>) {
+  return {
+    status: "proposed",
+    note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: {
+      id: expect.any(String),
+      type: tool,
+      plan_id: planId,
+      label: planningProposalLabel(tool),
+      summary: "Apply the confirmed Build planning change.",
+      params,
+    },
+  };
+}
+
+async function tracePlanningProposal(
+  tool: PlanningProposalTool,
+  input: Record<string, unknown>,
+  tables: string[],
+  options: { repository?: AppRepository; tenantId?: string; activePlanId?: number } = {},
+) {
+  const { repository = repo, tenantId = "default", activePlanId } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try {
+    output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId }));
+  } finally {
+    observer.state.active = false;
+  }
+  expect(statements.every((sql) => String(sql).startsWith("select "))).toBe(true);
+  const observed = [...new Set(statements.map((sql) => planningSelect(sql, tenantId)))].sort();
+  expect(observed).toEqual(tables);
+  expect(observer.state.files).toEqual([]);
+  const union = unions.get(tool) ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  unions.set(tool, union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+it("traces build planning proposal creators against the app_settings brief lookup", async () => {
+  const plan = repo.createProfile("Proposal Planning");
+  const idle = repo.createProfile("Proposal Idle");
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual([...PLANNING_PROPOSAL_SETTINGS]);
+  }
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    for (const plan_id of [undefined, null, "invalid"]) {
+      expect(await tracePlanningProposal(tool, { plan_id }, [])).toEqual({ error: "plan_id required" });
+      expect(statements).toEqual([]);
+    }
+    expect(await tracePlanningProposal(tool, { plan_id: plan.id }, [...PLANNING_PROPOSAL_SETTINGS])).toEqual({
+      error: "Build planning brief not found",
+    });
+  }
+  savePlanningBrief(plan.id);
+  const otherPlan = await tenantStorage.run("other", () => {
+    const created = repo.createProfile("Other Proposal Planning");
+    savePlanningBrief(created.id);
+    return created;
+  });
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    const baseInput =
+      tool === "propose_resolve_build_differences"
+        ? { group_id: " group-a ", rationale: " keep both " }
+        : { note: "admission" };
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(
+        await tracePlanningProposal(tool, { ...baseInput, plan_id }, [...PLANNING_PROPOSAL_SETTINGS], {
+          activePlanId: idle.id,
+        }),
+      ).toEqual(planningProposal(tool, plan.id, { ...baseInput, plan_id }));
+    }
+    expect(
+      await tracePlanningProposal(tool, baseInput, [...PLANNING_PROPOSAL_SETTINGS], { activePlanId: plan.id }),
+    ).toEqual(planningProposal(tool, plan.id, baseInput));
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: "invalid" }, [...PLANNING_PROPOSAL_SETTINGS], {
+        activePlanId: plan.id,
+      }),
+    ).toEqual(planningProposal(tool, plan.id, { ...baseInput, plan_id: "invalid" }));
+    // resolvePlanId(..., false) does not ownership-check explicit IDs; brief key miss fails closed.
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: 999999 }, [...PLANNING_PROPOSAL_SETTINGS], {
+        activePlanId: plan.id,
+      }),
+    ).toEqual({ error: "Build planning brief not found" });
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: plan.id }, [...PLANNING_PROPOSAL_SETTINGS], {
+        tenantId: "other",
+      }),
+    ).toEqual({ error: "Build planning brief not found" });
+    expect(
+      await tracePlanningProposal(tool, { ...baseInput, plan_id: otherPlan.id }, [...PLANNING_PROPOSAL_SETTINGS], {
+        tenantId: "other",
+      }),
+    ).toEqual(planningProposal(tool, otherPlan.id, { ...baseInput, plan_id: otherPlan.id }));
+  }
+  expect(
+    await tracePlanningProposal(
+      "propose_resolve_build_differences",
+      { plan_id: plan.id, group_id: " ", rationale: "keep" },
+      [...PLANNING_PROPOSAL_SETTINGS],
+    ),
+  ).toEqual({ error: "group_id and rationale required" });
+  expect(
+    await tracePlanningProposal(
+      "propose_resolve_build_differences",
+      { plan_id: plan.id, group_id: "g1", rationale: "  " },
+      [...PLANNING_PROPOSAL_SETTINGS],
+    ),
+  ).toEqual({ error: "group_id and rationale required" });
+  expect(
+    await tracePlanningProposal(
+      "propose_resolve_build_differences",
+      { plan_id: plan.id },
+      [...PLANNING_PROPOSAL_SETTINGS],
+    ),
+  ).toEqual({ error: "group_id and rationale required" });
+  for (const tool of PLANNING_PROPOSAL_TOOLS) {
+    expect([...unions.get(tool) ?? []].sort()).toEqual([...PLANNING_PROPOSAL_SETTINGS]);
+    const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual([...PLANNING_PROPOSAL_SETTINGS]);
+  }
+  // Brief bytes unchanged — proposal creators do not apply.
+  expect(repo.getSetting(`build_planning.v1.${plan.id}`)).toBeTruthy();
+  const before = repo.getSetting(`build_planning.v1.${plan.id}`);
+  await tracePlanningProposal(
+    "propose_update_build_brief",
+    { plan_id: plan.id, requirements: [{ key: "project", value: "changed", status: "satisfied" }] },
+    [...PLANNING_PROPOSAL_SETTINGS],
+  );
+  expect(repo.getSetting(`build_planning.v1.${plan.id}`)).toBe(before);
 });

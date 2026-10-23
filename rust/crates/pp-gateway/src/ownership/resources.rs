@@ -79,6 +79,10 @@ enum ReviewedEntry {
     SourceSync { import: SourceSyncImport },
     #[serde(rename = "tool.get_workflow_help")]
     GetWorkflowHelp { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.web_search")]
+    WebSearch { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.fetch_web_page")]
+    FetchWebPage { resources: Vec<ResourceId> },
     #[serde(rename = "tool.check_hardware_interfaces")]
     CheckHardwareInterfaces { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_add_custom_filament")]
@@ -119,6 +123,16 @@ enum ReviewedEntry {
     ListBuildDifferences { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_draft")]
     GetPlanDraft { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_build_brief")]
+    ProposeUpdateBuildBrief { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_resolve_build_differences")]
+    ProposeResolveBuildDifferences { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_build_source_roles")]
+    ProposeSetBuildSourceRoles { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_rebuild_plan")]
+    ProposeRebuildPlan { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_apply_plan_draft")]
+    ProposeApplyPlanDraft { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -133,6 +147,10 @@ enum ReviewedEntry {
     ListPlanSnapshots { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_kit_catalog")]
     GetKitCatalog { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.analyze_build_request")]
+    AnalyzeBuildRequest { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_recipe")]
+    GetBuildRecipe { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -248,6 +266,8 @@ impl ReviewedEntry {
             Self::GetWorkflowHelp { resources } => {
                 ("tool.get_workflow_help", resources, BTreeSet::new())
             }
+            Self::WebSearch { resources } => ("tool.web_search", resources, BTreeSet::new()),
+            Self::FetchWebPage { resources } => ("tool.fetch_web_page", resources, BTreeSet::new()),
             Self::CheckHardwareInterfaces { resources } => {
                 ("tool.check_hardware_interfaces", resources, BTreeSet::new())
             }
@@ -378,6 +398,31 @@ impl ReviewedEntry {
                 resources,
                 planning_brief_with_draft(),
             ),
+            Self::ProposeUpdateBuildBrief { resources } => (
+                "tool.propose_update_build_brief",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeResolveBuildDifferences { resources } => (
+                "tool.propose_resolve_build_differences",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeSetBuildSourceRoles { resources } => (
+                "tool.propose_set_build_source_roles",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeRebuildPlan { resources } => (
+                "tool.propose_rebuild_plan",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeApplyPlanDraft { resources } => (
+                "tool.propose_apply_plan_draft",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -416,6 +461,25 @@ impl ReviewedEntry {
                 "tool.get_kit_catalog",
                 resources,
                 BTreeSet::from([File(FileFamily::KitCatalog)]),
+            ),
+            Self::AnalyzeBuildRequest { resources } => (
+                "tool.analyze_build_request",
+                resources,
+                BTreeSet::from([File(FileFamily::KitCatalog)]),
+            ),
+            Self::GetBuildRecipe { resources } => (
+                "tool.get_build_recipe",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    Table(PlanDecisions),
+                    File(FileFamily::KitCatalog),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
             Self::GetPlanOptionGroups { resources } => (
                 "tool.get_plan_option_groups",
@@ -628,6 +692,8 @@ impl Declarations {
         for id in [
             "source.sync",
             "tool.get_workflow_help",
+            "tool.web_search",
+            "tool.fetch_web_page",
             "tool.get_job_status",
             "tool.check_hardware_interfaces",
             "tool.propose_add_custom_filament",
@@ -649,6 +715,11 @@ impl Declarations {
             "tool.get_build_planning_state",
             "tool.list_build_differences",
             "tool.get_plan_draft",
+            "tool.propose_update_build_brief",
+            "tool.propose_resolve_build_differences",
+            "tool.propose_set_build_source_roles",
+            "tool.propose_rebuild_plan",
+            "tool.propose_apply_plan_draft",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
@@ -657,6 +728,8 @@ impl Declarations {
             "tool.list_plan_snapshots",
             "tool.get_plan_snapshot",
             "tool.get_kit_catalog",
+            "tool.analyze_build_request",
+            "tool.get_build_recipe",
             "tool.get_plan_option_groups",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",

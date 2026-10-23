@@ -20,6 +20,40 @@ batch closure for cancellation and retained generic effects from older Jobs.
 `halt_job` fences the attempt and saves it once. Reopening storage preserves the
 closed batch. Unrelated queued work remains eligible for admission.
 
+### Oversized Sync recovery quarantine
+
+`recover_in` quarantines a Sync Job when durable document handling returns
+`JobDocTooLarge`—either while decoding a stored row past the size limit, or when
+`recover_attempt` / `halt_job` cannot save a recovered document. Quarantine runs
+in the same writer transaction: the original document bytes and resource column
+stay as stored, history records `document_quarantined_resource_uncertain` when a
+resource was held, and operator inspection is required before another Job can
+take those Sources. Startup `recover(all=true)` and runtime
+`claim()`→`recover_in(tx,false)` share this path. Decode runs before the lease
+check, so an oversized running row is quarantined on the next claim even when its
+lease is still live. Unrelated Sources stay admissible.
+
+`halt_job` writes batch and target rows before it saves the Job document. When
+that save is the `JobDocTooLarge` failure, those batch and target writes remain
+with the quarantine commit. No second cleanup path rolls them back; a savepoint
+or preflight is not required for this contract. Under current payload and effect
+bounds, a terminal Sync halt that replaces a large recovery field typically
+shrinks the document, so the halt-then-quarantine interleaving is defensive.
+
+`oversized_sync_recovery_quarantines_on_startup_and_lease_expiry` stores a
+running Sync Job one byte over the document limit. Live-lease cells recover
+through storage reopen (`recover(all=true)`). Expired-lease cells pad on the live
+owner and claim (`recover_in(false)`); they do not reopen. Both claimed and
+unclaimed targets are covered. The test asserts quarantine, exact document
+retention, unchanged batch/target evidence on the decode path, blocked admission
+of overlapping Sources, the uncertain resource, and later work on another Source.
+`halt_job_doc_too_large_quarantines_with_batch_and_targets` keeps the document
+just under the limit with confirmed effects (a field `halt_job` does not rewrite),
+pads on the live owner, claims so `recover_in(false)` hits halt-then-quarantine,
+and asserts the Job is quarantined with the original running document while the
+batch is `reconciliation_required` and targets show the halt writes
+(`reconciliation_required` / `not_run`).
+
 ## Bind a claimed target
 
 `ServerWorkerClient::bind_source_sync_target` checks a claimed Local target
@@ -114,6 +148,75 @@ and another worker can take the Source.
 the acknowledgement that follows. `sync_acknowledgement_replay_preserves_result`
 checks the replay, the untouched sibling result and the released Source.
 
+## Adopt one acknowledged success
+
+`ServerWorkerClient::adopt_source_sync_target` returns one already-acknowledged
+successful Sync target result when this attempt still owns the claim and the
+live Source observation matches the capture stored at claim. The stored result,
+receipt and acknowledgement stay as recorded. The command writes nothing.
+
+A changed Source observation is refused as mismatched provenance, without
+writing. A stale attempt fence is refused the same way. After the observation
+is restored, the same key adopts the retained result again. A reclaimed attempt
+after lease expiry is refused as `Sync target attempt mismatch` because the
+target still records the claim attempt's generation, worker and fence. A
+retained failure is refused as `Sync target is not an acknowledged success`.
+
+`sync_adopts_matching_retained_result` settles one target, adopts that key, and
+checks an exact replay with an unchanged database. `sync_adopt_rejects_changed_provenance`
+moves the Source path, asserts the refusal and unchanged Sync rows, restores the
+path, and adopts successfully. `sync_adopt_rejects_reclaimed_attempt` expires
+the lease, reclaims the Job, and asserts the attempt-fence refusal.
+`sync_adopt_rejects_failed_target` fails a claimed target and asserts the
+acknowledged-success guard.
+
+## Halt after a Source operation error
+
+`ServerWorkerClient::halt_source_sync` connects a caller Source operation error
+to the existing batch halt semantics. `SourceSyncHalt::Fatal` stores `fatal`.
+`SourceSyncHalt::UncertainTarget` stores `uncertain_target`. The detail becomes
+the Job recovery message. Pending targets become `not_run` with `batch_halt`.
+A claimed target becomes `reconciliation_required` and keeps its claim evidence.
+An unacknowledged retained failure stays as recorded and is not overwritten.
+
+A stale attempt fence is refused without writing. Reopening storage keeps the
+recovery message and retained target evidence.
+
+`sync_halt_after_error_retains_primary_failure` fails one target, refuses a stale
+halt, then halts with the live lease and checks that the recovery detail and
+`local_read` evidence stay after reload. `sync_halt_after_error_keeps_target_for_reconciliation`
+halts while a target is still claimed and checks that claim capture remains on
+the reconciliation-required row.
+
+## Inspect a live Sync target
+
+`ServerWorkerClient::inspect_source_sync_target` reads one target for the live
+authorized attempt. Claimed and pending targets return `Pending`. An
+acknowledged success returns its stored result. An acknowledged failure returns
+that failure. `not_run` returns `Halted`. Unacknowledged terminal rows and
+`reconciliation_required` return `ReconciliationRequired`. The command writes
+nothing and does not change reservation ownership.
+
+The Job must still own the attempt, the original authority must still resolve,
+and the target row's tenant must match the Job. A foreign Job id, an ordinal
+outside the sealed basis, or a tampered tenant is refused without writing.
+
+`sync_inspect_returns_authorized_target` claims, inspects `Pending`, settles,
+then inspects the exact settled result twice with an unchanged database.
+`sync_inspect_is_read_only_and_tenant_scoped` checks those refusals and that
+successful inspection leaves every Sync row unchanged.
+
+## Inspect retained recovery evidence
+
+`AtomicJobClient::inspect_source_sync_recovery` reads one retained Sync Job at
+an exact version. It checks batch phase, sealed-basis bindings and result
+capture, then reports each disposition without writing. Authority capture,
+result digest and phase mismatches refuse without mutation.
+
+`sync_retained_inspection_reports_disposition` and
+`sync_retained_inspection_rejects_corrupt_binding` cover the happy path and
+those refusals.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
@@ -132,7 +235,7 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
   unacknowledged_failure_blocks_claim_after_restart
 ```
 
-Feature-off, settle, fail, acknowledge and their tables are absent. The same check covers those commands:
+Feature-off, settle, fail, acknowledge, adopt, halt, inspect, retained recovery and their tables are absent. The same check covers those commands:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
@@ -150,6 +253,55 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
   sync_acknowledgement_replay_preserves_result
 ```
 
+Adopt an acknowledged success with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-778-sync-adopt \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_adopts_matching_retained_result \
+  sync_adopt_rejects_changed_provenance \
+  sync_adopt_rejects_reclaimed_attempt \
+  sync_adopt_rejects_failed_target
+```
+
+Halt after a caller Source operation error with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-779-sync-halt \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_halt_after_error_retains_primary_failure \
+  sync_halt_after_error_keeps_target_for_reconciliation
+```
+
+Inspect a live Sync target with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-780-sync-inspect \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_inspect_returns_authorized_target \
+  sync_inspect_is_read_only_and_tenant_scoped
+```
+
+Inspect retained recovery evidence with:
+
+`inspect_retained` validates each target through `validate_target_in_basis`
+(producer capture, observation digests, result/receipt provenance, and
+pending/claimed/failed/not-run/reconciliation rules) before reporting
+dispositions. Corrupt Source bindings, incomplete captures, and invalid
+observation digests are refused without writing.
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-781-sync-retained-inspect \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_retained_inspection_reports_disposition \
+  sync_retained_inspection_rejects_corrupt_binding \
+  sync_retained_inspection_reports_failed_and_reconciliation
+```
+
 `durable_claim_returns_source_busy_after_restart` and
 `durable_claim_returns_source_busy_after_lease_expiry` exercise two Jobs sharing
 one Source. Their worker admits two Jobs per resource so the tests reach target
@@ -165,6 +317,16 @@ through restart and lease expiry, with and without a claimed target. They assert
 the Job state, target states, batch phase, one generation bump, retained effects,
 reopen stability, and admission of later work on an unrelated Source. Fixtures use
 temporary directories and fake accounts and Sources.
+
+The oversized Sync recovery quarantine tests cover the size-limit contract above.
+Check them with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  oversized_sync_recovery_quarantines_on_startup_and_lease_expiry \
+  halt_job_doc_too_large_quarantines_with_batch_and_targets
+```
 
 `sync_candidate_requires_claim_and_current_source_proof` and
 `sync_candidate_rejects_changed_basis` cover binding. They tamper with the held

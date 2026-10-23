@@ -1,11 +1,21 @@
 use crate::DesktopRebuild;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use axum::Router;
-use pp_api::auth::{AuthHttpConfig, ProviderClient, ResetMailer, auth_router};
+use pp_api::{
+    auth::auth_router,
+    builds::{BuildHttpConfig, build_router},
+    catalog::{CatalogHttpConfig, admit_catalog_routes},
+};
+// Re-export so desktop_rebuild integration tests can build AuthRoutes without a
+// non-optional pp-api [dev-dependencies] edge (gated boundary check).
+pub use pp_api::auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer};
 use pp_storage::{
     WriterOwner,
-    auth::{AuthPolicy, rebuild::AuthLifetimes},
+    auth::{AuthPolicy, rebuild::AuthLifetimes, rebuild::RebuildAuthClient},
+    build_graph::BuildGraphClient,
+    working_drafts::WorkingDraftClient,
 };
+use std::sync::{Arc, Mutex};
 
 pub struct AuthRoutes {
     pub http: AuthHttpConfig,
@@ -13,6 +23,65 @@ pub struct AuthRoutes {
     pub lifetimes: AuthLifetimes,
     pub providers: ProviderClient,
     pub mail: ResetMailer,
+}
+
+/// Completed authenticated read surfaces the rebuild router may admit.
+/// Draft mutations stay with GRE-820; jobs/WS with GRE-821.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebuildReadOwner {
+    Auth,
+    Builds,
+    Catalog,
+}
+
+impl RebuildReadOwner {
+    /// Admit a known read surface. Unknown names fail closed (`None`) before
+    /// any client construction, route mount, or storage execution.
+    pub fn admit(name: &str) -> Option<Self> {
+        match name {
+            "auth" => Some(Self::Auth),
+            "builds" => Some(Self::Builds),
+            "catalog" => Some(Self::Catalog),
+            _ => None,
+        }
+    }
+}
+
+/// Opted-in rebuild HTTP storage clients. Constructed only when the stored
+/// `DesktopRebuild` setting is on.
+///
+/// Catalog HTTP is not a precomposed client: `admit_catalog_routes` takes the
+/// shared `WriterOwner` and builds a credentialed `SourceCatalogClient` per
+/// request. `read_router` mounts catalog that way; this bundle does not hold a
+/// LocalOwner catalog handle.
+pub struct RebuildHttpClients {
+    pub auth: RebuildAuthClient,
+    pub drafts: WorkingDraftClient,
+    pub builds: BuildGraphClient,
+}
+
+impl RebuildHttpClients {
+    /// Drop owned client handles. Storage shutdown stays with `WriterOwner`.
+    pub fn close(self) {}
+}
+
+/// Compose auth, draft, and Build clients without mounting.
+/// Returns `None` before creating any client unless the stored setting is on.
+/// Catalog admission uses `admit_catalog_routes(owner)` from `read_router`.
+pub fn clients(
+    rebuild: DesktopRebuild,
+    owner: &WriterOwner,
+    policy: AuthPolicy,
+    lifetimes: AuthLifetimes,
+) -> Result<Option<RebuildHttpClients>> {
+    if !rebuild.enabled() {
+        return Ok(None);
+    }
+    Ok(Some(RebuildHttpClients {
+        auth: owner.rebuild_auth_with_policy(policy, lifetimes)?,
+        drafts: owner.working_drafts_with_policy(policy)?,
+        builds: owner.build_graph_with_policy(policy)?,
+    }))
 }
 
 /// Rust HTTP routes for the desktop rebuild, served by the rebuild auth client.
@@ -34,31 +103,81 @@ pub fn router(
     )))
 }
 
+/// Compose authenticated read routers (auth, Plan builds, catalog) from one
+/// `WriterOwner` when the stored rebuild setting is on. Aliases share that
+/// owner. Returns `None` before creating clients or mounting when the setting
+/// is off. Does not cut over production gateway ownership (GRE-593).
+///
+/// `origin` must match `auth.http`'s listener origin. `api_key_tenant` is the
+/// configured API-key tenant for build and catalog admission.
+pub fn read_router(
+    rebuild: DesktopRebuild,
+    owner: Arc<Mutex<WriterOwner>>,
+    auth: AuthRoutes,
+    origin: &str,
+    api_key_tenant: &str,
+) -> Result<Option<Router>> {
+    if !rebuild.enabled() {
+        return Ok(None);
+    }
+    let policy = auth.policy;
+    let RebuildHttpClients {
+        auth: auth_client,
+        drafts: _drafts,
+        builds: builds_client,
+    } = {
+        let guard = owner
+            .lock()
+            .map_err(|_| anyhow!("rebuild owner lock poisoned"))?;
+        clients(rebuild, &guard, policy, auth.lifetimes)?
+            .ok_or_else(|| anyhow!("flag on constructs clients"))?
+    };
+    // `_drafts` is opened with the bundle for GRE-818 parity; draft HTTP is GRE-820.
+    let builds = build_router(
+        BuildHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
+        builds_client,
+    );
+    let catalog = admit_catalog_routes(
+        CatalogHttpConfig::from_startup(origin, api_key_tenant, policy, Some("1"))?,
+        Arc::clone(&owner),
+    );
+    let auth_routes = auth_router(auth.http, auth_client, auth.providers, auth.mail);
+    Ok(Some(auth_routes.merge(builds).merge(catalog)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pp_api::auth::CookieTransport;
     use pp_storage::{
         Limits,
-        auth::{FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        auth::{FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
+        build_graph::BuildCommand,
+        read_model::Credential,
     };
     use serde_json::{Value, json};
-    use std::time::Duration;
+    use std::{
+        sync::{Arc, atomic::AtomicBool},
+        time::Duration,
+    };
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::FirstAccountOnly,
+            first_user: FirstUserTenant::NewUser,
+            session_tenant: SessionTenantPolicy::SingleAccountDefault,
+        }
+    }
+
+    fn lifetimes() -> AuthLifetimes {
+        AuthLifetimes::shorter(Duration::from_secs(3600), Some(Duration::from_secs(600))).unwrap()
+    }
 
     fn routes(origin: &str) -> AuthRoutes {
         AuthRoutes {
             http: AuthHttpConfig::new(origin, CookieTransport::LoopbackHttp, false, None, false)
                 .unwrap(),
-            policy: AuthPolicy {
-                registration: RegistrationPolicy::FirstAccountOnly,
-                first_user: FirstUserTenant::NewUser,
-                session_tenant: SessionTenantPolicy::SingleAccountDefault,
-            },
-            lifetimes: AuthLifetimes::shorter(
-                Duration::from_secs(3600),
-                Some(Duration::from_secs(600)),
-            )
-            .unwrap(),
+            policy: policy(),
+            lifetimes: lifetimes(),
             providers: ProviderClient::new(None, None).unwrap(),
             mail: ResetMailer::disabled(),
         }
@@ -87,6 +206,57 @@ mod tests {
                 "{value:?}"
             );
         }
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn application_host_flag_off_constructs_no_rebuild_clients() {
+        let (owner, directory) = owner();
+        for value in [None, Some("0"), Some("false"), Some("TRUE")] {
+            assert!(
+                clients(
+                    DesktopRebuild::from_value(value),
+                    &owner,
+                    policy(),
+                    lifetimes(),
+                )
+                .unwrap()
+                .is_none(),
+                "{value:?}"
+            );
+        }
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn application_host_closes_owned_clients() {
+        let (owner, directory) = owner();
+        let bundle = clients(
+            DesktopRebuild::from_value(Some("1")),
+            &owner,
+            policy(),
+            lifetimes(),
+        )
+        .unwrap()
+        .expect("flag on constructs clients");
+        // Policy-backed Build client refuses a missing session (not LocalOwner).
+        let refused = bundle
+            .builds
+            .execute(
+                Credential::Session(Secret::new("not-a-session".into())),
+                BuildCommand::List,
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(2),
+            )
+            .unwrap_err();
+        let message = refused.to_string();
+        assert!(
+            message.contains("Authentication required") || message.contains("Invalid session"),
+            "{message}"
+        );
+        bundle.close();
         owner.shutdown().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }

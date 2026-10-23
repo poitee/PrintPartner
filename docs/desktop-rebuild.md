@@ -89,7 +89,7 @@ Slices land in this order. Linear tracks each one under GRE-595. A slice is one 
 | D21 | GRE-616 | pp-storage read_model context and graph |
 | D22 | GRE-618 | pp-storage read_model workflow and views |
 | D23 | GRE-617 | pp-api auth HTTP |
-| D24 | GRE-619 | pp-api drafts HTTP |
+| D24 | GRE-619 | pp-api drafts HTTP (list/read/edit/abandon; abandon GRE-988) |
 | D25 | GRE-620 | pp-api builds HTTP and jobs |
 | D26 | GRE-621 | Web and server wiring behind the flag |
 
@@ -277,8 +277,9 @@ Use their `into_json_body().into_bytes()` methods. The complete outcome uses
 `Outcome::into_json_body()?.into_bytes()`.
 
 This first core unit ports the read-only seam. The writes section below covers
-Part edits and abandon. Preparation and recompute have their own sections. Save
-and rebase remain GRE-608. There is no HTTP route or default-feature change.
+Part edits and abandon. Preparation and recompute have their own sections. The
+ordinary Save writer is GRE-861 (below). Rebase and siblings remain GRE-608.
+There is no HTTP route or default-feature change.
 
 The operation tests call the public client against Node-written databases.
 Their literal expected JSON comes from `getPlanDraft`, `listPlanDraftIdentities`,
@@ -428,8 +429,8 @@ storage-issued observation requests with the shared preparation budget.
 Naming rules charge their definitions and per-path comparisons. Spoolman
 defaults follow user and Plan feature choices; disabled or invalid choices drop
 Spoolman references from new Parts without changing accepted decisions.
-Recompute consumes it. Save and rebase remain GRE-608. Existing GRE-668,
-GRE-669 and GRE-670 follow-ups remain open.
+Recompute consumes it. Ordinary Save is GRE-861 (below). Rebase and siblings
+remain GRE-608. Existing GRE-668, GRE-669 and GRE-670 follow-ups remain open.
 
 Quantity JSON uses the existing `ryu-js` formatter at the shared Part encoding
 boundary, including the bytes sorted and hashed by the planning digest.
@@ -517,14 +518,19 @@ A recompute runs in three steps on the writer thread:
    assignment ceiling.
    This is a work bound; elapsed time depends on the machine and scheduler.
    Refusing two drafts with 200,000 assignments took 2,381.8 ms in one run.
+   Carry loading and budget refusal hold the writer lock for that whole
+   duration. GRE-706 must size the caller's wait and UX for multi-second
+   lock occupancy; there is no elapsed-time guarantee.
    Each cost query streams indexed rows and sums individual column lengths
-   without concatenation, aggregation or sorting. Both the cost scan and the
-   loader check cancellation between rows. JSON parsing and serialization
-   also check cancellation. Large JSON arrays retain raw rows and validate
-   one at a time, so cancelling does not free a whole parsed object tree.
-   The release test sweeps cancellation offsets on 200,000 assignments; the
-   debug test uses 20,000 assignments. SQLite hooks remain a test-only
-   dependency. A limit or cancellation refusal rolls the transaction back.
+   without concatenation, aggregation or sorting. The open-draft ID list,
+   the cost scan, and the loader all check cancellation between rows. JSON
+   parsing and serialization also check cancellation. Large JSON arrays
+   retain raw rows and validate one at a time, so cancelling does not free
+   a whole parsed object tree. Cap-sized carry tests assert cancellation
+   and unchanged rows; they do not bound wall-clock latency (a prior
+   `<50 ms` release sweep had little headroom under load). SQLite hooks
+   remain a test-only dependency. A limit or cancellation refusal rolls
+   the transaction back.
    It abandons
    every open draft, increments their lifecycle versions, inserts the draft,
    inputs and Parts, and returns `created` with the saved snapshot.
@@ -575,7 +581,7 @@ node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development ru
 cmp /persist/tmp/recompute-first.jsonl /persist/tmp/recompute-second.jsonl
 cmp /persist/tmp/recompute-first.jsonl rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.jsonl
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute --test-threads=2
-cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(two_hundred_thousand_assignments) | test(multiple_maximum_drafts) | test(cancellation_inside_a_large)'
+cargo nextest run --release --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --test working_draft_recompute -E 'test(cap_sized_assignment_selection) | test(two_cap_sized_drafts) | test(cancellation_before_recompute_of_a_cap_sized)'
 node --import ./web/node_modules/tsx/dist/loader.mjs --conditions=development rust/crates/pp-storage/tests/fixtures/working-draft-recompute-node.mjs web/apps/server --large-carry
 python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 ```
@@ -583,6 +589,57 @@ python3 rust/crates/pp-storage/tests/fixtures/mutate-working-draft-recompute.py
 The mutation runner copies the workspace into `/persist/tmp` and reuses
 `CARGO_TARGET_DIR` when supplied. Run it separately from other Cargo commands
 when you reuse a target directory. Only an executed failing test counts as a kill.
+
+### D13 ordinary Save writer
+
+GRE-861 ports `WorkingDraftClient::save` behind default-off `desktop_rebuild`
+(#1063, `ccc32252`). Callers build `save::SaveCommand` with the session or API
+key, Plan profile, `SavePlanChoicesRequest`, and idempotency key (trimmed;
+non-empty; at most 200 UTF-16 units). The client needs observations from
+`WriterOwner::working_drafts_with_observations`. Service callers also require
+`PP_DESKTOP_REBUILD` exactly `1` or `true`. There is no HTTP route in this
+slice. Manifest, rebase, and siblings remain GRE-608.
+
+A Save runs on the writer thread:
+
+1. An immediate transaction admits the principal, resolves preparation and
+   Required-unit reconciliation, applies Plan choices, publishes through
+   `AuthenticatedPublicationContext`, closes the expected open draft when
+   present, and writes the atomic `ApplyPlanDraftReceipt`. Stale, missing, or
+   colliding inputs refuse without writes. A publication failure rolls the
+   snapshot, reconciliation, and Source closure back together.
+2. After commit, capture builds the published authority. If that capture fails,
+   the receipt and closed-draft IDs stay committed and surface as
+   `CommittedSaveCaptureFailure`; a retry with the same key replays the
+   receipt without a second publication. Cancellation or a preparation budget
+   limit before commit leaves the database unchanged.
+
+Focused proofs live in `working_draft_save` (atomic receipt and exact-key
+replay, changed-payload refusal, publication rollback, post-commit capture
+retry, Source budget and cancellation). Default builds omit the module; run
+package checks with and without `desktop_rebuild`:
+
+```sh
+cargo check -p pp-storage --manifest-path rust/Cargo.toml --locked --no-default-features
+cargo check -p pp-storage --manifest-path rust/Cargo.toml --locked --features desktop_rebuild --tests
+cargo nextest run -p pp-storage --manifest-path rust/Cargo.toml --locked --features desktop_rebuild \
+  -E 'binary(working_draft_save)'
+```
+
+### D29 failed ordinary-Save intent (client)
+
+GRE-811 retains an immutable failed ordinary-Save command (payload and
+idempotency key) in `PlanWorkspaceContext` for deliberate retry. GRE-812 keeps
+that intent per Plan across Build navigation: switching Plans does not apply one
+Plan's failed intent to another, and ordinary `preparePlan` / navigation does
+not automatically resend a definitive rejection. Deliberate Retry uses
+`retryPlanSave`. Web-only; no new Rust `desktop_rebuild` surface. Focused proofs:
+`failed_save_survives_navigation_without_resend`,
+`failed_save_is_isolated_by_plan` in `PlanSelection.integration.test.tsx`.
+
+```sh
+npm run test -w @print-partner/web -- src/context/PlanSelection.integration.test.tsx src/context/PlanWorkspaceContext.test.tsx
+```
 
 ### D4 media reconciliation
 
@@ -773,7 +830,7 @@ CoreRuntime replaces a valid saved port only when binding returns `AddrInUse`. I
 
 `CoreHandle` offers typed per-field updates and reads for `BrowserPreferences` under the existing storage lease. The versioned `browser-preferences.json` sidecar is independent of the port. It stores optional sidebar collapse, theme, and supported printer poll interval values. Unknown fields, invalid values, unsupported versions, unsafe files, and oversized files fail without overwrite. Updates preserve other fields and unrelated portable-store bytes. Shutdown closes command admission and settles queued callers before releasing the lease.
 
-This is a library contract. GRE-368 must wire browser capture and restore and show the origin-change notice. Existing origin-scoped localStorage and IndexedDB do not follow a changed port today. These operations do not relocate or rewrite product databases or transfer authentication data. A new runtime always bootstraps its gateway session, without adding a user login flow.
+With `desktop_rebuild` compiled and `PP_DESKTOP_REBUILD` exactly `1` or `true`, the shell shows that credential-free notice and copies saved sidebar, theme, and printer poll values into the replacement origin before the page reads them. It writes those same keys back to `browser-preferences.json`. Other localStorage keys and IndexedDB stay on the previous origin. The desktop gateway cookie name includes the port, so a replacement opens the one-shot bootstrap URL. The host-only `pp_session` cookie is not scoped to a port, so the shell does not clear it or add a login step. With either gate off, the shell keeps the previous behavior: no notice and no preference script. Focus, tray, and second-instance window behavior stay in GRE-368. These operations do not relocate or rewrite product databases.
 
 ## Review observations
 
@@ -785,8 +842,13 @@ The reference acquisition and upload modules land in smaller slices on top of D5
 
 GRE-784 adds `pp_core::uploads::SourceImports` behind `desktop_rebuild`. `SourceImports::new` opens the owner's upload journal with its import quota. `directory_input` names every regular file below a supplied directory in path order. It skips names that start with `.` and refuses links and special files. `admit` hashes the named files from that directory under the request's input limit, measures stored bytes under the storage `repos` directory, and admits the operation once per key. A replay of the same request returns the stored operation. `get` returns the journal operation. A refusal before admission writes no rows and changes no files. The client never claims or runs the import. A later slice adds the runner and verifies published artifacts on `get`. Captured preparation stays in GRE-785. No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
 
+GRE-785 extends that client with captured preparation. `SourceImports::new` also opens a policy-aware import worker. `preflight_capture` measures stored bytes under `repos` and returns storage's immutable preflight. `admit_captured` admits a `PreparedCapturedAdmission` once per key. `prepare_frozen_claim` inspects a retained frozen capture, correlates its manifest and inventory with the journal, and claims only an exact admitted match that still has a current Source proof. Manifest/journal mismatch and a missing Source refuse with journal rows and non-database files unchanged. The client still does not copy retained inputs into owned import directories (GRE-786). No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
+
+GRE-786 adds the input-copy stage. `write_retained_inputs` takes a claimed frozen capture and copies its retained files into `repos/.pp-imports/{job_id}` through directory capabilities with `O_NOFOLLOW` and `O_EXCL`. Case-folded path collisions are rejected before any destination file is opened. An existing destination operation directory is refused without overwriting. On success the journal advances to `OwnedInputReady` and the frozen capture is removed. The client still does not publish or activate (GRE-787). No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
+
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_client
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_files
 ```
 
 ### D6 native-secret migration
@@ -1197,7 +1259,67 @@ policy, target, and manifest digests. `validate` rejects a changed component.
 Repeated inputs produce the same digests. The payload decodes as version 2.
 Supplied inputs stay version 1, and `ImportClient::admit` still accepts only
 those. Refusal leaves the admitted journal row and non-database files unchanged.
-Manifest bytes and captured preflight stay later.
+
+### D14 capture manifests: inspect, serialize, and journal resolve
+
+GRE-768 adds `inspect_capture_manifest` and `bind_capture_manifest` behind
+`desktop_rebuild`. A closed v1 wire document carries capture id, operation key,
+actor, target, digests, admission limits, and requested inventory.
+`inspect_capture_manifest` returns paths and `max_input_bytes` only after
+recomputing `requested_digest`, `policy_digest`, and `target_digest`, validating
+the payload policy, and checking that payload paths match `requested_files`.
+
+GRE-769 adds `resolve_capture_manifest`. It runs the same integrity checks, then
+compares actor, operation key, target, admission limits, inventory, and digests
+with an admitted journal `Operation`. Exact rebound bytes must match the
+presented document. A mismatch or integrity failure refuses without writing;
+journal rows and non-database files stay unchanged.
+
+### D14 captured preflight admission
+
+GRE-770 adds `ImportClient::preflight_capture` and `preflight_capture_target`
+behind `desktop_rebuild`. Preflight authenticates the credential, checks
+admission limits, and — for a fresh key — checks that the bytes on disk plus
+every unsettled reservation plus this reservation fit the owner import quota
+(`Owner import quota exceeded`), then validates the create or existing target
+basis. It returns an immutable `PreflightedCapture` and does not publish files
+or enqueue a job. A matching prior captured journal entry may be returned as
+`replay` without re-checking owner-wide quota; a supplied prior with the same
+key refuses with an idempotency conflict. Refusal and success both leave
+journal rows, non-database files, and the accounting epoch unchanged.
+
+### D14 captured prepare and admit
+
+GRE-771 adds `PreflightedCapture::prepare` and `ImportClient::admit_prepared`
+behind `desktop_rebuild`. `prepare` binds the capture manifest (GRE-768/769)
+into a `PreparedCapturedAdmission` with `Input::Captured`. `admit_prepared`
+submits writer `Admit` under `AdmissionAuthority::Preflighted`, re-admits the
+preflight credential in the write transaction (`Capture authority changed` on
+mismatch), revalidates the target basis, checks captured inventory and binding,
+and either returns an exact prior operation (same actor and `intent_digest`) or
+writes one journal row, quota reservation, and supplied import job
+(`input_version` 2). Credential-path `admit` still refuses `Input::Captured`.
+A stale basis after preflight refuses without changing journal rows or
+non-database files.
+
+### D14 capture correlation and resolved claims
+
+GRE-772 adds `ImportClient::correlate_capture_manifest` and
+`ServerWorkerClient::claim_resolved_import` behind `desktop_rebuild`. Correlation
+reads the journal and durable jobs only: it returns `Absent`,
+`ExactAdmitted(ResolvedCapturedClaim)`, `ExactOwnedOrLater`, or
+`MismatchRepairRequired` without admitting or charging. A resolved claim is
+revalidated in the claim transaction against the admitted operation, inventory,
+captured job payload, and Source; a changed inventory or other mismatch refuses
+with `Captured import requires repair` and leaves queued job rows unchanged.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_correlation
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-storage --all-targets --features desktop_rebuild
+```
 
 ### D14 uploads: import phases
 
@@ -1257,8 +1379,9 @@ As in the reference, `uploads::source_reserved` makes Source deletion return
 `active_work` while an import of the Source holds an unsettled reservation.
 Storage written before that guard can hold an unsettled entry whose Source is
 gone. The same startup pass fails its queued job with `source_unavailable`, as a
-claim would, and then settles the entry. Any other job state with a missing
-Source refuses to open.
+claim would, and then settles the entry. A terminal job with a missing Source
+also settles. Only a non-terminal, non-queued job with a missing Source refuses
+to open.
 
 Opening storage checks each preclaim refusal against its entry and job: it must be
 the entry's first and only observation, the entry must be `admitted`, or settled as
@@ -1550,8 +1673,9 @@ JSON and generator pattern. Regenerate it from `web`:
 npx tsx --conditions=development ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.mts apps/server > ../rust/crates/pp-storage/tests/fixtures/manifest-commands-node.json
 ```
 
-No HTTP route or runtime caller is added. GRE-644 still needs its HTTP slice
-with D25/GRE-620 build routes, including `PP_DESKTOP_REBUILD` admission.
+Storage commands landed without HTTP. GRE-801 registers gated ReadKit on the
+Build router (`docs/gre-801-manifest-http.md`). GRE-802 registers gated SaveKit
+(`docs/gre-802-manifest-http.md`). ReadBuilder HTTP remains GRE-803.
 
 ## D11 required units (GRE-606)
 
@@ -1589,7 +1713,11 @@ queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
 The expansion loop also checks cancellation once per Part. There is no timing
-target.
+target. Unexpected transaction failures surface Node's
+`Plan draft update failed` on the client, with the source retained through
+`.context`, matching the publication client and Node's reconcile route.
+Authentication failures and admission outcomes (`Cancelled`, `QueueFull`,
+`Stopped`, `OutcomeUnknown`) stay typed and unwrapped.
 
 Selection refuses a draft before it expands assignments when the sum of part
 quantities is above 230. The error is "Reconciliation row limit exceeded".
@@ -1614,8 +1742,10 @@ checked before the cap.
   with no selection, the retry selects the saved reconciliation again. A retry
   with a different payload returns `idempotency_conflict`.
 
-The operation has no HTTP route. GRE-619 adds it. The local `Decision` and
-request types exist because `pp-storage` has no dependency on `pp-contracts`.
+The operation has no HTTP route yet. D24 (GRE-619) mounts draft list, read, and
+part-edit HTTP only; Required-unit selection stays unregistered. The local
+`Decision` and request types exist because `pp-storage` has no dependency on
+`pp-contracts`.
 
 Tests open Node-written databases in
 `rust/crates/pp-storage/tests/fixtures/required-units/`. Each operation test
@@ -1930,7 +2060,24 @@ the batch. Non-Sync jobs and builds without `desktop_rebuild` keep their existin
 generic worker behavior. GRE-775 stores one successful target and releases its
 reservation. GRE-776 records one local read failure, the Source failure
 observation and progress, and leaves that reservation unacknowledged so the
-failure stays retained evidence. Acknowledging it remains GRE-777.
+failure stays retained evidence. GRE-777 acknowledges that retained failure when
+the presented observation matches the claim. GRE-778 adopts an already-
+acknowledged successful result when the live Source observation still matches
+the claim capture, and refuses mismatched provenance without writing.
+GRE-779 ports `halt_after_error` and `HaltSourceSync` so a caller Source
+operation error closes through the existing batch halt path. The detail is the
+Job recovery message. Retained failures stay as recorded. A claimed target is
+kept for reconciliation. A stale attempt is refused without writing.
+GRE-780 ports `inspect` and `InspectSourceSyncTarget` so the authorized worker
+reads one live Sync target without writing or changing reservation ownership.
+Claimed targets report `Pending`; acknowledged successes and failures return
+their stored evidence. A foreign tenant row or Job mismatch is refused without
+writing.
+GRE-781 ports recovery read types and `inspect_retained` through
+`inspect_source_sync_recovery` so a credential-scoped caller validates retained
+target/result/observation bindings and reads each disposition without adopting
+or deleting evidence. A corrupt Source binding, incomplete success capture,
+batch-phase mismatch or stale version is refused without writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
@@ -2108,6 +2255,94 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core --features desktop_rebuild
 ```
 
+### Password-change response parity, GRE-873
+
+`fixtures/parity/auth-password-change/` records Node's public
+`POST /auth/change-password` status and body together with whether the old and
+new passwords still authenticate. The corpus covers missing cookies, wrong
+current passwords, valid changes, malformed fields, and nonempty invalid or
+revoked cookies (including empty bodies). Rust resolves the session before
+field validation so those stale cookies return
+`401 {"detail":"Authentication required"}` instead of a 400 field error.
+Password and session policy stay unchanged. The focused suite requires
+`desktop_rebuild`.
+
+```sh
+node fixtures/parity/auth-password-change/generate.mjs --check
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test auth_password_change_parity
+```
+
+### D24 drafts HTTP, GRE-619
+
+`pp-api` `drafts/http.rs` compiles with `desktop_rebuild`.
+`DraftHttpConfig::new` enables the router only when
+`PP_DESKTOP_REBUILD` is exactly `1` or `true` at process start. Otherwise
+`draft_router` and `admit_draft_routes` mount nothing and every draft path
+answers 404.
+
+Landed replacement slices for the superseded #635 monolith:
+
+| Slice | Linear | Scope |
+| --- | --- | --- |
+| a1 | GRE-939 | Loopback Host/Origin admission and credential presentation ([#969](https://github.com/poitee/PrintPartner/pull/969)) |
+| a2 | GRE-944 | Request target, body size, and body-read timeout bounds |
+| b | GRE-940 | List and workspace reads |
+| c | GRE-941 | API-key `ResolveKey` so `lastUsedAt` commits; foreign-tenant keys 401 |
+| d | GRE-942 | Part edits with Node conflict shapes |
+| e | GRE-988 | Abandon with storage lifecycle token |
+
+With both gates on, `draft_router` serves these paths at the root and
+`/api/v2`:
+
+| Method | Path | Storage |
+| --- | --- | --- |
+| GET | `/plans/{id}/drafts` | `WorkingDraftClient` list |
+| GET | `/plans/{id}/drafts/{draft_id}` | workspace read |
+| PATCH | `/plans/{id}/drafts/{draft_id}/parts` | `edit` with typed `EditRequest` |
+| POST | `/plans/{id}/drafts/{draft_id}/abandon` | `abandon` with typed `AbandonRequest` |
+
+`admit_draft_routes` buffers each body before routing, disables Axum's 2 MiB
+default, and applies the guard's limits: 16 KiB request target, 1 MiB for
+reads, 8 MiB for PATCH, 5 s body timeout, 64 admission permits. Loopback
+transport is required. Host must match the configured listener; forwarded and
+`x-forwarded-*` headers are refused. Session-cookie writes (PATCH/POST) need a matching
+Origin; GETs and API-key writes may omit it, but any Origin sent must match.
+A foreign or `null` Origin, or `sec-fetch-site: cross-site`, returns 403.
+Ambiguous credentials return 401, or 403 on an Origin-less write. Exactly one
+of session cookie, `Authorization: Bearer`, or `x-print-partner-api-key` is
+accepted. API keys use the configured tenant, not a request header.
+
+List returns `{ profile_id, drafts: [{ draft_id, state, lifecycle_version,
+snapshot_digest, base }] }`. Workspace returns the storage workspace JSON.
+Missing profile or draft returns 404 with Node `detail` and `code`
+(`profile_not_found` / `draft_not_found`).
+
+PATCH bodies are typed `EditRequest`. Invalid JSON, unknown fields, empty
+decisions, zero part IDs, and out-of-range quantities return 400
+`invalid_request` before any mutation. Successful edits return 200 with the
+workspace. Conflicts match Node `plan-drafts.ts`: 409 is `{ code }` plus
+`workspace` only when one exists (`draft_changed`, `base_changed`,
+`not_open`, `accepted_baseline_required`, `idempotency_conflict`) with no
+synthetic conflict `detail`; 422 `domain_error` is `{ code }` only. 404 and
+503 keep their Node `detail`. Server failures use
+`{ detail: "Plan draft update failed", code: "internal_error" }`.
+
+`POST /plans/{id}/drafts/{draft_id}/abandon` takes
+`{ expected_lifecycle_version }` (`AbandonRequest`). Success returns 200 with
+the draft identity (`state: abandoned`, lifecycle advanced). A retry with the
+same expected lifecycle version is idempotent (`Ready`). A stale token returns
+409 `{ code: "draft_changed", workspace }` with no synthetic `detail`; a
+consumed or already-closed draft that is not the idempotent retry returns
+409 `{ code: "not_open", workspace }`. Invalid bodies return 400
+`invalid_request` before mutation. Server failures use the same
+`Plan draft update failed` detail as edit. The desktop gateway does not mount
+this router; D26 does.
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --lib
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --lib drafts::http::tests -- --test-threads=2
+```
+
 ### D30 catalog HTTP reads, GRE-804
 
 `pp-api` gains `catalog`, compiled only with `desktop_rebuild`.
@@ -2127,3 +2362,38 @@ unregistered. The desktop gateway does not mount this router; D26 does.
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --test catalog_http
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test catalog_http
 ```
+
+### D26 runtime wiring (a), GRE-818
+
+`pp_core::rebuild_api::clients(rebuild, owner, policy, lifetimes)` composes the
+opted-in auth, draft, and Build storage clients from the same `WriterOwner` and
+stored `DesktopRebuild` flag that D23's auth router already uses. It returns
+`None` before creating any client unless the flag is on. Catalog is not in the
+bundle: GRE-819 mounts it with `admit_catalog_routes(config, owner)`, which
+builds a credentialed catalog client per request. `RebuildHttpClients::close`
+drops the owned handles; storage shutdown stays with `WriterOwner`. This slice
+does not mount routes or change production ownership.
+
+```sh
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild \
+  --lib application_host_ -- --test-threads=2
+```
+
+See `docs/gre-818-rebuild-clients.md`.
+
+### D26 runtime wiring (b), GRE-819
+
+`pp_core::rebuild_api::read_router` mounts auth, Plan builds, and catalog from
+one `WriterOwner` when the stored rebuild flag is on. It uses the GRE-818 client
+bundle plus `admit_catalog_routes(config, owner)`. Aliases share that owner.
+`RebuildReadOwner::admit` fails closed for unknown names. Flag off returns
+`None` before clients or mounts. Draft HTTP is GRE-820; cutover remains GRE-593.
+
+```sh
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild \
+  --test rebuild_read_http -- --exact --test-threads=2
+```
+
+Focused tests: `rebuild_read_aliases_use_one_owner`, `unknown_read_owner_is_refused_before_execution`.

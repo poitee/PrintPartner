@@ -34,6 +34,10 @@ env:
   CARGO_TERM_COLOR: always
   # Snapshot baselines must be committed; CI must never accept or create them.
   INSTA_UPDATE: 'no'
+  # CI-only: cut debuginfo from full (2) to line tables. Keeps panic locations;
+  # do not put these in .cargo/config or profile.toml for developer machines.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
   changes:

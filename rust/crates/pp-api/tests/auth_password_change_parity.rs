@@ -18,9 +18,18 @@ struct Fixture {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionKind {
+    Absent,
+    Valid,
+    Invalid,
+    Revoked,
+}
+
+#[derive(Deserialize)]
 struct Case {
     id: String,
-    session: bool,
+    session: SessionKind,
     body: Value,
     proposed_password: String,
     observation: Observation,
@@ -54,7 +63,7 @@ fn fixture() -> Fixture {
         "../../../../fixtures/parity/auth-password-change/node.json"
     ))
     .unwrap();
-    assert_eq!(fixture.cases.len(), 20);
+    assert_eq!(fixture.cases.len(), 24);
     let ids: std::collections::HashSet<_> = fixture.cases.iter().map(|case| &case.id).collect();
     assert_eq!(ids.len(), fixture.cases.len());
     fixture
@@ -64,7 +73,7 @@ struct Directory(PathBuf);
 
 impl Drop for Directory {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).unwrap();
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -189,6 +198,19 @@ fn session_cookie(response: &Response) -> String {
     cookie.to_owned()
 }
 
+async fn cookie_for(server: &Server, kind: &SessionKind, issued: &str) -> Option<String> {
+    match kind {
+        SessionKind::Absent => None,
+        SessionKind::Valid => Some(issued.to_owned()),
+        SessionKind::Invalid => Some("pp_session=invalid-session-token-873".to_owned()),
+        SessionKind::Revoked => {
+            let logout = server.post("/auth/logout", &json!({}), Some(issued)).await;
+            assert_eq!(logout.status(), 200);
+            Some(issued.to_owned())
+        }
+    }
+}
+
 #[tokio::test]
 async fn password_change_matches_node_response_and_login_outcomes() {
     let fixture = fixture();
@@ -207,14 +229,11 @@ async fn password_change_matches_node_response_and_login_outcomes() {
             )
             .await;
         assert_eq!(registration.status(), 200, "{}", case.id);
-        let cookie = session_cookie(&registration);
+        let issued = session_cookie(&registration);
+        let cookie = cookie_for(&server, &case.session, &issued).await;
         let before = server.logins(&fixture, case).await;
         let response = server
-            .post(
-                "/auth/change-password",
-                &case.body,
-                case.session.then_some(cookie.as_str()),
-            )
+            .post("/auth/change-password", &case.body, cookie.as_deref())
             .await;
         let change = Change {
             status: response.status().as_u16(),
@@ -259,6 +278,18 @@ fn recorded_cases_require_password_preservation_or_replacement() {
             "{}",
             case.id,
         );
+        if matches!(
+            case.session,
+            SessionKind::Absent | SessionKind::Invalid | SessionKind::Revoked
+        ) {
+            assert_eq!(case.observation.change.status, 401, "{}", case.id);
+            assert_eq!(
+                case.observation.change.body,
+                json!({"detail":"Authentication required"}),
+                "{}",
+                case.id
+            );
+        }
     }
 }
 
@@ -293,5 +324,20 @@ fn parity_rejects_old_password_accepted_after_success() {
         .observation;
     let mut altered = expected.clone();
     altered.after.old = true;
+    assert!(!matches_node(&altered, expected));
+}
+
+#[test]
+fn parity_rejects_invalid_session_downgraded_to_field_error() {
+    let fixture = fixture();
+    let expected = &fixture
+        .cases
+        .iter()
+        .find(|case| case.id == "invalid_session_missing_both")
+        .unwrap()
+        .observation;
+    let mut altered = expected.clone();
+    altered.change.status = 400;
+    altered.change.body = json!({"detail":"Current and new passwords are required"});
     assert!(!matches_node(&altered, expected));
 }

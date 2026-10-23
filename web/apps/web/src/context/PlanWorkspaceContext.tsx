@@ -84,7 +84,24 @@ type DraftPartEdit =
   | { kind: "set_quantity"; value: QuantityUpdate };
 
 type PlanEdits = readonly { part: PlanEditablePart; edit: DraftPartEdit }[];
-type PendingPlanSave = { edits: PlanEdits; request: SavePlanChoicesRequest; key: string };
+type PendingPlanSave = Readonly<{
+  edits: PlanEdits;
+  request: SavePlanChoicesRequest;
+  key: string;
+}>;
+/** Immutable ordinary-Save command retained after a failed response for deliberate retry. */
+type FailedOrdinarySave = Readonly<{
+  certainty: "definitive" | "uncertain";
+  command: PendingPlanSave;
+}>;
+
+function freezePendingPlanSave(command: PendingPlanSave): PendingPlanSave {
+  return Object.freeze({
+    edits: command.edits,
+    request: command.request,
+    key: command.key,
+  });
+}
 
 function samePlanEdits(left: PlanEdits, right: PlanEdits): boolean {
   return left.length === right.length && left.every((item, index) => {
@@ -120,6 +137,8 @@ type PlanWorkspaceValue = {
   progressSummary: string;
   refresh: () => Promise<void>;
   preparePlan: (options?: { applyManifest?: boolean }) => Promise<void>;
+  /** Deliberate Retry: resend a retained failed ordinary-Save for the selected Plan. */
+  retryPlanSave: (options?: { applyManifest?: boolean }) => Promise<void>;
   saving: boolean;
   mergeConflict: boolean;
   discardPendingEdits: () => Promise<void>;
@@ -189,6 +208,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   const draftEditQueueByBuild = useRef<Map<number, Promise<void>>>(new Map());
   const closedDraftIds = useRef(new Set<number>());
   const pendingSaveByBuild = useRef(new Map<number, PendingPlanSave>());
+  const failedOrdinarySaveByBuild = useRef(new Map<number, FailedOrdinarySave>());
   const selectedDraftUi =
     selectedProfileId == null
       ? EMPTY_BUILD_DRAFT_UI_STATE
@@ -553,7 +573,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  const preparePlan = useCallback((options?: { applyManifest?: boolean }) => {
+  const prepareCurrentPlan = useCallback((options?: { applyManifest?: boolean }) => {
     const profileId = selectedProfileId;
     if (profileId == null) return Promise.reject(new Error("Choose a Build first"));
     return enqueueDraftEdit(profileId, async () => {
@@ -624,6 +644,19 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           draftMutationError: null,
           mergeConflict: false,
         }));
+        const clearOrdinarySaveIntent = () => {
+          pendingSaveByBuild.current.delete(profileId);
+          failedOrdinarySaveByBuild.current.delete(profileId);
+        };
+        const retainFailedOrdinarySave = (
+          pending: PendingPlanSave,
+          certainty: FailedOrdinarySave["certainty"],
+        ) => {
+          const command = freezePendingPlanSave(pending);
+          failedOrdinarySaveByBuild.current.set(profileId, { certainty, command });
+          if (certainty === "definitive") pendingSaveByBuild.current.delete(profileId);
+          else pendingSaveByBuild.current.set(profileId, command);
+        };
         const publish = async (pending: PendingPlanSave) => {
           for (let retry = 0; ; retry += 1) {
             try {
@@ -637,12 +670,12 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
                 activeDraftId: current.activeDraftId != null && saved.closed_draft_ids.includes(current.activeDraftId)
                   ? null : current.activeDraftId,
               }));
-              pendingSaveByBuild.current.delete(profileId);
+              clearOrdinarySaveIntent();
               return;
             } catch (error) {
               const definitive = error instanceof EngineHttpError && error.status < 500 && error.status !== 408;
-              if (definitive) pendingSaveByBuild.current.delete(profileId);
               if (!definitive && retry === 0) continue;
+              retainFailedOrdinarySave(pending, definitive ? "definitive" : "uncertain");
               throw error;
             }
           }
@@ -650,7 +683,14 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         try {
           for (let attempt = 0; attempt < 3; attempt += 1) {
             try {
-              const pending = pendingSaveByBuild.current.get(profileId);
+              const failed = failedOrdinarySaveByBuild.current.get(profileId);
+              const pending =
+                pendingSaveByBuild.current.get(profileId) ??
+                (failed && samePlanEdits(failed.command.edits, edits)
+                  ? failed.command
+                  : failed?.certainty === "uncertain"
+                    ? failed.command
+                    : undefined);
               if (pending) {
                 await publish(pending);
                 if (samePlanEdits(pending.edits, edits)) return;
@@ -712,7 +752,11 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
             } catch (error) {
               if (attempt < 2 && error instanceof EngineHttpError && error.status === 409) {
                 const replaced = replaceFromConflict(profileId, error);
-                if (replaced && !isWorkingPlanInputsChanged(error)) continue;
+                if (replaced && !isWorkingPlanInputsChanged(error)) {
+                  // Conflict recovery rebuilds a new command with a new key.
+                  failedOrdinarySaveByBuild.current.delete(profileId);
+                  continue;
+                }
                 const body = error.body;
                 const code = body && typeof body === "object" && "code" in body ? body.code : null;
                 if (code === "inputs_changed" || code === "base_changed" || code === "draft_changed") {
@@ -726,6 +770,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
                     }
                     if (open) storeWorkspace(await fetchPlanDraftWorkspace(profileId, open.draft.draft_id), false);
                   }
+                  failedOrdinarySaveByBuild.current.delete(profileId);
                   continue;
                 }
               }
@@ -792,18 +837,85 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
   const { choices: pendingFileChoices, saving: savingFiles, error: fileChoiceError, select: setFilesIncluded, flush: flushFileChoices, hasPending: hasPendingFileChoices, discard: discardFileChoices } = usePlanFileChoices(selectedProfileId, saveFileChoices);
   const setIncluded = useCallback((part: PlanEditablePart, included: boolean) => setFilesIncluded([part], included), [setFilesIncluded]);
-  const retryOrPreparePlan = useCallback(async (options?: { applyManifest?: boolean }) => {
+  const replayRetainedOrdinarySave = useCallback(async (options?: { applyManifest?: boolean }) => {
     if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
       await flushFileChoices(selectedProfileId);
       if (!options?.applyManifest) return;
     }
-    const pending = selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId);
-    if (pending && selectedProfileId != null) {
-      await editDraft(pending.edits, selectedProfileId);
+    const pending =
+      selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId) ?? null;
+    const failed =
+      selectedProfileId == null
+        ? null
+        : failedOrdinarySaveByBuild.current.get(selectedProfileId) ?? null;
+    // applyManifest must still reach prepare: skip definitive replay so prepare is not stuck
+    // on the rejected payload. Uncertain/pending still replay first because the outcome is
+    // ambiguous. After a successful applyManifest prepare that skipped definitive replay,
+    // consume the snapshot so later plain preparePlan callers do not stick that payload.
+    const skippedDefinitiveReplay =
+      options?.applyManifest === true &&
+      pending == null &&
+      failed?.certainty === "definitive";
+    const retained =
+      pending ??
+      (failed && (failed.certainty === "uncertain" || !options?.applyManifest)
+        ? failed.command
+        : null);
+    if (retained && selectedProfileId != null) {
+      await editDraft(retained.edits, selectedProfileId);
       if (!options?.applyManifest) return;
     }
-    await preparePlan(options);
-  }, [editDraft, flushFileChoices, hasPendingFileChoices, preparePlan, selectedProfileId]);
+    await prepareCurrentPlan(options);
+    if (skippedDefinitiveReplay && selectedProfileId != null) {
+      failedOrdinarySaveByBuild.current.delete(selectedProfileId);
+    }
+  }, [editDraft, flushFileChoices, hasPendingFileChoices, prepareCurrentPlan, selectedProfileId]);
+
+  // Navigation / auto prepare: keep each Plan's failed ordinary-Save intent, but do not
+  // automatically resend a definitive rejection. Uncertain outcomes still replay because
+  // the prior response was ambiguous. Deliberate Retry uses retryPlanSave instead.
+  const preparePlan = useCallback(async (options?: { applyManifest?: boolean }) => {
+    if (options?.applyManifest === true) {
+      await replayRetainedOrdinarySave(options);
+      return;
+    }
+    if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
+      await flushFileChoices(selectedProfileId);
+      return;
+    }
+    const pending =
+      selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId) ?? null;
+    const failed =
+      selectedProfileId == null
+        ? null
+        : failedOrdinarySaveByBuild.current.get(selectedProfileId) ?? null;
+    if (pending == null && failed?.certainty === "definitive") {
+      const message =
+        (selectedProfileId != null
+          ? draftUiByBuildRef.current.get(selectedProfileId)?.draftMutationError
+          : null) ?? "Save failed";
+      throw new Error(message);
+    }
+    const retained =
+      pending ?? (failed?.certainty === "uncertain" ? failed.command : null);
+    if (retained && selectedProfileId != null) {
+      await editDraft(retained.edits, selectedProfileId);
+      return;
+    }
+    await prepareCurrentPlan(options);
+  }, [
+    editDraft,
+    flushFileChoices,
+    hasPendingFileChoices,
+    prepareCurrentPlan,
+    replayRetainedOrdinarySave,
+    selectedProfileId,
+  ]);
+
+  const retryPlanSave = useCallback(
+    (options?: { applyManifest?: boolean }) => replayRetainedOrdinarySave(options),
+    [replayRetainedOrdinarySave],
+  );
 
   const reconcileActivePlanDraft = useCallback(
     async (decisions: RequiredUnitDecisionContract[]) => {
@@ -858,7 +970,9 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     return enqueueDraftEdit(profileId, async () => {
       updateDraftUi(profileId, (current) => ({ ...current, saving: true }));
       try {
-        const ambiguousSave = pendingSaveByBuild.current.has(profileId);
+        const ambiguousSave =
+          pendingSaveByBuild.current.has(profileId) ||
+          failedOrdinarySaveByBuild.current.has(profileId);
         const workspace = await resolveOpenDraftWorkspace(profileId);
         if (workspace) {
           await abandonPlanDraft(profileId, workspace.draft);
@@ -879,6 +993,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           queryClient.invalidateQueries({ queryKey: queryKeys.buildWorkflow(profileId) }),
         ]);
         pendingSaveByBuild.current.delete(profileId);
+        failedOrdinarySaveByBuild.current.delete(profileId);
         discardFileChoices(profileId);
         updateDraftUi(profileId, (current) => ({ ...current, activeDraftId: null, draftMutationError: null, mergeConflict: false }));
       } catch (error) {
@@ -974,7 +1089,8 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
           ? draftListQuery.error.message
           : null),
       startPlanDraft,
-      preparePlan: retryOrPreparePlan,
+      preparePlan,
+      retryPlanSave,
       saving: saving || savingFiles,
       pendingFileChoices,
       mergeConflict,
@@ -1011,7 +1127,8 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       draftMutationError,
       fileChoiceError,
       startPlanDraft,
-      retryOrPreparePlan,
+      preparePlan,
+      retryPlanSave,
       saving,
       savingFiles,
       pendingFileChoices,

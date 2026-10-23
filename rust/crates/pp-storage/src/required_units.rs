@@ -220,6 +220,15 @@ impl ReconciliationClient {
         receiver
             .recv()
             .map_err(|_| anyhow!(Failure::OutcomeUnknown))?
+            .map_err(|error| {
+                if error.downcast_ref::<auth::AuthFailure>().is_some()
+                    || error.downcast_ref::<Failure>().is_some()
+                {
+                    error
+                } else {
+                    error.context("Plan draft update failed")
+                }
+            })
     }
 }
 

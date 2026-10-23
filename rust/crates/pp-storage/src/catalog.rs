@@ -46,7 +46,7 @@ pub struct SourceCatalogClient {
     client: SettingsClient,
     authority: Authority,
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSource {
     pub name: String,

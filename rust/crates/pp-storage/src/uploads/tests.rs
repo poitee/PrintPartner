@@ -1096,3 +1096,1296 @@ mod capture_binding {
         owner.shutdown().unwrap();
     }
 }
+
+mod capture_manifest {
+    use super::super::{
+        Admission, AdmissionLimits, CaptureId, CapturedPayloadV1, File, Input, Target,
+        capture_manifest, inspect_capture_manifest, resolve_capture_manifest,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::Connection;
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: hex::encode(Sha256::digest(b"mesh")),
+            kind: "input".into(),
+        }]
+    }
+
+    fn bind_existing() -> capture_manifest::BoundCaptureManifest {
+        capture_manifest::bind_capture_manifest(
+            CaptureId::new("ab".repeat(32)).unwrap(),
+            CapturedPayloadV1::files(vec!["nested/part.stl".into()]),
+            "actor",
+            "operation-key",
+            &Target::Existing { source_id: 42 },
+            limits(),
+            &files(),
+        )
+        .unwrap()
+    }
+
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection
+            .query_row(JOURNAL_SQL, [], |row| row.get(0))
+            .unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    fn admit_journal(
+        root_label: &str,
+    ) -> (std::path::PathBuf, WriterOwner, super::super::Operation) {
+        let root = directory(root_label);
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner
+            .imports(
+                AuthPolicy {
+                    registration: RegistrationPolicy::Open,
+                    session_tenant: SessionTenantPolicy::AccountTenant,
+                    first_user: FirstUserTenant::NewUser,
+                },
+                16 * 1024 * 1024 * 1024,
+            )
+            .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let operation = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-resolve".into(),
+                    target: Target::Create {
+                        metadata: Box::new(CreateSource {
+                            name: "CaptureResolve".into(),
+                            ..Default::default()
+                        }),
+                    },
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        (root, owner, operation)
+    }
+
+    fn bind_for_operation(
+        operation: &super::super::Operation,
+    ) -> capture_manifest::BoundCaptureManifest {
+        capture_manifest::bind_capture_manifest(
+            CaptureId::new("ab".repeat(32)).unwrap(),
+            CapturedPayloadV1::files(
+                operation
+                    .requested_files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect(),
+            ),
+            &operation.actor,
+            &operation.key,
+            &Target::Existing {
+                source_id: operation.source_id,
+            },
+            AdmissionLimits {
+                reserved_bytes: operation.reserved_bytes,
+                max_input_bytes: operation.max_input_bytes,
+                max_prepared_bytes: operation.max_prepared_bytes,
+            },
+            &operation.requested_files,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn capture_manifest_inventory_round_trip() {
+        let bound = bind_existing();
+        let inventory = inspect_capture_manifest(bound.bytes()).unwrap();
+        assert_eq!(inventory.paths(), &["nested/part.stl".to_string()]);
+        assert_eq!(inventory.max_input_bytes(), limits().max_input_bytes);
+
+        let wire: Value = serde_json::from_slice(bound.bytes()).unwrap();
+        let keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            [
+                "manifest_version",
+                "capture_id",
+                "operation_key",
+                "actor",
+                "target",
+                "target_digest",
+                "input",
+                "admission_limits",
+                "policy_digest",
+                "requested_files",
+                "requested_digest",
+            ]
+        );
+        assert_eq!(wire["manifest_version"], 1);
+        assert_eq!(wire["actor"], "actor");
+        assert_eq!(wire["operation_key"], "operation-key");
+        assert_eq!(wire["target"]["source_id"], 42);
+        assert_eq!(
+            wire["policy_digest"],
+            "7163d9f0439e36702b872b901c23a8f40f37683c30ce246faff1cbd666d5129a"
+        );
+        assert_eq!(
+            wire["requested_digest"],
+            hex::encode(Sha256::digest(serde_json::to_vec(&files()).unwrap()))
+        );
+
+        let rebound = capture_manifest::bind_capture_manifest(
+            CaptureId::new("ab".repeat(32)).unwrap(),
+            CapturedPayloadV1::files(vec!["nested/part.stl".into()]),
+            "actor",
+            "operation-key",
+            &Target::Existing { source_id: 42 },
+            limits(),
+            &files(),
+        )
+        .unwrap();
+        assert_eq!(rebound.bytes(), bound.bytes());
+        assert_eq!(rebound.input(), bound.input());
+        let _ = bound.into_parts();
+    }
+
+    #[test]
+    fn capture_manifest_rejects_unknown_fields_and_version() {
+        let bound = bind_existing();
+        let value: Value = serde_json::from_slice(bound.bytes()).unwrap();
+
+        let mut unknown = value.clone();
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("future".into(), Value::Bool(true));
+        let error = inspect_capture_manifest(&serde_json::to_vec(&unknown).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid capture manifest"),
+            "{error:#}"
+        );
+
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("actor");
+        let error = inspect_capture_manifest(&serde_json::to_vec(&missing).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid capture manifest"),
+            "{error:#}"
+        );
+
+        let mut future = value.clone();
+        future["manifest_version"] = Value::from(2);
+        let error = inspect_capture_manifest(&serde_json::to_vec(&future).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid capture manifest"),
+            "{error:#}"
+        );
+
+        assert!(inspect_capture_manifest(br#"{}"#).is_err());
+        assert!(inspect_capture_manifest(br#"[]"#).is_err());
+
+        let mut bad_limits = value.clone();
+        bad_limits["admission_limits"]["max_input_bytes"] = Value::from(268_435_457u64);
+        let error =
+            inspect_capture_manifest(&serde_json::to_vec(&bad_limits).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Invalid import limits"),
+            "{error:#}"
+        );
+
+        let mut stale = value;
+        stale["requested_files"][0]["path"] = Value::from("other.stl");
+        let error = inspect_capture_manifest(&serde_json::to_vec(&stale).unwrap()).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture inventory mismatch")
+                || format!("{error:#}").contains("Capture requested digest mismatch"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn capture_manifest_resolves_exact_journal() {
+        let (_root, owner, operation) = admit_journal("capture-manifest-resolve");
+        let bound = bind_for_operation(&operation);
+        let inventory = resolve_capture_manifest(bound.bytes(), &operation).unwrap();
+        assert_eq!(
+            inventory.paths(),
+            operation
+                .requested_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(inventory.max_input_bytes(), operation.max_input_bytes);
+        assert_eq!(inspect_capture_manifest(bound.bytes()).unwrap(), inventory);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_manifest_mismatch_preserves_journal() {
+        let (root, owner, operation) = admit_journal("capture-manifest-mismatch");
+        let before = journal_and_files(&root);
+        let bound = bind_for_operation(&operation);
+        let value: Value = serde_json::from_slice(bound.bytes()).unwrap();
+
+        let mut wrong_actor = value.clone();
+        wrong_actor["actor"] = Value::from("other-actor");
+        let error =
+            resolve_capture_manifest(&serde_json::to_vec(&wrong_actor).unwrap(), &operation)
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture") && format!("{error:#}").contains("mismatch"),
+            "{error:#}"
+        );
+
+        let mut wrong_key = value.clone();
+        wrong_key["operation_key"] = Value::from("other-key");
+        assert!(
+            resolve_capture_manifest(&serde_json::to_vec(&wrong_key).unwrap(), &operation).is_err()
+        );
+
+        let mut wrong_target = value.clone();
+        wrong_target["target"]["source_id"] = Value::from(operation.source_id + 1);
+        assert!(
+            resolve_capture_manifest(&serde_json::to_vec(&wrong_target).unwrap(), &operation)
+                .is_err()
+        );
+
+        let mut stale_inventory = value.clone();
+        stale_inventory["requested_files"][0]["path"] = Value::from("other.stl");
+        let error =
+            resolve_capture_manifest(&serde_json::to_vec(&stale_inventory).unwrap(), &operation)
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture inventory mismatch")
+                || format!("{error:#}").contains("Capture requested digest mismatch"),
+            "{error:#}"
+        );
+
+        let mut stale_digest = value;
+        stale_digest["requested_digest"] = Value::from("0".repeat(64));
+        let error =
+            resolve_capture_manifest(&serde_json::to_vec(&stale_digest).unwrap(), &operation)
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Capture requested digest mismatch"),
+            "{error:#}"
+        );
+
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(
+            resolve_capture_manifest(bound.bytes(), &operation)
+                .unwrap()
+                .paths(),
+            &operation
+                .requested_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>()[..]
+        );
+        assert_eq!(journal_and_files(&root), before);
+        owner.shutdown().unwrap();
+    }
+}
+
+mod capture_preflight {
+    use super::super::{
+        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
+        Operation, State, Target,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::{Connection, params};
+    use sha2::{Digest, Sha256};
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }]
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection
+            .query_row(JOURNAL_SQL, [], |row| row.get(0))
+            .unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+
+    fn create_target(name: &str) -> Target {
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: name.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
+    #[test]
+    fn capture_preflight_refuses_stale_target_or_quota() {
+        let root = directory("capture-preflight-refuse");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+
+        let missing = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-missing".into(),
+                Target::Existing { source_id: 9_999 },
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            missing.contains("Source not found") || missing.contains("not found"),
+            "{missing}"
+        );
+
+        let over_quota = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-quota".into(),
+                create_target("CaptureQuota"),
+                payload.clone(),
+                AdmissionLimits {
+                    reserved_bytes: QUOTA + 1,
+                    ..limits()
+                },
+                0,
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(over_quota, "Import quota exceeded");
+
+        let cancelled = AtomicBool::new(false);
+        let reserved = limits().reserved_bytes;
+        client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-supplied".into(),
+                    target: create_target("CaptureSupplied"),
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: reserved,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        let conflict = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-supplied".into(),
+                create_target("CaptureConflict"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(conflict, "Import idempotency conflict");
+
+        let pending = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-pending".into(),
+                create_target("CapturePending"),
+                payload,
+                limits(),
+                QUOTA - 2 * reserved + 1,
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(pending, "Owner import quota exceeded");
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_preflight_has_no_journal_side_effects() {
+        let root = directory("capture-preflight-clean");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let before = journal_and_files(&root);
+        let epoch = client.accounting_epoch();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+
+        let refused = client.preflight_capture(
+            credential(&owner),
+            "capture-stale".into(),
+            Target::Existing { source_id: 42 },
+            payload.clone(),
+            limits(),
+            0,
+        );
+        assert!(refused.is_err());
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.accounting_epoch(), epoch);
+
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-ok".into(),
+                create_target("CaptureOk"),
+                payload,
+                limits(),
+                0,
+            )
+            .unwrap();
+        assert!(preflight.replay().is_none());
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.accounting_epoch(), epoch);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_preflight_replays_matching_captured_journal() {
+        let root = directory("capture-preflight-replay");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let admitted = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-seed-source".into(),
+                    target: create_target("CaptureReplaySource"),
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        let target = Target::Existing {
+            source_id: admitted.source_id,
+        };
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-replay";
+        let actor = "physical-owner";
+        let captured = CapturedInputV2::bind(
+            CaptureId::new("capture-replay-id").unwrap(),
+            payload.clone(),
+            actor,
+            key,
+            &target,
+            limits(),
+            &inventory,
+        )
+        .unwrap();
+        let requested_digest = hex::encode(Sha256::digest(serde_json::to_vec(&inventory).unwrap()));
+        let prior = Operation {
+            tenant: "default".into(),
+            actor: actor.into(),
+            key: key.into(),
+            intent_digest: "c".repeat(64),
+            source_id: admitted.source_id,
+            job_id: "d".repeat(64),
+            input_version: 2,
+            input: Input::Captured(captured),
+            requested_files: inventory,
+            requested_digest,
+            state: State::Admitted,
+            basis: admitted.basis.clone(),
+            default_rules: true,
+            original_rules: None,
+            reserved_bytes: limits().reserved_bytes,
+            max_input_bytes: limits().max_input_bytes,
+            max_prepared_bytes: limits().max_prepared_bytes,
+            owned: None,
+            artifact: None,
+            receipt: None,
+            cleanup_settled: false,
+            authority_revision: None,
+            observation_cursor: None,
+        };
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO source_import_operations(tenant,operation_key,actor,intent_digest,source_id,job_id,state,document_version,document) VALUES(?1,?2,?3,?4,?5,?6,'admitted',1,?7)",
+                params![
+                    prior.tenant,
+                    prior.key,
+                    prior.actor,
+                    prior.intent_digest,
+                    prior.source_id,
+                    prior.job_id,
+                    serde_json::to_string(&prior).unwrap(),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO source_import_quota VALUES(?1,?2,?3,0,0)",
+                params![
+                    prior.tenant,
+                    prior.key,
+                    i64::try_from(prior.reserved_bytes).unwrap()
+                ],
+            )
+            .unwrap();
+        drop(connection);
+
+        let before = journal_and_files(&root);
+        let epoch = client.accounting_epoch();
+        let preflight = client
+            .preflight_capture(credential(&owner), key.into(), target, payload, limits(), 0)
+            .unwrap();
+        let replay = preflight.replay().expect("captured journal replay");
+        assert_eq!(replay.key, prior.key);
+        assert_eq!(replay.source_id, prior.source_id);
+        assert_eq!(replay.input, prior.input);
+        assert_eq!(journal_and_files(&root), before);
+        assert_eq!(client.accounting_epoch(), epoch);
+        owner.shutdown().unwrap();
+    }
+}
+
+mod capture_admission {
+    use super::super::{
+        Admission, AdmissionLimits, CaptureId, CapturedInputV2, CapturedPayloadV1, File, Input,
+        Target,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::Credential,
+        tests::directory,
+    };
+    use rusqlite::{Connection, params};
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }]
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    const JOURNAL_SQL: &str = "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(operation_key||char(9)||reserved_bytes||char(9)||retained_bytes||char(9)||settled,char(10)),'') FROM (SELECT operation_key,reserved_bytes,retained_bytes,settled FROM source_import_quota ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state,char(10)),'') FROM (SELECT id,kind,state FROM durable_jobs ORDER BY id))||char(10)||\
+(SELECT count(*)||char(9)||(SELECT count(*) FROM source_revision_attempts) FROM source_revisions)";
+
+    fn journal_and_files(root: &Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let mut text: String = connection
+            .query_row(JOURNAL_SQL, [], |row| row.get(0))
+            .unwrap();
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                if !name.ends_with(".db") && !name.ends_with("-wal") && !name.ends_with("-shm") {
+                    files.push((name, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+        files.sort();
+        text.push_str(&format!("{files:?}"));
+        text
+    }
+
+    fn create_target(name: &str) -> Target {
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: name.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
+    #[test]
+    fn captured_admission_replays_once() {
+        let root = directory("capture-admission-replay");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-admit-replay";
+        let capture_id = CaptureId::new("capture-admit-replay-id").unwrap();
+
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureAdmitReplay"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap();
+        let prepared = preflight
+            .prepare(
+                capture_id.clone(),
+                key.into(),
+                payload.clone(),
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        assert!(!prepared.manifest().is_empty());
+
+        let first = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        assert_eq!(first.input_version, 2);
+        assert!(matches!(first.input, Input::Captured(_)));
+
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM source_import_operations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let quotas: i64 = connection
+            .query_row("SELECT COUNT(*) FROM source_import_quota", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let jobs: i64 = connection
+            .query_row("SELECT COUNT(*) FROM durable_jobs", [], |row| row.get(0))
+            .unwrap();
+        drop(connection);
+        assert_eq!((rows, quotas, jobs), (1, 1, 1));
+
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureAdmitReplay"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap();
+        let prepared = preflight
+            .prepare(capture_id, key.into(), payload, limits(), inventory)
+            .unwrap();
+        let replay = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        assert_eq!(replay, first);
+
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM source_import_operations", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM source_import_quota", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM durable_jobs", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        drop(connection);
+
+        let refused = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "credential-captured".into(),
+                    target: create_target("CredentialCaptured"),
+                    input: Input::Captured(
+                        CapturedInputV2::bind(
+                            CaptureId::new("credential-captured-id").unwrap(),
+                            CapturedPayloadV1::files(vec!["nested/part.stl".into()]),
+                            "physical-owner",
+                            "credential-captured",
+                            &create_target("CredentialCaptured"),
+                            limits(),
+                            &files(),
+                        )
+                        .unwrap(),
+                    ),
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &AtomicBool::new(false),
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(refused, "Captured imports require prepared admission");
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn captured_admission_stale_basis_rolls_back() {
+        let root = directory("capture-admission-stale");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let seeded = client
+            .admit(
+                credential(&owner),
+                Admission {
+                    key: "capture-stale-seed".into(),
+                    target: create_target("CaptureStaleSeed"),
+                    input: Input::Files {
+                        paths: vec!["nested/part.stl".into()],
+                    },
+                    reserved_bytes: limits().reserved_bytes,
+                    max_input_bytes: limits().max_input_bytes,
+                    max_prepared_bytes: limits().max_prepared_bytes,
+                },
+                files(),
+                0,
+                client.accounting_epoch(),
+                &cancelled,
+            )
+            .unwrap();
+        let target = Target::Existing {
+            source_id: seeded.source_id,
+        };
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let preflight = client
+            .preflight_capture(
+                credential(&owner),
+                "capture-stale-admit".into(),
+                target,
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap();
+        assert!(preflight.replay().is_none());
+
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        connection
+            .execute(
+                "DELETE FROM projects WHERE tenant_id=?1 AND id=?2",
+                params!["default", seeded.source_id],
+            )
+            .unwrap();
+        drop(connection);
+
+        let before = journal_and_files(&root);
+        let prepared = preflight
+            .prepare(
+                CaptureId::new("capture-stale-admit-id").unwrap(),
+                "capture-stale-admit".into(),
+                payload,
+                limits(),
+                files(),
+            )
+            .unwrap();
+        let refused = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            refused.contains("Source not found") || refused.contains("not found"),
+            "{refused}"
+        );
+        assert_eq!(journal_and_files(&root), before);
+        owner.shutdown().unwrap();
+    }
+}
+
+mod capture_correlation {
+    use super::super::{
+        AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedPayloadV1, File, OwnedInput,
+        Phase, State, Target,
+    };
+    use crate::{
+        Limits, WriterOwner,
+        auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
+        catalog::CreateSource,
+        jobs::{Credential, JobKind, PersistentState, ServerWorkerClient, WorkerAdmission},
+        tests::directory,
+    };
+    use rusqlite::Connection;
+
+    fn policy() -> AuthPolicy {
+        AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            first_user: FirstUserTenant::NewUser,
+        }
+    }
+
+    fn limits() -> AdmissionLimits {
+        AdmissionLimits {
+            reserved_bytes: 3_506_438_144,
+            max_input_bytes: 268_435_456,
+            max_prepared_bytes: 1_073_741_824,
+        }
+    }
+
+    fn files() -> Vec<File> {
+        vec![File {
+            path: "nested/part.stl".into(),
+            size: 4,
+            sha256: "a".repeat(64),
+            kind: "input".into(),
+        }]
+    }
+
+    fn credential(owner: &WriterOwner) -> Credential {
+        Credential::PhysicalOwner(owner.job_physical_owner())
+    }
+
+    fn create_target(name: &str) -> Target {
+        Target::Create {
+            metadata: Box::new(CreateSource {
+                name: name.into(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn worker(owner: &WriterOwner) -> ServerWorkerClient {
+        owner
+            .job_worker_with_policy(
+                policy(),
+                WorkerAdmission {
+                    kinds: vec![(JobKind::SuppliedSourceImport, 1)],
+                    total: 1,
+                    per_resource: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .unwrap()
+    }
+
+    const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
+
+    fn journal_snapshot(root: &std::path::Path) -> String {
+        let connection = Connection::open(root.join("print-partner.db")).unwrap();
+        connection
+            .query_row(
+                "SELECT \
+(SELECT ifnull(group_concat(operation_key||char(9)||actor||char(9)||intent_digest||char(9)||state||char(9)||document,char(10)),'') FROM (SELECT operation_key,actor,intent_digest,state,document FROM source_import_operations ORDER BY operation_key))||char(10)||\
+(SELECT ifnull(group_concat(id||char(9)||kind||char(9)||state||char(9)||document,char(10)),'') FROM (SELECT id,kind,state,document FROM durable_jobs ORDER BY id))",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn capture_correlation_distinguishes_absent_match_conflict() {
+        let root = directory("capture-correlation-absent-match");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-correlate-key";
+        let capture_id = CaptureId::new("capture-correlate-id").unwrap();
+
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureCorrelate"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                capture_id.clone(),
+                key.into(),
+                payload.clone(),
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest.clone(), inventory.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::Absent
+        ));
+        let before_admit = journal_snapshot(&root);
+
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let after_admit = journal_snapshot(&root);
+        assert_ne!(before_admit, after_admit);
+
+        let matched = client
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
+            .unwrap();
+        assert!(matches!(
+            matched,
+            CaptureJournalCorrelation::ExactAdmitted(_)
+        ));
+        assert_eq!(journal_snapshot(&root), after_admit);
+        assert_eq!(admitted.input_version, 2);
+
+        let mut conflicted = inventory.clone();
+        conflicted[0].sha256 = "b".repeat(64);
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest, conflicted)
+                .unwrap(),
+            CaptureJournalCorrelation::MismatchRepairRequired
+        ));
+        assert_eq!(journal_snapshot(&root), after_admit);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn resolved_capture_claim_rejects_changed_inventory() {
+        let root = directory("capture-correlation-changed-inventory");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-claim-inventory";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureClaimInventory"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-claim-inventory-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+
+        let CaptureJournalCorrelation::ExactAdmitted(mut claim) = client
+            .correlate_capture_manifest(manifest, inventory)
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+        // Keep the journal valid so load→validate_operation succeeds; only the
+        // retained claim inventory diverges, forcing capture_claim_matches.
+        claim.inventory[0].sha256 = "c".repeat(64);
+
+        let before = journal_snapshot(&root);
+        let refused = worker(&owner)
+            .claim_resolved_import(claim)
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(refused, "Captured import requires repair");
+        assert_eq!(journal_snapshot(&root), before);
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn resolved_capture_claim_runs_admitted_job() {
+        let root = directory("capture-correlation-claim-success");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-claim-success";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureClaimSuccess"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-claim-success-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let CaptureJournalCorrelation::ExactAdmitted(claim) = client
+            .correlate_capture_manifest(manifest, inventory)
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+
+        let claimed = worker(&owner)
+            .claim_resolved_import(claim)
+            .unwrap()
+            .expect("valid resolved claim is claimable");
+        assert_eq!(claimed.job.job_id, admitted.job_id);
+        assert_eq!(claimed.job.state, PersistentState::Running);
+        assert!(claimed.source_work.is_some());
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+
+    #[test]
+    fn capture_correlation_reports_exact_owned_or_later() {
+        let root = directory("capture-correlation-owned-or-later");
+        let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
+        let client = owner.imports(policy(), QUOTA).unwrap();
+        let payload = CapturedPayloadV1::files(vec!["nested/part.stl".into()]);
+        let inventory = files();
+        let key = "capture-owned-or-later";
+        let prepared = client
+            .preflight_capture(
+                credential(&owner),
+                key.into(),
+                create_target("CaptureOwnedOrLater"),
+                payload.clone(),
+                limits(),
+                0,
+            )
+            .unwrap()
+            .prepare(
+                CaptureId::new("capture-owned-or-later-id").unwrap(),
+                key.into(),
+                payload,
+                limits(),
+                inventory.clone(),
+            )
+            .unwrap();
+        let manifest = prepared.manifest().to_vec();
+        let admitted = client
+            .admit_prepared(prepared, 0, client.accounting_epoch())
+            .unwrap();
+        let CaptureJournalCorrelation::ExactAdmitted(claim) = client
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
+            .unwrap()
+        else {
+            panic!("expected exact admitted claim");
+        };
+
+        let worker = worker(&owner);
+        let claimed = worker
+            .claim_resolved_import(claim)
+            .unwrap()
+            .expect("valid resolved claim is claimable");
+        let owned = worker
+            .import_phase(
+                &claimed.lease,
+                claimed.source_work.as_ref().unwrap(),
+                Phase::Owned(OwnedInput {
+                    locator: format!(".pp-imports/{}", admitted.job_id),
+                    digest: admitted.requested_digest.clone(),
+                    files: admitted.requested_files.clone(),
+                }),
+            )
+            .unwrap();
+        assert_eq!(owned.state, State::OwnedInputReady);
+
+        let before = journal_snapshot(&root);
+        assert!(matches!(
+            client
+                .correlate_capture_manifest(manifest, inventory)
+                .unwrap(),
+            CaptureJournalCorrelation::ExactOwnedOrLater
+        ));
+        assert_eq!(journal_snapshot(&root), before);
+        assert_eq!(admitted.key, key);
+        owner.shutdown().unwrap();
+    }
+}

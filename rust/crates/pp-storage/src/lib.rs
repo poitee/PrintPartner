@@ -134,7 +134,7 @@ enum Envelope {
     #[cfg(feature = "desktop_rebuild")]
     Uploads {
         command: uploads::Command,
-        reply: mpsc::Sender<Result<uploads::Operation>>,
+        reply: mpsc::Sender<Result<uploads::UploadsOutcome>>,
     },
     #[cfg(feature = "desktop_rebuild")]
     Checkoff {
@@ -698,7 +698,12 @@ impl WriterOwner {
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::WorkingDraftWrite { command } => {
-                        working_drafts::write(&mut connection, command, admission);
+                        working_drafts::write(
+                            &mut connection,
+                            command,
+                            admission,
+                            publication_tokens.as_mut(),
+                        );
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));

@@ -299,6 +299,14 @@
         "resources": []
       },
       {
+        "operation": "tool.web_search",
+        "resources": []
+      },
+      {
+        "operation": "tool.fetch_web_page",
+        "resources": []
+      },
+      {
         "operation": "tool.get_plan_decisions",
         "resources": [
           {
@@ -956,6 +964,52 @@
         ]
       },
       {
+        "operation": "tool.analyze_build_request",
+        "resources": [
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          }
+        ]
+      },
+      {
+        "operation": "tool.get_build_recipe",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          },
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_plan_snapshot",
         "resources": [
           {
@@ -1154,6 +1208,36 @@
             "kind": "table",
             "name": "plan_draft_required_unit_assignments"
           }
+        ]
+      },
+      {
+        "operation": "tool.propose_update_build_brief",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_resolve_build_differences",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_set_build_source_roles",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_rebuild_plan",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
+      },
+      {
+        "operation": "tool.propose_apply_plan_draft",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
         ]
       }
     ],
@@ -1511,7 +1595,6 @@
       "startup.seedStockSlicerInstancesIfEmpty",
       "startup.sweepExpiredTransferArtifacts",
       "tool.add_addon",
-      "tool.analyze_build_request",
       "tool.apply_build_recipe",
       "tool.apply_stack_preset",
       "tool.archive_plan",
@@ -1521,9 +1604,7 @@
       "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
       "tool.duplicate_plan",
-      "tool.fetch_web_page",
       "tool.find_filament_matches",
-      "tool.get_build_recipe",
       "tool.get_build_workflow",
       "tool.get_farm_status",
       "tool.get_interaction_graph",
@@ -1536,17 +1617,12 @@
       "tool.list_example_builds",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_source",
-      "tool.propose_apply_plan_draft",
       "tool.propose_assign_role_filament",
       "tool.propose_edit_plan_draft_parts",
       "tool.propose_exclude_replaced_parts",
       "tool.propose_import_build_inputs",
-      "tool.propose_rebuild_plan",
-      "tool.propose_resolve_build_differences",
       "tool.propose_restore_snapshot",
-      "tool.propose_set_build_source_roles",
       "tool.propose_source_mapping",
-      "tool.propose_update_build_brief",
       "tool.remove_layer",
       "tool.search_plan_parts",
       "tool.set_base",
@@ -1554,7 +1630,6 @@
       "tool.start_sync",
       "tool.suggest_source_contributions",
       "tool.update_kit_selections",
-      "tool.web_search",
       "worker.startManagedProfileSync"
     ]
   },
