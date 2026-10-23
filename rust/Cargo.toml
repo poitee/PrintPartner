@@ -14,7 +14,7 @@ license = "AGPL-3.0-only"
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup"] }
 anyhow = "=1.0.104"
 axum = { version = "=0.8.9", features = ["ws"] }
-tokio = { version = "=1.53.1", features = ["full"] }
+tokio = { version = "=1.53.3", features = ["full"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 serde_path_to_error = "=0.1.20"
