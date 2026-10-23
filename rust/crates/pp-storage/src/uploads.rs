@@ -776,15 +776,67 @@ pub struct PreflightedCapture {
     pub(crate) replay: Option<Box<Operation>>,
 }
 
+pub struct PreparedCapturedAdmission {
+    preflight: PreflightedCapture,
+    request: Admission,
+    expected_files: Vec<File>,
+    manifest: Vec<u8>,
+}
+
 impl PreflightedCapture {
     pub fn replay(&self) -> Option<&Operation> {
         self.replay.as_deref()
+    }
+
+    pub fn prepare(
+        self,
+        capture_id: CaptureId,
+        operation_key: String,
+        payload: CapturedPayloadV1,
+        limits: AdmissionLimits,
+        expected_files: Vec<File>,
+    ) -> Result<PreparedCapturedAdmission> {
+        let bound = capture_manifest::bind_capture_manifest(
+            capture_id,
+            payload,
+            &self.actor,
+            &operation_key,
+            &self.target,
+            limits,
+            &expected_files,
+        )?;
+        let (captured, manifest) = bound.into_parts();
+        let request = Admission {
+            key: operation_key,
+            target: self.target.clone(),
+            input: Input::Captured(captured),
+            reserved_bytes: limits.reserved_bytes,
+            max_input_bytes: limits.max_input_bytes,
+            max_prepared_bytes: limits.max_prepared_bytes,
+        };
+        Ok(PreparedCapturedAdmission {
+            preflight: self,
+            request,
+            expected_files,
+            manifest,
+        })
+    }
+}
+
+impl PreparedCapturedAdmission {
+    pub fn manifest(&self) -> &[u8] {
+        &self.manifest
     }
 }
 
 pub(crate) enum UploadsOutcome {
     Operation(Box<Operation>),
     Preflighted(PreflightedCapture),
+}
+
+pub(crate) enum AdmissionAuthority {
+    Credential(jobs::Credential),
+    Preflighted(Box<PreflightedCapture>),
 }
 
 pub(crate) enum Command {
@@ -815,7 +867,7 @@ pub(crate) enum Command {
 }
 
 pub(crate) struct Admit {
-    credential: jobs::Credential,
+    authority: AdmissionAuthority,
     policy: AuthPolicy,
     storage: Arc<crate::Shared>,
     request: Admission,
@@ -904,7 +956,7 @@ impl ImportClient {
         match submit(
             &self.storage,
             Command::Admit(Admit {
-                credential,
+                authority: AdmissionAuthority::Credential(credential),
                 policy: self.policy,
                 storage: self.storage.shared.clone(),
                 request,
@@ -914,6 +966,31 @@ impl ImportClient {
                 quota: self.quota,
             }),
             cancelled,
+        )? {
+            UploadsOutcome::Operation(operation) => Ok(*operation),
+            UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
+        }
+    }
+
+    pub fn admit_prepared(
+        &self,
+        prepared: PreparedCapturedAdmission,
+        disk_bytes: u64,
+        accounting_epoch: u64,
+    ) -> Result<Operation> {
+        match submit(
+            &self.storage,
+            Command::Admit(Admit {
+                authority: AdmissionAuthority::Preflighted(Box::new(prepared.preflight)),
+                policy: self.policy,
+                storage: self.storage.shared.clone(),
+                request: prepared.request,
+                expected_files: prepared.expected_files,
+                disk_bytes,
+                accounting_epoch,
+                quota: self.quota,
+            }),
+            &AtomicBool::new(false),
         )? {
             UploadsOutcome::Operation(operation) => Ok(*operation),
             UploadsOutcome::Preflighted(_) => Err(anyhow!("Unexpected capture preflight reply")),
@@ -1806,7 +1883,7 @@ fn admit(
     command: Admit,
 ) -> Result<Operation> {
     let Admit {
-        credential,
+        authority,
         policy,
         storage,
         mut request,
@@ -1819,8 +1896,22 @@ fn admit(
         storage.import_epoch.load(Ordering::Acquire) == accounting_epoch,
         "Import accounting changed; retry admission"
     );
-    let (tenant, actor, authority) =
-        crate::auth::authority::admit(tx, credential, policy, &storage)?;
+    let (tenant, actor, durable_authority, prepared_capture) = match authority {
+        AdmissionAuthority::Credential(credential) => {
+            let (tenant, actor, durable_authority) =
+                crate::auth::authority::admit(tx, credential, policy, &storage)?;
+            (tenant, actor, durable_authority, false)
+        }
+        AdmissionAuthority::Preflighted(preflight) => {
+            let (tenant, actor, durable_authority) =
+                crate::auth::authority::admit(tx, preflight.credential, policy, &storage)?;
+            ensure!(
+                tenant == preflight.tenant && actor == preflight.actor,
+                "Capture authority changed"
+            );
+            (tenant, actor, durable_authority, true)
+        }
+    };
     ensure!(
         !request.key.is_empty()
             && request.key.len() <= 128
@@ -1854,9 +1945,32 @@ fn admit(
     match &mut request.input {
         Input::Files { paths } => paths.iter_mut().for_each(|path| *path = canonical(path)),
         Input::Zip { path } => *path = canonical(path),
-        Input::Captured(_) => {
+        Input::Captured(_) if !prepared_capture => {
             return Err(anyhow!("Captured imports require prepared admission"));
         }
+        Input::Captured(_) => {}
+    }
+    if let Input::Captured(captured) = &request.input {
+        ensure!(
+            request.input.requested_paths()
+                == expected_files
+                    .iter()
+                    .map(|file| file.path.as_str())
+                    .collect::<Vec<_>>()
+                && expected_files.iter().all(|file| file.kind == "input"),
+            "Capture inventory mismatch"
+        );
+        captured.validate(
+            &actor,
+            &request.key,
+            Some(&request.target),
+            AdmissionLimits {
+                reserved_bytes: request.reserved_bytes,
+                max_input_bytes: request.max_input_bytes,
+                max_prepared_bytes: request.max_prepared_bytes,
+            },
+            &expected_files,
+        )?;
     }
     files(&expected_files, request.max_input_bytes)?;
     let requested_digest = serialized_digest(&expected_files)?;
@@ -1876,6 +1990,7 @@ fn admit(
     }
     validate_limits(&request, quota)?;
     ensure_owner_import_quota(tx, disk_bytes, request.reserved_bytes, quota)?;
+    let input_version = request.input.version();
     let source_id = match request.target {
         Target::Existing { source_id } => source_id,
         Target::Create { metadata } => match catalog::run(
@@ -1909,7 +2024,7 @@ fn admit(
         tx,
         &tenant,
         &actor,
-        authority,
+        durable_authority,
         jobs::UserOperation::Enqueue {
             key: format!(
                 "source-import:{}",
@@ -1919,7 +2034,7 @@ fn admit(
             payload: jobs::Payload::SuppliedSourceImport {
                 project_id: source_id.try_into()?,
                 operation_key: request.key.clone(),
-                input_version: 1,
+                input_version,
             },
         },
     )?
@@ -1933,7 +2048,7 @@ fn admit(
         intent_digest,
         source_id,
         job_id: job.job_id,
-        input_version: 1,
+        input_version,
         input: request.input,
         requested_files: expected_files,
         requested_digest,
