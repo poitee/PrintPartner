@@ -23,6 +23,7 @@ export CARGO_TARGET_DIR=/persist/targets/cursor-gre-795
 export CARGO_BUILD_JOBS=2
 cargo check -p pp-api --locked --manifest-path rust/Cargo.toml --no-default-features
 cargo check -p pp-api --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --tests
+cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --test jobs_http jobs_list_
 cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --test jobs_http \
-  jobs_list_matches_node_filters jobs_list_flag_off_and_wrong_tenant_are_refused
+  jobs_list_
 ```

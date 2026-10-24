@@ -97,10 +97,23 @@ impl Server {
     }
 
     async fn send(&self, method: Method, path: &str, headers: &[(&str, &str)]) -> (u16, Value) {
+        self.send_with_origin(method, path, headers, Some(&self.origin))
+            .await
+    }
+
+    async fn send_with_origin(
+        &self,
+        method: Method,
+        path: &str,
+        headers: &[(&str, &str)],
+        origin: Option<&str>,
+    ) -> (u16, Value) {
         let mut request = self
             .client
-            .request(method, format!("{}{path}", self.origin))
-            .header("Origin", &self.origin);
+            .request(method, format!("{}{path}", self.origin));
+        if let Some(origin) = origin {
+            request = request.header("Origin", origin);
+        }
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
@@ -180,7 +193,7 @@ fn policy() -> pp_storage::auth::AuthPolicy {
 }
 
 #[cfg(feature = "desktop_rebuild")]
-async fn register(server: &Server, email: &str) -> String {
+async fn register_account(server: &Server, email: &str) -> (String, String) {
     let registered = server
         .client
         .post(format!("{}/auth/register", server.origin))
@@ -190,13 +203,37 @@ async fn register(server: &Server, email: &str) -> String {
         .await
         .unwrap();
     assert_eq!(registered.status(), 200, "{email}");
-    registered.headers()["set-cookie"]
+    let cookie = registered.headers()["set-cookie"]
         .to_str()
         .unwrap()
         .split(';')
         .next()
         .unwrap()
-        .to_owned()
+        .to_owned();
+    let user: Value = registered.json().await.unwrap();
+    let tenant = user["user"]["user_id"].as_str().unwrap().to_owned();
+    (cookie, tenant)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn register(server: &Server, email: &str) -> String {
+    register_account(server, email).await.0
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn create_api_key(server: &Server, cookie: &str) -> String {
+    let created = server
+        .client
+        .post(format!("{}/settings/api-keys", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", cookie)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 201);
+    let body: Value = created.json().await.unwrap();
+    body["key"].as_str().unwrap().to_owned()
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -498,6 +535,248 @@ async fn jobs_list_flag_off_and_wrong_tenant_are_refused() {
             "/api/v1/jobs",
             &[("Cookie", cookie_a.as_str())],
         )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["jobs"].as_array().unwrap().len(), 1);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// The configured API-key tenant selects the tenant. A key minted for another
+/// tenant is refused before any job row or file can change.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn jobs_list_refuses_wrong_tenant_api_key() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+    use pp_storage::{
+        auth::Secret,
+        jobs::{Credential, Outcome, Payload, UserOperation},
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let (cookie, tenant) = register_account(&bootstrap, "jobs-key@example.test").await;
+    let key = create_api_key(&bootstrap, &cookie).await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+    match owner
+        .lock()
+        .unwrap()
+        .jobs(chosen)
+        .unwrap()
+        .submit(
+            Credential::Session(Secret::new(token)),
+            UserOperation::Enqueue {
+                key: "owned".into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        Outcome::Job(_, _) => {}
+        _ => panic!("enqueued job expected"),
+    }
+
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+    let authorization = format!("Bearer {key}");
+
+    // The key belongs to `tenant`, so the configured `default` tenant must refuse it.
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    for method in [Method::GET, Method::HEAD] {
+        let get = method == Method::GET;
+        let (status, body) = server
+            .send(
+                method,
+                "/api/v1/jobs",
+                &[("Authorization", authorization.as_str())],
+            )
+            .await;
+        assert_eq!(status, 401);
+        if get {
+            assert_eq!(
+                body,
+                serde_json::json!({"detail": "Authentication required"})
+            );
+        } else {
+            assert_eq!(body, Value::Null);
+        }
+    }
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot.clone(), before.clone())
+    );
+    server.stop().await;
+
+    // The same key resolves under its own tenant, proving the refusal was tenant routing.
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, &tenant, Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let (status, body) = server
+        .send(
+            Method::GET,
+            "/api/v1/jobs",
+            &[("Authorization", authorization.as_str())],
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["jobs"].as_array().unwrap().len(), 1);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Foreign transport identity is refused by the shared `loopback::admit` before
+/// the jobs handler runs, so no job row or file changes.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn jobs_list_refuses_foreign_host_and_origin() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+    use pp_storage::{
+        auth::Secret,
+        jobs::{Credential, Outcome, Payload, UserOperation},
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let (cookie, _tenant) = register_account(&bootstrap, "jobs-admit@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+    match owner
+        .lock()
+        .unwrap()
+        .jobs(chosen)
+        .unwrap()
+        .submit(
+            Credential::Session(Secret::new(token)),
+            UserOperation::Enqueue {
+                key: "owned".into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        Outcome::Job(_, _) => {}
+        _ => panic!("enqueued job expected"),
+    }
+
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("true")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    for method in [Method::GET, Method::HEAD] {
+        let get = method == Method::GET;
+        let (status, body) = server
+            .send(
+                method.clone(),
+                "/api/v1/jobs",
+                &[("Cookie", cookie.as_str()), ("Host", "evil.example")],
+            )
+            .await;
+        assert_eq!(status, 403, "foreign host via {method}");
+        if get {
+            assert_eq!(body, serde_json::json!({"detail": "Invalid request host"}));
+        } else {
+            assert_eq!(body, Value::Null);
+        }
+        let (status, body) = server
+            .send_with_origin(
+                method.clone(),
+                "/api/v1/jobs",
+                &[("Cookie", cookie.as_str())],
+                Some("http://evil.example"),
+            )
+            .await;
+        assert_eq!(status, 403, "foreign origin via {method}");
+        if get {
+            assert_eq!(
+                body,
+                serde_json::json!({"detail": "Invalid request origin"})
+            );
+        } else {
+            assert_eq!(body, Value::Null);
+        }
+    }
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+
+    // The same route admits the loopback Host/Origin and returns the row.
+    let (status, body) = server
+        .send(Method::GET, "/api/v1/jobs", &[("Cookie", cookie.as_str())])
         .await;
     assert_eq!(status, 200);
     assert_eq!(body["jobs"].as_array().unwrap().len(), 1);

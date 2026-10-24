@@ -7,7 +7,8 @@ and `/api/v2` only when the stored `PP_DESKTOP_REBUILD` value is exactly `1` or
 in GRE-791/GRE-792. Kit-manifest ReadKit is GRE-801
 (`docs/gre-801-manifest-http.md`). Layer mutate (base/addon replace/detach) is
 `docs/gre-794-builds-http.md`. Job list is `docs/gre-795-jobs-http.md`. SaveKit
-and ReadBuilder stay unregistered (later D25 children).
+`PUT` is GRE-802 (`docs/gre-802-manifest-http.md`); plan-manifest-builder
+ReadBuilder is GRE-803 (`docs/gre-803-manifest-http.md`).
 
 Admission matches GRE-791 (loopback Host/Origin, session cookie or API key with
 the configured tenant).
