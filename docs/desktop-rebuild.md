@@ -2098,6 +2098,11 @@ GRE-781 ports recovery read types and `inspect_retained` through
 target/result/observation bindings and reads each disposition without adopting
 or deleting evidence. A corrupt Source binding, incomplete success capture,
 batch-phase mismatch or stale version is refused without writing.
+GRE-782 ports `finish`, `validated_terminal_aggregate` and
+`FinishSourceSync` so a Sync-owned finish succeeds only after every target has
+a valid acknowledged terminal result. The aggregate is stored on the batch.
+Exact retry returns the same aggregate without writing. An unsettled target is
+refused without writing.
 
 GRE-857 preserves a Sync Job's completed Source-writer refusal evidence when
 Cancel marks the Job for cancellation during reconciliation. The refusal
