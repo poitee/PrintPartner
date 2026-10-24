@@ -102,11 +102,10 @@ pub fn jobs_router(config: JobsHttpConfig, client: AtomicJobClient) -> Router {
         admission: Arc::new(tokio::sync::Semaphore::new(64)),
         serializers: Arc::new(tokio::sync::Semaphore::new(SERIALIZERS)),
     };
-    let detail = Router::new().route("/jobs/{id}", get(detail));
     Router::new()
         .route("/api/v1/jobs", get(list))
-        .merge(detail.clone())
-        .nest("/api/v1", detail)
+        .route("/jobs/{id}", get(detail))
+        .route("/api/v1/jobs/{id}", get(detail))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
