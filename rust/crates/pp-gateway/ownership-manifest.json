@@ -1010,6 +1010,43 @@
         ]
       },
       {
+        "operation": "tool.compare_plans",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "source_docs"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "plan_decisions"
+          },
+          {
+            "kind": "file",
+            "name": "kit-catalog"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
         "operation": "tool.get_plan_snapshot",
         "resources": [
           {
@@ -1600,7 +1637,6 @@
       "tool.archive_plan",
       "tool.audit_build_coverage",
       "tool.check_stack_compatibility",
-      "tool.compare_plans",
       "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
       "tool.duplicate_plan",

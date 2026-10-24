@@ -217,6 +217,24 @@ result digest and phase mismatches refuse without mutation.
 `sync_retained_inspection_rejects_corrupt_binding` cover the happy path and
 those refusals.
 
+## Finish a fully settled batch
+
+`ServerWorkerClient::finish_source_sync` closes an open Sync batch once every
+target has a valid acknowledged terminal result. It stores the aggregate on the
+batch, sets progress to 100, and finishes the Job as succeeded when any target
+succeeded, or failed when every target failed. Exact retry presents the same
+lease generation and prior version, revalidates the stored aggregate, and
+returns that aggregate without writing.
+
+A pending, claimed or unacknowledged target is refused without writing. The
+batch stays open and the Job stays running.
+
+`sync_finish_requires_all_targets_settled` settles one of two targets, asserts
+the refusal and unchanged rows, settles the sibling, then finishes and checks
+the aggregate, public result and batch phase. `sync_finish_replay_returns_same_aggregate`
+finishes a mixed success-and-acknowledged-failure batch, then replays finish
+and asserts an identical aggregate with an unchanged database.
+
 ## Run the regression tests
 
 From `rust/`, use the per-VM Cargo wrapper on `PATH`:
@@ -235,7 +253,8 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=8 \
   unacknowledged_failure_blocks_claim_after_restart
 ```
 
-Feature-off, settle, fail, acknowledge, adopt, halt, inspect, retained recovery and their tables are absent. The same check covers those commands:
+Feature-off, settle, fail, acknowledge, adopt, halt, inspect, retained recovery,
+finish and their tables are absent. The same check covers those commands:
 
 ```sh
 CARGO_BUILD_JOBS=3 RUSTC_WRAPPER=sccache \
@@ -300,6 +319,16 @@ cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
   sync_retained_inspection_reports_disposition \
   sync_retained_inspection_rejects_corrupt_binding \
   sync_retained_inspection_reports_failed_and_reconciliation
+```
+
+Finish a fully settled batch with:
+
+```sh
+CARGO_BUILD_JOBS=2 \
+CARGO_TARGET_DIR=/persist/targets/gre-782-sync-finish \
+cargo test -p pp-storage --features desktop_rebuild --lib -- --test-threads=2 \
+  sync_finish_requires_all_targets_settled \
+  sync_finish_replay_returns_same_aggregate
 ```
 
 `durable_claim_returns_source_busy_after_restart` and
