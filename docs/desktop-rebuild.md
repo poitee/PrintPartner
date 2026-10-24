@@ -2425,3 +2425,23 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features deskto
 ```
 
 Focused tests: `rebuild_read_aliases_use_one_owner`, `unknown_read_owner_is_refused_before_execution`.
+
+### D26 runtime wiring (c), GRE-820
+
+`pp_core::rebuild_api::draft_router` mounts completed draft list/read/edit/abandon
+routes from one `WriterOwner` when the stored rebuild flag is on. It uses the
+GRE-818 client bundle's auth and draft handles. Root and `/api/v2` aliases share
+that executor. `RebuildDraftOwner::admit` fails closed for unknown names. Flag
+off returns `None` before clients or mounts. Rust draft failures stay on the
+Rust path with no Node fallback. Cutover remains GRE-593.
+
+```sh
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild \
+  --test rebuild_draft_http -- --exact --test-threads=2
+```
+
+Focused tests: `draft_aliases_and_workers_share_executor`,
+`rust_draft_failure_never_falls_back_to_node`.
+
+See `docs/gre-820-draft-mutations.md`.
