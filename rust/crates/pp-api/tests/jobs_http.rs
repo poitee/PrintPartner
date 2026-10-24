@@ -159,9 +159,11 @@ async fn feature_off_404() {
     let snapshot = files(&directory);
     let before = job_rows(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
-    let (status, body) = server.send(Method::GET, "/api/v1/jobs", &[]).await;
-    assert_eq!(status, 404);
-    assert!(body.get("jobs").is_none());
+    for path in ["/api/v1/jobs", "/api/v1/jobs/missing", "/jobs/missing"] {
+        let (status, body) = server.send(Method::GET, path, &[]).await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("jobs").is_none() && body.get("job_id").is_none());
+    }
     server.stop().await;
     assert_eq!(
         (files(&directory), job_rows(&directory)),
@@ -179,6 +181,18 @@ async fn jobs_list_matches_node_filters() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn jobs_list_flag_off_and_wrong_tenant_are_refused() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_detail_aliases_match() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_detail_head_has_no_body_and_keeps_status() {
     feature_off_404().await;
 }
 
@@ -780,6 +794,273 @@ async fn jobs_list_refuses_foreign_host_and_origin() {
         .await;
     assert_eq!(status, 200);
     assert_eq!(body["jobs"].as_array().unwrap().len(), 1);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn enqueue_and_finish_public(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    token: &str,
+) -> String {
+    use pp_storage::{
+        auth::Secret,
+        jobs::{
+            CompletedResult, Credential, JobKind, Outcome, Payload, SourceUpdatesResult,
+            UserOperation, WorkerAdmission, WorkerOperation,
+        },
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let job_id = match owner
+        .lock()
+        .unwrap()
+        .jobs(chosen)
+        .unwrap()
+        .submit(
+            Credential::Session(Secret::new(token.to_owned())),
+            UserOperation::Enqueue {
+                key: "detail".into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        Outcome::Job(job, _) => job.job_id,
+        _ => panic!("enqueued job expected"),
+    };
+    let worker = owner
+        .lock()
+        .unwrap()
+        .job_worker_with_policy(
+            chosen,
+            WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert_eq!(lease.job_id(), job_id);
+    worker
+        .update(&mut lease, WorkerOperation::Progress(40))
+        .unwrap();
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                    checked: vec![],
+                    skipped: vec![],
+                    updates_available: 0,
+                    checked_count: 0,
+                })),
+            },
+        )
+        .unwrap();
+    job_id
+}
+
+/// `/jobs/{id}` and `/api/v1/jobs/{id}` return the same public snapshot; refusals
+/// leave rows and files unchanged.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_detail_aliases_match() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie_a = register(&bootstrap, "job-detail-a@example.test").await;
+    let cookie_b = register(&bootstrap, "job-detail-b@example.test").await;
+    let token = cookie_a.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let headers = [("Cookie", cookie_a.as_str())];
+    let (status_v1, body_v1) = server
+        .send(Method::GET, &format!("/api/v1/jobs/{job_id}"), &headers)
+        .await;
+    let (status_root, body_root) = server
+        .send(Method::GET, &format!("/jobs/{job_id}"), &headers)
+        .await;
+    assert_eq!(status_v1, 200);
+    assert_eq!((status_root, body_root), (status_v1, body_v1.clone()));
+    assert_eq!(body_v1["job_id"], job_id);
+    assert_eq!(body_v1["status"], "done");
+    assert_eq!(body_v1["kind"], "check-source-updates");
+    assert!(body_v1.get("result").is_some());
+    assert_eq!(body_v1["error"], Value::Null);
+
+    for path in [
+        format!("/api/v1/jobs/{job_id}-missing"),
+        format!("/jobs/{job_id}-missing"),
+    ] {
+        let (status, body) = server.send(Method::GET, &path, &headers).await;
+        assert_eq!(status, 404, "{path}");
+        assert_eq!(body, serde_json::json!({"detail": "Job not found"}));
+    }
+    let (status, body) = server
+        .send(
+            Method::GET,
+            &format!("/api/v1/jobs/{job_id}"),
+            &[("Cookie", cookie_b.as_str())],
+        )
+        .await;
+    assert_eq!(status, 404);
+    assert_eq!(body, serde_json::json!({"detail": "Job not found"}));
+    let (status, body) = server
+        .send(Method::GET, &format!("/jobs/{job_id}"), &[])
+        .await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        body,
+        serde_json::json!({"detail": "Authentication required"})
+    );
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+    // Flag-off 404 for these aliases is covered by feature-off stubs and
+    // `jobs_list_flag_off_and_wrong_tenant_are_refused` (empty router).
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// HEAD shares status and auth with GET and returns an empty body.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_detail_head_has_no_body_and_keeps_status() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-detail-head@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("true")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    for path in [format!("/api/v1/jobs/{job_id}"), format!("/jobs/{job_id}")] {
+        let get = server
+            .client
+            .request(Method::GET, format!("{}{path}", server.origin))
+            .header("Origin", &server.origin)
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        let get_status = get.status();
+        let get_body = get.bytes().await.unwrap();
+        assert_eq!(get_status, 200, "{path}");
+        assert!(!get_body.is_empty(), "{path}");
+
+        let head = server
+            .client
+            .request(Method::HEAD, format!("{}{path}", server.origin))
+            .header("Origin", &server.origin)
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(head.status(), get_status, "{path}");
+        assert_eq!(head.bytes().await.unwrap().len(), 0, "{path}");
+    }
+
+    let missing = format!("/jobs/{job_id}-missing");
+    let get = server
+        .client
+        .request(Method::GET, format!("{}{missing}", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get.status(), 404);
+    let _ = get.bytes().await.unwrap();
+    let head = server
+        .client
+        .request(Method::HEAD, format!("{}{missing}", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head.status(), 404);
+    assert_eq!(head.bytes().await.unwrap().len(), 0);
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
     server.stop().await;
     shutdown(owner, directory);
 }
