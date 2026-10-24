@@ -118,6 +118,15 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                                     if step.get("uses", "").startswith("actions/checkout@"))
                     self.assertNotIn("ref", checkout.get("with", {}))
                 if filename == "rust-cross-os.yml":
+                    self.assertIn("python3 scripts/ci-affected-nextest-filter.py",
+                                  select["run"].splitlines())
+                    self.assertEqual(jobs["changes"]["outputs"]["nextest_filter"],
+                                     "${{ steps.select.outputs.nextest_filter }}")
+                    for job_id in ("rust-linux-build", "rust-macos", "rust-windows"):
+                        self.assertEqual(
+                            jobs[job_id]["env"]["NEXTEST_FILTER"],
+                            "${{ needs.changes.outputs.nextest_filter || 'all()' }}")
+                    self.assertEqual(jobs["rust-linux-rebuild"]["env"]["NEXTEST_FILTER"], "all()")
                     rebuild = jobs["rust-linux-rebuild"]
                     self.assertEqual(rebuild["needs"], ["rust-linux-build"])
                     aggregate = jobs["rust-linux"]

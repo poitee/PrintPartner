@@ -10,7 +10,9 @@ import sys
 
 def relevant(path, kind):
     # A filter change must test its own consumers.
-    if path in {"scripts/ci-path-filter.py", "scripts/test_ci_path_filter.py"}:
+    if path in {"scripts/ci-path-filter.py", "scripts/test_ci_path_filter.py",
+                "scripts/ci-affected-nextest-filter.py",
+                "scripts/test_ci_affected_nextest_filter.py"}:
         return True
     if kind == "native" and (path.startswith(".cursor/skills/verify-print-partner-rust/helpers/")
                              or path in {".github/workflows/desktop-native-macos.yml",
