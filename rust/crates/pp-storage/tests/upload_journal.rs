@@ -41,10 +41,12 @@ fn policy() -> AuthPolicy {
     }
 }
 
+// Fields drop in declaration order: `root` must stay last so the owner closes
+// before the scratch directory is removed.
 struct Fixture {
-    root: scratch::Scratch,
     owner: WriterOwner,
     client: ImportClient,
+    root: scratch::Scratch,
 }
 
 impl Fixture {
