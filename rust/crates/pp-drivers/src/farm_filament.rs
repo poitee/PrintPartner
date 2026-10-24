@@ -661,8 +661,6 @@ mod tests {
     #[derive(serde::Deserialize)]
     struct GoldenContext {
         configured: bool,
-        #[allow(dead_code)]
-        physically_empty: bool,
     }
 
     #[derive(serde::Deserialize)]
