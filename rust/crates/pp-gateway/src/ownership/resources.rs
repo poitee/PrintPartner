@@ -33,6 +33,10 @@ pub enum TableId {
     PlanDraftRequiredUnitReconciliations,
     PlanDraftRequiredUnitDecisions,
     PlanDraftRequiredUnitAssignments,
+    AcceptedPlateHeads,
+    AcceptedPlateRevisions,
+    AcceptedPlates,
+    AcceptedPlateUnits,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -151,6 +155,8 @@ enum ReviewedEntry {
     AnalyzeBuildRequest { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_build_recipe")]
     GetBuildRecipe { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_workflow")]
+    GetBuildWorkflow { resources: Vec<ResourceId> },
     #[serde(rename = "tool.compare_plans")]
     ComparePlans { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
@@ -200,6 +206,7 @@ impl ReviewedEntry {
     ) -> Result<(&'static str, ResourceSet), AdmissionError> {
         use ResourceId::{File, Table};
         use TableId::{
+            AcceptedPlateHeads, AcceptedPlateRevisions, AcceptedPlateUnits, AcceptedPlates,
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
             PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
             PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
@@ -207,6 +214,36 @@ impl ReviewedEntry {
             PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
             PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
             SourceRevisions,
+        };
+        let build_workflow = || {
+            BTreeSet::from([
+                Table(AcceptedPlateHeads),
+                Table(AcceptedPlateRevisions),
+                Table(AcceptedPlateUnits),
+                Table(AcceptedPlates),
+                Table(AppSettings),
+                Table(BuildProfiles),
+                Table(Parts),
+                Table(PlanAcceptedInputSets),
+                Table(PlanDraftInputs),
+                Table(PlanDraftParts),
+                Table(PlanDraftRequiredUnitAssignments),
+                Table(PlanDraftRequiredUnitDecisions),
+                Table(PlanDraftRequiredUnitReconciliations),
+                Table(PlanDrafts),
+                Table(PlanRevisionInputSets),
+                Table(PlanRevisionInputs),
+                Table(PlanRevisionParts),
+                Table(PlanRevisionRequiredUnitSets),
+                Table(PlanRevisionRequiredUnits),
+                Table(PlanRevisions),
+                Table(PrintProgress),
+                Table(ProfileLayers),
+                Table(Projects),
+                Table(RequiredUnits),
+                Table(SourceRevisions),
+                File(FileFamily::SourceWorkspace),
+            ])
         };
         let accepted_plan_operational = || {
             BTreeSet::from([
@@ -483,6 +520,9 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::GetBuildWorkflow { resources } => {
+                ("tool.get_build_workflow", resources, build_workflow())
+            }
             Self::ComparePlans { resources } => (
                 "tool.compare_plans",
                 resources,
@@ -746,6 +786,7 @@ impl Declarations {
             "tool.get_kit_catalog",
             "tool.analyze_build_request",
             "tool.get_build_recipe",
+            "tool.get_build_workflow",
             "tool.compare_plans",
             "tool.get_plan_option_groups",
             "tool.ui_highlight_part",

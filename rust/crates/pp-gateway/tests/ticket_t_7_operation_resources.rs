@@ -686,6 +686,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_kit_catalog",
         "tool.analyze_build_request",
         "tool.get_build_recipe",
+        "tool.get_build_workflow",
         "tool.compare_plans",
         "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
@@ -705,8 +706,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 55);
-    assert_eq!(unresolved.len(), 388);
+    assert_eq!(reviewed.len(), 56);
+    assert_eq!(unresolved.len(), 387);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -921,8 +922,8 @@ fn unknown_resource_syntax_and_competing_import_fail_closed() {
         ),
         (
             "/resources/reviewed/1/operation",
-            json!("tool.get_build_workflow"),
-            "unknown variant `tool.get_build_workflow`",
+            json!("tool.audit_build_coverage"),
+            "unknown variant `tool.audit_build_coverage`",
         ),
         ("/resources/extra", json!(true), "unknown field `extra`"),
     ] {
@@ -1003,6 +1004,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_kit_catalog",
         "tool.analyze_build_request",
         "tool.get_build_recipe",
+        "tool.get_build_workflow",
         "tool.compare_plans",
         "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
@@ -1029,9 +1031,10 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
                 .as_array_mut()
                 .unwrap()
                 .retain(|name| format!("tool.{}", name.as_str().unwrap()) != id);
-            regroup(&mut value, id, &["tool.get_build_workflow"]);
+            let stand_in = "tool.audit_build_coverage";
+            regroup(&mut value, id, &[stand_in]);
             let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-            unresolved.retain(|operation| operation != "tool.get_build_workflow");
+            unresolved.retain(|operation| operation != stand_in);
             if !participants.is_empty() {
                 unresolved.push(json!("tool.regrouped"));
             }
@@ -1140,7 +1143,8 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),
         ("tool.analyze_build_request", "tool.get_build_recipe"),
-        ("tool.get_build_recipe", "tool.compare_plans"),
+        ("tool.get_build_recipe", "tool.get_build_workflow"),
+        ("tool.get_build_workflow", "tool.compare_plans"),
         ("tool.compare_plans", "tool.get_plan_option_groups"),
         ("tool.get_workflow_help", "tool.web_search"),
         ("tool.web_search", "tool.fetch_web_page"),
@@ -1192,13 +1196,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.get_build_workflow", "tool.audit_build_coverage"],
+        &["tool.audit_build_coverage", "tool.archive_plan"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.get_build_workflow" && id != "tool.audit_build_coverage");
+    unresolved.retain(|id| id != "tool.audit_build_coverage" && id != "tool.archive_plan");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.get_build_workflow", "tool.audit_build_coverage"] {
+    for id in ["tool.audit_build_coverage", "tool.archive_plan"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
@@ -1873,12 +1877,6 @@ fn assert_workspace_tool_resources(id: &str) {
         );
         assert!(!effect);
     }
-    assert_eq!(
-        index.resources_for("tool.get_build_workflow"),
-        Err(AdmissionError::UnresolvedResources {
-            operation: "tool.get_build_workflow".into(),
-        })
-    );
     for owner in ["rust", "python"] {
         let mut value = manifest();
         regroup(&mut value, id, &[id]);
@@ -2137,10 +2135,11 @@ fn assert_tool_invalid_admission(id: &str) {
                 AdmissionError::ResourceSetMismatch { id: id.into() }
             }
             13 => {
+                let participant = "tool.audit_build_coverage";
                 regroup(&mut value, "tool.regrouped", &[id]);
-                regroup(&mut value, id, &["tool.get_build_workflow"]);
+                regroup(&mut value, id, &[participant]);
                 let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-                unresolved.retain(|operation| operation != "tool.get_build_workflow");
+                unresolved.retain(|operation| operation != participant);
                 unresolved.push(json!("tool.regrouped"));
                 malformed(&format!(
                     "reviewed participant {id} must belong to operation {id}"
@@ -2433,6 +2432,96 @@ fn ticket_t_7_ownership_get_build_recipe_has_complete_node_owned_resources() {
     let mut value = manifest();
     value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+}
+
+#[test]
+fn ticket_t_7_ownership_get_build_workflow_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.get_build_workflow");
+}
+
+#[test]
+fn ticket_t_7_ownership_get_build_workflow_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_build_workflow";
+    let index = admit_bundled_manifest().unwrap();
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"table","name":"accepted_plate_heads"},
+        {"kind":"table","name":"accepted_plate_revisions"},
+        {"kind":"table","name":"accepted_plate_units"},
+        {"kind":"table","name":"accepted_plates"},
+        {"kind":"table","name":"app_settings"},
+        {"kind":"table","name":"build_profiles"},
+        {"kind":"table","name":"parts"},
+        {"kind":"table","name":"plan_accepted_input_sets"},
+        {"kind":"table","name":"plan_draft_inputs"},
+        {"kind":"table","name":"plan_draft_parts"},
+        {"kind":"table","name":"plan_draft_required_unit_assignments"},
+        {"kind":"table","name":"plan_draft_required_unit_decisions"},
+        {"kind":"table","name":"plan_draft_required_unit_reconciliations"},
+        {"kind":"table","name":"plan_drafts"},
+        {"kind":"table","name":"plan_revision_input_sets"},
+        {"kind":"table","name":"plan_revision_inputs"},
+        {"kind":"table","name":"plan_revision_parts"},
+        {"kind":"table","name":"plan_revision_required_unit_sets"},
+        {"kind":"table","name":"plan_revision_required_units"},
+        {"kind":"table","name":"plan_revisions"},
+        {"kind":"table","name":"print_progress"},
+        {"kind":"table","name":"profile_layers"},
+        {"kind":"table","name":"projects"},
+        {"kind":"table","name":"required_units"},
+        {"kind":"table","name":"source_revisions"},
+        {"kind":"file","name":"source-workspace"}
+    ]))
+    .unwrap();
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut sqlite_compatible = manifest();
+    sqlite_compatible["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(
+        admit(&sqlite_compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    for (format, node_reads, writers) in [
+        ("sqlite-schema", 34, vec![Some(35), None]),
+        ("source-revision-workspace", 1, vec![Some(2), None]),
+    ] {
+        for rust_writes in writers {
+            let mut value = manifest();
+            value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+    }
+    let mut value = manifest();
+    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    value["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(1);
     assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
 }
 

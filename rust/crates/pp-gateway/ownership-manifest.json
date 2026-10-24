@@ -1010,6 +1010,115 @@
         ]
       },
       {
+        "operation": "tool.get_build_workflow",
+        "resources": [
+          {
+            "kind": "table",
+            "name": "accepted_plate_heads"
+          },
+          {
+            "kind": "table",
+            "name": "accepted_plate_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "accepted_plate_units"
+          },
+          {
+            "kind": "table",
+            "name": "accepted_plates"
+          },
+          {
+            "kind": "table",
+            "name": "app_settings"
+          },
+          {
+            "kind": "table",
+            "name": "build_profiles"
+          },
+          {
+            "kind": "table",
+            "name": "parts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_accepted_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_inputs"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_parts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_required_unit_assignments"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_required_unit_decisions"
+          },
+          {
+            "kind": "table",
+            "name": "plan_draft_required_unit_reconciliations"
+          },
+          {
+            "kind": "table",
+            "name": "plan_drafts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_input_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_inputs"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_parts"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_required_unit_sets"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revision_required_units"
+          },
+          {
+            "kind": "table",
+            "name": "plan_revisions"
+          },
+          {
+            "kind": "table",
+            "name": "print_progress"
+          },
+          {
+            "kind": "table",
+            "name": "profile_layers"
+          },
+          {
+            "kind": "table",
+            "name": "projects"
+          },
+          {
+            "kind": "table",
+            "name": "required_units"
+          },
+          {
+            "kind": "table",
+            "name": "source_revisions"
+          },
+          {
+            "kind": "file",
+            "name": "source-workspace"
+          }
+        ]
+      },
+      {
         "operation": "tool.compare_plans",
         "resources": [
           {
@@ -1641,7 +1750,6 @@
       "tool.detect_build_decisions",
       "tool.duplicate_plan",
       "tool.find_filament_matches",
-      "tool.get_build_workflow",
       "tool.get_farm_status",
       "tool.get_interaction_graph",
       "tool.get_plan_review",

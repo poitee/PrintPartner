@@ -78,7 +78,7 @@ const manifest = z.object({ live_formats: z.object({
   "community-manifests": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -3287,6 +3287,258 @@ it("traces get_build_recipe isolated workspace probes against its operation-wide
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+const BUILD_WORKFLOW_RECONCILIATION_TABLES = [
+  "plan_draft_required_unit_assignments",
+  "plan_draft_required_unit_decisions",
+  "plan_draft_required_unit_reconciliations",
+];
+const BUILD_WORKFLOW_OPEN_DRAFT_TABLES = ["plan_draft_inputs", "plan_draft_parts", ...BUILD_WORKFLOW_RECONCILIATION_TABLES];
+const BUILD_WORKFLOW_PLATE_LAYOUT_TABLES = [
+  "accepted_plate_revisions",
+  "accepted_plate_units",
+  "accepted_plates",
+];
+const BUILD_WORKFLOW_BASE_TABLES = [
+  "accepted_plate_heads",
+  "app_settings",
+  "build_profiles",
+  "parts",
+  "plan_accepted_input_sets",
+  "plan_drafts",
+  "plan_revision_input_sets",
+  "plan_revision_inputs",
+  "plan_revision_parts",
+  "plan_revision_required_unit_sets",
+  "plan_revision_required_units",
+  "plan_revisions",
+  "print_progress",
+  "profile_layers",
+  "projects",
+  "required_units",
+  "source_revisions",
+];
+const BUILD_WORKFLOW_ACCEPTED_TABLES = BUILD_WORKFLOW_BASE_TABLES.map((table) => `table:${table}`);
+const BUILD_WORKFLOW_READY_PLATE_TABLES = [...BUILD_WORKFLOW_BASE_TABLES, ...BUILD_WORKFLOW_PLATE_LAYOUT_TABLES]
+  .map((table) => `table:${table}`)
+  .sort();
+const BUILD_WORKFLOW_STALE_PLATE_TABLES = [...BUILD_WORKFLOW_BASE_TABLES, "accepted_plate_revisions"]
+  .map((table) => `table:${table}`)
+  .sort();
+const BUILD_WORKFLOW_TABLES = [
+  ...BUILD_WORKFLOW_BASE_TABLES,
+  ...BUILD_WORKFLOW_OPEN_DRAFT_TABLES,
+  ...BUILD_WORKFLOW_PLATE_LAYOUT_TABLES,
+]
+  .map((table) => `table:${table}`)
+  .sort();
+const BUILD_WORKFLOW_RECONCILED_STALE_PLATE_TABLES = [
+  ...BUILD_WORKFLOW_BASE_TABLES,
+  ...BUILD_WORKFLOW_OPEN_DRAFT_TABLES,
+  "accepted_plate_revisions",
+]
+  .map((table) => `table:${table}`)
+  .sort();
+const BUILD_WORKFLOW_UNION = ["file:source-workspace", ...BUILD_WORKFLOW_TABLES].sort();
+const IDLE_BUILD_WORKFLOW_TABLES = [
+  "table:app_settings",
+  "table:build_profiles",
+  "table:parts",
+  "table:plan_accepted_input_sets",
+  "table:plan_drafts",
+  "table:plan_revision_required_unit_sets",
+  "table:plan_revisions",
+  "table:profile_layers",
+];
+
+function buildWorkflowSelect(statement: unknown, tenantId: string, sourceDocs = false): string[] {
+  const sql = z.string().parse(statement);
+  if (["BEGIN DEFERRED", "COMMIT", "ROLLBACK"].includes(sql)) return [];
+  for (const classify of [
+    () => acceptedPlanSelect(sql, tenantId, sourceDocs),
+    () => resourcesForPlanSelect(sql, tenantId),
+  ]) {
+    try {
+      return classify();
+    } catch {
+      continue;
+    }
+  }
+  const plate = /^select (?:(?!\bfrom\b).)+ from "(accepted_plate_heads|accepted_plate_revisions|accepted_plates|accepted_plate_units)"/.exec(sql);
+  if (plate) return [`table:${plate[1]}`];
+  if (sql.includes('from "build_profiles" left join "plan_accepted_input_sets"')) {
+    return ["table:build_profiles", "table:plan_accepted_input_sets", "table:plan_revision_required_unit_sets"];
+  }
+  if (sql.startsWith('select "id", "tenant_id", "name", "order_number", "special_request"')) return ["table:build_profiles"];
+  if (sql.startsWith('select "id", "name", "order_number", "archived_at" from "build_profiles"')) return ["table:build_profiles"];
+  if (sql.startsWith('select count(*) from "parts"')) return ["table:parts"];
+  if (sql.startsWith('select "id", "tenant_id", "profile_id", "layer_order"')) return ["table:profile_layers"];
+  const draft = /^select (?:(?!\bfrom\b).)+ from "(plan_draft[a-z_]*)"/.exec(sql);
+  if (draft) return [`table:${draft[1]}`];
+  const reconciliationLookup = /^select (?:(?!\bfrom\b).)+ from "plan_draft_required_unit_reconciliations" where \(?"plan_draft_required_unit_reconciliations"\."id" = -?(?:0|[1-9][0-9]*)(?:\.0)?\)?$/.test(sql);
+  if (reconciliationLookup) return ["table:plan_draft_required_unit_reconciliations"];
+  if (/^select /i.test(sql) && /from "plan_drafts"/.test(sql)) return ["table:plan_drafts"];
+  throw new Error(`Unsupported SQL: ${sql}`);
+}
+
+function buildWorkflowFileResources(workspaceRoots: string[]): string[] {
+  const resources = new Set<string>();
+  for (const { api, args } of observer.state.files) {
+    expect(["realpathSync", "lstatSync", "statSync"], `Unsupported workflow filesystem call ${api}`).toContain(api);
+    const path = z.string().parse(args[0]);
+    expect(workspaceRoots.some((root) => under(root, path) || path === root), `${api} ${path}`).toBe(true);
+    resources.add("file:source-workspace");
+  }
+  return [...resources];
+}
+
+it("traces get_build_workflow summary, active-plan fallback, accepted snapshot and tenant isolation", async () => {
+  const union = new Set<string>();
+  const idle = repo.createProfile("Idle workflow");
+  repo.setSetting("printer.checkoff_links", JSON.stringify([]));
+  repo.setSetting("printer.send_queue", JSON.stringify([]));
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign workflow"));
+  async function trace(input: Record<string, unknown>, tables: string[], options: { tenantId?: string; activePlanId?: number; repository?: AppRepository; files?: [string, ...unknown[]][] } = {}) {
+    const { tenantId = "default", activePlanId, repository = repo, files = [] } = options;
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try {
+      output = await tenantStorage.run(tenantId, () =>
+        invokeAssistantTool("get_build_workflow", input, { repo: repository, activePlanId }),
+      );
+    } finally {
+      observer.state.active = false;
+    }
+    const observed = [...new Set(statements.flatMap((sql) => buildWorkflowSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(tables);
+    const observedFiles = observer.state.files.map(({ api, args }) => [api, ...args]);
+    if (files.length > 0) expect(observedFiles).toEqual(files);
+    for (const resource of observed) union.add(resource);
+    for (const resource of buildWorkflowFileResources([join(dataDir, "repos"), root, userRoot])) union.add(resource);
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  expect(await trace({}, [])).toEqual({ error: "plan_id required" });
+  expect(await trace({ plan_id: "invalid" }, [])).toEqual({ error: "plan_id required" });
+  expect(await trace({ plan_id: 999999 }, ["table:build_profiles"])).toEqual({ error: "Build not found" });
+  const idleWorkflow = await trace({ plan_id: idle.id }, IDLE_BUILD_WORKFLOW_TABLES);
+  expect(idleWorkflow).toMatchObject({ build: { id: idle.id, name: "Idle workflow" }, accepted_plan: { kind: "none" }, working_plan: { kind: "none" } });
+  expect(await trace({}, IDLE_BUILD_WORKFLOW_TABLES, { activePlanId: idle.id })).toMatchObject({ build: { id: idle.id } });
+  expect(await trace({ plan_id: foreign.id }, ["table:build_profiles"], { activePlanId: idle.id })).toEqual({ error: "Build not found" });
+  const { repository, plan, part, basis } = acceptedPlanFixture(true);
+  const accepted = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_ACCEPTED_TABLES, { repository });
+  expect(accepted).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    accepted_plan: { kind: "ready" },
+    stages: expect.arrayContaining([expect.objectContaining({ id: "sources" })]),
+  });
+  expect(repository.readAcceptedPlates(plan.id)).toMatchObject({ kind: "empty", plates: [] });
+  const tokens = part.units.filter((unit) => unit.required).map((unit) => unit.token);
+  expect(tokens.length).toBeGreaterThan(0);
+  const published = repository.publishAcceptedPlates({
+    profileId: plan.id,
+    expected: basis,
+    expectedPlateRevisionId: null,
+    plates: [
+      {
+        plateId: "workflow-plate",
+        printerId: "printer-1",
+        printerName: "Printer 1",
+        printerModel: "Test Printer",
+        bedWidthUm: 500_000,
+        bedDepthUm: 500_000,
+        bedHeightUm: 500_000,
+        marginUm: 0,
+        units: tokens.map((token, index) => ({
+          token,
+          xUm: index * 20_000,
+          yUm: 0,
+          widthUm: 10_000,
+          depthUm: 10_000,
+          heightUm: 10_000,
+        })),
+      },
+    ],
+  });
+  expect(published).toMatchObject({ kind: "published" });
+  const withPlates = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_READY_PLATE_TABLES, { repository });
+  expect(withPlates).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    stages: expect.arrayContaining([
+      expect.objectContaining({ id: "production", status: expect.objectContaining({ kind: "ready" }) }),
+    ]),
+  });
+  expect(repository.readAcceptedPlates(plan.id).kind).toBe("ready");
+  sqlite.exec("DROP TRIGGER trg_accepted_plate_revisions_immutable_update");
+  const staleDigest = sqlite
+    .prepare("UPDATE accepted_plate_revisions SET plan_revision_digest = ? WHERE profile_id = ?")
+    .run("f".repeat(64), plan.id);
+  expect(staleDigest.changes).toBe(1);
+  expect(repository.readAcceptedPlates(plan.id).kind).toBe("stale_accepted_plan");
+  const withStalePlates = await trace({ plan_id: plan.id }, BUILD_WORKFLOW_STALE_PLATE_TABLES, { repository });
+  expect(withStalePlates).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    stages: expect.arrayContaining([
+      expect.objectContaining({ id: "production", status: expect.objectContaining({ kind: "stale" }) }),
+    ]),
+  });
+  expect(await trace({ plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Build not found" });
+  expect(await trace({ plan_id: foreign.id }, IDLE_BUILD_WORKFLOW_TABLES, { tenantId: "other" })).toMatchObject({ build: { id: foreign.id } });
+  const created = repo.recomputePlanDraft({
+    profileId: plan.id,
+    actor: "admission",
+    idempotencyKey: "workflow-draft",
+    applyManifest: false,
+  });
+  expect(created.kind).toBe("created");
+  if (created.kind !== "created") throw new Error("workflow draft was not created");
+  const draft = created.draft;
+  const saved = repo.savePlanDraftRequiredUnitReconciliation({
+    profileId: plan.id,
+    draftId: draft.id,
+    expectedSnapshotDigest: draft.snapshotDigest,
+    decisions: [],
+    actorId: "admission",
+    idempotencyKey: "workflow-reconciliation",
+  });
+  expect(saved.kind).toBe("saved");
+  const withReconciledDraft = await trace(
+    { plan_id: plan.id },
+    BUILD_WORKFLOW_RECONCILED_STALE_PLATE_TABLES,
+    { repository },
+  );
+  expect(withReconciledDraft).toMatchObject({
+    build: { id: plan.id, name: "Accepted plan" },
+    working_plan: { kind: "ready", draft_id: draft.id },
+  });
+  expect([...union].sort()).toEqual(BUILD_WORKFLOW_UNION);
+  const entry = manifest.resources.reviewed.find((entry) => entry.operation === "tool.get_build_workflow");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing build workflow declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(BUILD_WORKFLOW_UNION);
+});
+
+it("traces get_build_workflow isolated workspace probes against its operation-wide union", async () => {
+  const { repository, workspace, plan } = acceptedPlanFixture(true);
+  const union = new Set<string>();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try {
+    output = await tenantStorage.run("default", () =>
+      invokeAssistantTool("get_build_workflow", { plan_id: plan.id }, { repo: repository }),
+    );
+  } finally {
+    observer.state.active = false;
+  }
+  expect(JSON.parse(output.content)).toMatchObject({ build: { id: plan.id, name: "Accepted plan" } });
+  const observed = [...new Set(statements.flatMap((sql) => buildWorkflowSelect(sql, "default")))].sort();
+  expect(observed).toEqual(BUILD_WORKFLOW_ACCEPTED_TABLES);
+  for (const resource of observed) union.add(resource);
+  for (const resource of buildWorkflowFileResources([join(dataDir, "repos"), workspace])) union.add(resource);
+  expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
 });
 
 function comparePlansSelect(statement: unknown, tenantId: string, planIds: number[]): string {
