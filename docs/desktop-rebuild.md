@@ -2416,7 +2416,8 @@ See `docs/gre-818-rebuild-clients.md`.
 one `WriterOwner` when the stored rebuild flag is on. It uses the GRE-818 client
 bundle plus `admit_catalog_routes(config, owner)`. Aliases share that owner.
 `RebuildReadOwner::admit` fails closed for unknown names. Flag off returns
-`None` before clients or mounts. Draft HTTP is GRE-820; cutover remains GRE-593.
+`None` before clients or mounts. Draft HTTP is GRE-820 (below); cutover remains
+GRE-593.
 
 ```sh
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
