@@ -5,6 +5,7 @@ use pp_api::{
     auth::auth_router,
     builds::{BuildHttpConfig, build_router},
     catalog::{CatalogHttpConfig, admit_catalog_routes},
+    drafts::{DraftHttpConfig, draft_router as api_draft_router},
 };
 // Re-export so desktop_rebuild integration tests can build AuthRoutes without a
 // non-optional pp-api [dev-dependencies] edge (gated boundary check).
@@ -26,7 +27,7 @@ pub struct AuthRoutes {
 }
 
 /// Completed authenticated read surfaces the rebuild router may admit.
-/// Draft mutations stay with GRE-820; jobs/WS with GRE-821.
+/// Jobs/WS stay with GRE-821.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildReadOwner {
     Auth,
@@ -42,6 +43,24 @@ impl RebuildReadOwner {
             "auth" => Some(Self::Auth),
             "builds" => Some(Self::Builds),
             "catalog" => Some(Self::Catalog),
+            _ => None,
+        }
+    }
+}
+
+/// Completed draft mutation surfaces the rebuild router may admit.
+/// Jobs/WS stay with GRE-821.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebuildDraftOwner {
+    Drafts,
+}
+
+impl RebuildDraftOwner {
+    /// Admit a known draft surface. Unknown names fail closed (`None`) before
+    /// any client construction, route mount, or storage execution.
+    pub fn admit(name: &str) -> Option<Self> {
+        match name {
+            "drafts" => Some(Self::Drafts),
             _ => None,
         }
     }
@@ -132,7 +151,8 @@ pub fn read_router(
         clients(rebuild, &guard, policy, auth.lifetimes)?
             .ok_or_else(|| anyhow!("flag on constructs clients"))?
     };
-    // `_drafts` is opened with the bundle for GRE-818 parity; draft HTTP is GRE-820.
+    // `_drafts` is opened with the bundle for GRE-818 parity; draft HTTP uses
+    // `draft_router` (GRE-820) from the same owner when composed separately.
     let builds = build_router(
         BuildHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
         builds_client,
@@ -143,6 +163,38 @@ pub fn read_router(
     );
     let auth_routes = auth_router(auth.http, auth_client, auth.providers, auth.mail);
     Ok(Some(auth_routes.merge(builds).merge(catalog)))
+}
+
+/// Compose completed draft list/read/edit/abandon routers from one
+/// `WriterOwner` when the stored rebuild setting is on. Root and `/api/v2`
+/// aliases share that client's executor. Returns `None` before creating
+/// clients or mounting when the setting is off. Does not cut over production
+/// gateway ownership (GRE-593) and does not fall back to Node on Rust failure.
+///
+/// `origin` is the loopback listener origin. `api_key_tenant` is the configured
+/// API-key tenant for draft admission.
+pub fn draft_router(
+    rebuild: DesktopRebuild,
+    owner: &WriterOwner,
+    policy: AuthPolicy,
+    lifetimes: AuthLifetimes,
+    origin: &str,
+    api_key_tenant: &str,
+) -> Result<Option<Router>> {
+    if !rebuild.enabled() {
+        return Ok(None);
+    }
+    let RebuildHttpClients {
+        auth,
+        drafts,
+        builds: _,
+    } = clients(rebuild, owner, policy, lifetimes)?
+        .ok_or_else(|| anyhow!("flag on constructs clients"))?;
+    Ok(Some(api_draft_router(
+        DraftHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
+        drafts,
+        auth,
+    )))
 }
 
 #[cfg(test)]
