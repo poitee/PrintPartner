@@ -198,7 +198,7 @@ fn review(root: &Path, session: &str) -> Refusal {
         r#"{"availableInputRoots":[1],"mediaByPartId":{"1":{"artifactMissing":false,"thumbEmpty":false},"2":{"artifactMissing":false,"thumbEmpty":false}}}"#,
     )
     .unwrap();
-    let output = child_process::command(env!("CARGO_BIN_EXE_plan-read-fixture"))
+    let output = child_process::command(child_process::bin_exe("plan-read-fixture"))
         .arg(root)
         .arg("1")
         .env("PP_READ_SESSION", session)

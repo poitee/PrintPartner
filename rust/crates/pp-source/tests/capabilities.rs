@@ -478,7 +478,7 @@ fn cli_retry_reuses_revision_after_inputs_are_deleted() {
         "reservedStoredBytes": 1024 * 1024, "snapshot": request(),
     });
     let invoke = || {
-        let mut child = test_process::command(env!("CARGO_BIN_EXE_pp-source"))
+        let mut child = test_process::command(test_process::bin_exe("pp-source"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

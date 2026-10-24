@@ -86,7 +86,9 @@ class MergeGroupWorkflowTests(unittest.TestCase):
     def test_required_lint_and_rust_jobs_use_the_filter(self):
         for filename, kind, contexts in (
             ("actionlint.yml", "actions", {"actionlint": "actionlint", "zizmor": "zizmor"}),
-            ("rust-cross-os.yml", "rust", {"rust-linux": "rust (linux)",
+            # Path filter runs on rust-linux-build; rust-linux is the required
+            # aggregate check over build + optional rebuild partitions.
+            ("rust-cross-os.yml", "rust", {"rust-linux-build": "rust (linux) build",
                                            "rust-windows": "rust (windows)"}),
         ):
             with self.subTest(workflow=filename):
@@ -115,6 +117,26 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                     checkout = next(step for step in job["steps"]
                                     if step.get("uses", "").startswith("actions/checkout@"))
                     self.assertNotIn("ref", checkout.get("with", {}))
+                if filename == "rust-cross-os.yml":
+                    rebuild = jobs["rust-linux-rebuild"]
+                    self.assertEqual(rebuild["needs"], ["rust-linux-build"])
+                    aggregate = jobs["rust-linux"]
+                    self.assertEqual(aggregate.get("name"), "rust (linux)")
+                    self.assertEqual(aggregate["needs"], ["rust-linux-build", "rust-linux-rebuild"])
+                    self.assertEqual(
+                        aggregate["if"],
+                        "(github.event_name != 'pull_request' || "
+                        "!github.event.pull_request.draft) && (!cancelled() && "
+                        "needs.rust-linux-build.result != 'skipped')",
+                    )
+                    require = next(
+                        step for step in aggregate["steps"]
+                        if step.get("name") == "Require linux build and rebuild partitions"
+                    )
+                    self.assertEqual(require["env"]["EVENT_NAME"], "${{ github.event_name }}")
+                    self.assertIn("push|merge_group|workflow_dispatch)", require["run"])
+                    self.assertIn('test "$REBUILD_RESULT" = success', require["run"])
+                    self.assertIn("success|skipped)", require["run"])
 
     def test_native_macos_plan_respects_paths_and_event(self):
         workflow = yaml.load((ROOT / ".github/workflows/desktop-native-macos.yml").read_text(),

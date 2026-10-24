@@ -797,7 +797,7 @@ fn fixture_runner_reports_the_node_result_and_its_restart_replay() {
         hex::encode(rand::random::<[u8; 16]>())
     ));
     std::fs::write(&request, f.request().to_string()).unwrap();
-    let output = child_process::command(env!("CARGO_BIN_EXE_required-unit-fixture"))
+    let output = child_process::command(child_process::bin_exe("required-unit-fixture"))
         .arg(&f.path)
         .args(["1", "2", "selection"])
         .arg(&request)
