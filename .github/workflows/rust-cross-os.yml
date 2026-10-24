@@ -139,7 +139,7 @@ jobs:
         with:
           workspaces: rust -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: nextest@0.9.148
       - name: Install Linux desktop dependencies
@@ -323,7 +323,7 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: nextest@0.9.148
       - name: Install Linux desktop dependencies
