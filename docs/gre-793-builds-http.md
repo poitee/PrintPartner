@@ -6,7 +6,8 @@ and `/api/v2` only when the stored `PP_DESKTOP_REBUILD` value is exactly `1` or
 `true`. Otherwise those routes answer 404. List/detail/create/delete remain as
 in GRE-791/GRE-792. Kit-manifest ReadKit is GRE-801
 (`docs/gre-801-manifest-http.md`). Layer mutate (base/addon replace/detach) is
-`docs/gre-794-builds-http.md`. Job list is `docs/gre-795-jobs-http.md`. SaveKit
+`docs/gre-794-builds-http.md`. Job list is `docs/gre-795-jobs-http.md`; read-one
+aliases are `docs/gre-796-jobs-http.md`. SaveKit
 `PUT` is GRE-802 (`docs/gre-802-manifest-http.md`); plan-manifest-builder
 ReadBuilder is GRE-803 (`docs/gre-803-manifest-http.md`).
 
