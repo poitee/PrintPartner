@@ -21,10 +21,12 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+#[path = "common/scratch.rs"]
+mod scratch;
 
 const RESERVED: u64 = 3_506_438_144;
 const MAX_INPUT: u64 = 268_435_456;
@@ -39,18 +41,17 @@ fn policy() -> AuthPolicy {
     }
 }
 
+// Fields drop in declaration order: `root` must stay last so the owner closes
+// before the scratch directory is removed.
 struct Fixture {
-    root: PathBuf,
     owner: WriterOwner,
     client: ImportClient,
+    root: scratch::Scratch,
 }
 
 impl Fixture {
     fn open() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "pp-upload-journal-{}",
-            hex::encode(rand::random::<[u8; 8]>())
-        ));
+        let root = scratch::Scratch::new("pp-upload-journal-");
         let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
         let client = owner.imports(policy(), QUOTA).unwrap();
         Self {
@@ -523,10 +524,7 @@ fn admission_retries_zip_aliases_with_the_same_intent() {
 
 #[test]
 fn imports_requires_one_valid_owner_quota() {
-    let root = std::env::temp_dir().join(format!(
-        "pp-upload-quota-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
+    let root = scratch::Scratch::new("pp-upload-quota-");
     let (owner, _) = WriterOwner::open(&root, Limits::default()).unwrap();
     let refusal = |quota| owner.imports(policy(), quota).err().unwrap().to_string();
     assert_eq!(refusal(0), "Invalid desktop quota");
@@ -743,7 +741,7 @@ fn delete_preclaim(root: &std::path::Path) {
 
 /// Admits an import with an owner session, revokes it, and lets a targeted claim
 /// refuse the job before its first attempt, which writes the only preclaim row.
-fn preclaim_refused() -> PathBuf {
+fn preclaim_refused() -> scratch::Scratch {
     let Fixture {
         root,
         owner,

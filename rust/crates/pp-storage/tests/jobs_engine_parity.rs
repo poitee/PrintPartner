@@ -16,10 +16,13 @@ use pp_storage::{
     },
 };
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+#[path = "common/scratch.rs"]
+mod scratch;
 
 fn policy() -> AuthPolicy {
     AuthPolicy {
@@ -59,12 +62,8 @@ fn golden() -> serde_json::Value {
     .unwrap()
 }
 
-fn open() -> (PathBuf, WriterOwner) {
-    let path = std::env::temp_dir().join(format!(
-        "pp-jobs-engine-parity-{}",
-        hex::encode(rand::random::<[u8; 8]>())
-    ));
-    std::fs::create_dir_all(&path).unwrap();
+fn open() -> (scratch::Scratch, WriterOwner) {
+    let path = scratch::Scratch::new("pp-jobs-engine-parity-");
     let owner = WriterOwner::open(&path, Limits::default()).unwrap().0;
     (path, owner)
 }
@@ -101,7 +100,7 @@ fn enqueued_jobs_project_like_node_and_stay_tenant_private() {
     let golden = golden();
     let cases = golden["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 2);
-    let (_, owner) = open();
+    let (_scratch, owner) = open();
     let tenant_a = session(&owner, "parity-a@example.com");
     let tenant_b = session(&owner, "parity-b@example.com");
     for case in cases {
@@ -257,7 +256,7 @@ fn finished_and_retained_jobs_read_and_list_like_node() {
     let golden = golden();
     let finished = golden["finished"].as_array().unwrap();
     assert_eq!(finished.len(), 2);
-    let (_, owner) = open();
+    let (_scratch, owner) = open();
     let tenant_a = session(&owner, "retained-a@example.com");
     let tenant_b = session(&owner, "retained-b@example.com");
     let client = owner.jobs(policy()).unwrap();
