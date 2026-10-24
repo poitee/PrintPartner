@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+desktop_rebuild = ["pp-api-types/desktop_rebuild"]
+
 [dependencies]
 anyhow.workspace = true
 tokio.workspace = true
