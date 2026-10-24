@@ -13,4 +13,7 @@ cargo +nightly fuzz run canonical_target -- -max_total_time=60 -max_len=4096
 Successful parses must preserve the query, remain origin-form, have safe decoded
 segments and be idempotent. URI/parser rejections are expected. Crashes and corpus
 mutations are ignored by Git; retain minimized reproducers as regression tests.
-The independent `Cargo.lock` pins the fuzz dependency graph.
+The independent `Cargo.lock` pins the fuzz dependency graph. It must still
+resolve under `--locked` after the workspace bumps an exact pin; the Desktop
+cargo-deny workflow checks it for advisories. Refresh it from `rust/` with
+`cargo update --manifest-path fuzz/Cargo.toml -p <crate> --precise <version>`.
