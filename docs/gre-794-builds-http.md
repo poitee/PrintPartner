@@ -3,8 +3,9 @@
 With the default-off `desktop_rebuild` feature compiled, layer mutation routes
 mount at `/`, `/api/v1`, and `/api/v2` only when stored `PP_DESKTOP_REBUILD` is
 exactly `1` or `true`. Otherwise they answer 404. Prior Plan routes stay as in
-GRE-791–GRE-793; kit-manifest ReadKit is GRE-801 and SaveKit is GRE-802. Jobs
-and ReadBuilder stay unregistered.
+GRE-791–GRE-793; kit-manifest ReadKit is GRE-801 and SaveKit is GRE-802
+(`docs/gre-802-manifest-http.md`). Job list HTTP is `docs/gre-795-jobs-http.md`.
+Plan-manifest-builder ReadBuilder is GRE-803 (`docs/gre-803-manifest-http.md`).
 
 Admission matches GRE-791. Each request runs one existing `BuildGraphClient`
 command in the writer transaction. Bodies use `SourceAttachmentRequest`
