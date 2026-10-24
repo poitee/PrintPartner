@@ -2,6 +2,9 @@ use std::path::Path;
 
 use super::scratch::Scratch;
 
+#[path = "process.rs"]
+mod child_process;
+
 fn assert_empty(root: &Path) {
     let leftovers: Vec<_> = std::fs::read_dir(root)
         .unwrap()
@@ -18,7 +21,7 @@ fn assert_empty(root: &Path) {
 /// check does not recurse into itself.
 pub fn assert_test_run_clean(arguments: &[&str]) {
     let scratch = Scratch::new("pp-scratch-check-");
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
+    let output = child_process::command(std::env::current_exe().unwrap())
         .args(arguments)
         .arg("--nocapture")
         .env("TMPDIR", scratch.as_ref())
