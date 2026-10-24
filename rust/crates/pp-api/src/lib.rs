@@ -7,6 +7,8 @@ pub mod catalog;
 #[cfg(feature = "desktop_rebuild")]
 pub mod drafts;
 #[cfg(feature = "desktop_rebuild")]
+pub mod fixtures;
+#[cfg(feature = "desktop_rebuild")]
 pub mod jobs;
 #[cfg(feature = "desktop_rebuild")]
 mod loopback;
