@@ -138,10 +138,12 @@ pub fn slot_filament_status(slot: &FilamentSlot, lookup: &SpoolLookup<'_>) -> Sl
 
 /// Does the live host status message say the printer is out of filament?
 ///
-/// Matches the frozen TypeScript `RUNOUT_PATTERN` with dependency-free substring
-/// checks over a whitespace-collapsed lowercase message. Word boundaries are
-/// approximated: a marker inside a larger word (e.g. "unrunoutable") is not a
-/// realistic printer message.
+/// Mirrors the frozen TypeScript `RUNOUT_PATTERN`:
+/// `\b(runout|run out|run-out|filament\s*(out|empty|error|jam)|out of filament|load filament|insert filament|filament\s*sensor)\b/i`.
+/// Dependency-free: the ASCII word-boundary checks below reproduce the TS `\b`
+/// anchors, and the alternation reduces to fixed literals plus `filament`,
+/// optional whitespace, and a qualifier. Whitespace is not collapsed, because
+/// the literal `run out` alternative requires its one plain space.
 pub fn host_reports_filament_runout(status: Option<&PrinterHostStatus>) -> bool {
     let Some(message) = status.and_then(|status| status.message.as_deref()) else {
         return false;
@@ -150,25 +152,93 @@ pub fn host_reports_filament_runout(status: Option<&PrinterHostStatus>) -> bool 
     if message.is_empty() {
         return false;
     }
-    let collapsed = message
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
-    const MARKERS: [&str; 11] = [
+    let message = message.to_lowercase();
+    const LITERALS: [&str; 6] = [
         "runout",
         "run out",
         "run-out",
-        "filament out",
-        "filament empty",
-        "filament error",
-        "filament jam",
         "out of filament",
         "load filament",
         "insert filament",
-        "filament sensor",
     ];
-    MARKERS.iter().any(|&marker| collapsed.contains(marker))
+    const FILAMENT_QUALIFIERS: [&str; 5] = ["out", "empty", "error", "jam", "sensor"];
+
+    LITERALS
+        .iter()
+        .any(|literal| contains_word_bounded(&message, literal))
+        || contains_filament_qualifier(&message, &FILAMENT_QUALIFIERS)
+}
+
+/// ASCII word byte, matching the TS regex `\b` definition (`[A-Za-z0-9_]`).
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Whether `index` sits on a `\b` boundary in `bytes` (exactly one side is a
+/// word byte).
+fn is_word_boundary(bytes: &[u8], index: usize) -> bool {
+    let before = index.checked_sub(1).is_some_and(|i| is_word_byte(bytes[i]));
+    let after = bytes.get(index).is_some_and(|&byte| is_word_byte(byte));
+    before != after
+}
+
+fn contains_word_bounded(haystack: &str, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let mut search_from = 0;
+    while let Some(offset) = haystack[search_from..].find(needle) {
+        let start = search_from + offset;
+        if is_word_boundary(bytes, start) && is_word_boundary(bytes, start + needle.len()) {
+            return true;
+        }
+        search_from = start + 1;
+    }
+    false
+}
+
+/// The TS regex `\s` character class, which differs slightly from
+/// [`char::is_whitespace`] (it includes the BOM and excludes U+0085).
+fn is_js_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0009}'..='\u{000d}'
+            | '\u{0020}'
+            | '\u{00a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{3000}'
+            | '\u{feff}'
+    )
+}
+
+/// `filament\s*(out|empty|error|jam|sensor)` with both `\b` anchors.
+fn contains_filament_qualifier(haystack: &str, qualifiers: &[&str]) -> bool {
+    const NEEDLE: &str = "filament";
+    let bytes = haystack.as_bytes();
+    let mut search_from = 0;
+    while let Some(offset) = haystack[search_from..].find(NEEDLE) {
+        let start = search_from + offset;
+        let after_needle = start + NEEDLE.len();
+        if is_word_boundary(bytes, start) {
+            let rest = &haystack[after_needle..];
+            let qualifier_start = after_needle
+                + rest
+                    .find(|character: char| !is_js_whitespace(character))
+                    .unwrap_or(rest.len());
+            let rest = &haystack[qualifier_start..];
+            if qualifiers.iter().any(|qualifier| {
+                rest.starts_with(qualifier)
+                    && is_word_boundary(bytes, qualifier_start + qualifier.len())
+            }) {
+                return true;
+            }
+        }
+        search_from = start + 1;
+    }
+    false
 }
 
 /// Combine slot inventory with the live host status into a single swap verdict.
@@ -519,5 +589,276 @@ mod tests {
             &PrinterHostStatus::offline("Printing plate 3")
         )));
         assert!(!host_reports_filament_runout(None));
+    }
+
+    /// Pins the exact `\b…\b` truth table of the frozen TS `RUNOUT_PATTERN`
+    /// (evaluated in node against `farm-filament.ts`). A substring matcher gets
+    /// all three of these wrong in a different way, so each case is explicit.
+    #[test]
+    fn runout_honours_frozen_ts_word_boundaries() {
+        // `load filament` must not fire from inside "Unload filament": the TS
+        // `\b` before "load" sees the preceding "n".
+        assert!(!host_reports_filament_runout(Some(
+            &PrinterHostStatus::offline("Unload filament")
+        )));
+        // "Filament outlet fan" has no qualifier directly after "filament"; the
+        // trailing `\b` rejects the "out" prefix of "outlet".
+        assert!(!host_reports_filament_runout(Some(
+            &PrinterHostStatus::offline("Filament outlet fan")
+        )));
+        // `filament\s*(out|…)` allows zero whitespace, so the run-together
+        // spelling is a runout to TS.
+        assert!(host_reports_filament_runout(Some(
+            &PrinterHostStatus::offline("filamentout")
+        )));
+        // `\s*` also allows more than one separator character.
+        assert!(host_reports_filament_runout(Some(
+            &PrinterHostStatus::offline("filament   empty")
+        )));
+        // The literal "run out" alternative requires one plain space, exactly
+        // as the TS regex spells it.
+        assert!(!host_reports_filament_runout(Some(
+            &PrinterHostStatus::offline("run  out")
+        )));
+    }
+
+    /// Broader fixture-free parity corpus, each value checked by evaluating the
+    /// frozen TS `RUNOUT_PATTERN` in node. Guards the boundary/`\s` corners the
+    /// old substring matcher got wrong in both directions.
+    #[test]
+    fn runout_parity_corpus_matches_node_truth_table() {
+        let cases: [(&str, bool); 12] = [
+            ("Filament jammed", false),
+            ("run-outage", false),
+            ("pre-runout", true),
+            ("filament\tout", true),
+            ("filament\u{00a0}out", true),
+            ("filament\u{feff}out", true),
+            ("filament\u{85}out", false),
+            ("filament_out", false),
+            ("cfilamentout", false),
+            ("OUT OF FILAMENT.", true),
+            ("reload filament", false),
+            ("unrunoutable", false),
+        ];
+        for (message, expected) in cases {
+            assert_eq!(
+                host_reports_filament_runout(Some(&PrinterHostStatus::offline(message))),
+                expected,
+                "message: {message:?}"
+            );
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenFile {
+        case: String,
+        context: GoldenContext,
+        input: GoldenInput,
+        expected: GoldenExpected,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenContext {
+        configured: bool,
+        #[allow(dead_code)]
+        physically_empty: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenInput {
+        machine: GoldenMachine,
+        spools_by_color_id: std::collections::BTreeMap<String, Option<Vec<GoldenSpool>>>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenMachine {
+        loaded_filaments: Vec<GoldenSlotInput>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenSlotInput {
+        slot: u32,
+        filament_color_id: Option<String>,
+        #[serde(default)]
+        label: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenSpool {
+        spool_id: u64,
+        remaining_g: f64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenExpected {
+        slots: Vec<GoldenSlotExpected>,
+        needs_filament_swap: bool,
+        filament_swap_reason: Option<String>,
+        filament_remaining_g: Option<f64>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GoldenSlotExpected {
+        slot: u32,
+        label: String,
+        filament_color_id: Option<String>,
+        remaining_g: Option<f64>,
+        spool_ids: Vec<u64>,
+        empty: bool,
+        low: bool,
+    }
+
+    fn load_farm_filament_goldens() -> Vec<GoldenFile> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../fixtures/parity/farm-filament");
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                (path.extension().and_then(|ext| ext.to_str()) == Some("json")).then_some(path)
+            })
+            .collect();
+        paths.sort();
+        paths
+            .iter()
+            .map(|path| {
+                let text = std::fs::read_to_string(path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+                serde_json::from_str(&text)
+                    .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+            })
+            .collect()
+    }
+
+    fn golden_expected_state(slot: &GoldenSlotExpected) -> SlotState {
+        match slot.remaining_g {
+            Some(remaining_g) => SlotState::Loaded {
+                remaining_g,
+                spool_ids: slot.spool_ids.clone(),
+                low: slot.low,
+            },
+            None if slot.empty => SlotState::Empty,
+            None => SlotState::Unknown,
+        }
+    }
+
+    /// Drives every checked-in GRE-575 golden through the Rust derivation. The
+    /// four "Keep" rows must match the frozen TS output exactly; the
+    /// `no-slot-config` "Change" row must instead report `Unconfigured`, with no
+    /// swap, no reason, and no total. `context.configured` alone decides that,
+    /// because `empty-slot.json` has the same null printer id.
+    #[test]
+    fn slot_state_goldens_keep_four_cases_and_change_unconfigured() {
+        let goldens = load_farm_filament_goldens();
+        let cases: Vec<&str> = goldens.iter().map(|golden| golden.case.as_str()).collect();
+        assert_eq!(
+            cases,
+            [
+                "blank-filament-color-id",
+                "empty-slot",
+                "loaded-matched",
+                "loaded-no-spoolman-match",
+                "no-slot-config",
+            ]
+        );
+
+        let no_config = goldens
+            .iter()
+            .find(|golden| golden.case == "no-slot-config")
+            .unwrap_or_else(|| panic!("missing no-slot-config golden"));
+        let empty = goldens
+            .iter()
+            .find(|golden| golden.case == "empty-slot")
+            .unwrap_or_else(|| panic!("missing empty-slot golden"));
+        assert!(!no_config.context.configured);
+        assert!(empty.context.configured);
+        assert_eq!(
+            no_config.input.machine.loaded_filaments[0].filament_color_id,
+            None
+        );
+        assert_eq!(
+            empty.input.machine.loaded_filaments[0].filament_color_id,
+            None
+        );
+
+        for golden in &goldens {
+            let machine = Machine {
+                loaded_filaments: golden
+                    .input
+                    .machine
+                    .loaded_filaments
+                    .iter()
+                    .map(|slot| FilamentSlot {
+                        slot: slot.slot,
+                        configured: golden.context.configured,
+                        filament_color_id: slot.filament_color_id.clone(),
+                        label: slot.label.clone(),
+                    })
+                    .collect(),
+            };
+            let lookup = |color_id: &str| match golden.input.spools_by_color_id.get(color_id) {
+                Some(Some(spools)) => Some(
+                    spools
+                        .iter()
+                        .map(|summary| spool(summary.spool_id, summary.remaining_g))
+                        .collect(),
+                ),
+                Some(None) | None => None,
+            };
+            let status = printer_filament_status(&machine, &lookup, None);
+
+            if golden.case == "no-slot-config" {
+                assert_eq!(status.slots[0].state, SlotState::Unconfigured);
+                assert_eq!(status.slots[0].filament_color_id, None);
+                assert!(!status.needs_filament_swap);
+                assert_eq!(status.filament_swap_reason, None);
+                assert_eq!(status.filament_remaining_g, None);
+                continue;
+            }
+
+            assert!(golden.context.configured);
+            assert_eq!(status.slots.len(), golden.expected.slots.len());
+            for (actual, expected) in status.slots.iter().zip(&golden.expected.slots) {
+                assert_eq!(actual.slot, expected.slot);
+                assert_eq!(actual.label, expected.label);
+                assert_eq!(actual.filament_color_id, expected.filament_color_id);
+                assert_eq!(actual.state, golden_expected_state(expected));
+            }
+            assert_eq!(
+                status.needs_filament_swap,
+                golden.expected.needs_filament_swap
+            );
+            assert_eq!(
+                status.filament_swap_reason,
+                golden.expected.filament_swap_reason
+            );
+            assert_eq!(
+                status.filament_remaining_g,
+                golden.expected.filament_remaining_g
+            );
+        }
+    }
+
+    /// GRE-488's rule is about PP configuration, not the printer's report: an
+    /// unconfigured slot stays `Unconfigured` even if the printer reports a
+    /// perfectly valid, non-blank filament id.
+    #[test]
+    fn unconfigured_slot_ignores_non_blank_printer_reported_id() {
+        let table = vec![(7, vec![spool(1, 900.0)])];
+        let lookup = spoolman_lookup(&table);
+        let slots = vec![slot(
+            1,
+            false,
+            Some("spoolman:workshop:filament:7"),
+            "LDO Black",
+        )];
+        let status = printer_filament_status(&machine(slots), &lookup, None);
+
+        assert_eq!(status.slots[0].state, SlotState::Unconfigured);
+        assert_eq!(status.slots[0].filament_color_id, None);
+        assert!(!status.needs_filament_swap);
+        assert_eq!(status.filament_swap_reason, None);
+        assert_eq!(status.filament_remaining_g, None);
     }
 }
