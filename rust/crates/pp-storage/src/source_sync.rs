@@ -4,8 +4,8 @@ use crate::{
         IssuedTokenState, SourceBinding, SourceBusy, SourceWorkLease, SourceWorkProof, State,
     },
     jobs::{
-        AttemptLease, JobKind, JobRecord, Payload, PersistentState, ResultArtifact,
-        SourceScanResult, SourceSyncFailure,
+        AttemptLease, CompletedResult, JobKind, JobRecord, LocalCommit, Payload, PersistentState,
+        ResultArtifact, SourceScanResult, SourceSyncFailure, SourceSyncResult,
     },
     source_scan::LocalScanObservation,
 };
@@ -126,6 +126,45 @@ impl SourceSyncHalt {
         match self {
             Self::Fatal => "fatal",
             Self::UncertainTarget => "uncertain_target",
+        }
+    }
+}
+
+/// Outcome of a Sync-owned finish. Ordinary completion carries the aggregate
+/// and the terminal Job. Reconciliation is reserved for later guard slices.
+#[derive(Debug)]
+pub enum SourceSyncFinishOutcome {
+    Completed(Box<CompletedSourceSync>),
+    NeedsReconciliation,
+}
+
+/// A finished Sync batch: the terminal Job and the validated target aggregate.
+#[derive(Debug)]
+pub struct CompletedSourceSync {
+    pub job: JobRecord,
+    pub aggregate: SourceSyncResult,
+}
+
+pub(crate) struct SyncCommandResult<T> {
+    pub(crate) value: T,
+    pub(crate) job: JobRecord,
+    pub(crate) commit: LocalCommit,
+}
+
+impl<T> SyncCommandResult<T> {
+    fn committed(value: T, job: JobRecord) -> Self {
+        Self {
+            value,
+            job,
+            commit: LocalCommit::Committed,
+        }
+    }
+
+    fn read_only(value: T, job: JobRecord) -> Self {
+        Self {
+            value,
+            job,
+            commit: LocalCommit::ReadOnly,
         }
     }
 }
@@ -321,8 +360,8 @@ enum ValidatedTargetOutcome {
         _receipt: crate::jobs::ResultArtifact,
     },
     Failed {
-        _failure: SourceSyncFailure,
-        _code: String,
+        failure: SourceSyncFailure,
+        code: String,
     },
     NotRun,
     ReconciliationRequired {
@@ -927,8 +966,8 @@ fn validate_target_in_basis(
                 _ => return Err(anyhow!("Invalid Sync failure code")),
             }
             ValidatedTargetOutcome::Failed {
-                _failure: failure()?,
-                _code: code,
+                failure: failure()?,
+                code,
             }
         }
         "not_run" => {
@@ -1991,6 +2030,181 @@ pub(crate) fn inspect_retained(
         targets,
         original_authority: access.original_authority,
     })
+}
+
+fn validated_terminal_aggregate(tx: &Transaction<'_>, job: &JobRecord) -> Result<SourceSyncResult> {
+    let source_ids = validate_basis(tx, job)?;
+    let mut results = Vec::new();
+    let mut failures = Vec::new();
+    for ordinal in 0..source_ids.len() {
+        let target = validate_target_in_basis(
+            tx,
+            job,
+            &SyncTargetKey {
+                job_id: job.job_id.clone(),
+                ordinal: u32::try_from(ordinal)?,
+            },
+            &source_ids,
+        )?;
+        ensure!(target.acknowledged, "Sync target is not acknowledged");
+        match target.outcome {
+            ValidatedTargetOutcome::Succeeded { result, .. } => results.push(result),
+            ValidatedTargetOutcome::Failed { failure, code } => {
+                ensure!(
+                    matches!(
+                        code.as_str(),
+                        "unavailable" | "unsupported_kind" | "local_read"
+                    ),
+                    "Sync terminal failure requires reconciliation"
+                );
+                failures.push(failure);
+            }
+            _ => return Err(anyhow!("Sync target is not terminal")),
+        }
+    }
+    Ok(SourceSyncResult {
+        synced: u64::try_from(results.len())?,
+        failed: u64::try_from(failures.len())?,
+        results,
+        failures,
+    })
+}
+
+/// Finishes an open Sync batch once every target has a valid acknowledged
+/// terminal result. Exact retry returns the same aggregate without writing.
+pub(crate) fn finish(
+    tx: &Transaction<'_>,
+    lease: &AttemptLease,
+    policy: crate::auth::AuthPolicy,
+) -> Result<SyncCommandResult<SourceSyncResult>> {
+    let loaded =
+        crate::jobs::load(tx, lease.job_id())?.ok_or_else(|| anyhow!("Sync Job not found"))?;
+    ensure!(loaded.kind == JobKind::Sync, "Attempt is not a Sync Job");
+    ensure!(
+        loaded.tenant == lease.tenant(),
+        "Sync finish tenant mismatch"
+    );
+    if loaded.state == PersistentState::ReconciliationRequired {
+        return Err(anyhow!("Inspect retained Sync recovery evidence"));
+    }
+    if loaded.state.terminal() {
+        ensure!(
+            loaded.generation == lease.generation(),
+            "Sync finish generation mismatch"
+        );
+        ensure!(
+            loaded.state_version == lease.version() + 1,
+            "Sync finish retry version mismatch"
+        );
+        crate::jobs::require_original_authority(tx, &loaded, policy)?;
+        let (phase, aggregate_json, aggregate_digest): (String, String, String) = tx.query_row(
+            "SELECT phase,aggregate_json,aggregate_digest FROM source_sync_batches WHERE job_id=?1 AND tenant=?2",
+            params![loaded.job_id, loaded.tenant],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        ensure!(
+            matches!(phase.as_str(), "completed" | "failed"),
+            "Sync finish retry batch mismatch"
+        );
+        let stored_aggregate: SourceSyncResult = serde_json::from_str(&aggregate_json)?;
+        let canonical_aggregate = serde_json::to_string(&stored_aggregate)?;
+        ensure!(
+            aggregate_json == canonical_aggregate,
+            "Sync finish retry aggregate is not canonical"
+        );
+        ensure!(
+            digest(canonical_aggregate.as_bytes()) == aggregate_digest,
+            "Sync finish retry aggregate mismatch"
+        );
+        let aggregate = validated_terminal_aggregate(tx, &loaded)?;
+        ensure!(
+            aggregate == stored_aggregate,
+            "Sync finish retry target aggregate mismatch"
+        );
+        if aggregate.synced == 0 && aggregate.failed > 0 {
+            ensure!(
+                loaded.state == PersistentState::Failed && loaded.public_result.is_none(),
+                "Sync finish retry failed aggregate mismatch"
+            );
+        } else {
+            ensure!(
+                matches!(&loaded.public_result, Some(CompletedResult::SourceSync(value)) if value == &aggregate),
+                "Sync finish retry public result mismatch"
+            );
+        }
+        return Ok(SyncCommandResult::read_only(aggregate, loaded));
+    }
+    let mut job = require_sync_job(tx, lease)?;
+    ensure!(!job.cancel_requested, "Sync was cancelled");
+    ensure!(job.effects.is_empty(), "Sync has generic effect evidence");
+    crate::jobs::require_original_authority(tx, &job, policy)?;
+    let (batch_tenant, selection_kind, target_basis_digest, target_count, batch_phase): (
+        String,
+        String,
+        String,
+        i64,
+        String,
+    ) = tx.query_row(
+        "SELECT tenant,selection_kind,target_basis_digest,target_count,phase FROM source_sync_batches WHERE job_id=?1",
+        [&job.job_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    ensure!(batch_tenant == job.tenant, "Sync batch tenant mismatch");
+    ensure!(batch_phase == "open", "Sync batch is not open");
+    let aggregate = validated_terminal_aggregate(tx, &job)?;
+    let aggregate_json = serde_json::to_string(&aggregate)?;
+    let aggregate_digest = digest(aggregate_json.as_bytes());
+    let all_failed = aggregate.synced == 0 && aggregate.failed > 0;
+    job.progress = Some(100);
+    job.result = None;
+    if all_failed {
+        job.state = PersistentState::Failed;
+        job.public_result = None;
+        let joined = aggregate
+            .failures
+            .iter()
+            .map(|failure| {
+                format!(
+                    "{}: {}",
+                    failure
+                        .project_id
+                        .map_or_else(|| "unknown".into(), |id| id.to_string()),
+                    failure.error
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        job.recovery = Some(joined.chars().take(1024).collect());
+    } else {
+        job.state = PersistentState::Succeeded;
+        job.public_result = Some(CompletedResult::SourceSync(aggregate.clone()));
+        job.recovery = None;
+    }
+    ensure!(
+        tx.execute(
+            "UPDATE source_sync_batches SET phase=?2,aggregate_json=?3,aggregate_digest=?4,updated_at=?5 WHERE job_id=?1 AND phase='open' AND tenant=?6 AND selection_kind=?7 AND target_basis_digest=?8 AND target_count=?9",
+            params![job.job_id, if all_failed { "failed" } else { "completed" }, aggregate_json, aggregate_digest, now(), job.tenant, selection_kind, target_basis_digest, target_count],
+        )? == 1,
+        "Sync batch terminal update changed"
+    );
+    crate::jobs::save(
+        tx,
+        &mut job,
+        if all_failed {
+            "source_sync_failed"
+        } else {
+            "source_sync_completed"
+        },
+    )?;
+    Ok(SyncCommandResult::committed(aggregate, job))
 }
 
 pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<()> {

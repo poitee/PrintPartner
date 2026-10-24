@@ -687,6 +687,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.analyze_build_request",
         "tool.get_build_recipe",
         "tool.get_build_workflow",
+        "tool.compare_plans",
         "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
@@ -705,8 +706,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 55);
-    assert_eq!(unresolved.len(), 388);
+    assert_eq!(reviewed.len(), 56);
+    assert_eq!(unresolved.len(), 387);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1004,6 +1005,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.analyze_build_request",
         "tool.get_build_recipe",
         "tool.get_build_workflow",
+        "tool.compare_plans",
         "tool.get_plan_option_groups",
         "tool.ui_highlight_part",
         "tool.ui_focus_stl_search",
@@ -1142,7 +1144,8 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.get_kit_catalog", "tool.analyze_build_request"),
         ("tool.analyze_build_request", "tool.get_build_recipe"),
         ("tool.get_build_recipe", "tool.get_build_workflow"),
-        ("tool.get_build_workflow", "tool.get_plan_option_groups"),
+        ("tool.get_build_workflow", "tool.compare_plans"),
+        ("tool.compare_plans", "tool.get_plan_option_groups"),
         ("tool.get_workflow_help", "tool.web_search"),
         ("tool.web_search", "tool.fetch_web_page"),
         ("tool.fetch_web_page", "tool.get_job_status"),
@@ -1193,13 +1196,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.audit_build_coverage", "tool.compare_plans"],
+        &["tool.audit_build_coverage", "tool.archive_plan"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.audit_build_coverage" && id != "tool.compare_plans");
+    unresolved.retain(|id| id != "tool.audit_build_coverage" && id != "tool.archive_plan");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.audit_build_coverage", "tool.compare_plans"] {
+    for id in ["tool.audit_build_coverage", "tool.archive_plan"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
@@ -1980,6 +1983,11 @@ fn ticket_t_7_ownership_get_build_recipe_refuses_invalid_admission_before_effect
     assert_tool_invalid_admission("tool.get_build_recipe");
 }
 
+#[test]
+fn ticket_t_7_ownership_compare_plans_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.compare_plans");
+}
+
 fn assert_tool_invalid_admission(id: &str) {
     let mut original = manifest();
     original["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
@@ -2514,6 +2522,75 @@ fn ticket_t_7_ownership_get_build_workflow_has_complete_node_owned_resources() {
     let mut value = manifest();
     value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
     value["live_formats"]["source-revision-workspace"]["rust_writes"] = json!(1);
+    assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
+}
+
+#[test]
+fn ticket_t_7_ownership_compare_plans_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.compare_plans";
+    let index = admit_bundled_manifest().unwrap();
+    let expected: ResourceSet = serde_json::from_value(json!([
+        {"kind":"table","name":"build_profiles"},
+        {"kind":"table","name":"profile_layers"},
+        {"kind":"table","name":"projects"},
+        {"kind":"table","name":"source_docs"},
+        {"kind":"table","name":"app_settings"},
+        {"kind":"table","name":"plan_decisions"},
+        {"kind":"file","name":"kit-catalog"},
+        {"kind":"file","name":"source-workspace"}
+    ]))
+    .unwrap();
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut sqlite_compatible = manifest();
+    sqlite_compatible["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    assert_eq!(
+        admit(&sqlite_compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+    for (format, node_reads, writers) in [
+        ("sqlite-schema", 34, vec![Some(35), None]),
+        ("source-revision-workspace", 1, vec![Some(2), None]),
+        ("kit-catalog", 1, vec![Some(2), None]),
+    ] {
+        for rust_writes in writers {
+            let mut value = manifest();
+            value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+            value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect);
+        }
+    }
+    let mut value = manifest();
+    value["live_formats"]["sqlite-schema"]["rust_writes"] = json!(34);
+    value["live_formats"]["kit-catalog"]["rust_writes"] = json!(1);
     assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(&expected));
 }
 

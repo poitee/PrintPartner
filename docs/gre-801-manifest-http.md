@@ -4,8 +4,9 @@ With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 `/plans/{id}/kit-manifest` mount at the root, `/api/v1`, and `/api/v2` only when
 the stored `PP_DESKTOP_REBUILD` value is exactly `1` or `true`. Otherwise those
 routes answer 404 and do not open the build graph. SaveKit (`PUT`) is GRE-802
-(`docs/gre-802-manifest-http.md`). Plan-manifest-builder stays unregistered
-(GRE-803). The desktop gateway does not mount this router in this slice.
+(`docs/gre-802-manifest-http.md`). Plan-manifest-builder ReadBuilder is GRE-803
+(`docs/gre-803-manifest-http.md`). The desktop gateway does not mount this
+router in this slice.
 
 Admission (loopback Host/Origin, principal, forwarded-header refusal) is shared
 with Plan list/detail through the Build router (`docs/gre-791-builds-http.md`).

@@ -160,6 +160,12 @@ const KIT_PATHS: &[&str] = &[
     "/api/v2/plans/1/kit-manifest",
 ];
 
+const BUILDER_PATHS: &[&str] = &[
+    "/plans/1/plan-manifest-builder",
+    "/api/v1/plans/1/plan-manifest-builder",
+    "/api/v2/plans/1/plan-manifest-builder",
+];
+
 /// Without `desktop_rebuild`, kit-manifest HTTP is not linked into pp-api.
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
@@ -176,9 +182,44 @@ async fn kit_manifest_read_flag_off_is_404() {
         assert_eq!(status, 404, "PUT {path}");
         assert!(body.get("kit").is_none());
     }
+    for path in BUILDER_PATHS {
+        let (status, body) = server.send(Method::GET, path, &[]).await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("profile_id").is_none());
+    }
     server.stop().await;
     assert_eq!(files(&directory), snapshot);
     assert_eq!(profiles(&directory), before);
+    shutdown(owner, directory);
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn builder_read_retries_one_changed_observation() {
+    let (owner, directory) = open();
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server
+        .send(Method::GET, "/plans/1/plan-manifest-builder", &[])
+        .await;
+    assert_eq!(status, 404);
+    assert!(body.get("profile_id").is_none());
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn builder_read_zero_variants_honors_cancellation() {
+    let (owner, directory) = open();
+    let snapshot = files(&directory);
+    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
+    let (status, body) = server
+        .send(Method::GET, "/plans/1/plan-manifest-builder", &[])
+        .await;
+    assert_eq!(status, 404);
+    assert!(body.get("profile_id").is_none());
+    server.stop().await;
+    assert_eq!(files(&directory), snapshot);
     shutdown(owner, directory);
 }
 
@@ -321,6 +362,11 @@ async fn kit_manifest_read_flag_off_is_404() {
             let (status, body) = server.send(Method::PUT, path, &[]).await;
             assert_eq!(status, 404, "PUT {flag:?} {path}");
             assert!(body.get("kit").is_none());
+        }
+        for path in BUILDER_PATHS {
+            let (status, body) = server.send(Method::GET, path, &[]).await;
+            assert_eq!(status, 404, "{flag:?} {path}");
+            assert!(body.get("profile_id").is_none());
         }
         server.stop().await;
     }
@@ -861,6 +907,343 @@ async fn kit_manifest_save_rejects_changed_basis() {
         Some("changed")
     );
     assert_ne!(before_modified.as_deref(), Some("changed"));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+const BUILDER_MANIFEST: &[u8] = b"option_groups:\n  toolhead:\n    variants:\n      - id: stock\n        parts: [part.stl]\nselections:\n  toolhead: stock\n";
+
+#[cfg(feature = "desktop_rebuild")]
+const ZERO_VARIANT_MANIFEST: &[u8] = b"option_groups: {slow: {variants: []}}\n";
+
+/// First observation pair sees a stamp change; ReadBuilder retries once and
+/// succeeds when the second attempt's pair matches (storage Change::Once).
+#[cfg(feature = "desktop_rebuild")]
+struct OnceChangedReads {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(feature = "desktop_rebuild")]
+impl pp_storage::working_drafts::observation::DraftReads for OnceChangedReads {
+    fn read_checkout_manifest(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedCheckoutReadRequest,
+        _: pp_storage::working_drafts::observation::CheckoutManifestUse,
+        budget: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        pp_storage::working_drafts::observation::DocumentRead,
+    > {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        budget.check()?;
+        let mut bytes = BUILDER_MANIFEST.to_vec();
+        if call > 0 {
+            bytes.extend_from_slice(b"# changed\n");
+        }
+        budget.document(bytes.len(), bytes.len())?;
+        Ok(pp_storage::working_drafts::observation::DocumentRead::Bytes(bytes))
+    }
+
+    fn resolve_stl_root(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedStlReadRequest,
+        budget: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        Box<dyn pp_storage::working_drafts::observation::StlRootRead>,
+    > {
+        budget.check()?;
+        Ok(Box::new(EmptyRoot))
+    }
+
+    fn read_catalog_document(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedCatalogReadRequest,
+        _: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        pp_storage::working_drafts::observation::DocumentRead,
+    > {
+        panic!("declared groups need no hints")
+    }
+}
+
+/// Materializes a zero-variant checkout manifest, then refuses with Cancelled so
+/// the HTTP boundary maps Failure::Cancelled (GRE-751 end-check lives in storage).
+#[cfg(feature = "desktop_rebuild")]
+struct ZeroVariantCancelReads;
+
+#[cfg(feature = "desktop_rebuild")]
+impl pp_storage::working_drafts::observation::DraftReads for ZeroVariantCancelReads {
+    fn read_checkout_manifest(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedCheckoutReadRequest,
+        _: pp_storage::working_drafts::observation::CheckoutManifestUse,
+        budget: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        pp_storage::working_drafts::observation::DocumentRead,
+    > {
+        budget.check()?;
+        let bytes = ZERO_VARIANT_MANIFEST.to_vec();
+        budget.document(bytes.len(), bytes.len())?;
+        Err(pp_storage::working_drafts::observation::ReadFailure::Cancelled)
+    }
+
+    fn resolve_stl_root(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedStlReadRequest,
+        budget: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        Box<dyn pp_storage::working_drafts::observation::StlRootRead>,
+    > {
+        budget.check()?;
+        Ok(Box::new(EmptyRoot))
+    }
+
+    fn read_catalog_document(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedCatalogReadRequest,
+        _: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        pp_storage::working_drafts::observation::DocumentRead,
+    > {
+        panic!("zero-variant cancel does not read catalogs")
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn builder_read_retries_one_changed_observation() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        builds::{BuildHttpConfig, build_router},
+    };
+    use pp_storage::{
+        auth::Secret,
+        build_graph::{BuildCommand, BuildName, BuildOutcome},
+        read_model::Credential,
+        working_drafts::observation::PreparationLimits,
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "builder-retry@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let id = {
+        let client = owner
+            .lock()
+            .unwrap()
+            .build_graph_with_policy(chosen)
+            .unwrap();
+        match client
+            .execute(
+                Credential::Session(Secret::new(token)),
+                BuildCommand::Create {
+                    name: BuildName::parse("Builder Retry".into()).unwrap(),
+                    base_source: None,
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(2),
+            )
+            .unwrap()
+        {
+            BuildOutcome::Created { profile, .. } => profile.id,
+            other => panic!("{other:?}"),
+        }
+    };
+    let tenant = profiles(&directory)
+        .into_iter()
+        .find(|row| row.1 == id)
+        .map(|row| row.0)
+        .expect("tenant");
+    attach_checkout(&directory, &tenant, id);
+    let before_kit = kit_setting(&directory, &tenant, id);
+    let before_modified = config_modified(&directory, &tenant, id);
+
+    let reads = Arc::new(OnceChangedReads {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let (auth, graph) = {
+        let locked = owner.lock().unwrap();
+        (
+            locked.auth_with_policy(chosen).unwrap(),
+            locked
+                .build_graph_with_observations(chosen, reads.clone(), PreparationLimits::default())
+                .unwrap(),
+        )
+    };
+    let mut server = Server::spawn(
+        bound,
+        build_router(
+            BuildHttpConfig::from_startup(&origin, &tenant, Some("1")).unwrap(),
+            graph,
+        )
+        .merge(auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        )),
+    )
+    .await;
+
+    let path = format!("/plans/{id}/plan-manifest-builder");
+    let (status, body) = server
+        .send(Method::GET, &path, &[("Cookie", cookie.as_str())])
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["profile_id"], id);
+    assert!(body.get("merged_option_groups").is_some(), "{body}");
+    assert_eq!(reads.calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    assert_eq!(kit_setting(&directory, &tenant, id), before_kit);
+    assert_eq!(config_modified(&directory, &tenant, id), before_modified);
+
+    for prefix in ["", "/api/v1", "/api/v2"] {
+        let (status, _) = server
+            .send(
+                Method::HEAD,
+                &format!("{prefix}/plans/{id}/plan-manifest-builder"),
+                &[("Cookie", cookie.as_str())],
+            )
+            .await;
+        assert_eq!(status, 200, "HEAD {prefix}");
+    }
+
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn builder_read_zero_variants_honors_cancellation() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        builds::{BuildHttpConfig, build_router},
+    };
+    use pp_storage::{
+        auth::Secret,
+        build_graph::{BuildCommand, BuildName, BuildOutcome},
+        read_model::Credential,
+        working_drafts::observation::PreparationLimits,
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "builder-cancel@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let id = {
+        let client = owner
+            .lock()
+            .unwrap()
+            .build_graph_with_policy(chosen)
+            .unwrap();
+        match client
+            .execute(
+                Credential::Session(Secret::new(token)),
+                BuildCommand::Create {
+                    name: BuildName::parse("Builder Cancel".into()).unwrap(),
+                    base_source: None,
+                },
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(2),
+            )
+            .unwrap()
+        {
+            BuildOutcome::Created { profile, .. } => profile.id,
+            other => panic!("{other:?}"),
+        }
+    };
+    let tenant = profiles(&directory)
+        .into_iter()
+        .find(|row| row.1 == id)
+        .map(|row| row.0)
+        .expect("tenant");
+    attach_checkout(&directory, &tenant, id);
+    let before_kit = kit_setting(&directory, &tenant, id);
+    let before_modified = config_modified(&directory, &tenant, id);
+    let snapshot = files(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let (auth, graph) = {
+        let locked = owner.lock().unwrap();
+        (
+            locked.auth_with_policy(chosen).unwrap(),
+            locked
+                .build_graph_with_observations(
+                    chosen,
+                    Arc::new(ZeroVariantCancelReads),
+                    PreparationLimits::default(),
+                )
+                .unwrap(),
+        )
+    };
+    let mut server = Server::spawn(
+        bound,
+        build_router(
+            BuildHttpConfig::from_startup(&origin, &tenant, Some("1")).unwrap(),
+            graph,
+        )
+        .merge(auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        )),
+    )
+    .await;
+
+    let path = format!("/plans/{id}/plan-manifest-builder");
+    let (status, body) = server
+        .send(Method::GET, &path, &[("Cookie", cookie.as_str())])
+        .await;
+    assert_eq!(status, 503);
+    assert_eq!(
+        body,
+        json!({
+            "detail": "Build service temporarily unavailable",
+            "code": "request_cancelled",
+        })
+    );
+    assert_eq!(kit_setting(&directory, &tenant, id), before_kit);
+    assert_eq!(config_modified(&directory, &tenant, id), before_modified);
+    assert_eq!(files(&directory), snapshot);
     server.stop().await;
     shutdown(owner, directory);
 }
