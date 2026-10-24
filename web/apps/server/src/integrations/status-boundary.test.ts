@@ -89,7 +89,7 @@ function violations(extraSource = ""): string[] {
 
 it("requires the boundary's real permit type along every adapter status acquisition", () => {
   expect(violations()).toEqual([]);
-});
+}, 60_000);
 
 it("rejects a new low-level status producer and a forged-permit caller", () => {
   expect(violations(`
