@@ -6,6 +6,10 @@ import {
 } from "../api/endpoints/planManifests";
 import type { AutosaveStatus } from "../lib/autosaveStatus";
 import { KIT_MANIFEST_SAVED_CLEAR_MS, selectionsEqual } from "../lib/kitManifestSave";
+import {
+  clearFailedAuxiliarySave,
+  retainFailedAuxiliarySave,
+} from "../lib/planAuxiliarySaveIntent";
 
 type Options = {
   profileId: number;
@@ -17,8 +21,7 @@ type Options = {
   baseKit: KitManifest | null;
   onPersisted?: (kit: KitManifest) => Promise<void>;
   onSaved: (kit: KitManifest) => void | Promise<void>;
-  onRegisterFlush?: (profileId: number, flush: () => Promise<void>) => void;
-  onUnregisterFlush?: (profileId: number) => void;
+  onRegisterFlush?: (profileId: number, flush: () => Promise<void>) => () => void;
 };
 
 type ProfileSaveState = {
@@ -34,7 +37,27 @@ type ProfileSaveState = {
   lastSavedSelectionsProp: ManifestSelections;
   lastBaseKitProp: KitManifest | null;
   pendingConfirmation: KitManifest | null;
+  retainedFailedKit: KitManifest | null;
 };
+
+function kitFromState(
+  saveState: ProfileSaveState,
+  selectionsToSave: ManifestSelections,
+): KitManifest {
+  const kitBase = saveState.baseKit;
+  return {
+    name: kitBase?.name ?? null,
+    layers: kitBase?.layers ?? [],
+    base_source_id: kitBase?.base_source_id ?? null,
+    addon_source_ids: kitBase?.addon_source_ids ?? [],
+    selections: selectionsToSave,
+    include: kitBase?.include ?? [],
+    exclude: kitBase?.exclude ?? [],
+    replacements: kitBase?.replacements ?? {},
+    choice_tree: kitBase?.choice_tree ?? [],
+    category_links: kitBase?.category_links ?? [],
+  };
+}
 
 export function useKitManifestAutosave({
   profileId,
@@ -47,10 +70,10 @@ export function useKitManifestAutosave({
   onPersisted,
   onSaved,
   onRegisterFlush,
-  onUnregisterFlush,
 }: Options) {
   const [status, setStatus] = useState<AutosaveStatus>("idle");
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushSaveRef = useRef<(() => Promise<void>) | null>(null);
 
   const saveStateRef = useRef<ProfileSaveState>({
     profileId,
@@ -60,6 +83,7 @@ export function useKitManifestAutosave({
     savedSelections,
     baseKit,
     pendingConfirmation: null,
+    retainedFailedKit: null,
     loaded,
     disabled,
     lastPendingSelectionsProp: pendingSelections,
@@ -75,6 +99,7 @@ export function useKitManifestAutosave({
       savedSelections,
       baseKit,
       pendingConfirmation: null,
+      retainedFailedKit: null,
       loaded,
       disabled,
       lastPendingSelectionsProp: pendingSelections,
@@ -107,60 +132,73 @@ export function useKitManifestAutosave({
     }
   }, []);
 
+  const persistKit = useCallback(
+    async (kit: KitManifest, needsManifestPut: boolean) => {
+      if (needsManifestPut) {
+        const saved = await savePlanKitManifest(profileId, kit);
+        saveState.baseKit = saved;
+        saveState.savedSelections = { ...saved.selections };
+        saveState.pendingConfirmation = saved;
+        saveState.retainedFailedKit = null;
+        clearFailedAuxiliarySave(profileId, "manifest");
+      }
+      if (saveState.pendingConfirmation) await onPersisted?.(saveState.pendingConfirmation);
+      if (saveStateRef.current === saveState) {
+        const latestSaved = selectionsEqual(saveState.pendingSelections, saveState.savedSelections);
+        if (saveState.pendingConfirmation && latestSaved) await onSaved(saveState.pendingConfirmation);
+        saveState.pendingConfirmation = null;
+        if (latestSaved) {
+          setStatus("saved");
+          savedClearTimerRef.current = setTimeout(() => {
+            setStatus((current) => (current === "saved" ? "idle" : current));
+            savedClearTimerRef.current = null;
+          }, KIT_MANIFEST_SAVED_CLEAR_MS);
+        } else if (needsManifestPut) {
+          setStatus("idle");
+        }
+      } else {
+        saveState.pendingConfirmation = null;
+      }
+    },
+    [onPersisted, onSaved, profileId, saveState],
+  );
+
   const drainQueuedSelections = useCallback(async () => {
-    while (saveState.queuedSelections || saveState.pendingConfirmation) {
+    while (saveState.queuedSelections || saveState.pendingConfirmation || saveState.retainedFailedKit) {
       const selectionsToSave = saveState.queuedSelections ?? saveState.savedSelections;
       saveState.queuedSelections = null;
-      const needsSave = !selectionsEqual(selectionsToSave, saveState.savedSelections);
-      if (!needsSave && !saveState.pendingConfirmation) continue;
+      const needsManifestPut =
+        saveState.retainedFailedKit != null ||
+        !selectionsEqual(selectionsToSave, saveState.savedSelections);
+      if (!needsManifestPut && !saveState.pendingConfirmation) {
+        saveState.retainedFailedKit = null;
+        continue;
+      }
 
       const isCurrentProfile = saveStateRef.current === saveState;
       if (isCurrentProfile) {
         clearSavedTimer();
         setStatus("saving");
       }
+      const kit = saveState.retainedFailedKit ?? kitFromState(saveState, selectionsToSave);
       try {
-        const kitBase = saveState.baseKit;
-        const kit: KitManifest = {
-          name: kitBase?.name ?? null,
-          layers: kitBase?.layers ?? [],
-          base_source_id: kitBase?.base_source_id ?? null,
-          addon_source_ids: kitBase?.addon_source_ids ?? [],
-          selections: selectionsToSave,
-          include: kitBase?.include ?? [],
-          exclude: kitBase?.exclude ?? [],
-          replacements: kitBase?.replacements ?? {},
-          choice_tree: kitBase?.choice_tree ?? [],
-          category_links: kitBase?.category_links ?? [],
-        };
-        if (needsSave) {
-          const saved = await savePlanKitManifest(profileId, kit);
-          saveState.baseKit = saved;
-          saveState.savedSelections = { ...saved.selections };
-          saveState.pendingConfirmation = saved;
-        }
-        if (saveState.pendingConfirmation) await onPersisted?.(saveState.pendingConfirmation);
-        if (saveStateRef.current === saveState) {
-          const latestSaved = selectionsEqual(saveState.pendingSelections, saveState.savedSelections);
-          if (saveState.pendingConfirmation && latestSaved) await onSaved(saveState.pendingConfirmation);
-          saveState.pendingConfirmation = null;
-          if (latestSaved) {
-            setStatus("saved");
-            savedClearTimerRef.current = setTimeout(() => {
-              setStatus((current) => (current === "saved" ? "idle" : current));
-              savedClearTimerRef.current = null;
-            }, KIT_MANIFEST_SAVED_CLEAR_MS);
-          }
-        } else {
-          saveState.pendingConfirmation = null;
-        }
+        await persistKit(kit, needsManifestPut);
       } catch (error) {
         saveState.queuedSelections = null;
+        const manifestPutFailed = needsManifestPut && saveState.pendingConfirmation == null;
+        if (manifestPutFailed) {
+          saveState.retainedFailedKit = kit;
+          retainFailedAuxiliarySave(profileId, "manifest", async () => {
+            const flush = flushSaveRef.current;
+            if (!flush) throw new Error("Kit manifest autosave is unavailable");
+            await flush();
+          });
+        }
         if (saveStateRef.current === saveState) setStatus("error");
         throw error;
       }
     }
-  }, [clearSavedTimer, onPersisted, onSaved, profileId, saveState]);
+  }, [clearSavedTimer, persistKit, profileId, saveState]);
 
   const saveSelections = useCallback(
     async (selectionsOverride?: ManifestSelections) => {
@@ -169,7 +207,8 @@ export function useKitManifestAutosave({
       if (
         !saveState.inFlight &&
         selectionsEqual(selectionsToSave, saveState.savedSelections) &&
-        !saveState.pendingConfirmation
+        !saveState.pendingConfirmation &&
+        !saveState.retainedFailedKit
       ) {
         return;
       }
@@ -196,11 +235,17 @@ export function useKitManifestAutosave({
     if (saveState.inFlight) {
       await saveState.inFlight;
     }
-    if (saveState.pendingConfirmation || !selectionsEqual(saveState.pendingSelections, saveState.savedSelections)) {
+    if (
+      saveState.pendingConfirmation ||
+      saveState.retainedFailedKit ||
+      !selectionsEqual(saveState.pendingSelections, saveState.savedSelections)
+    ) {
       if (!saveState.loaded || saveState.disabled) throw new Error("Kit selections cannot be saved yet");
       await saveSelections(saveState.pendingSelections);
     }
   }, [saveSelections, saveState]);
+
+  flushSaveRef.current = flushSave;
 
   const registeredFlushRef = useRef({ profileId, flush: flushSave });
   if (registeredFlushRef.current.profileId !== profileId) {
@@ -213,18 +258,19 @@ export function useKitManifestAutosave({
   const saveUserEdit = useCallback(
     (selections: ManifestSelections) => {
       saveState.pendingSelections = selections;
+      saveState.retainedFailedKit = null;
+      clearFailedAuxiliarySave(profileId, "manifest");
       clearSavedTimer();
       setStatus("pending");
       void saveSelections(selections).catch(() => {});
     },
-    [clearSavedTimer, saveSelections, saveState],
+    [clearSavedTimer, profileId, saveSelections, saveState],
   );
 
   useEffect(() => {
     if (!onRegisterFlush) return;
-    onRegisterFlush(profileId, () => registeredFlush.flush());
-    return () => onUnregisterFlush?.(profileId);
-  }, [onRegisterFlush, onUnregisterFlush, profileId, registeredFlush]);
+    return onRegisterFlush(profileId, () => registeredFlush.flush());
+  }, [onRegisterFlush, profileId, registeredFlush]);
 
   useEffect(() => {
     const flushForProfile = () => registeredFlush.flush();
@@ -255,6 +301,7 @@ export function useKitManifestAutosave({
       if (
         !saveState.inFlight &&
         !saveState.pendingConfirmation &&
+        !saveState.retainedFailedKit &&
         status !== "error" &&
         selectionsEqual(saveState.pendingSelections, saveState.savedSelections)
       ) return;

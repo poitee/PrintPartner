@@ -11,23 +11,53 @@ import {
 afterEach(cleanup);
 
 describe("BuildSaveFlushProvider", () => {
-  it("flushes every registered Profile until it unregisters", async () => {
+  it("keeps same-Build producers independent and cleans up only its own registration", async () => {
     const { result } = renderHook(
-      () => ({ registry: useBuildSaveFlushRegistry(), flushAll: useFlushBuildPageSaves() }),
+      () => ({ register: useBuildSaveFlushRegistry(), flushAll: useFlushBuildPageSaves() }),
       { wrapper: BuildSaveFlushProvider },
     );
     const flushFirst = vi.fn(async () => {});
     const flushSecond = vi.fn(async () => {});
 
-    result.current.registry.registerFlush(1, flushFirst);
-    result.current.registry.registerFlush(2, flushSecond);
+    const unregisterFirst = result.current.register(1, flushFirst);
+    const unregisterSecond = result.current.register(1, flushSecond);
     await act(() => result.current.flushAll());
     expect(flushFirst).toHaveBeenCalledTimes(1);
     expect(flushSecond).toHaveBeenCalledTimes(1);
 
-    result.current.registry.unregisterFlush(1);
+    unregisterFirst();
     await act(() => result.current.flushAll());
     expect(flushFirst).toHaveBeenCalledTimes(1);
     expect(flushSecond).toHaveBeenCalledTimes(2);
+
+    unregisterSecond();
+    await act(() => result.current.flushAll());
+    expect(flushSecond).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for every producer before returning a failure", async () => {
+    const { result } = renderHook(
+      () => ({ register: useBuildSaveFlushRegistry(), flushAll: useFlushBuildPageSaves() }),
+      { wrapper: BuildSaveFlushProvider },
+    );
+    let finishSlowSave!: () => void;
+    const slowSave = new Promise<void>((resolve) => {
+      finishSlowSave = resolve;
+    });
+    const failure = new Error("Plan save failed");
+    result.current.register(1, async () => {
+      throw failure;
+    });
+    result.current.register(1, () => slowSave);
+
+    let finished = false;
+    const barrier = result.current.flushAll().finally(() => {
+      finished = true;
+    });
+    await act(async () => Promise.resolve());
+    expect(finished).toBe(false);
+    finishSlowSave();
+    await expect(barrier).rejects.toBe(failure);
+    expect(finished).toBe(true);
   });
 });

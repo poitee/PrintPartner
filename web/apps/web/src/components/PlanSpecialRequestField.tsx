@@ -1,8 +1,13 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { useUpdateProfileMutation } from "../queries/profiles";
 import { cn } from "@/lib/utils";
+import { useBuildSaveFlushRegistry } from "../context/BuildSaveFlushContext";
+import {
+  clearFailedAuxiliarySave,
+  retainFailedAuxiliarySave,
+} from "../lib/planAuxiliarySaveIntent";
 
 type Props = {
   profileId: number;
@@ -14,7 +19,11 @@ type RequestDraft =
   | { kind: "dirty" | "saving" | "saved"; text: string }
   | { kind: "failed"; text: string; error: string };
 
+type SpecialRequestBody = Readonly<{ id: number; special_request: string | null }>;
+
 const drafts = new Map<number, RequestDraft>();
+const failedBodies = new Map<number, SpecialRequestBody>();
+const inFlightByProfile = new Map<number, Promise<void>>();
 const listeners = new Set<() => void>();
 
 function warnOnUnload(event: BeforeUnloadEvent) {
@@ -39,6 +48,69 @@ function subscribe(listener: () => void) {
   return () => { listeners.delete(listener); };
 }
 
+async function persistBody(
+  profileId: number,
+  body: SpecialRequestBody,
+  mutateAsync: (body: SpecialRequestBody) => Promise<unknown>,
+): Promise<void> {
+  const active = inFlightByProfile.get(profileId);
+  if (active) {
+    await active;
+    return;
+  }
+  const run = (async () => {
+    setRequestDraft(profileId, { kind: "saving", text: body.special_request ?? "" });
+    try {
+      await mutateAsync(body);
+      setRequestDraft(profileId, { kind: "saved", text: (body.special_request ?? "").trim() });
+      failedBodies.delete(profileId);
+      clearFailedAuxiliarySave(profileId, "special_request");
+    } catch (error) {
+      failedBodies.set(profileId, body);
+      retainFailedAuxiliarySave(profileId, "special_request", async () => {
+        await persistBody(profileId, body, mutateAsync);
+      });
+      setRequestDraft(profileId, {
+        kind: "failed",
+        text: body.special_request ?? "",
+        error: error instanceof Error ? error.message : "Could not save the special request",
+      });
+      throw error;
+    }
+  })();
+  inFlightByProfile.set(profileId, run);
+  try {
+    await run;
+  } finally {
+    if (inFlightByProfile.get(profileId) === run) inFlightByProfile.delete(profileId);
+  }
+}
+
+export function flushSpecialRequestSave(
+  profileId: number,
+  mutateAsync: (body: SpecialRequestBody) => Promise<unknown>,
+  value: string | null | undefined,
+): Promise<void> {
+  const inFlight = inFlightByProfile.get(profileId);
+  if (inFlight) return inFlight;
+  const retained = failedBodies.get(profileId);
+  if (retained) return persistBody(profileId, retained, mutateAsync);
+  const draft = drafts.get(profileId);
+  if (draft?.kind === "failed" || draft?.kind === "dirty") {
+    const next = draft.text.trim();
+    const prev = (value ?? "").trim();
+    if (next === prev) {
+      setRequestDraft(profileId, null);
+      return Promise.resolve();
+    }
+    return persistBody(profileId, { id: profileId, special_request: next || null }, mutateAsync);
+  }
+  if (draft?.kind === "saving") {
+    return inFlightByProfile.get(profileId) ?? Promise.resolve();
+  }
+  return Promise.resolve();
+}
+
 /**
  * Per-Build special-request note.
  *
@@ -52,8 +124,14 @@ export default function PlanSpecialRequestField({
   className,
 }: Props) {
   const updateMutation = useUpdateProfileMutation();
+  const registerFlush = useBuildSaveFlushRegistry();
   const pending = useSyncExternalStore(subscribe, () => drafts.get(profileId) ?? null, () => null);
   const draft = pending?.text ?? value ?? "";
+
+  const mutateBody = useCallback(
+    (body: SpecialRequestBody) => updateMutation.mutateAsync(body),
+    [updateMutation],
+  );
 
   useEffect(() => {
     if (pending?.kind === "saved" && pending.text === (value ?? "").trim()) {
@@ -61,24 +139,29 @@ export default function PlanSpecialRequestField({
     }
   }, [pending, profileId, value]);
 
+  useEffect(() => {
+    return registerFlush(profileId, () => flushSpecialRequestSave(profileId, mutateBody, value));
+  }, [mutateBody, profileId, registerFlush, value]);
+
   const persist = async () => {
+    const inFlight = inFlightByProfile.get(profileId);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
     if (pending?.kind === "saving") return;
+    const retained = failedBodies.get(profileId);
+    if (retained) {
+      await persistBody(profileId, retained, mutateBody);
+      return;
+    }
     const next = draft.trim();
     const prev = (value ?? "").trim();
     if (next === prev) {
       setRequestDraft(profileId, null);
       return;
     }
-    setRequestDraft(profileId, { kind: "saving", text: draft });
-    try {
-      await updateMutation.mutateAsync({ id: profileId, special_request: next || null });
-      setRequestDraft(profileId, { kind: "saved", text: next });
-    } catch (error) {
-      setRequestDraft(profileId, {
-        kind: "failed", text: draft,
-        error: error instanceof Error ? error.message : "Could not save the special request",
-      });
-    }
+    await persistBody(profileId, { id: profileId, special_request: next || null }, mutateBody);
   };
 
   return (
@@ -86,8 +169,12 @@ export default function PlanSpecialRequestField({
       <Input
         id={`plan-special-request-${profileId}`}
         value={draft}
-        onChange={(e) => setRequestDraft(profileId, { kind: "dirty", text: e.target.value })}
-        onBlur={() => { void persist(); }}
+        onChange={(e) => {
+          failedBodies.delete(profileId);
+          clearFailedAuxiliarySave(profileId, "special_request");
+          setRequestDraft(profileId, { kind: "dirty", text: e.target.value });
+        }}
+        onBlur={() => { void persist().catch(() => {}); }}
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();
         }}
@@ -101,9 +188,19 @@ export default function PlanSpecialRequestField({
       {pending?.kind === "failed" && (
         <div role="alert" className="flex items-center gap-2 text-xs text-destructive">
           <span>Special request was not saved: {pending.error}</span>
-          <Button type="button" size="sm" variant="secondary" onClick={() => { void persist(); }}>Retry save</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => { void persist().catch(() => {}); }}>Retry save</Button>
         </div>
       )}
     </div>
   );
+}
+
+export function resetSpecialRequestSaveStateForTests(): void {
+  drafts.clear();
+  failedBodies.clear();
+  inFlightByProfile.clear();
+  listeners.clear();
+  if (typeof window !== "undefined") {
+    window.removeEventListener("beforeunload", warnOnUnload);
+  }
 }
