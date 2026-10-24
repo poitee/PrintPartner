@@ -241,6 +241,20 @@ mod tests {
         }
     }
 
+    // The macOS runner has no /usr/bin/sleep (`sleep` lives at /bin/sleep there),
+    // so the timeout case re-invokes this test binary instead of a system path.
+    // The helper test below outlives the 50ms timeout and is killed by run_browser.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn timeout_helper() -> Command {
+        let mut command = Command::new(std::env::current_exe().expect("test binary path"));
+        command.args([
+            "--ignored",
+            "--exact",
+            "native_actions::tests::ticket_t_68_browser_timeout_helper",
+        ]);
+        command
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn ticket_t_68_browser_process_reports_failure_and_times_out() {
@@ -249,10 +263,8 @@ mod tests {
                 .await
                 .is_err()
         );
-        let mut command = Command::new("/usr/bin/sleep");
-        command.arg("5");
         assert_eq!(
-            run_browser(command, Duration::from_millis(50)).await,
+            run_browser(timeout_helper(), Duration::from_millis(50)).await,
             Err("Could not confirm the browser opened")
         );
         assert!(
@@ -260,5 +272,12 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    #[ignore = "spawned as a long-lived helper by ticket_t_68_browser_process_reports_failure_and_times_out"]
+    fn ticket_t_68_browser_timeout_helper() {
+        std::thread::sleep(Duration::from_secs(30));
     }
 }
