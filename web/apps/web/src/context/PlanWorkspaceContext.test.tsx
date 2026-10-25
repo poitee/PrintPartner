@@ -26,6 +26,10 @@ import { queryKeys } from "../queries/keys";
 import { usePlanDraftWorkspaceQuery } from "../queries/planDraft";
 import { WORKING_PLAN_CHANGED_MESSAGE } from "../lib/workingPlanChanged";
 import {
+  resetAuxiliarySaveIntentForTests,
+  retainFailedAuxiliarySave,
+} from "../lib/planAuxiliarySaveIntent";
+import {
   PlanWorkspaceProvider,
   usePlanWorkspace,
 } from "./PlanWorkspaceContext";
@@ -283,6 +287,7 @@ function deferred<T>() {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  resetAuxiliarySaveIntentForTests();
 });
 
 beforeEach(() => {
@@ -886,6 +891,29 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
       vi.mocked(applyPlanDraft).mock.calls.length +
         vi.mocked(abandonPlanDraft).mock.calls.length,
     ).toBeGreaterThan(prepareCallsAfterApply);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("retry_with_failed_manifest_prepares_the_plan_once", async () => {
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+    const prepareCalls = () =>
+      vi.mocked(recomputePlanDraft).mock.calls.length +
+      vi.mocked(applyPlanDraft).mock.calls.length +
+      vi.mocked(abandonPlanDraft).mock.calls.length;
+    const before = prepareCalls();
+    let preparesBeforeManifestRetry: number | null = null;
+    // Stands in for KitManifestOptions, whose retried PUT ends in preparePlan({ applyManifest: true }).
+    retainFailedAuxiliarySave(7, "manifest", async () => {
+      preparesBeforeManifestRetry = prepareCalls() - before;
+      await hook.result.current.preparePlan({ applyManifest: true });
+    });
+
+    await act(async () => {
+      await hook.result.current.retryPlanSave();
+    });
+    expect(preparesBeforeManifestRetry).toBe(0);
+    expect(vi.mocked(recomputePlanDraft)).toHaveBeenLastCalledWith(7, { applyManifest: true });
     expect(hook.result.current.draftError).toBeNull();
   });
 

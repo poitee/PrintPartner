@@ -24,14 +24,27 @@ export function clearFailedAuxiliarySave(profileId: number, kind: AuxiliarySaveK
   if (profileFailures.size === 0) failedByProfile.delete(profileId);
 }
 
-/** Retries failed special-request and manifest saves in the order they first failed. */
+export function hasFailedAuxiliarySave(profileId: number, kind: AuxiliarySaveKind): boolean {
+  return failedByProfile.get(profileId)?.has(kind) ?? false;
+}
+
+/**
+ * Retries failed special-request and manifest saves in the order they first failed.
+ * A failed retry does not stop the rest; the first failure is rethrown after all ran.
+ */
 export async function retryFailedAuxiliarySaves(profileId: number): Promise<void> {
   const profileFailures = failedByProfile.get(profileId);
   if (!profileFailures || profileFailures.size === 0) return;
+  const errors: unknown[] = [];
   // Map insertion order matches first-failure order (updates keep the original key slot).
-  for (const failure of profileFailures.values()) {
-    await failure.retry();
+  for (const failure of [...profileFailures.values()]) {
+    try {
+      await failure.retry();
+    } catch (error) {
+      errors.push(error);
+    }
   }
+  if (errors.length > 0) throw errors[0];
 }
 
 export function resetAuxiliarySaveIntentForTests(): void {

@@ -40,6 +40,27 @@ type ProfileSaveState = {
   retainedFailedKit: KitManifest | null;
 };
 
+// KitManifestOptions remounts per Build, so a refused PUT outlives the editor that sent it.
+// The editor mounted for that Build adopts the retained kit and owns its retry and status.
+const retainedFailedKitByProfile = new Map<number, KitManifest>();
+const mountedFlushByProfile = new Map<number, { owner: ProfileSaveState; flush: () => Promise<void> }>();
+
+async function retryMountedManifestSave(profileId: number): Promise<void> {
+  const mounted = mountedFlushByProfile.get(profileId);
+  if (!mounted) throw new Error("Kit manifest autosave is unavailable");
+  await mounted.flush();
+}
+
+/** Selections of a refused manifest save, so a remounted editor shows what Retry sends. */
+export function retainedFailedManifestSelections(profileId: number): ManifestSelections | null {
+  return retainedFailedKitByProfile.get(profileId)?.selections ?? null;
+}
+
+export function resetKitManifestAutosaveForTests(): void {
+  retainedFailedKitByProfile.clear();
+  mountedFlushByProfile.clear();
+}
+
 function kitFromState(
   saveState: ProfileSaveState,
   selectionsToSave: ManifestSelections,
@@ -73,7 +94,6 @@ export function useKitManifestAutosave({
 }: Options) {
   const [status, setStatus] = useState<AutosaveStatus>("idle");
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flushSaveRef = useRef<(() => Promise<void>) | null>(null);
 
   const saveStateRef = useRef<ProfileSaveState>({
     profileId,
@@ -83,7 +103,7 @@ export function useKitManifestAutosave({
     savedSelections,
     baseKit,
     pendingConfirmation: null,
-    retainedFailedKit: null,
+    retainedFailedKit: retainedFailedKitByProfile.get(profileId) ?? null,
     loaded,
     disabled,
     lastPendingSelectionsProp: pendingSelections,
@@ -99,7 +119,7 @@ export function useKitManifestAutosave({
       savedSelections,
       baseKit,
       pendingConfirmation: null,
-      retainedFailedKit: null,
+      retainedFailedKit: retainedFailedKitByProfile.get(profileId) ?? null,
       loaded,
       disabled,
       lastPendingSelectionsProp: pendingSelections,
@@ -133,13 +153,15 @@ export function useKitManifestAutosave({
   }, []);
 
   const persistKit = useCallback(
-    async (kit: KitManifest, needsManifestPut: boolean) => {
+    async (kit: KitManifest, needsManifestPut: boolean, onManifestSaved: () => void) => {
       if (needsManifestPut) {
         const saved = await savePlanKitManifest(profileId, kit);
+        onManifestSaved();
         saveState.baseKit = saved;
         saveState.savedSelections = { ...saved.selections };
         saveState.pendingConfirmation = saved;
         saveState.retainedFailedKit = null;
+        retainedFailedKitByProfile.delete(profileId);
         clearFailedAuxiliarySave(profileId, "manifest");
       }
       if (saveState.pendingConfirmation) await onPersisted?.(saveState.pendingConfirmation);
@@ -181,18 +203,21 @@ export function useKitManifestAutosave({
         setStatus("saving");
       }
       const kit = saveState.retainedFailedKit ?? kitFromState(saveState, selectionsToSave);
+      let manifestPutFailed = needsManifestPut;
       try {
-        await persistKit(kit, needsManifestPut);
+        await persistKit(kit, needsManifestPut, () => {
+          manifestPutFailed = false;
+        });
       } catch (error) {
         saveState.queuedSelections = null;
-        const manifestPutFailed = needsManifestPut && saveState.pendingConfirmation == null;
         if (manifestPutFailed) {
           saveState.retainedFailedKit = kit;
-          retainFailedAuxiliarySave(profileId, "manifest", async () => {
-            const flush = flushSaveRef.current;
-            if (!flush) throw new Error("Kit manifest autosave is unavailable");
-            await flush();
-          });
+          // A detached editor must not replace what a newer editor for this Build now owns.
+          const mounted = mountedFlushByProfile.get(profileId);
+          if (!mounted || mounted.owner === saveState) {
+            retainedFailedKitByProfile.set(profileId, kit);
+            retainFailedAuxiliarySave(profileId, "manifest", () => retryMountedManifestSave(profileId));
+          }
         }
         if (saveStateRef.current === saveState) setStatus("error");
         throw error;
@@ -245,8 +270,6 @@ export function useKitManifestAutosave({
     }
   }, [saveSelections, saveState]);
 
-  flushSaveRef.current = flushSave;
-
   const registeredFlushRef = useRef({ profileId, flush: flushSave });
   if (registeredFlushRef.current.profileId !== profileId) {
     registeredFlushRef.current = { profileId, flush: flushSave };
@@ -259,6 +282,7 @@ export function useKitManifestAutosave({
     (selections: ManifestSelections) => {
       saveState.pendingSelections = selections;
       saveState.retainedFailedKit = null;
+      retainedFailedKitByProfile.delete(profileId);
       clearFailedAuxiliarySave(profileId, "manifest");
       clearSavedTimer();
       setStatus("pending");
@@ -266,6 +290,14 @@ export function useKitManifestAutosave({
     },
     [clearSavedTimer, profileId, saveSelections, saveState],
   );
+
+  useEffect(() => {
+    const mounted = { owner: saveState, flush: () => registeredFlush.flush() };
+    mountedFlushByProfile.set(profileId, mounted);
+    return () => {
+      if (mountedFlushByProfile.get(profileId) === mounted) mountedFlushByProfile.delete(profileId);
+    };
+  }, [profileId, registeredFlush, saveState]);
 
   useEffect(() => {
     if (!onRegisterFlush) return;
@@ -291,7 +323,7 @@ export function useKitManifestAutosave({
   }, [clearSavedTimer]);
 
   useEffect(() => {
-    setStatus("idle");
+    setStatus(saveStateRef.current.retainedFailedKit ? "error" : "idle");
     clearSavedTimer();
   }, [profileId, clearSavedTimer]);
 

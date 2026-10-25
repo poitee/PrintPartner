@@ -7,7 +7,11 @@ import PlanSpecialRequestField, {
   resetSpecialRequestSaveStateForTests,
 } from "./PlanSpecialRequestField";
 import { BuildSaveFlushProvider, useFlushBuildPageSaves } from "../context/BuildSaveFlushContext";
-import { resetAuxiliarySaveIntentForTests } from "../lib/planAuxiliarySaveIntent";
+import {
+  resetAuxiliarySaveIntentForTests,
+  retainFailedAuxiliarySave,
+  retryFailedAuxiliarySaves,
+} from "../lib/planAuxiliarySaveIntent";
 import { act, renderHook } from "@testing-library/react";
 
 const update = vi.hoisted(() => vi.fn());
@@ -134,4 +138,34 @@ it("keeps an unblurred request with its Build when switching Builds", async () =
   await waitFor(() => expect(update).toHaveBeenCalledWith({ id: 9002, special_request: "Keep with Build 9002" }));
   returned.rerender(field("Keep with Build 9002", 9002));
   await waitFor(() => expect(window.dispatchEvent(new Event("beforeunload", { cancelable: true }))).toBe(true));
+});
+
+it("failed_special_request_retry_preserves_order", async () => {
+  const order: string[] = [];
+  retainFailedAuxiliarySave(9001, "manifest", async () => {
+    order.push("manifest");
+  });
+  update
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockRejectedValueOnce(new Error("still offline"))
+    .mockImplementationOnce(async () => {
+      order.push("special_request");
+    });
+  const page = render(field(null));
+  fireEvent.change(screen.getByRole("textbox", { name: "Special request" }), { target: { value: "Retry after manifest" } });
+  fireEvent.blur(screen.getByRole("textbox", { name: "Special request" }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("offline"));
+  // A second failure updates the retained save but keeps its first-failure slot.
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("still offline"));
+
+  await act(async () => {
+    await retryFailedAuxiliarySaves(9001);
+  });
+
+  expect(order).toEqual(["manifest", "special_request"]);
+  expect(update).toHaveBeenCalledTimes(3);
+  expect(update.mock.calls[2]?.[0]).toEqual({ id: 9001, special_request: "Retry after manifest" });
+  page.rerender(field("Retry after manifest"));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
 });

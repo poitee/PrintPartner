@@ -650,14 +650,26 @@ the user makes a new edit. `BuildSaveFlushContext` allows multiple flush
 producers per Build so special-request and manifest autosave can register
 independently. `retryPlanSave` replays retained ordinary-Save intent from
 GRE-812, then retries auxiliary failures in first-failure order (whichever
-kind failed first runs first when both failed). Web-only; no new Rust
-`desktop_rebuild` surface. Focused proofs:
-`failed_manifest_save_keeps_exact_payload` in `useKitManifestAutosave.test.ts`,
-`failed_special_request_retry_preserves_order` in
-`planAuxiliarySaveIntent.test.ts`.
+kind failed first runs first when both failed). A failed retry does not stop
+the rest: every retained save runs, then the first failure is rethrown. When a
+manifest failure is retained, `retryPlanSave` skips its own Plan prepare,
+because the manifest retry prepares with `applyManifest` once its PUT lands.
+Web-only; no new Rust `desktop_rebuild` surface.
+
+GRE-991 keys the retained kit by Build. `KitManifestOptions` remounts per Build,
+so the editor mounted for a Build adopts its refused kit. It shows those
+selections with the error status, and it owns the retry that `retryPlanSave`
+and Leave-Build flushes run. The hook detects a refused PUT from the PUT
+itself, so a failed Plan refresh on an earlier save does not hide a later PUT
+failure. Focused proofs: `failed_manifest_save_keeps_exact_payload` and
+`remounted_editor_owns_retained_manifest_retry` in
+`useKitManifestAutosave.test.ts`; `failed_special_request_retry_preserves_order`
+in `PlanSpecialRequestField.test.tsx`;
+`retry_with_failed_manifest_prepares_the_plan_once` in
+`PlanWorkspaceContext.test.tsx`.
 
 ```sh
-npm run test -w @print-partner/web -- src/hooks/useKitManifestAutosave.test.ts src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/context/BuildSaveFlushContext.test.tsx
+npm run test -w @print-partner/web -- src/hooks/useKitManifestAutosave.test.ts src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/context/BuildSaveFlushContext.test.tsx src/components/KitManifestOptions.navigation.test.tsx src/context/PlanWorkspaceContext.test.tsx
 ```
 
 ### D4 media reconciliation

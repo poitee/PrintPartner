@@ -49,6 +49,7 @@ vi.mock("../context/BuildSaveFlushContext", () => ({
 }));
 
 vi.mock("../hooks/useKitManifestAutosave", () => ({
+  retainedFailedManifestSelections: () => null,
   useKitManifestAutosave: () => ({
     dirty: false,
     status: "idle",
