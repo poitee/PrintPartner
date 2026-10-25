@@ -2036,10 +2036,10 @@ fn ticket_t_3_drain_measured_release_startup_parent_death() {
     // budget also covers re-executing the helper. The 30s acknowledgement
     // starts only after the helper publishes release-verified. The budget
     // holds only when the test runs alone, so nextest.toml gives it every test
-    // thread. Sharing a 3-vCPU macOS runner with other real-process tests, the
-    // whole test took 65.9s (run 40169439947) and cycle 1 alone took more than
-    // 60s (run 40194530057). The same runners took 12.9s and 20.8s in the
-    // later desktop_rebuild pass.
+    // thread. On hosted macos-26, sharing the default nextest profile's test
+    // threads with other real-process tests, the whole test took 65.9s (run
+    // 40169439947) and cycle 1 alone took more than 60s (run 40194530057). The
+    // same runners took 12.9s and 20.8s in the later desktop_rebuild-on pass.
     startup_owner_death_cycles(
         "ticket_t_2::measured_startup_owner_death_fixture",
         &bundle.node,
