@@ -2,6 +2,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+import yaml
+
 from manifests.scripts.validate import (
     check_embedded_copy_drift,
     sync_embedded_copies,
@@ -283,6 +285,70 @@ class ManifestValidatorTests(unittest.TestCase):
 
             self.assertEqual(sync_embedded_copies(root), [])
             self.assertEqual(check_embedded_copy_drift(root), [])
+
+    def test_invalid_registry_slugs_block_sync_before_any_writes(self) -> None:
+        for slug in (
+            "kit-catalog", "registry-index", "", None, 7, "Example",
+            "../escape", "a/b", "a\\b", ".hidden", "-prefix", "_prefix",
+            "has space", "éxample", "example\n", "a" * 65,
+        ):
+            with self.subTest(slug=slug), TemporaryDirectory() as directory:
+                root = Path(directory)
+                canonical = root / "manifests/community/example/manifest.yaml"
+                registry = root / "manifests/registry/index.yaml"
+                embedded_dir = root / "web/apps/server/src/data/manifests"
+                canonical.parent.mkdir(parents=True)
+                registry.parent.mkdir(parents=True)
+                embedded_dir.mkdir(parents=True)
+                canonical.write_text("format: print-partner-manifest\nversion: 1\n")
+                registry.write_text(yaml.safe_dump({"entries": [
+                    {"slug": "valid-first", "manifest_file": "example/manifest.yaml"},
+                    {"slug": slug, "manifest_file": "example/manifest.yaml"},
+                ]}))
+                before = {
+                    "registry-index.yaml": b"entries: []\n",
+                    "kit-catalog.yaml": b"kits: []\n",
+                    "orphan.yaml": b"keep this file\n",
+                }
+                for name, content in before.items():
+                    (embedded_dir / name).write_bytes(content)
+
+                errors = sync_embedded_copies(root)
+
+                self.assertTrue(any("entries[1].slug" in error for error in errors), errors)
+                self.assertEqual(
+                    {path.name: path.read_bytes() for path in embedded_dir.iterdir()},
+                    before,
+                )
+                drift_errors = check_embedded_copy_drift(root)
+                self.assertTrue(
+                    any("entries[1].slug" in error for error in drift_errors),
+                    drift_errors,
+                )
+
+    def test_valid_registry_slug_near_misses_sync_and_pass_drift_check(self) -> None:
+        slugs = (
+            "kit-catalog-v2", "registry-index-v2", "kit-catalog_", "registry-index.",
+            "0", "a" * 64, "a.b_c-d",
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical = root / "manifests/community/example/manifest.yaml"
+            registry = root / "manifests/registry/index.yaml"
+            embedded_dir = root / "web/apps/server/src/data/manifests"
+            canonical.parent.mkdir(parents=True)
+            registry.parent.mkdir(parents=True)
+            canonical.write_text("format: print-partner-manifest\nversion: 1\n")
+            registry.write_text(yaml.safe_dump({"entries": [
+                {"slug": slug, "manifest_file": "example/manifest.yaml"}
+                for slug in slugs
+            ]}))
+
+            self.assertEqual(sync_embedded_copies(root), [])
+            self.assertEqual(check_embedded_copy_drift(root), [])
+            self.assertEqual((embedded_dir / "registry-index.yaml").read_bytes(), registry.read_bytes())
+            for slug in slugs:
+                self.assertEqual((embedded_dir / f"{slug}.yaml").read_bytes(), canonical.read_bytes())
 
 
 if __name__ == "__main__":

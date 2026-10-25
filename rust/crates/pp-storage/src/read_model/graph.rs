@@ -17,8 +17,7 @@ pub(crate) fn build_summary(
     repos: &std::path::Path,
     budget: &mut Budget,
 ) -> Result<Option<crate::build_graph::ProfileSummary>> {
-    let accepted = match read_with_purpose(tx, tenant, profile, repos, budget, ReadPurpose::Summary)
-    {
+    let accepted = match read(tx, tenant, profile, repos, budget) {
         Ok(read) => read,
         Err(error) => match error.downcast_ref::<Integrity>() {
             Some(error) => super::AcceptedRead::IntegrityFailure {
@@ -47,7 +46,7 @@ use std::{
 };
 
 #[derive(Debug)]
-pub(super) struct Integrity {
+pub(crate) struct Integrity {
     pub code: &'static str,
     pub message: String,
 }
@@ -185,6 +184,11 @@ pub struct Part {
     pub requirement: Option<String>,
     pub option_group_id: Option<String>,
     pub manifest_source: Option<String>,
+    /// Lossless manifest metadata. The scalar fields above are `None` when
+    /// the stored text is not valid Unicode; JSON bodies write this instead.
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(skip)]
+    pub manifest: PartManifestMetadata,
     pub artifact: Artifact,
     pub units: Vec<Unit>,
 }
@@ -614,27 +618,12 @@ fn canonical_part(r: &Row) -> Result<String> {
     let part = DraftPart::new(Value::Object(scalar), r.2.clone());
     String::from_utf8(part.json_fields(&fields, false)).map_err(Into::into)
 }
-enum ReadPurpose {
-    Snapshot,
-    #[cfg(feature = "desktop_rebuild")]
-    Summary,
-}
-pub(super) fn read(
+pub(crate) fn read(
     tx: &Transaction<'_>,
     tenant: &str,
     id: i64,
     repos: &Path,
     b: &mut Budget,
-) -> Result<AcceptedRead> {
-    read_with_purpose(tx, tenant, id, repos, b, ReadPurpose::Snapshot)
-}
-fn read_with_purpose(
-    tx: &Transaction<'_>,
-    tenant: &str,
-    id: i64,
-    repos: &Path,
-    b: &mut Budget,
-    _purpose: ReadPurpose,
 ) -> Result<AcceptedRead> {
     let Some(p) = one(
         tx,
@@ -1067,21 +1056,6 @@ fn read_with_purpose(
                 }
             }
         };
-        #[cfg(feature = "desktop_rebuild")]
-        check(
-            matches!(_purpose, ReadPurpose::Summary)
-                || (r
-                    .2
-                    .requirement
-                    .as_ref()
-                    .is_none_or(|v| v.0.as_scalar().is_some())
-                    && r.2
-                        .option_group_id
-                        .as_ref()
-                        .is_none_or(|v| v.0.as_scalar().is_some())),
-            "manifest_text",
-            "Non-scalar manifest metadata requires a lossless snapshot projection",
-        )?;
         parts.push(Part {
             revision_part_id: r.n("id")?,
             projection_part_id: pid,
@@ -1106,6 +1080,8 @@ fn read_with_purpose(
             requirement: r.os("requirement")?,
             option_group_id: r.os("option_group_id")?,
             manifest_source: r.os("manifest_source")?,
+            #[cfg(feature = "desktop_rebuild")]
+            manifest: r.2.clone(),
             artifact,
             units: Vec::new(),
         });
@@ -1309,3 +1285,7 @@ fn read_with_purpose(
         }),
     })
 }
+
+#[cfg(all(test, feature = "desktop_rebuild"))]
+#[path = "review_tests.rs"]
+mod review_tests;

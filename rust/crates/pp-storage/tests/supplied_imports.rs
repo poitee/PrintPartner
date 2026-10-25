@@ -6,7 +6,7 @@
 //! the reference, the attempt limit does not bound that cleanup claim.
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/common/claimed_attempt.rs"
+    "/src/claimed_attempt.rs"
 ));
 use pp_storage::jobs::ClaimedAttempt;
 use pp_storage::{
@@ -18,19 +18,10 @@ use pp_storage::{
     },
 };
 use rusqlite::Connection;
-use std::{
-    path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
-    time::Duration,
-};
+use std::{path::Path, sync::atomic::AtomicBool, time::Duration};
 
-fn directory() -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "pp-supplied-imports-{}",
-        hex::encode(rand::random::<[u8; 16]>())
-    ));
-    std::fs::create_dir_all(&path).unwrap();
-    path
+fn directory() -> scratch::Scratch {
+    scratch::Scratch::new("pp-supplied-imports-")
 }
 
 fn open(path: &Path) -> WriterOwner {
@@ -448,4 +439,34 @@ fn recovery_returns_a_cancelled_import_at_the_attempt_limit_to_its_owner() {
     let claimed_attempt!(cleanup, _) = worker.claim_import(&job_id).unwrap().unwrap();
     assert_eq!(cleanup.attempt, 101);
     owner.shutdown().unwrap();
+}
+
+#[path = "common/scratch.rs"]
+mod scratch;
+
+#[path = "common/cleanup.rs"]
+mod cleanup;
+
+#[test]
+fn scratch_dir_is_removed_when_the_test_panics() {
+    let observed = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let captured = observed.clone();
+    let outcome = std::panic::catch_unwind(|| {
+        let dir = scratch::Scratch::new("pp-panic-scratch-");
+        std::fs::write(dir.join("payload"), b"x").unwrap();
+        *captured.lock().unwrap() = Some(dir.to_path_buf());
+        panic!("boom");
+    });
+    assert!(outcome.is_err(), "expected the closure to panic");
+    let dir = observed.lock().unwrap().take().unwrap();
+    assert!(!dir.exists(), "scratch leaked after panic: {dir:?}");
+}
+
+#[test]
+fn scratch_root_is_empty_after_supplied_import_tests() {
+    cleanup::assert_test_run_clean(&[
+        "--skip",
+        "scratch_root_is_empty_after_supplied_import_tests",
+        "--test-threads=1",
+    ]);
 }

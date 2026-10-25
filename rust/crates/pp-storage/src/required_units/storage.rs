@@ -1,4 +1,4 @@
-use super::model::{self, BasePart, FORMAT, Reconciled, Unit, digest};
+use super::model::{self, BasePart, FORMAT, Unit, digest};
 use crate::manifest_text::{
     DraftPart, ManifestText, OptionGroupId, PartManifestMetadata, read_manifest_text,
 };
@@ -11,7 +11,20 @@ use std::collections::{HashMap, HashSet};
 
 mod json;
 
-const ROW_LIMIT: usize = 200_000;
+type Check<'a> = &'a dyn Fn() -> Result<()>;
+
+pub(crate) const DRAFT_COLUMNS: &str = "id,tenant_id,profile_id,base_revision_id,base_plan_version,state,lifecycle_version,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest,digest_format,snapshot_digest,created_by,idempotency_key,created_at,current_required_unit_reconciliation_id,consumed_revision_id,consumed_at";
+pub(crate) const INPUT_COLUMNS: &str = "id,tenant_id,draft_id,source_id,source_layer,layer_order,tracking_kind,source_revision_id,manifest_digest,effective_naming_digest";
+pub(crate) const PART_COLUMNS: &str = "id,tenant_id,draft_id,base_revision_part_id,part_key,relative_path,filename,source_layer,status,role_inferred,role_override,filament_color_id,filament_custom_hex,spoolman_spool_id,quantity_inferred,quantity_override,quantity_effective,included,notes,github_blob_url,geometry_same,requirement,option_group_id,manifest_source,artifact_digest";
+pub(crate) const RECONCILIATION_CHECK_COLUMNS: &str = "id";
+pub(crate) const RECONCILIATION_COLUMNS: &str = "id,tenant_id,profile_id,draft_id,format,planning_digest,base_revision_id,base_mapping_digest,selection_basis_digest,selection_basis_json,decision_digest,result_kind,result_digest,result_json,reconciliation_digest,expected_assignment_count,actor_id,idempotency_key,payload_digest,created_at,finalized_at";
+pub(crate) const DECISION_COLUMNS: &str = "kind,target_draft_part_id,predecessor_revision_part_id";
+pub(crate) const ASSIGNMENT_COLUMNS: &str =
+    "kind,target_draft_part_id,unit_index,required_unit_token";
+
+pub(crate) const ROW_LIMIT: usize = 200_000;
+/// Largest checked-in assignment list is 23 (`edit-selected`). Ten times that.
+pub(crate) const ASSIGNMENT_CAP: i64 = 230;
 const TEXT_LIMIT: usize = 65_536;
 const TOTAL_TEXT_LIMIT: usize = 64 * 1024 * 1024;
 const UNIT_LIMIT: u16 = 10_000;
@@ -62,13 +75,40 @@ pub(crate) fn rows(
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
 ) -> Result<Vec<Value>> {
+    rows_checked(tx, sql, args, &|| Ok(()))
+}
+
+pub(crate) fn rows_checked(
+    tx: &Transaction<'_>,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+    check: Check<'_>,
+) -> Result<Vec<Value>> {
+    let mut out = Vec::new();
+    each_row(tx, sql, args, check, |row| {
+        out.push(row);
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+fn each_row(
+    tx: &Transaction<'_>,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+    check: Check<'_>,
+    mut visit: impl FnMut(Value) -> Result<()>,
+) -> Result<()> {
+    check()?;
     let mut statement = tx.prepare(sql)?;
     let columns: Vec<_> = statement.column_names().iter().map(|n| camel(n)).collect();
     let mut query = statement.query(args)?;
-    let mut out = Vec::new();
+    let mut count = 0;
     let mut total = 0;
     while let Some(row) = query.next()? {
-        ensure!(out.len() < ROW_LIMIT, "Reconciliation row limit exceeded");
+        check()?;
+        ensure!(count < ROW_LIMIT, "Reconciliation row limit exceeded");
+        count += 1;
         let mut object = serde_json::Map::new();
         for (i, column) in columns.iter().enumerate() {
             let value = row.get_ref(i)?;
@@ -82,9 +122,9 @@ pub(crate) fn rows(
             }
             object.insert(column.clone(), scalar(value)?);
         }
-        out.push(Value::Object(object));
+        visit(Value::Object(object))?;
     }
-    Ok(out)
+    check()
 }
 
 /// Reads Part rows, keeping manifest text columns out of the scalar JSON.
@@ -93,12 +133,23 @@ pub(crate) fn part_rows(
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
 ) -> Result<Vec<DraftPart>> {
+    part_rows_checked(tx, sql, args, &|| Ok(()))
+}
+
+fn part_rows_checked(
+    tx: &Transaction<'_>,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+    check: Check<'_>,
+) -> Result<Vec<DraftPart>> {
+    check()?;
     let mut statement = tx.prepare(sql)?;
     let columns: Vec<_> = statement.column_names().iter().map(|n| camel(n)).collect();
     let mut query = statement.query(args)?;
     let mut parts = Vec::new();
     let mut total = 0;
     while let Some(row) = query.next()? {
+        check()?;
         ensure!(parts.len() < ROW_LIMIT, "Reconciliation row limit exceeded");
         let mut object = serde_json::Map::new();
         let mut manifest = PartManifestMetadata::default();
@@ -135,6 +186,7 @@ pub(crate) fn part_rows(
         }
         parts.push(DraftPart::new(Value::Object(object), manifest));
     }
+    check()?;
     Ok(parts)
 }
 
@@ -143,7 +195,16 @@ pub(crate) fn one(
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
 ) -> Result<Option<Value>> {
-    Ok(rows(tx, sql, args)?.into_iter().next())
+    one_checked(tx, sql, args, &|| Ok(()))
+}
+
+fn one_checked(
+    tx: &Transaction<'_>,
+    sql: &str,
+    args: &[&dyn rusqlite::ToSql],
+    check: Check<'_>,
+) -> Result<Option<Value>> {
+    Ok(rows_checked(tx, sql, args, check)?.into_iter().next())
 }
 
 pub(crate) fn text<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
@@ -293,10 +354,23 @@ pub(super) fn saved(
     draft: i64,
     id: i64,
 ) -> Result<Saved> {
-    let header = one(
+    saved_checked(tx, tenant, profile, draft, id, &|| Ok(()))
+}
+
+fn saved_checked(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    draft: i64,
+    id: i64,
+    check: Check<'_>,
+) -> Result<Saved> {
+    check()?;
+    let header = one_checked(
         tx,
-        "SELECT * FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=?",
+        &format!("SELECT {RECONCILIATION_COLUMNS} FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=?"),
         &[&tenant, &id],
+        check,
     )?
     .filter(|h| h["finalizedAt"].is_string())
     .ok_or_else(|| anyhow!("Required-unit reconciliation is not finalized"))?;
@@ -308,32 +382,59 @@ pub(super) fn saved(
         header["format"] == FORMAT,
         "Required-unit reconciliation format is unsupported"
     );
-    let basis = json::basis(text(&header, "selectionBasisJson")?)?;
-    let result = json::result(text(&header, "resultJson")?)?;
-    let reconciled = Reconciled {
-        result: serde_json::to_value(&result)?,
-        basis: serde_json::to_value(&basis)?,
+    let basis = json::basis(text(&header, "selectionBasisJson")?, check)?;
+    let result = json::result(text(&header, "resultJson")?, check)?;
+    let kind = match &result {
+        StoredResult::Ready { .. } => "ready",
+        StoredResult::Unresolved { .. } => "unresolved",
     };
     ensure!(
-        reconciled.result["kind"] == header["resultKind"],
+        kind == header["resultKind"],
         "Required-unit reconciliation result kind mismatch"
     );
+    #[derive(Serialize)]
+    struct SelectionBasis<'a> {
+        format: &'static str,
+        base_mapping_digest: &'a Value,
+        rows: &'a [BasisRow],
+    }
     ensure!(
-        selection_basis_digest(&header["baseMappingDigest"], &reconciled.basis)
-            == header["selectionBasisDigest"],
+        json::digest(
+            &SelectionBasis {
+                format: FORMAT,
+                base_mapping_digest: &header["baseMappingDigest"],
+                rows: &basis
+            },
+            check
+        )? == header["selectionBasisDigest"],
         "Required-unit reconciliation selection basis digest mismatch"
     );
+    #[derive(Serialize)]
+    struct FullResult<'a> {
+        #[serde(flatten)]
+        result: &'a StoredResult,
+        #[serde(rename = "selectionBasis")]
+        basis: &'a [BasisRow],
+    }
     ensure!(
-        digest(&reconciled.full()) == header["resultDigest"],
+        json::digest(
+            &FullResult {
+                result: &result,
+                basis: &basis
+            },
+            check
+        )? == header["resultDigest"],
         "Required-unit reconciliation result digest mismatch"
     );
-    let decisions = rows(
+    let decisions = rows_checked(
         tx,
-        "SELECT kind,target_draft_part_id,predecessor_revision_part_id FROM plan_draft_required_unit_decisions WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id",
+        &format!("SELECT {DECISION_COLUMNS} FROM plan_draft_required_unit_decisions WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id"),
         &[&tenant, &id],
+        check,
     )?
     .into_iter()
     .map(|row| {
+        check()?;
         let mut decision = json!({"kind":row["kind"],"targetDraftPartId":row["targetDraftPartId"]});
         let predecessor = &row["predecessorRevisionPartId"];
         if row["kind"] == "replace" {
@@ -346,51 +447,68 @@ pub(super) fn saved(
     })
     .collect::<Result<Vec<_>>>()?;
     ensure!(
-        digest(&json!(decisions)) == header["decisionDigest"],
+        json::digest(&decisions, check)? == header["decisionDigest"],
         "Required-unit reconciliation decision digest mismatch"
     );
-    let assignments = rows(
-        tx,
-        "SELECT kind,target_draft_part_id,unit_index,required_unit_token FROM plan_draft_required_unit_assignments WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id,unit_index",
-        &[&tenant, &id],
-    )?
-    .into_iter()
-    .map(|row| {
-        let token = &row["requiredUnitToken"];
-        let slot = (&row["targetDraftPartId"], &row["unitIndex"]);
-        if row["kind"] == "create" {
-            ensure!(token.is_null(), "Required-unit create assignment is corrupt");
-            Ok(json!({"kind":"create","draftPartId":slot.0,"unitIndex":slot.1}))
-        } else {
-            ensure!(!token.is_null(), "Required-unit reuse assignment is corrupt");
-            Ok(json!({"kind":"reuse","draftPartId":slot.0,"unitIndex":slot.1,"token":token}))
-        }
-    })
-    .collect::<Result<Vec<_>>>()?;
-    let expected = match &result {
-        StoredResult::Ready { .. } => {
-            ensure!(
-                Some(assignments.len() as i64) == header["expectedAssignmentCount"].as_i64(),
-                "Required-unit reconciliation assignment count mismatch"
-            );
-            reconciled.result["assignments"].clone()
-        }
-        StoredResult::Unresolved { .. } => {
-            ensure!(
-                assignments.is_empty(),
-                "Required-unit reconciliation assignment count mismatch"
-            );
-            json!([])
-        }
+    let expected: &[StoredAssignment] = match &result {
+        StoredResult::Ready { assignments, .. } => assignments,
+        StoredResult::Unresolved { .. } => &[],
     };
+    let mut count = 0;
+    let mut assignments_match = true;
+    each_row(
+        tx,
+        &format!(
+            "SELECT {ASSIGNMENT_COLUMNS} FROM plan_draft_required_unit_assignments WHERE tenant_id=? AND reconciliation_id=? ORDER BY target_draft_part_id,unit_index"
+        ),
+        &[&tenant, &id],
+        check,
+        |row| {
+            let token = &row["requiredUnitToken"];
+            let slot = (&row["targetDraftPartId"], &row["unitIndex"]);
+            let assignment = if row["kind"] == "create" {
+                ensure!(
+                    token.is_null(),
+                    "Required-unit create assignment is corrupt"
+                );
+                json!({"kind":"create","draftPartId":slot.0,"unitIndex":slot.1})
+            } else {
+                ensure!(
+                    !token.is_null(),
+                    "Required-unit reuse assignment is corrupt"
+                );
+                json!({"kind":"reuse","draftPartId":slot.0,"unitIndex":slot.1,"token":token})
+            };
+            assignments_match &= expected
+                .get(count)
+                .map(serde_json::to_value)
+                .transpose()?
+                .as_ref()
+                == Some(&assignment);
+            count += 1;
+            Ok(())
+        },
+    )?;
+    match &result {
+        StoredResult::Ready { .. } => ensure!(
+            Some(count as i64) == header["expectedAssignmentCount"].as_i64(),
+            "Required-unit reconciliation assignment count mismatch"
+        ),
+        StoredResult::Unresolved { .. } => ensure!(
+            count == 0,
+            "Required-unit reconciliation assignment count mismatch"
+        ),
+    }
     ensure!(
-        json!(assignments) == expected,
+        count == expected.len() && assignments_match,
         "Required-unit reconciliation assignments do not match the saved result"
     );
+    check()?;
     ensure!(
         reconciliation_digest(&header) == header["reconciliationDigest"],
         "Required-unit reconciliation digest mismatch"
     );
+    check()?;
     Ok(Saved { header, result })
 }
 
@@ -402,38 +520,61 @@ pub(crate) fn draft(
     profile: i64,
     id: i64,
 ) -> Result<Option<Draft>> {
-    let Some(header) = one(
+    draft_checked(tx, tenant, profile, id, &|| Ok(()))
+}
+
+pub(crate) fn draft_checked(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    profile: i64,
+    id: i64,
+    check: Check<'_>,
+) -> Result<Option<Draft>> {
+    check()?;
+    let Some(header) = one_checked(
         tx,
-        "SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND id=?",
+        &format!(
+            "SELECT {DRAFT_COLUMNS} FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND id=?"
+        ),
         &[&tenant, &profile, &id],
+        check,
     )?
     else {
         return Ok(None);
     };
-    let inputs = rows(
+    let inputs = rows_checked(
         tx,
-        "SELECT * FROM plan_draft_inputs WHERE tenant_id=? AND draft_id=? ORDER BY layer_order,source_id",
+        &format!(
+            "SELECT {INPUT_COLUMNS} FROM plan_draft_inputs WHERE tenant_id=? AND draft_id=? ORDER BY layer_order,source_id"
+        ),
         &[&tenant, &id],
+        check,
     )?;
-    let mut parts = part_rows(
+    let mut parts = part_rows_checked(
         tx,
-        "SELECT * FROM plan_draft_parts WHERE tenant_id=? AND draft_id=? ORDER BY id",
+        &format!(
+            "SELECT {PART_COLUMNS} FROM plan_draft_parts WHERE tenant_id=? AND draft_id=? ORDER BY id"
+        ),
         &[&tenant, &id],
+        check,
     )?;
+    check()?;
     normalize_parts(&mut parts)?;
     let planning = model::planning(&header, &inputs, &parts)?;
+    check()?;
     let selected = optional_num(&header, "currentRequiredUnitReconciliationId")?
         .map(|rid| {
             ensure!(
-                one(
+                one_checked(
                     tx,
-                    "SELECT id FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=? AND profile_id=? AND draft_id=? AND finalized_at IS NOT NULL",
+                    &format!("SELECT {RECONCILIATION_CHECK_COLUMNS} FROM plan_draft_required_unit_reconciliations WHERE tenant_id=? AND id=? AND profile_id=? AND draft_id=? AND finalized_at IS NOT NULL"),
                     &[&tenant, &rid, &profile, &id],
+                    check,
                 )?
                 .is_some(),
                 "Plan draft Required-unit selection is corrupt"
             );
-            saved(tx, tenant, profile, id, rid)
+            saved_checked(tx, tenant, profile, id, rid, check)
         })
         .transpose()?;
     let expected = match text(&header, "digestFormat")? {
@@ -457,6 +598,7 @@ pub(crate) fn draft(
         expected == header["snapshotDigest"],
         "Plan draft snapshot digest mismatch"
     );
+    check()?;
     Ok(Some(Draft {
         header,
         inputs,

@@ -220,6 +220,15 @@ impl ReconciliationClient {
         receiver
             .recv()
             .map_err(|_| anyhow!(Failure::OutcomeUnknown))?
+            .map_err(|error| {
+                if error.downcast_ref::<auth::AuthFailure>().is_some()
+                    || error.downcast_ref::<Failure>().is_some()
+                {
+                    error
+                } else {
+                    error.context("Plan draft update failed")
+                }
+            })
     }
 }
 
@@ -233,7 +242,13 @@ pub(super) fn execute(
         Failure::Cancelled
     );
     let tx = crate::writer_admission::begin_immediate(connection, admission)?;
-    let outcome = reconcile::run(&tx, &command.input, command.policy)?;
+    let outcome = reconcile::run(&tx, &command.input, command.policy, &mut || {
+        ensure!(
+            !command.cancelled.load(Ordering::Acquire),
+            Failure::Cancelled
+        );
+        Ok(())
+    })?;
     ensure!(
         !command.cancelled.load(Ordering::Acquire),
         Failure::Cancelled

@@ -27,10 +27,22 @@ fn invalid<T>() -> ReadResult<T> {
     Err(ReadFailure::InvalidDocument)
 }
 fn tag_name(tag: Option<&Tag>) -> ReadResult<Option<&str>> {
-    match tag {
-        None => Ok(None),
-        Some(t) if t.handle.is_empty() && t.suffix == "!" => Ok(Some("!")),
-        Some(t) if t.is_yaml_core_schema() => Ok(Some(t.suffix.as_str())),
+    let Some(t) = tag else {
+        return Ok(None);
+    };
+    if t.handle.is_empty() && t.suffix == "!" {
+        return Ok(Some("!"));
+    }
+    // A verbatim tag has an empty handle and its whole URI as the suffix.
+    let name = if t.handle.is_empty() {
+        t.suffix.strip_prefix("tag:yaml.org,2002:")
+    } else if t.is_yaml_core_schema() {
+        Some(t.suffix.as_str())
+    } else {
+        None
+    };
+    match name {
+        Some(name @ ("str" | "int" | "float" | "bool" | "null" | "seq" | "map")) => Ok(Some(name)),
         _ => invalid(),
     }
 }
@@ -150,6 +162,47 @@ fn yaml_blank_break(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\r' | '\n' | '\0')
 }
 
+// js-yaml rejects these characters in a scalar.
+fn non_printable(c: char) -> bool {
+    matches!(
+        c,
+        '\0'..='\x08'
+            | '\x0b'
+            | '\x0c'
+            | '\x0e'..='\x1f'
+            | '\x7f'..='\u{84}'
+            | '\u{86}'..='\u{9f}'
+            | '\u{fffe}'
+            | '\u{ffff}'
+    )
+}
+
+// js-yaml reads a line that starts with a BOM as a document boundary when the
+// separation space after the BOM reaches `%` or `---` at the start of a line.
+fn bom_boundary(chars: &[char], i: usize, budget: &PreparationBudget<'_>) -> ReadResult<bool> {
+    let mut j = i + 1;
+    let mut line = j;
+    loop {
+        budget.check()?;
+        while chars.get(j).is_some_and(|c| matches!(c, ' ' | '\t')) {
+            j += 1;
+        }
+        if chars.get(j) == Some(&'#') {
+            j = line_end(chars, j, budget)?;
+        }
+        match chars.get(j) {
+            Some('\r') if chars.get(j + 1) == Some(&'\n') => j += 2,
+            Some('\r' | '\n') => j += 1,
+            _ => break,
+        }
+        line = j;
+    }
+    Ok(j == line
+        && (chars.get(j) == Some(&'%')
+            || (chars.get(j..j + 3) == Some(&['-', '-', '-'])
+                && chars.get(j + 3).copied().is_none_or(yaml_blank_break))))
+}
+
 fn scalar_chars(source: &str, budget: &PreparationBudget<'_>) -> ReadResult<Vec<char>> {
     let mut chars = Vec::new();
     let mut checkpoint = 0;
@@ -173,20 +226,297 @@ fn line_end(chars: &[char], start: usize, budget: &PreparationBudget<'_>) -> Rea
     Ok(end)
 }
 
+struct FlowProperty {
+    line: usize,
+    // A `:` after the empty node would separate it as a mapping key.
+    key: bool,
+}
+
+struct PlainLanding {
+    pos: usize,
+    line_begin: usize,
+    indent: usize,
+}
+
+struct BlockPlain {
+    text: String,
+    end: usize,
+    line_begin: usize,
+    line_indent: usize,
+}
+
+fn at_document_boundary(
+    chars: &[char],
+    index: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<bool> {
+    let marker = matches!(
+        chars.get(index..index + 3),
+        Some(['-', '-', '-'] | ['.', '.', '.'])
+    ) && chars.get(index + 3).copied().is_none_or(yaml_blank_break);
+    if marker {
+        return Ok(true);
+    }
+    if chars.get(index) == Some(&'\u{feff}') {
+        return bom_boundary(chars, index, budget);
+    }
+    Ok(false)
+}
+
+// Skip the line break js-yaml's plain-scalar scanner consumes, including blank
+// lines, and stop on the next content line. Indent counts spaces only.
+fn skip_plain_separation(
+    chars: &[char],
+    mut pos: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<PlainLanding> {
+    let mut line_begin = pos;
+    let mut indent = 0;
+    let mut steps = 0usize;
+    loop {
+        if steps.is_multiple_of(1024) {
+            budget.check()?;
+        }
+        steps += 1;
+        while chars.get(pos).is_some_and(|c| matches!(c, ' ' | '\t')) {
+            if steps.is_multiple_of(1024) {
+                budget.check()?;
+            }
+            steps += 1;
+            pos += 1;
+        }
+        match chars.get(pos) {
+            Some('\r') => {
+                pos += 1;
+                if chars.get(pos) == Some(&'\n') {
+                    pos += 1;
+                }
+            }
+            Some('\n') => pos += 1,
+            _ => break,
+        }
+        line_begin = pos;
+        indent = 0;
+        while chars.get(pos) == Some(&' ') {
+            if steps.is_multiple_of(1024) {
+                budget.check()?;
+            }
+            steps += 1;
+            indent += 1;
+            pos += 1;
+        }
+    }
+    Ok(PlainLanding {
+        pos,
+        line_begin,
+        indent,
+    })
+}
+
+fn fold_plain(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<String> {
+    let mut result = String::new();
+    let mut i = start;
+    let mut capture_start = start;
+    let mut capture_end = start;
+    while i < end {
+        if (i - start).is_multiple_of(1024) {
+            budget.check()?;
+        }
+        let ch = chars[i];
+        if matches!(ch, '\n' | '\r') {
+            result.extend(&chars[capture_start..capture_end]);
+            let mut breaks = 0usize;
+            while i < end {
+                match chars[i] {
+                    '\n' => {
+                        breaks += 1;
+                        i += 1;
+                    }
+                    '\r' => {
+                        breaks += 1;
+                        i += 1;
+                        if chars.get(i) == Some(&'\n') {
+                            i += 1;
+                        }
+                    }
+                    ' ' | '\t' => i += 1,
+                    _ => break,
+                }
+            }
+            if breaks == 1 {
+                result.push(' ');
+            } else if breaks > 1 {
+                result.push_str(&"\n".repeat(breaks - 1));
+            }
+            capture_start = i;
+            capture_end = i;
+        } else {
+            i += 1;
+            if !matches!(ch, ' ' | '\t') {
+                capture_end = i;
+            }
+        }
+    }
+    result.extend(&chars[capture_start..capture_end]);
+    Ok(result)
+}
+
+// saphyr reads `]`, `}`, and `,` as flow tokens outside a collection. js-yaml
+// reads them as a block plain scalar, so `a:\n  []\n\n: ]` is a null key whose
+// value is "]". A multiline scalar that then stops on `:` is the implicit-key
+// shape js-yaml rejects.
+fn block_indicator_plain(
+    chars: &[char],
+    start: usize,
+    line_begin: usize,
+    line_indent: usize,
+    min_indent: usize,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<BlockPlain> {
+    let mut pos = start;
+    let mut end = start;
+    let mut multiline = false;
+    let mut later_colon = false;
+    let mut line_start = line_begin;
+    let mut cursor_line = line_begin;
+    let mut cursor_indent = line_indent;
+    let mut end_line_begin = line_begin;
+    let mut end_line_indent = line_indent;
+    let mut checked = start;
+    loop {
+        if pos >= checked {
+            budget.check()?;
+            checked = pos + 1024;
+        }
+        if pos >= chars.len() {
+            break;
+        }
+        if pos == line_start && at_document_boundary(chars, pos, budget)? {
+            break;
+        }
+        let ch = chars[pos];
+        if ch == ':' && chars.get(pos + 1).copied().is_none_or(yaml_blank_break) {
+            later_colon = multiline;
+            break;
+        } else if ch == '#' && (pos == 0 || yaml_blank_break(chars[pos - 1])) {
+            break;
+        } else if matches!(ch, '\r' | '\n') {
+            let landing = skip_plain_separation(chars, pos, budget)?;
+            let boundary = landing.pos == landing.line_begin
+                && landing.pos < chars.len()
+                && at_document_boundary(chars, landing.pos, budget)?;
+            if !boundary && landing.indent >= min_indent {
+                multiline = true;
+                pos = landing.pos;
+                line_start = landing.line_begin;
+                cursor_line = landing.line_begin;
+                cursor_indent = landing.indent;
+                continue;
+            }
+            break;
+        }
+        if !matches!(ch, ' ' | '\t') {
+            end = pos + 1;
+            end_line_begin = cursor_line;
+            end_line_indent = cursor_indent;
+        }
+        pos += 1;
+    }
+    if later_colon {
+        return invalid();
+    }
+    for (offset, ch) in chars[start..end].iter().enumerate() {
+        if offset.is_multiple_of(1024) {
+            budget.check()?;
+        }
+        if non_printable(*ch) {
+            return invalid();
+        }
+    }
+    Ok(BlockPlain {
+        text: fold_plain(chars, start, end, budget)?,
+        end,
+        line_begin: end_line_begin,
+        line_indent: end_line_indent,
+    })
+}
+
+fn push_quoted_plain(
+    output: &mut String,
+    text: &str,
+    budget: &mut PreparationBudget<'_>,
+) -> ReadResult<()> {
+    output.push('"');
+    for (offset, ch) in text.chars().enumerate() {
+        if offset.is_multiple_of(1024) {
+            budget.check()?;
+        }
+        match ch {
+            '\\' => output.push_str("\\\\"),
+            '"' => output.push_str("\\\""),
+            '\n' => output.push_str("\\n"),
+            '\u{e000}' => output.push_str("\u{e000}\u{e000}"),
+            ch => output.push(ch),
+        }
+    }
+    output.push('"');
+    Ok(())
+}
+
 fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String> {
     budget.check()?;
+    // js-yaml rejects any input that contains a NUL.
+    if source.contains('\0') {
+        return invalid();
+    }
     let chars = scalar_chars(source, budget)?;
     let mut output = String::with_capacity(source.len());
     let mut i = 0;
-    let mut flow = 0usize;
+    // Opening bracket of each open flow collection.
+    let mut flow: Vec<char> = Vec::new();
     let mut quote = None;
     let mut plain = false;
-    let mut plain_indent = 0usize;
+    // Column of the last block `-` or `?`, or of the key before the last block
+    // `:`; None at the document root. A plain scalar continues on any deeper line.
+    let mut parent: Option<usize> = None;
+    let mut plain_parent: Option<usize> = None;
+    let mut node_column: Option<usize> = None;
     let mut node = true;
     let mut line_start = true;
+    let mut line_begin = 0usize;
     let mut line_indent = 0usize;
+    // The line began inside a quoted scalar, so its indent is unknown here.
+    let mut quoted_line = false;
     let mut quoted_end = false;
-    let mut block: Option<(usize, Option<usize>)> = None;
+    // A block scalar's parent indent (None at a root node js-yaml indents at
+    // column 0) and, once known, its content indent.
+    let mut block: Option<(Option<usize>, Option<usize>)> = None;
+    // js-yaml's indent for the outermost flow collection: one past its block
+    // parent, or the indent of the line the root node starts on.
+    let mut flow_indent = 0usize;
+    let mut document_indent: Option<usize> = None;
+    // js-yaml rejects a separating tab followed on the same line by a flow
+    // token when the line is indented less than the collection, which is the
+    // line a block value's flow opens on.
+    let mut shallow_flow = false;
+    let mut separation_tab = false;
+    // A tab after a flow node's properties counts once the node ends.
+    let mut node_tab = false;
+    // A separation tab on this block line. js-yaml will not open a block
+    // sequence, explicit key, or mapping entry after it. A plain value may.
+    let mut block_tab = false;
+    // The current block node began after `block_tab` on this line.
+    let mut tab_key = false;
+    let mut flow_key = false;
+    let mut flow_property: Option<FlowProperty> = None;
+    // Byte offset just after a flow sequence's `?`. saphyr drops an empty
+    // explicit key, so the shield writes that key as `~`.
+    let mut explicit_key: Option<usize> = None;
     let mut consumed = 0usize;
     let mut next_check = 4096usize;
     while i < chars.len() {
@@ -202,14 +532,52 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 }
                 i += 1;
             }
+            line_begin = start;
             line_indent = i - start;
+            quoted_line = start > 0 && !matches!(chars[start - 1], '\r' | '\n');
+            node_column = None;
+            shallow_flow = false;
+            separation_tab = false;
+            node_tab = false;
+            if flow.is_empty() {
+                block_tab = false;
+                tab_key = false;
+            }
             let blank = i == chars.len() || matches!(chars[i], '\r' | '\n');
+            // Before a block scalar's first content line sets its indent, js-yaml
+            // rejects a tab that sits no deeper than the scalar's parent node.
+            if chars.get(i) == Some(&'\t')
+                && matches!(block, Some((Some(base), None)) if line_indent <= base)
+            {
+                return invalid();
+            }
+            let mut block_end = false;
             if let Some((base, required)) = block {
+                let detected = required.is_some();
                 let required = required.or_else(|| (!blank).then_some(line_indent));
-                if blank || required.is_some_and(|n| line_indent >= n && line_indent > base) {
+                // js-yaml ends every block scalar at a document marker.
+                let marker = line_indent == 0
+                    && (matches!(chars.get(i..i + 3), Some(['-', '-', '-'] | ['.', '.', '.']))
+                        && chars.get(i + 3).copied().is_none_or(yaml_blank_break)
+                        || chars.get(i) == Some(&'\u{feff}') && bom_boundary(&chars, i, budget)?);
+                if !marker
+                    && (blank
+                        || required.is_some_and(|n| {
+                            line_indent >= n && base.is_none_or(|b| line_indent > b)
+                        }))
+                {
                     block = Some((base, required));
                     let end = line_end(&chars, i, budget)?;
+                    // js-yaml counts a root indentation indicator from column 0
+                    // and saphyr from column 1, and saphyr rejects a tab at
+                    // column 0, so each root block line moves one column deeper.
+                    if base.is_none() && start < end {
+                        output.push(' ');
+                    }
                     for c in &chars[start..end] {
+                        if non_printable(*c) {
+                            return invalid();
+                        }
                         output.push(*c);
                         if *c == '\u{e000}' {
                             output.push(*c);
@@ -224,7 +592,17 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     line_start = false;
                     continue;
                 }
+                // saphyr reads a comment or `---` after a root block scalar with
+                // no indicator and no content as that content.
+                let whitespace = chars[i..]
+                    .iter()
+                    .find(|c| !matches!(c, ' ' | '\t'))
+                    .is_none_or(|c| matches!(c, '\r' | '\n'));
+                if parent.is_none() && !detected && !whitespace && !(marker && chars[i] == '.') {
+                    return invalid();
+                }
                 block = None;
+                block_end = true;
             }
             for c in &chars[start..i] {
                 output.push(*c);
@@ -237,24 +615,62 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             if i == chars.len() {
                 break;
             }
-            if flow == 0 && (!plain || line_indent <= plain_indent) {
+            let mut content = i;
+            while chars.get(content).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                if (content - i).is_multiple_of(1024) {
+                    budget.check()?;
+                }
+                content += 1;
+            }
+            let plain_blank = chars.get(content).is_none_or(|c| matches!(c, '\r' | '\n'));
+            if !plain_blank
+                && flow.is_empty()
+                && (!plain || plain_parent.is_some_and(|n| line_indent <= n))
+            {
                 plain = false;
                 node = true;
                 quoted_end = false;
             }
             line_start = false;
             if line_indent == 0
-                && flow == 0
-                && chars.get(i..i + 3) == Some(&['-', '-', '-'])
+                && flow.is_empty()
+                && matches!(chars.get(i..i + 3), Some(['-', '-', '-'] | ['.', '.', '.']))
                 && chars.get(i + 3).copied().is_none_or(yaml_blank_break)
             {
-                output.push_str("---");
+                output.extend(&chars[i..i + 3]);
                 consumed += 3;
                 i += 3;
+                parent = None;
+                document_indent = None;
                 plain = false;
                 node = true;
                 quoted_end = false;
                 continue;
+            }
+            // js-yaml skips a comment or whitespace-only line that ends a block
+            // scalar, but saphyr rejects some indented comments and reads a tab
+            // as indentation. A `#` at column 0 ends the scalar in saphyr too.
+            let comment = chars.get(content) == Some(&'#');
+            // js-yaml allows only comments after a root block scalar.
+            if block_end && parent.is_none() && !plain_blank && !comment {
+                return invalid();
+            }
+            if block_end && (plain_blank || comment) {
+                output.truncate(output.len() - line_indent);
+                consumed += content - i;
+                i = content;
+                if plain_blank {
+                    output.push('#');
+                    continue;
+                }
+            }
+            // A comment line ends a plain scalar in js-yaml, but saphyr continues
+            // the scalar across one led by a tab. Without its indent, saphyr
+            // ends the scalar there too.
+            if content > i && chars.get(content) == Some(&'#') {
+                output.truncate(output.len() - line_indent);
+                consumed += content - i;
+                i = content;
             }
             if (chars[i] == '%' && line_indent == 0 && !plain) || chars[i] == '#' {
                 let end = line_end(&chars, i, budget)?;
@@ -272,6 +688,39 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         }
         let c = chars[i];
         if let Some(q) = quote {
+            // js-yaml checks quoted continuation lines before reading flow keys,
+            // and in block context requires them deeper than the block parent.
+            if i > 0 && matches!(chars[i - 1], '\r' | '\n') {
+                let mut end = i;
+                while chars.get(end) == Some(&' ') {
+                    if (end - i).is_multiple_of(1024) {
+                        budget.check()?;
+                    }
+                    end += 1;
+                }
+                let indent = end - i;
+                while chars.get(end).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                    if (end - i).is_multiple_of(1024) {
+                        budget.check()?;
+                    }
+                    end += 1;
+                }
+                if end > i && chars.get(end).is_none_or(|c| matches!(c, '\r' | '\n')) {
+                    // js-yaml folds a whitespace-only line as blank; saphyr
+                    // rejects one that contains a tab.
+                    consumed += end - i;
+                    i = end;
+                    continue;
+                }
+                let deficient = if flow.is_empty() {
+                    parent.is_some_and(|p| indent <= p)
+                } else {
+                    indent < flow_indent
+                };
+                if deficient && chars.get(end).is_some_and(|c| !matches!(c, '\r' | '\n')) {
+                    return invalid();
+                }
+            }
             if q == '"' && c == '\\' {
                 let width = match chars.get(i + 1) {
                     Some('u') => Some(4),
@@ -308,8 +757,36 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     output.push(*c);
                     consumed += c.len_utf8();
                     i += 1;
-                    if *c == '\n' {
+                    if matches!(*c, '\r' | '\n') {
                         line_start = true;
+                        if *c == '\r' && chars.get(i) == Some(&'\n') {
+                            output.push('\n');
+                            consumed += 1;
+                            i += 1;
+                        }
+                        // js-yaml folds the blank lines after an escaped line
+                        // break away; saphyr keeps each as a newline.
+                        let mut blank = 0usize;
+                        loop {
+                            if blank.is_multiple_of(1024) {
+                                budget.check()?;
+                            }
+                            blank += 1;
+                            let mut end = i;
+                            while chars.get(end).is_some_and(|c| matches!(c, ' ' | '\t')) {
+                                if (end - i).is_multiple_of(1024) {
+                                    budget.check()?;
+                                }
+                                end += 1;
+                            }
+                            let width = match chars.get(end..end + 2) {
+                                Some(['\r', '\n']) => 2,
+                                _ if chars.get(end).is_some_and(|c| matches!(c, '\r' | '\n')) => 1,
+                                _ => break,
+                            };
+                            consumed += end + width - i;
+                            i = end + width;
+                        }
                     }
                 }
                 continue;
@@ -344,10 +821,16 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             output.push(c);
             consumed += 1;
             i += 1;
+            if c == '\r' && chars.get(i) == Some(&'\n') {
+                output.push('\n');
+                consumed += 1;
+                i += 1;
+            }
             line_start = true;
             continue;
         }
         let next = chars.get(i + 1).copied();
+        let column = i - line_begin;
         if c == '#' && (i == 0 || yaml_blank_break(chars[i - 1])) {
             let end = line_end(&chars, i, budget)?;
             for c in &chars[i..end] {
@@ -361,22 +844,74 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i = end;
             continue;
         }
-        if node && matches!(c, '!' | '&' | '*') {
-            // saphyr gives verbatim tags an empty handle, so `!<!>` would pass as
-            // a bare `!`, which js-yaml rejects. No other verbatim tag passes
-            // `tag_name`.
-            if c == '!' && next == Some('<') {
+        let mut separator = false;
+        let mut empty_key = None;
+        if !yaml_blank_break(c) {
+            empty_key = explicit_key.take();
+            // js-yaml ends a flow node at its properties when a line break
+            // follows and the next line is not indented past the collection.
+            // That line may sit below the collection's indent.
+            if let Some(property) = flow_property.take()
+                && property.line != line_begin
+                && line_indent <= flow_indent
+            {
+                separator = c == ':' && property.key;
+                if !separator && !matches!(c, ',' | ']' | '}') {
+                    return invalid();
+                }
+                // saphyr rejects a flow closer shallower than one column past
+                // the block key or `-`. A plain scalar in the flow can drop
+                // that extra column, so one past the parent still reaches.
+                // The closer stays on this line.
+                let required = parent.map_or(0, |column| column + 1);
+                if !node_tab && !separation_tab && line_indent < required {
+                    for _ in 0..required - line_indent {
+                        output.push(' ');
+                    }
+                }
+                shallow_flow = line_indent < flow_indent;
+            }
+            // js-yaml indents every other flow line at least to the collection.
+            if !flow.is_empty() && !shallow_flow && !quoted_line && line_indent < flow_indent {
                 return invalid();
             }
+            if separation_tab && shallow_flow && !flow.is_empty() {
+                return invalid();
+            }
+            // js-yaml counts no indent on the first line.
+            document_indent.get_or_insert(if line_begin == 0 { 0 } else { line_indent });
+        }
+        if node && !yaml_blank_break(c) && node_column.is_none() {
+            node_column = Some(column);
+        }
+        if node && matches!(c, '!' | '&' | '*') {
+            let verbatim = c == '!' && next == Some('<');
             let mut end = i + 1;
             while end < chars.len()
                 && !yaml_blank_break(chars[end])
-                && !matches!(chars[end], ',' | '[' | ']' | '{' | '}')
+                && if verbatim {
+                    chars[end] != '>'
+                } else {
+                    !matches!(chars[end], ',' | '[' | ']' | '{' | '}')
+                }
             {
                 if (end - i) % 1024 == 0 {
                     budget.check()?;
                 }
                 end += 1;
+            }
+            if verbatim {
+                // saphyr decodes verbatim tags and gives them an empty handle, so
+                // `!<!>` and `!<%21>` would pass as a bare `!`, which js-yaml rejects.
+                if matches!(&chars[i + 2..end], ['!'] | ['%', '2', '1']) {
+                    return invalid();
+                }
+                if chars.get(end) == Some(&'>') {
+                    end += 1;
+                }
+            }
+            if node && flow.is_empty() {
+                tab_key = block_tab;
             }
             for c in &chars[i..end] {
                 output.push(*c);
@@ -386,13 +921,31 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                     next_check = consumed + 4096;
                 }
             }
+            let closed_verbatim = verbatim && end > i && chars[end - 1] == '>';
             i = end;
+            // saphyr requires whitespace after a verbatim tag. js-yaml allows
+            // the following scalar to touch the closing `>`.
+            if closed_verbatim && chars.get(i).is_some_and(|c| !yaml_blank_break(*c)) {
+                output.push(' ');
+            }
             if c == '*' {
                 node = false;
+            } else if !flow.is_empty() {
+                flow_property = Some(FlowProperty {
+                    line: line_begin,
+                    key: flow_key,
+                });
             }
             continue;
         }
+        // js-yaml reads no node from a flow `?` that a flow indicator follows.
+        if node && c == '?' && !flow.is_empty() && matches!(next, Some(',' | ']' | '}')) {
+            return invalid();
+        }
         if node && matches!(c, '"' | '\'') {
+            if flow.is_empty() {
+                tab_key = block_tab;
+            }
             quote = Some(c);
             plain = false;
             output.push(c);
@@ -400,21 +953,28 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             i += 1;
             continue;
         }
-        if node && matches!(c, '|' | '>') && flow == 0 {
+        if node && matches!(c, '|' | '>') {
+            // js-yaml reads no block scalar inside a flow collection.
+            if !flow.is_empty() {
+                return invalid();
+            }
             let end = line_end(&chars, i, budget)?;
+            // js-yaml indents a root node from the line it starts on.
+            let base = parent.or_else(|| document_indent.and_then(|n| n.checked_sub(1)));
             let mut explicit = None;
             for c in &chars[i + 1..end] {
                 if let Some(n) = c.to_digit(10)
                     && n > 0
                 {
-                    explicit = Some(line_indent + n as usize);
+                    // js-yaml counts the indicator from the parent's indent.
+                    explicit = Some(base.map_or(n as usize - 1, |p| p + n as usize));
                     break;
                 }
                 if *c == '#' {
                     break;
                 }
             }
-            block = Some((line_indent, explicit));
+            block = Some((base, explicit));
             for c in &chars[i..end] {
                 output.push(*c);
                 consumed += c.len_utf8();
@@ -428,32 +988,141 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             node = false;
             continue;
         }
+        if node && flow.is_empty() && matches!(c, ',' | ']' | '}') {
+            let min_indent = parent.map_or(line_indent, |column| column + 1);
+            let quoted =
+                block_indicator_plain(&chars, i, line_begin, line_indent, min_indent, budget)?;
+            if quoted.end <= i {
+                return invalid();
+            }
+            push_quoted_plain(&mut output, &quoted.text, budget)?;
+            if quoted.line_begin != line_begin {
+                line_begin = quoted.line_begin;
+                line_indent = quoted.line_indent;
+                separation_tab = false;
+                node_tab = false;
+                shallow_flow = false;
+                quoted_line = false;
+            }
+            for ch in &chars[i..quoted.end] {
+                consumed += ch.len_utf8();
+                if consumed >= next_check {
+                    budget.check()?;
+                    next_check = consumed + 4096;
+                }
+            }
+            i = quoted.end;
+            node = false;
+            plain = false;
+            quoted_end = false;
+            continue;
+        }
         let colon = c == ':'
-            && (next.is_none_or(yaml_blank_break)
+            && (separator
+                || next.is_none_or(yaml_blank_break)
                 || quoted_end
-                || (flow > 0 && next.is_some_and(|n| matches!(n, ',' | '[' | ']' | '{' | '}'))));
+                || (!flow.is_empty()
+                    && next.is_some_and(|n| matches!(n, ',' | '[' | ']' | '{' | '}'))));
         let structural = colon
-            || (flow > 0 && matches!(c, ',' | ']' | '}'))
+            || (!flow.is_empty() && matches!(c, ',' | ']' | '}'))
             || (node && matches!(c, '[' | '{'))
             || (node && matches!(c, '-' | '?') && next.is_none_or(yaml_blank_break));
         if structural {
+            // A tab is not block indentation. js-yaml rejects `-`, `?`, or a
+            // mapping key that begins after one. The key may be empty.
+            if flow.is_empty()
+                && block_tab
+                && (matches!(c, '-' | '?') || (colon && (tab_key || node)))
+            {
+                return invalid();
+            }
+            // js-yaml reads no comment directly after a quoted key's colon.
+            if colon && quoted_end && next == Some('#') {
+                return invalid();
+            }
+            if let Some(offset) = empty_key
+                && matches!(c, ':' | ',' | ']')
+            {
+                output.insert_str(offset, " ~");
+            }
+            if flow.is_empty() && c == ':' {
+                parent = Some(node_column.unwrap_or(column));
+            } else if flow.is_empty() && matches!(c, '-' | '?') {
+                parent = Some(column);
+            }
+            node_column = None;
+            if node_tab && shallow_flow && !flow.is_empty() {
+                if !matches!(c, '[' | '{') {
+                    return invalid();
+                }
+                separation_tab = true;
+            }
+            node_tab = false;
             if matches!(c, '[' | '{') {
-                flow += 1;
+                if flow.is_empty() {
+                    tab_key = block_tab;
+                    flow_indent = parent.map_or(document_indent.unwrap_or(0), |p| p + 1);
+                    shallow_flow = line_indent < flow_indent;
+                }
+                flow.push(c);
             } else if matches!(c, ']' | '}') {
-                flow = flow.saturating_sub(1);
+                flow.pop();
+            }
+            flow_key = match c {
+                '{' | '?' => true,
+                ',' => flow.last() == Some(&'{'),
+                _ => false,
+            };
+            if c == '?' && flow.last() == Some(&'[') {
+                explicit_key = Some(output.len() + 1);
             }
             node = !matches!(c, ']' | '}');
             plain = false;
             quoted_end = false;
+            if flow.is_empty() && (colon || matches!(c, '-' | '?')) {
+                tab_key = false;
+            }
         } else if !yaml_blank_break(c) {
             if node {
-                plain_indent = line_indent;
+                plain_parent = parent;
+                if flow.is_empty() {
+                    tab_key = block_tab;
+                }
             }
             node = false;
             plain = true;
             quoted_end = false;
+        } else if c == '\t' && !plain && (node || !flow.is_empty()) {
+            if flow.is_empty() {
+                block_tab = true;
+            }
+            if flow_property.is_some() {
+                node_tab = true;
+            } else {
+                separation_tab = true;
+            }
         }
         output.push(c);
+        // saphyr needs a space after a flow `:` before a tab or a collection,
+        // and after a block `:` before a tab that starts a plain value. A block
+        // tab before `[` or `{` is a different document, which js-yaml rejects.
+        let tab_value = if colon && next == Some('\t') {
+            let mut ahead = i + 1;
+            while chars.get(ahead) == Some(&'\t') {
+                if (ahead - i).is_multiple_of(1024) {
+                    budget.check()?;
+                }
+                ahead += 1;
+            }
+            !(flow.is_empty() && matches!(chars.get(ahead), Some('[' | '{')))
+        } else {
+            false
+        };
+        if separator
+            || (colon && ((!flow.is_empty() && matches!(next, Some('[' | '{'))) || tab_value))
+        {
+            output.push(' ');
+        }
         if plain && c == '\u{e000}' {
             output.push(c);
         }
@@ -461,7 +1130,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         i += 1;
     }
     budget.check()?;
-    if output.len() > source.len().saturating_mul(2) {
+    // The two quote bytes around a rewritten block scalar sit outside the doubled body.
+    if output.len() > source.len().saturating_mul(2).saturating_add(2) {
         return invalid();
     }
     budget.expansion(output.len().saturating_sub(source.len()))?;
@@ -995,6 +1665,335 @@ mod tests {
         let a = doc.get(groups, "a", &mut budget).unwrap().unwrap();
         assert!(matches!(doc.node(a, &mut budget).unwrap(), Node::Number(n) if *n == 1.0));
         for source in ["project: !<!> 123", "parts: !<%21> [a]"] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            assert!(
+                matches!(
+                    Document::parse(source.as_bytes(), &mut budget),
+                    Err(ReadFailure::InvalidDocument)
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_plain_continuation_keeps_property_lookalikes_like_js_yaml() {
+        let cancel = AtomicBool::new(false);
+        for (source, path, expected) in [
+            (
+                "project:\n  prefix\n  !<literal>",
+                &["project"][..],
+                "prefix !<literal>",
+            ),
+            ("project:\n  prefix\n  !<!>", &["project"], "prefix !<!>"),
+            ("project:\n  prefix\n  &a b", &["project"], "prefix &a b"),
+            ("project:\n  prefix\n  'q'", &["project"], "prefix 'q'"),
+            ("project:\n  prefix\n  - x", &["project"], "prefix - x"),
+            ("project:\n    prefix\n  !<l>", &["project"], "prefix !<l>"),
+            (
+                "x:\n  a:\n    prefix\n    !<l>\n  b: 1",
+                &["x", "a"],
+                "prefix !<l>",
+            ),
+            ("? a\n  !<l>\n: v", &["a !<l>"], "v"),
+            ("- a\n  !<b>", &[], "a !<b>"),
+            ("a\n!<b>", &[], "a !<b>"),
+            (
+                "- -\n    a\n  - \"\\uE000\\uE000\"",
+                &[],
+                "a,\u{e000}\u{e000}",
+            ),
+            ("...\n\"\\uE000\\uE000\"", &[], "\u{e000}\u{e000}"),
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
+            let mut id = doc.root;
+            for key in path {
+                id = doc.get(id, key, &mut budget).unwrap().unwrap();
+            }
+            assert_eq!(
+                doc.text(id, &mut budget).unwrap().units(),
+                expected.encode_utf16().collect::<Vec<_>>(),
+                "{source}"
+            );
+        }
+        for source in [
+            "a:\n  b # c\n  !<l> x",
+            "a:\n  b\n# c\n  !<l> x",
+            "- - a\n  !<l>",
+            "- -\n    a\n  - !<!> x",
+            "...\n!<!> x",
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            assert!(
+                matches!(
+                    Document::parse(source.as_bytes(), &mut budget),
+                    Err(ReadFailure::InvalidDocument)
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_plain_continuation_after_crlf_preserves_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(b"project: prefix\r\n  \"\\uE000\"", &mut budget).unwrap();
+        assert_eq!(
+            units(&doc, "project", &mut budget),
+            "prefix \"\\uE000\"".encode_utf16().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn yaml_plain_continuation_after_blank_preserves_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(b"project: prefix\n\n  \"\\uE000\"", &mut budget).unwrap();
+        assert_eq!(
+            units(&doc, "project", &mut budget),
+            "prefix\n\"\\uE000\"".encode_utf16().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn yaml_tab_blank_regressions_preserve_literal_escape() {
+        let cancel = AtomicBool::new(false);
+        let mut actual = Vec::new();
+        for source in [
+            "a: x\n\t\n  \"\\uE000\"",
+            "a: x\n\t  \n  \"\\uE000\"",
+            "- x\n\t\n  \"\\uE000\"",
+            "a: x\n  \n\t\n    \n  \"\\uE000\"",
+            "a: x\r\n\t\r\n  \"\\uE000\"",
+        ] {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let doc = Document::parse(source.as_bytes(), &mut budget).unwrap();
+            let id = if source.starts_with('-') {
+                let Node::Sequence(items) = doc.node(doc.root, &mut budget).unwrap() else {
+                    panic!("expected a sequence");
+                };
+                items[0]
+            } else {
+                doc.get(doc.root, "a", &mut budget).unwrap().unwrap()
+            };
+            actual.push(doc.text(id, &mut budget).unwrap().units().to_vec());
+        }
+        let expected = [
+            "x\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+            "x\n\n\n\"\\uE000\"",
+            "x\n\"\\uE000\"",
+        ]
+        .map(|value| value.encode_utf16().collect::<Vec<_>>());
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn yaml_line_breaks_match_js_yaml() {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Expected {
+            Mapping(HashMap<String, String>),
+            Sequence(Vec<String>),
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            source: String,
+            expected: Option<Expected>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/yaml-line-breaks-node.json"
+        ))
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        for case in cases {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let result = Document::parse(case.source.as_bytes(), &mut budget);
+            let Some(expected) = case.expected else {
+                assert!(
+                    matches!(result, Err(ReadFailure::InvalidDocument)),
+                    "{}: {:?}",
+                    case.name,
+                    case.source
+                );
+                continue;
+            };
+            let doc = result.unwrap_or_else(|err| panic!("{}: {err:?}", case.name));
+            match (doc.node(doc.root, &mut budget).unwrap(), expected) {
+                (Node::Mapping(entries), Expected::Mapping(expected)) => {
+                    assert_eq!(entries.len(), expected.len(), "{}", case.name);
+                    for (key, value) in expected {
+                        assert_eq!(
+                            units(&doc, &key, &mut budget),
+                            value.encode_utf16().collect::<Vec<_>>(),
+                            "{}: {key}",
+                            case.name
+                        );
+                    }
+                }
+                (Node::Sequence(items), Expected::Sequence(expected)) => {
+                    assert_eq!(items.len(), expected.len(), "{}", case.name);
+                    for (id, value) in items.iter().zip(expected) {
+                        assert_eq!(
+                            doc.text(*id, &mut budget).unwrap().units(),
+                            value.encode_utf16().collect::<Vec<_>>(),
+                            "{}",
+                            case.name
+                        );
+                    }
+                }
+                _ => panic!("{}: unexpected collection", case.name),
+            }
+        }
+    }
+
+    fn json(doc: &Document, id: usize, budget: &mut PreparationBudget<'_>) -> serde_json::Value {
+        let text = |s: &JsText| String::from_utf16(s.units()).unwrap();
+        match doc.node(id, budget).unwrap().clone() {
+            Node::Null => serde_json::Value::Null,
+            Node::Bool(b) => b.into(),
+            Node::Number(n) if n.fract() == 0.0 && n.abs() < 9e15 => (n as i64).into(),
+            Node::Number(n) => n.into(),
+            Node::String(s) => text(&s).into(),
+            Node::Sequence(items) => items.iter().map(|id| json(doc, *id, budget)).collect(),
+            Node::Mapping(entries) => entries
+                .iter()
+                .map(|(key, id)| (text(key), json(doc, *id, budget)))
+                .collect(),
+            Node::Alias(_) => unreachable!("node resolves aliases"),
+        }
+    }
+
+    fn assert_js_yaml_cases(fixture: &str) {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            source: String,
+            expected: Option<serde_json::Value>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(fixture).unwrap();
+        assert!(!cases.is_empty());
+        let cancel = AtomicBool::new(false);
+        let mut mismatches = Vec::new();
+        for case in cases {
+            let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+            let actual = match Document::parse(case.source.as_bytes(), &mut budget) {
+                Ok(doc) => Some(json(&doc, doc.root, &mut budget)),
+                Err(ReadFailure::InvalidDocument) => None,
+                Err(err) => panic!("{}: {err:?}", case.name),
+            };
+            if actual != case.expected {
+                mismatches.push(format!("{}: {:?} gave {actual:?}", case.name, case.source));
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
+    fn yaml_flow_collections_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-collections-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_flow_keys_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-keys-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_block_colon_matches_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-block-colon-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_block_tabs_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-block-tabs-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_flow_break_matches_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-flow-break-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_tab_lines_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-tab-lines-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_block_scalars_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-block-scalars-node.json"
+        ));
+    }
+
+    #[test]
+    fn yaml_verbatim_core_schema_tags_match_js_yaml() {
+        let cancel = AtomicBool::new(false);
+        let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
+        let doc = Document::parse(
+            b"str: !<tag:yaml.org,2002:str> 123\n\
+              escaped: !<tag:yaml.org,2002:%73tr> 123\n\
+              int: !<tag:yaml.org,2002:int> 123\n\
+              null: !<tag:yaml.org,2002:null> ''\n\
+              bool: !<tag:yaml.org,2002:bool> true\n\
+              float: !<tag:yaml.org,2002:float> 1.5\n\
+              seq: !<tag:yaml.org,2002:seq> [a]\n\
+              map: !<tag:yaml.org,2002:map> {a: 1}\n\
+              flow: [!<tag:yaml.org,2002:str> 1, b]\n\
+              quoted: !<tag:yaml.org,2002:str> \"\\uE000\\uE000\"\n\
+              surrogate: !<tag:yaml.org,2002:str> \"\\uE000uD800\\uE000\"\n",
+            &mut budget,
+        )
+        .unwrap();
+        let mut node = |key: &str| {
+            let id = doc.get(doc.root, key, &mut budget).unwrap().unwrap();
+            doc.node(id, &mut budget).unwrap().clone()
+        };
+        for key in ["str", "escaped"] {
+            assert!(
+                matches!(node(key), Node::String(s) if s.as_scalar().as_deref() == Some("123")),
+                "{key}"
+            );
+        }
+        assert!(matches!(node("int"), Node::Number(n) if n == 123.0));
+        assert!(matches!(node("null"), Node::Null));
+        assert!(matches!(node("bool"), Node::Bool(true)));
+        assert!(matches!(node("float"), Node::Number(n) if n == 1.5));
+        assert!(matches!(node("seq"), Node::Sequence(v) if v.len() == 1));
+        assert!(matches!(node("map"), Node::Mapping(v) if v.len() == 1));
+        assert_eq!(
+            units(&doc, "flow", &mut budget),
+            "1,b".encode_utf16().collect::<Vec<_>>()
+        );
+        assert_eq!(units(&doc, "quoted", &mut budget), [0xe000, 0xe000]);
+        assert_eq!(
+            units(&doc, "surrogate", &mut budget),
+            "\u{e000}uD800\u{e000}".encode_utf16().collect::<Vec<_>>()
+        );
+        for source in [
+            "project: !<tag:yaml.org,2002:!> 123",
+            "project: !<tag:yaml.org,2002:%21> 123",
+            "parts: !<tag:yaml.org,2002:!> [a]",
+            "project: !<tag:yaml.org,2002:binary> 123",
+            "project: !<tag:example.com,2000:x> 1",
+            "project: !<> 1",
+        ] {
             let mut budget = PreparationBudget::new(&cancel, PreparationLimits::default()).unwrap();
             assert!(
                 matches!(

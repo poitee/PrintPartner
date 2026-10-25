@@ -11,7 +11,15 @@ use serde_json::{Value, json};
 pub(super) struct Failure(pub StatusCode, pub &'static str);
 impl IntoResponse for Failure {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"detail": self.1}))).into_response()
+        let mut body = json!({"detail": self.1});
+        if self.0 == StatusCode::NOT_FOUND && self.1 == "API key not found" {
+            body["title"] = json!("Not Found");
+            body["status"] = json!(404);
+        }
+        if self.0 == StatusCode::UNAUTHORIZED && self.1 == "Current password is incorrect" {
+            body["code"] = json!("current_password_rejected");
+        }
+        (self.0, Json(body)).into_response()
     }
 }
 impl From<anyhow::Error> for Failure {
@@ -100,4 +108,52 @@ pub(super) fn redirect(target: &str) -> Response {
         },
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn failure_response_contracts() {
+        for (status, detail, expected) in [
+            (
+                StatusCode::NOT_FOUND,
+                "API key not found",
+                json!({"detail": "API key not found", "title": "Not Found", "status": 404}),
+            ),
+            (
+                StatusCode::NOT_FOUND,
+                "User not found",
+                json!({"detail": "User not found"}),
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                "API key not found",
+                json!({"detail": "API key not found"}),
+            ),
+            (
+                StatusCode::UNAUTHORIZED,
+                "Current password is incorrect",
+                json!({"detail": "Current password is incorrect", "code": "current_password_rejected"}),
+            ),
+            (
+                StatusCode::UNAUTHORIZED,
+                "Authentication required",
+                json!({"detail": "Authentication required"}),
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                "Current password is incorrect",
+                json!({"detail": "Current password is incorrect"}),
+            ),
+        ] {
+            let response = Failure(status, detail).into_response();
+            assert_eq!(response.status(), status, "{detail}");
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body, expected, "{status} {detail}");
+        }
+    }
 }

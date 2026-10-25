@@ -11,6 +11,7 @@ Project maintainers should add **`print-partner.manifest.yaml`** at the **root**
 1. Fork [PrintPartner](https://github.com/poitee/PrintPartner).
 2. Add `manifests/community/{slug}/manifest.yaml` and `meta.yaml` (submitter, `repo_url`, branch).
    A slug is 1 to 64 lowercase letters, digits, dots, hyphens or underscores, and starts with a letter or digit. Example: `ldo-2.4-sb-tap`.
+   The stems `kit-catalog` and `registry-index` are reserved for application data and cannot be slugs in registry submissions.
 3. Add an entry to `manifests/registry/index.yaml` with `status: proposed`.
 4. Open a **pull request**. CI reads `version` and validates against the matching
    v1 or v2 JSON Schema.
@@ -26,7 +27,7 @@ Project maintainers should add **`print-partner.manifest.yaml`** at the **root**
 
 Users pick an approved manifest in the community registry or rely on the repo-root file after sync. Maintainers export a PR bundle via the manifest registry API when submitting to this repository.
 
-A Source stores its community manifest slug in `manifest_community_slug`. An empty value means no community manifest. The server refuses a slug that breaks the rule above: kit bundle imports return HTTP 400, and assistant Source updates return an error. The server ignores and logs an invalid slug stored before this check.
+A Source stores its community manifest slug in `manifest_community_slug`. An empty value means no community manifest. The server refuses a slug that breaks the grammar above or uses `kit-catalog`: kit bundle imports return HTTP 400, and assistant Source updates return an error. The server ignores and logs an invalid slug stored before this check.
 
 ## Example v2 stack export
 
@@ -87,6 +88,7 @@ See `docs/kit-catalog.yaml` → `stack_presets` for reference preset ids.
 Files under `manifests/community/` and `manifests/registry/` are authoritative.
 The server copies under `web/apps/server/src/data/manifests/` are generated
 runtime assets; CI rejects drift.
+The validator rejects registry slugs that break the grammar or use either reserved stem before syncing any embedded copies.
 
 ```bash
 python -m pip install -r manifests/requirements.txt

@@ -6,7 +6,7 @@ pub use logs::recent_diagnostics;
 mod parent_death;
 use parent_death::{ParentDeathGuard, configure_child};
 mod release;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use axum::{
     body::Body,
     http::{HeaderValue, Request, Response},
@@ -14,7 +14,7 @@ use axum::{
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
-pub use release::verify_bundle;
+pub use release::{MeasuredBundle, verify_bundle};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
@@ -51,7 +51,7 @@ pub type BeforeSetup = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
 
 pub struct SpawnSpec {
     pub account_pin: DesktopAccountPin,
-    pub bundle: Bundle,
+    pub bundle: MeasuredBundle,
     pub data_dir: PathBuf,
     pub runtime_dir: PathBuf,
     #[cfg(test)]
@@ -454,12 +454,27 @@ async fn write_setup_or_cancel(
 }
 
 impl Process {
+    /// The first spawn uses the verification that produced `spec.bundle`. A respawn passes
+    /// the restart-disarm token, measures the release again on a blocking thread that stops
+    /// between files once `cancelled` fires, and starts no child if restarts were blocked
+    /// while it measured.
     async fn spawn(
         spec: &SpawnSpec,
         capture: &logs::Logs,
         cancelled: &CancellationToken,
+        respawn: Option<&CancellationToken>,
     ) -> Result<Self> {
-        release::verify_backend(&spec.bundle)?;
+        if let Some(disarmed) = respawn {
+            let bundle = Bundle::clone(&spec.bundle);
+            let stop = cancelled.clone();
+            tokio::task::spawn_blocking(move || release::verify_backend(&bundle, &stop))
+                .await
+                .context("Release verification task failed")??;
+            ensure!(
+                !restarts_blocked(cancelled, disarmed),
+                "Compatibility restart blocked during release verification"
+            );
+        }
         let package_root = release::package_root(&spec.bundle)?;
         let preload = spec
             .bundle
@@ -835,9 +850,10 @@ async fn obtain(
     source: &Launch,
     logs: &logs::Logs,
     cancelled: &CancellationToken,
+    respawn: Option<&CancellationToken>,
 ) -> Result<Process> {
     match source {
-        Launch::Release(spec) => Process::spawn(spec, logs, cancelled).await,
+        Launch::Release(spec) => Process::spawn(spec, logs, cancelled, respawn).await,
         #[cfg(test)]
         Launch::Shell(spec) => Process::spawn_shell(spec, logs, cancelled).await,
     }
@@ -907,6 +923,7 @@ impl Supervisor {
             let mut crashes = std::collections::VecDeque::new();
             let mut exit = CompatExit::Graceful;
             let mut attempt = 0;
+            let mut spawned = false;
             loop {
                 if restarts_blocked(&cancelled, &disarmed) {
                     break;
@@ -916,7 +933,9 @@ impl Supervisor {
                 // first request. Starting closes admission before draining it.
                 while recovery.try_recv().is_ok() {}
                 logs.event(logs::Event::Starting, 30);
-                let process = obtain(&source, &logs, &cancelled).await;
+                let process =
+                    obtain(&source, &logs, &cancelled, spawned.then_some(&disarmed)).await;
+                spawned = true;
                 let mut failure = logs::FailureReason::SpawnFailed;
                 let mut termination = None;
                 if let Ok(mut process) = process {
@@ -1141,18 +1160,26 @@ mod tests {
     }
 
     fn group_snapshot(group: u32) -> String {
-        let output = std::process::Command::new("ps")
-            .args(["-e", "-o", "pid,ppid,pgid,sid,stat,comm"])
+        let output = match std::process::Command::new("ps")
+            .args(["-e", "-o", "pid,ppid,pgid,stat,comm"])
             .output()
-            .unwrap();
+        {
+            Ok(output) => output,
+            Err(error) => return format!("ps failed to spawn: {error}"),
+        };
         let group = group.to_string();
-        String::from_utf8_lossy(&output.stdout)
+        let rows = String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter(|line| {
                 line.contains("PID") || line.split_whitespace().nth(2) == Some(group.as_str())
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        format!(
+            "ps status: {}\nps stderr: {}\n{rows}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )
     }
 
     /// `kill(pid, 0)` is true for a zombie. A preserved peer has to still be
@@ -1712,23 +1739,95 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    const SUBREAPER_FIXTURE: &str =
+        "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced";
+
+    #[cfg(target_os = "linux")]
+    fn run_subreaper_fixture(test_name: &str) -> std::process::Output {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--format=pretty", "--color=never"])
+            .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn validate_subreaper_fixture(
+        output: &std::process::Output,
+        test_name: &str,
+    ) -> Result<(), &'static str> {
+        if !output.status.success() {
+            return Err("isolated subreaper fixture failed");
+        }
+        let stdout = std::str::from_utf8(&output.stdout)
+            .map_err(|_| "isolated subreaper fixture output is not UTF-8")?;
+        let lines: Vec<_> = stdout.lines().filter(|line| !line.is_empty()).collect();
+        let expected = format!("test {test_name} ... ok");
+        let invalid = "isolated subreaper fixture did not pass exactly once";
+        let ["running 1 test", result, summary] = lines.as_slice() else {
+            return Err(invalid);
+        };
+        if *result != expected {
+            return Err(invalid);
+        }
+        let (filtered, _) = summary
+            .strip_prefix("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; ")
+            .and_then(|rest| rest.split_once(" filtered out; finished in "))
+            .ok_or(invalid)?;
+        filtered.parse::<usize>().map_err(|_| invalid)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subreaper_reexec_runs_exactly_one_fixture() {
+        let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
+        assert_eq!(
+            validate_subreaper_fixture(&output, SUBREAPER_FIXTURE),
+            Ok(()),
+            "{output:?}"
+        );
+        let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+        for malformed in [
+            stdout.repeat(2),
+            stdout.replace(SUBREAPER_FIXTURE, "unrelated_fixture"),
+            stdout.replace("1 passed;", "2 passed;"),
+            stdout.replace("0 failed;", "1 failed;"),
+        ] {
+            let mut invalid = output.clone();
+            invalid.stdout = malformed.into_bytes();
+            assert_eq!(
+                validate_subreaper_fixture(&invalid, SUBREAPER_FIXTURE),
+                Err("isolated subreaper fixture did not pass exactly once")
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn subreaper_reexec_wrong_name_is_failure() {
+        let output = run_subreaper_fixture(&format!("{SUBREAPER_FIXTURE}_missing"));
+        assert_eq!(output.status.code(), Some(0));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("running 0 tests"));
+        assert_eq!(
+            validate_subreaper_fixture(&output, SUBREAPER_FIXTURE),
+            Err("isolated subreaper fixture did not pass exactly once"),
+            "{output:?}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced() {
         use tokio::io::{AsyncBufReadExt, BufReader};
 
         if std::env::var_os("PP_COMPAT_SUBREAPER_FIXTURE").is_none() {
-            let status = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "tests::ticket_t_3_drain_leader_exit_with_forced_descendant_reports_forced",
-                    "--nocapture",
-                ])
-                .env("PP_COMPAT_SUBREAPER_FIXTURE", "1")
-                .status()
-                .unwrap();
-            assert!(
-                status.success(),
-                "isolated subreaper fixture failed: {status}"
+            let output = run_subreaper_fixture(SUBREAPER_FIXTURE);
+            assert_eq!(
+                validate_subreaper_fixture(&output, SUBREAPER_FIXTURE),
+                Ok(()),
+                "{output:?}"
             );
             return;
         }
@@ -1836,17 +1935,38 @@ if sys.argv[1] == "wait":
         }
     }
 
-    #[tokio::test]
-    async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
+    /// Spawns a shell that exits 0 on SIGTERM and returns once the trap is set.
+    /// The group SIGTERM can land in a forked child before it execs `sleep`; the
+    /// child's inherited trap swallows it and a `sleep 30` then outlives the
+    /// grace period (GRE-719). Short sleeps bound that to 0.1 s, and the shell
+    /// still runs its own trap once the current sleep ends.
+    async fn spawn_cooperative_child() -> (
+        tokio::process::Child,
+        tokio::io::BufReader<tokio::process::ChildStdout>,
+    ) {
+        use tokio::io::{AsyncBufReadExt, BufReader};
         let mut command = tokio::process::Command::new("/bin/sh");
         command
             .arg("-c")
-            .arg("trap 'exit 0' TERM; sleep 30")
+            .arg("trap 'echo terminated; exit 0' TERM; echo ready; while :; do sleep 0.1; done")
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
-        let child = command.spawn().unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut child = command.spawn().unwrap();
+        let mut line = String::new();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(line, "ready\n");
+        (child, stdout)
+    }
+
+    #[tokio::test]
+    async fn ticket_t_3_drain_process_stop_sigterms_cooperative_child() {
+        let (child, _stdout) = spawn_cooperative_child().await;
         let outcome = stop_owned_child(child, true).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
         assert_eq!(outcome.exit, super::CompatExit::Graceful);
@@ -1861,17 +1981,18 @@ if sys.argv[1] == "wait":
 
     #[tokio::test]
     async fn ticket_t_3_drain_restart_cleanup_switches_to_sigterm_when_shutdown_starts() {
-        let mut command = tokio::process::Command::new("/bin/sh");
-        command
-            .arg("-c")
-            .arg("trap 'exit 0' TERM; sleep 30")
-            .stdin(std::process::Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true);
-        let child = command.spawn().unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        use tokio::io::AsyncBufReadExt;
+
+        let (child, mut stdout) = spawn_cooperative_child().await;
         let outcome = stop_owned_child_at(child, false, Some(Duration::from_millis(100))).await;
         assert_eq!(outcome.intent, super::StopIntent::PlannedShutdown);
+        assert_eq!(outcome.exit, super::CompatExit::Graceful);
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(line, "terminated\n");
         assert!(
             outcome.elapsed < Duration::from_secs(3),
             "{:?}",
@@ -1969,75 +2090,173 @@ if sys.argv[1] == "wait":
 
     #[tokio::test]
     async fn ticket_t_3_drain_reaps_group_when_leader_wait_fails() {
-        let dir = std::env::temp_dir().join(format!("pp-t3-reap-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir(&dir).unwrap();
-        let pidfile = dir.join("grand.pid");
-        let script = format!(
-            "trap '' TERM; sh -c 'trap \"\" TERM; while true; do sleep 300; done' & echo $! > '{}'; wait",
-            pidfile.display()
-        );
-        let mut command = tokio::process::Command::new("/bin/sh");
-        command
-            .arg("-c")
-            .arg(script)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .process_group(0)
-            .kill_on_drop(true);
-        let mut child = command.spawn().unwrap();
-        let pid = child.id().unwrap();
-        let grand = wait_for_live_pid(&pidfile).await;
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-        let collected = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
-        assert_eq!(collected, pid as i32);
-        let started = std::time::Instant::now();
-        let result = super::drain::drive_shutdown_group(
-            &mut child,
-            pid,
-            false,
-            Duration::from_secs(2),
-            None,
-        )
-        .await;
-        assert!(
-            result.is_err(),
-            "leader wait was expected to fail: {result:?}"
-        );
-        assert!(
-            !super::drain::process_alive(grand),
-            "grandchild survived a failed leader wait\n{}",
-            group_snapshot(pid)
-        );
-        assert!(
-            super::drain::process_group_absent(pid),
-            "group survived a failed leader wait\n{}",
-            group_snapshot(pid)
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "{:?}",
-            started.elapsed()
-        );
-        let _ = std::fs::remove_dir_all(&dir);
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let cases = if cfg!(target_os = "macos") { 50 } else { 1 };
+        for case in 0..cases {
+            let mut command = tokio::process::Command::new("/bin/sh");
+            command
+                .arg("-c")
+                .arg("exec /bin/sleep 300")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .kill_on_drop(true);
+            let mut child = command.spawn().unwrap();
+            let pid = child.id().unwrap();
+            let mut member_command = tokio::process::Command::new("/bin/sh");
+            member_command
+                .arg("-c")
+                .arg("trap '' TERM; echo ready; exec /bin/sleep 300")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .process_group(pid as i32)
+                .kill_on_drop(true);
+            let mut member = member_command.spawn().unwrap();
+            let member_pid = member.id().unwrap();
+            let mut stdout = BufReader::new(member.stdout.take().unwrap());
+            let mut line = String::new();
+            tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(line, "ready\n");
+            assert_eq!(unsafe { libc::getpgid(pid as i32) }, pid as i32);
+            assert_eq!(unsafe { libc::getpgid(member_pid as i32) }, pid as i32);
+            assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+            loop {
+                let collected = unsafe { libc::waitpid(pid as i32, std::ptr::null_mut(), 0) };
+                if collected == pid as i32 {
+                    break;
+                }
+                let error = std::io::Error::last_os_error();
+                assert_eq!(collected, -1);
+                assert_eq!(error.raw_os_error(), Some(libc::EINTR), "{error}");
+            }
+            let started = std::time::Instant::now();
+            let joined = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(
+                    super::drain::drive_shutdown_group(
+                        &mut child,
+                        pid,
+                        false,
+                        Duration::from_secs(2),
+                        None,
+                    ),
+                    member.wait()
+                )
+            })
+            .await;
+            let (result, member_status) = match joined {
+                Ok(outcomes) => outcomes,
+                Err(error) => {
+                    let snapshot = group_snapshot(pid);
+                    let _ = member.kill().await;
+                    let _ = member.wait().await;
+                    panic!("case {case} timed out before cleanup: {error}\n{snapshot}");
+                }
+            };
+            assert_eq!(member_status.unwrap().signal(), Some(libc::SIGKILL));
+            let error = result
+                .as_ref()
+                .expect_err("leader wait was expected to fail");
+            assert_eq!(error.to_string(), "Child reap failed");
+            assert!(
+                error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|cause| cause.raw_os_error() == Some(libc::ECHILD))
+                }),
+                "{error:#}"
+            );
+            let group_probe = unsafe { libc::kill(-(pid as i32), 0) };
+            let group_probe_error = if group_probe < 0 {
+                Some(std::io::Error::last_os_error())
+            } else {
+                None
+            };
+            assert!(
+                group_probe < 0
+                    && group_probe_error
+                        .as_ref()
+                        .is_some_and(|error| error.raw_os_error() == Some(libc::ESRCH)),
+                "group survived a failed leader wait: pgid={pid}, kill(-pgid, 0)={group_probe}, errno={:?}, error={:?}, drain result={result:#?}\n{}",
+                group_probe_error
+                    .as_ref()
+                    .and_then(|error| error.raw_os_error()),
+                group_probe_error.as_ref().map(|error| error.to_string()),
+                group_snapshot(pid)
+            );
+            let elapsed = started.elapsed();
+            assert!(elapsed < Duration::from_secs(2), "case {case}: {elapsed:?}");
+        }
+        eprintln!("completed {cases} failed-leader-wait process-group cases");
     }
 
-    async fn wait_for_live_pid(path: &std::path::Path) -> u32 {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        loop {
-            if let Ok(text) = std::fs::read_to_string(path)
-                && let Ok(pid) = text.trim().parse::<u32>()
-                && super::drain::process_alive(pid)
-            {
-                return pid;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn ticket_t_3_drain_zombie_group_remains_until_owned_child_is_reaped() {
+        use std::os::unix::process::CommandExt;
+
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let observed = (|| -> std::io::Result<_> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        pid,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                    )
+                };
+                if result < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EINTR) {
+                        return Err(error);
+                    }
+                } else if info.si_pid == pid as i32 {
+                    let probe = unsafe { libc::kill(-(pid as i32), 0) };
+                    let errno = std::io::Error::last_os_error().raw_os_error();
+                    let absent = super::drain::process_group_absent(pid);
+                    return Ok((probe, errno, absent));
+                } else if info.si_pid != 0 {
+                    return Err(std::io::Error::other(format!(
+                        "waitid returned PID {} instead of {pid}",
+                        info.si_pid
+                    )));
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "owned child did not become an observable zombie",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "grandchild was not started"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        })();
+        if observed.is_err() {
+            let _ = child.kill();
         }
+        let status = child.wait();
+        let (probe, errno, absent) = observed.unwrap();
+        assert!(status.unwrap().success());
+        assert_eq!(probe, -1);
+        assert_eq!(errno, Some(libc::EPERM));
+        assert!(!absent);
+        let probe = unsafe { libc::kill(-(pid as i32), 0) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        assert_eq!(probe, -1);
+        assert_eq!(errno, Some(libc::ESRCH));
+        assert!(super::drain::process_group_absent(pid));
     }
 
     #[test]

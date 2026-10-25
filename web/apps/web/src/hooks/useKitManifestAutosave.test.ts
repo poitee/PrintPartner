@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ManifestSelections } from "@print-partner/contracts";
 import type { KitManifest } from "../api/endpoints/planManifests";
-import { useKitManifestAutosave } from "./useKitManifestAutosave";
+import {
+  resetKitManifestAutosaveForTests,
+  retainedFailedManifestSelections,
+  useKitManifestAutosave,
+} from "./useKitManifestAutosave";
+import {
+  resetAuxiliarySaveIntentForTests,
+  retryFailedAuxiliarySaves,
+} from "../lib/planAuxiliarySaveIntent";
 
 const mocks = vi.hoisted(() => ({
   savePlanKitManifest: vi.fn(),
@@ -78,14 +86,22 @@ function renderAutosave(onSaved = vi.fn()) {
 }
 
 describe("useKitManifestAutosave", () => {
+  // An unmount flush can settle after afterEach, so each test also starts from a clean slate.
+  beforeEach(() => {
+    resetAuxiliarySaveIntentForTests();
+    resetKitManifestAutosaveForTests();
+  });
+
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    resetAuxiliarySaveIntentForTests();
+    resetKitManifestAutosaveForTests();
   });
 
   it("keeps its registered flush available when the Plan refresh callback changes", () => {
-    const register = vi.fn();
     const unregister = vi.fn();
+    const register = vi.fn(() => unregister);
     const onSaved = vi.fn();
     const props = { onPersisted: vi.fn().mockResolvedValue(undefined) };
     const hook = renderHook(({ onPersisted }) => useKitManifestAutosave({
@@ -99,12 +115,211 @@ describe("useKitManifestAutosave", () => {
       onPersisted,
       onSaved,
       onRegisterFlush: register,
-      onUnregisterFlush: unregister,
     }), { initialProps: props });
     expect(register).toHaveBeenCalledTimes(1);
     hook.rerender({ onPersisted: vi.fn().mockResolvedValue(undefined) });
     expect(unregister).not.toHaveBeenCalled();
     expect(register).toHaveBeenCalledTimes(1);
+    hook.unmount();
+    expect(unregister).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a retained kit after selections resync to saved", async () => {
+    mocks.savePlanKitManifest.mockRejectedValueOnce(new Error("offline"));
+    const { result, rerender } = renderAutosave();
+    act(() => {
+      result.current.saveUserEdit({ extras: ["skirts"] });
+      rerender({
+        profileId: 7,
+        pendingSelections: { extras: ["skirts"] },
+        savedSelections: {},
+      });
+    });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    mocks.savePlanKitManifest.mockResolvedValueOnce(kit({ extras: ["skirts"] }));
+    act(() => {
+      rerender({
+        profileId: 7,
+        pendingSelections: {},
+        savedSelections: {},
+      });
+    });
+    await act(async () => {
+      await result.current.saveNow();
+    });
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+    expect(mocks.savePlanKitManifest.mock.calls[1]?.[1]).toEqual(
+      mocks.savePlanKitManifest.mock.calls[0]?.[1],
+    );
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+  });
+
+  it("manifest_retry_awaits_in_flight_put", async () => {
+    mocks.savePlanKitManifest.mockRejectedValueOnce(new Error("offline"));
+    const { result, rerender } = renderAutosave();
+    act(() => {
+      result.current.saveUserEdit({ extras: ["skirts"] });
+      rerender({
+        profileId: 7,
+        pendingSelections: { extras: ["skirts"] },
+        savedSelections: {},
+      });
+    });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(1);
+
+    const retryPut = deferred<KitManifest>();
+    mocks.savePlanKitManifest.mockImplementationOnce(() => retryPut.promise);
+
+    let saveNowDone = false;
+    let retryDone = false;
+    let saveNowError: unknown;
+    let retryError: unknown;
+    await act(async () => {
+      const saveNowPromise = result.current.saveNow().then(
+        () => {
+          saveNowDone = true;
+        },
+        (error) => {
+          saveNowError = error;
+          saveNowDone = true;
+        },
+      );
+      await Promise.resolve();
+      expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+
+      const retryPromise = retryFailedAuxiliarySaves(7).then(
+        () => {
+          retryDone = true;
+        },
+        (error) => {
+          retryError = error;
+          retryDone = true;
+        },
+      );
+      await Promise.resolve();
+      expect(saveNowDone).toBe(false);
+      expect(retryDone).toBe(false);
+      expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+
+      retryPut.resolve(kit({ extras: ["skirts"] }));
+      await saveNowPromise;
+      await retryPromise;
+    });
+
+    expect(saveNowError).toBeUndefined();
+    expect(retryError).toBeUndefined();
+    expect(saveNowDone).toBe(true);
+    expect(retryDone).toBe(true);
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+  });
+
+  it("failed_manifest_save_keeps_exact_payload", async () => {
+    mocks.savePlanKitManifest.mockRejectedValueOnce(new Error("offline"));
+    const { result, rerender } = renderAutosave();
+    act(() => {
+      result.current.saveUserEdit({ extras: ["skirts"] });
+      rerender({
+        profileId: 7,
+        pendingSelections: { extras: ["skirts"] },
+        savedSelections: {},
+      });
+    });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    const firstPayload = mocks.savePlanKitManifest.mock.calls[0]?.[1];
+    expect(firstPayload).toEqual(expect.objectContaining({ selections: { extras: ["skirts"] } }));
+
+    mocks.savePlanKitManifest.mockResolvedValueOnce(kit({ extras: ["skirts"] }));
+    act(() => {
+      rerender({
+        profileId: 7,
+        pendingSelections: { extras: ["panels"] },
+        savedSelections: {},
+      });
+    });
+    await act(async () => {
+      await result.current.saveNow();
+    });
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2);
+    expect(mocks.savePlanKitManifest.mock.calls[1]?.[1]).toBe(firstPayload);
+  });
+
+  it("remounted_editor_owns_retained_manifest_retry", async () => {
+    mocks.savePlanKitManifest.mockRejectedValue(new Error("offline"));
+    const first = renderAutosave();
+    act(() => first.result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(first.result.current.status).toBe("error"));
+    const failedPayload = mocks.savePlanKitManifest.mock.calls[0]?.[1];
+
+    // Leaving the Build unmounts the editor; returning mounts a fresh one with reset props.
+    first.unmount();
+    await waitFor(() => expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2));
+    const returned = renderAutosave();
+    // KitManifestOptions loads the retained selections so the form shows what Retry sends.
+    act(() => returned.rerender({ profileId: 7, pendingSelections: { extras: ["skirts"] }, savedSelections: {} }));
+    await waitFor(() => expect(returned.result.current.status).toBe("error"));
+
+    mocks.savePlanKitManifest.mockResolvedValue(kit({ extras: ["skirts"] }));
+    await act(async () => {
+      await retryFailedAuxiliarySaves(7);
+    });
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(3);
+    expect(mocks.savePlanKitManifest.mock.calls[2]?.[1]).toEqual(failedPayload);
+    expect(returned.onSaved).toHaveBeenCalledWith(kit({ extras: ["skirts"] }));
+    expect(returned.result.current.status).toBe("saved");
+  });
+
+  it("does not let a detached editor's late failure replace a newer editor's save", async () => {
+    const unmountFlush = deferred<KitManifest>();
+    mocks.savePlanKitManifest
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockReturnValueOnce(unmountFlush.promise)
+      .mockResolvedValueOnce(kit({ extras: ["panels"] }));
+    const first = renderAutosave();
+    act(() => first.result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(first.result.current.status).toBe("error"));
+    first.unmount();
+    await waitFor(() => expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2));
+
+    const returned = renderAutosave();
+    act(() => returned.result.current.saveUserEdit({ extras: ["panels"] }));
+    await waitFor(() => expect(returned.result.current.status).toBe("saved"));
+    await act(async () => {
+      unmountFlush.reject(new Error("offline"));
+      await unmountFlush.promise.catch(() => {});
+    });
+
+    expect(retainedFailedManifestSelections(7)).toBeNull();
+    await act(async () => {
+      await retryFailedAuxiliarySaves(7);
+    });
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains a failed manifest PUT after an earlier Plan refresh failed", async () => {
+    const onPersisted = vi.fn()
+      .mockRejectedValueOnce(new Error("Plan could not save"))
+      .mockResolvedValue(undefined);
+    mocks.savePlanKitManifest
+      .mockResolvedValueOnce(kit({ extras: ["skirts"] }))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(kit({ extras: ["panels"] }));
+    const { result, rerender } = renderAutosave();
+    act(() => rerender({ profileId: 7, pendingSelections: {}, savedSelections: {}, onPersisted }));
+
+    act(() => result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(onPersisted).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    act(() => result.current.saveUserEdit({ extras: ["panels"] }));
+    await waitFor(() => expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+
+    await act(async () => {
+      await retryFailedAuxiliarySaves(7);
+    });
+    expect(mocks.savePlanKitManifest).toHaveBeenCalledTimes(3);
+    expect(mocks.savePlanKitManifest.mock.calls[2]?.[1]).toBe(mocks.savePlanKitManifest.mock.calls[1]?.[1]);
+    expect(onPersisted).toHaveBeenLastCalledWith(kit({ extras: ["panels"] }));
   });
 
   it("rejects a failed flush so navigation can keep the editor open", async () => {

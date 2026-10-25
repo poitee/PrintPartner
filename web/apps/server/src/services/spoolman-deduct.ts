@@ -1,4 +1,3 @@
-import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 /**
  * spoolman-deduct.ts
  *
@@ -19,6 +18,7 @@ import type { AppRepository } from "../db/repository.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { parseSpoolmanSpoolId, useSpoolFilament as deductSpoolFilament } from "../integrations/spoolman-client.js";
+import { readSpoolmanAccess } from "../lib/spoolman-access.js";
 import { getLogger } from "./logger.js";
 import type { PrintVerifyDecision } from "@print-partner/contracts";
 

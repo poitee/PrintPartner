@@ -21,6 +21,22 @@ pub enum TableId {
     PlanAcceptedInputSets,
     PlanRevisionInputSets,
     PlanRevisionInputs,
+    PlanRevisions,
+    PlanRevisionParts,
+    PlanRevisionRequiredUnitSets,
+    PlanRevisionRequiredUnits,
+    RequiredUnits,
+    PrintProgress,
+    PlanDrafts,
+    PlanDraftInputs,
+    PlanDraftParts,
+    PlanDraftRequiredUnitReconciliations,
+    PlanDraftRequiredUnitDecisions,
+    PlanDraftRequiredUnitAssignments,
+    AcceptedPlateHeads,
+    AcceptedPlateRevisions,
+    AcceptedPlates,
+    AcceptedPlateUnits,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,6 +83,60 @@ enum ReviewedEntry {
     SourceSync { import: SourceSyncImport },
     #[serde(rename = "tool.get_workflow_help")]
     GetWorkflowHelp { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.web_search")]
+    WebSearch { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.fetch_web_page")]
+    FetchWebPage { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.check_hardware_interfaces")]
+    CheckHardwareInterfaces { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_add_custom_filament")]
+    ProposeAddCustomFilament { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_create_build")]
+    ProposeCreateBuild { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_create_source_category")]
+    ProposeCreateSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_rename_source_category")]
+    ProposeRenameSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_delete_source_category")]
+    ProposeDeleteSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_source_category")]
+    ProposeSetSourceCategory { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_source")]
+    ProposeUpdateSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_source_naming")]
+    ProposeUpdateSourceNaming { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_import_source_files")]
+    ProposeImportSourceFiles { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_plan_progress")]
+    ProposeSetPlanProgress { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_plan_assembly")]
+    ProposeSetPlanAssembly { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_verify_printer_checkoff")]
+    ProposeVerifyPrinterCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_checkoff")]
+    GetPlanCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_remaining")]
+    GetRemaining { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_printer_checkoff")]
+    GetPrinterCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_import_3mf_checkoff")]
+    ProposeImport3mfCheckoff { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_planning_state")]
+    GetBuildPlanningState { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.list_build_differences")]
+    ListBuildDifferences { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_draft")]
+    GetPlanDraft { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_update_build_brief")]
+    ProposeUpdateBuildBrief { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_resolve_build_differences")]
+    ProposeResolveBuildDifferences { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_set_build_source_roles")]
+    ProposeSetBuildSourceRoles { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_rebuild_plan")]
+    ProposeRebuildPlan { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_apply_plan_draft")]
+    ProposeApplyPlanDraft { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -81,6 +151,14 @@ enum ReviewedEntry {
     ListPlanSnapshots { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_kit_catalog")]
     GetKitCatalog { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.analyze_build_request")]
+    AnalyzeBuildRequest { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_recipe")]
+    GetBuildRecipe { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_workflow")]
+    GetBuildWorkflow { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.compare_plans")]
+    ComparePlans { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -99,6 +177,8 @@ enum ReviewedEntry {
     GetSourceDocs { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_open_docs")]
     UiOpenDocs { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.ui_focus_kit_option")]
+    UiFocusKitOption { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_navigate")]
     UiNavigate { resources: Vec<ResourceId> },
     #[serde(rename = "tool.ui_focus_stl_search")]
@@ -126,9 +206,83 @@ impl ReviewedEntry {
     ) -> Result<(&'static str, ResourceSet), AdmissionError> {
         use ResourceId::{File, Table};
         use TableId::{
+            AcceptedPlateHeads, AcceptedPlateRevisions, AcceptedPlateUnits, AcceptedPlates,
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
-            PlanRevisionInputSets, PlanRevisionInputs, PlanSnapshots, ProfileLayers, Projects,
-            SourceDocs, SourceNotes, SourceRevisions,
+            PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
+            PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
+            PlanRevisionInputSets, PlanRevisionInputs, PlanRevisionParts,
+            PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
+            PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
+            SourceRevisions,
+        };
+        let build_workflow = || {
+            BTreeSet::from([
+                Table(AcceptedPlateHeads),
+                Table(AcceptedPlateRevisions),
+                Table(AcceptedPlateUnits),
+                Table(AcceptedPlates),
+                Table(AppSettings),
+                Table(BuildProfiles),
+                Table(Parts),
+                Table(PlanAcceptedInputSets),
+                Table(PlanDraftInputs),
+                Table(PlanDraftParts),
+                Table(PlanDraftRequiredUnitAssignments),
+                Table(PlanDraftRequiredUnitDecisions),
+                Table(PlanDraftRequiredUnitReconciliations),
+                Table(PlanDrafts),
+                Table(PlanRevisionInputSets),
+                Table(PlanRevisionInputs),
+                Table(PlanRevisionParts),
+                Table(PlanRevisionRequiredUnitSets),
+                Table(PlanRevisionRequiredUnits),
+                Table(PlanRevisions),
+                Table(PrintProgress),
+                Table(ProfileLayers),
+                Table(Projects),
+                Table(RequiredUnits),
+                Table(SourceRevisions),
+                File(FileFamily::SourceWorkspace),
+            ])
+        };
+        let accepted_plan_operational = || {
+            BTreeSet::from([
+                Table(BuildProfiles),
+                Table(Parts),
+                Table(PlanAcceptedInputSets),
+                Table(PlanRevisionInputSets),
+                Table(PlanRevisionInputs),
+                Table(PlanRevisionParts),
+                Table(PlanRevisionRequiredUnitSets),
+                Table(PlanRevisionRequiredUnits),
+                Table(PlanRevisions),
+                Table(PrintProgress),
+                Table(Projects),
+                Table(RequiredUnits),
+                Table(SourceRevisions),
+                File(FileFamily::SourceWorkspace),
+            ])
+        };
+        let planning_brief = || {
+            BTreeSet::from([
+                Table(AppSettings),
+                Table(Projects),
+                Table(SourceDocs),
+                File(FileFamily::SourceWorkspace),
+            ])
+        };
+        let planning_brief_with_draft = || {
+            let mut resources = planning_brief();
+            resources.extend([
+                Table(BuildProfiles),
+                Table(PlanDrafts),
+                Table(PlanDraftInputs),
+                Table(PlanDraftParts),
+                Table(PlanDraftRequiredUnitReconciliations),
+                Table(PlanDraftRequiredUnitDecisions),
+                Table(PlanDraftRequiredUnitAssignments),
+            ]);
+            resources
         };
         let (id, resources, expected) = match self {
             Self::SourceSync {
@@ -151,6 +305,163 @@ impl ReviewedEntry {
             Self::GetWorkflowHelp { resources } => {
                 ("tool.get_workflow_help", resources, BTreeSet::new())
             }
+            Self::WebSearch { resources } => ("tool.web_search", resources, BTreeSet::new()),
+            Self::FetchWebPage { resources } => ("tool.fetch_web_page", resources, BTreeSet::new()),
+            Self::CheckHardwareInterfaces { resources } => {
+                ("tool.check_hardware_interfaces", resources, BTreeSet::new())
+            }
+            Self::ProposeAddCustomFilament { resources } => (
+                "tool.propose_add_custom_filament",
+                resources,
+                BTreeSet::new(),
+            ),
+            Self::ProposeCreateBuild { resources } => {
+                ("tool.propose_create_build", resources, BTreeSet::new())
+            }
+            Self::ProposeCreateSourceCategory { resources } => (
+                "tool.propose_create_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                ]),
+            ),
+            Self::ProposeRenameSourceCategory { resources } => (
+                "tool.propose_rename_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeDeleteSourceCategory { resources } => (
+                "tool.propose_delete_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeSetSourceCategory { resources } => (
+                "tool.propose_set_source_category",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeUpdateSource { resources } => (
+                "tool.propose_update_source",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeUpdateSourceNaming { resources } => (
+                "tool.propose_update_source_naming",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeImportSourceFiles { resources } => (
+                "tool.propose_import_source_files",
+                resources,
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::ProposeSetPlanProgress { resources } => (
+                "tool.propose_set_plan_progress",
+                resources,
+                accepted_plan_operational(),
+            ),
+            Self::ProposeSetPlanAssembly { resources } => (
+                "tool.propose_set_plan_assembly",
+                resources,
+                accepted_plan_operational(),
+            ),
+            Self::ProposeVerifyPrinterCheckoff { resources } => (
+                "tool.propose_verify_printer_checkoff",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::GetPlanCheckoff { resources } => (
+                "tool.get_plan_checkoff",
+                resources,
+                accepted_plan_operational(),
+            ),
+            Self::GetRemaining { resources } => {
+                ("tool.get_remaining", resources, accepted_plan_operational())
+            }
+            Self::GetPrinterCheckoff { resources } => (
+                "tool.get_printer_checkoff",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeImport3mfCheckoff { resources } => {
+                let mut expected = accepted_plan_operational();
+                expected.insert(Table(SourceDocs));
+                ("tool.propose_import_3mf_checkoff", resources, expected)
+            }
+            Self::GetBuildPlanningState { resources } => (
+                "tool.get_build_planning_state",
+                resources,
+                planning_brief_with_draft(),
+            ),
+            Self::ListBuildDifferences { resources } => {
+                ("tool.list_build_differences", resources, planning_brief())
+            }
+            Self::GetPlanDraft { resources } => (
+                "tool.get_plan_draft",
+                resources,
+                planning_brief_with_draft(),
+            ),
+            Self::ProposeUpdateBuildBrief { resources } => (
+                "tool.propose_update_build_brief",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeResolveBuildDifferences { resources } => (
+                "tool.propose_resolve_build_differences",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeSetBuildSourceRoles { resources } => (
+                "tool.propose_set_build_source_roles",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeRebuildPlan { resources } => (
+                "tool.propose_rebuild_plan",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
+            Self::ProposeApplyPlanDraft { resources } => (
+                "tool.propose_apply_plan_draft",
+                resources,
+                BTreeSet::from([Table(AppSettings)]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -189,6 +500,42 @@ impl ReviewedEntry {
                 "tool.get_kit_catalog",
                 resources,
                 BTreeSet::from([File(FileFamily::KitCatalog)]),
+            ),
+            Self::AnalyzeBuildRequest { resources } => (
+                "tool.analyze_build_request",
+                resources,
+                BTreeSet::from([File(FileFamily::KitCatalog)]),
+            ),
+            Self::GetBuildRecipe { resources } => (
+                "tool.get_build_recipe",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    Table(PlanDecisions),
+                    File(FileFamily::KitCatalog),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            Self::GetBuildWorkflow { resources } => {
+                ("tool.get_build_workflow", resources, build_workflow())
+            }
+            Self::ComparePlans { resources } => (
+                "tool.compare_plans",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    Table(PlanDecisions),
+                    File(FileFamily::KitCatalog),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
             Self::GetPlanOptionGroups { resources } => (
                 "tool.get_plan_option_groups",
@@ -293,6 +640,16 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::UiFocusKitOption { resources } => (
+                "tool.ui_focus_kit_option",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::UiNavigate { resources } => (
                 "tool.ui_navigate",
                 resources,
@@ -327,12 +684,22 @@ impl ReviewedEntry {
             Self::ListSources { resources } => (
                 "tool.list_sources",
                 resources,
-                BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]),
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
             Self::ListSourceCategories { resources } => (
                 "tool.list_source_categories",
                 resources,
-                BTreeSet::from([Table(Projects), Table(SourceDocs), Table(AppSettings)]),
+                BTreeSet::from([
+                    Table(Projects),
+                    Table(SourceDocs),
+                    Table(AppSettings),
+                    File(FileFamily::SourceWorkspace),
+                ]),
             ),
         };
         let count = resources.len();
@@ -381,7 +748,34 @@ impl Declarations {
         for id in [
             "source.sync",
             "tool.get_workflow_help",
+            "tool.web_search",
+            "tool.fetch_web_page",
             "tool.get_job_status",
+            "tool.check_hardware_interfaces",
+            "tool.propose_add_custom_filament",
+            "tool.propose_create_build",
+            "tool.propose_create_source_category",
+            "tool.propose_rename_source_category",
+            "tool.propose_delete_source_category",
+            "tool.propose_set_source_category",
+            "tool.propose_update_source",
+            "tool.propose_update_source_naming",
+            "tool.propose_import_source_files",
+            "tool.propose_set_plan_progress",
+            "tool.propose_set_plan_assembly",
+            "tool.propose_verify_printer_checkoff",
+            "tool.get_plan_checkoff",
+            "tool.get_remaining",
+            "tool.get_printer_checkoff",
+            "tool.propose_import_3mf_checkoff",
+            "tool.get_build_planning_state",
+            "tool.list_build_differences",
+            "tool.get_plan_draft",
+            "tool.propose_update_build_brief",
+            "tool.propose_resolve_build_differences",
+            "tool.propose_set_build_source_roles",
+            "tool.propose_rebuild_plan",
+            "tool.propose_apply_plan_draft",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
@@ -390,12 +784,17 @@ impl Declarations {
             "tool.list_plan_snapshots",
             "tool.get_plan_snapshot",
             "tool.get_kit_catalog",
+            "tool.analyze_build_request",
+            "tool.get_build_recipe",
+            "tool.get_build_workflow",
+            "tool.compare_plans",
             "tool.get_plan_option_groups",
             "tool.ui_highlight_part",
             "tool.ui_focus_stl_search",
             "tool.ui_navigate",
             "tool.ui_open_source",
             "tool.ui_open_docs",
+            "tool.ui_focus_kit_option",
             "tool.list_sources",
             "tool.list_source_categories",
             "tool.get_source_docs",

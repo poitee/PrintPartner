@@ -64,7 +64,7 @@ Transitive packages are recorded in `web/package-lock.json` and remain subject t
 | tailwind-merge | 3.7.0 | MIT | https://github.com/dcastil/tailwind-merge |
 | tar | 7.5.22 | BlueOak-1.0.0 | https://github.com/isaacs/node-tar |
 | three | 0.186.1 | MIT | https://threejs.org/ |
-| undici | 7.30.0 | MIT | https://undici.nodejs.org |
+| undici | 7.30.1 | MIT | https://undici.nodejs.org |
 | yazl | 3.3.1 | MIT | https://github.com/thejoshwolfe/yazl |
 | zod | 4.6.7 | MIT | https://zod.dev |
 
@@ -93,9 +93,9 @@ Built-in printer presets use common printer model names for bed-size hints only.
 
 ## Rust TLS trust roots
 
-`webpki-roots` 1.0.9 supplies Mozilla CA certificate data for Rust SMTP TLS. The crate declares `CDLA-Permissive-2.0`. The agreement below accompanies that data in Print Partner distributions.
+`webpki-roots` 1.0.10 supplies Mozilla CA certificate data for Rust SMTP TLS. The crate declares `CDLA-Permissive-2.0`. The agreement below accompanies that data in Print Partner distributions.
 
-Source: https://github.com/rustls/webpki-roots/tree/v/1.0.9/webpki-roots
+Source: https://github.com/rustls/webpki-roots/tree/v/1.0.10/webpki-roots
 
 ```text
 # Community Data License Agreement - Permissive - Version 2.0

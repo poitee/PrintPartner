@@ -31,7 +31,7 @@ console.log(JSON.stringify({ path: '.github/workflows/desktop-contracts.yml', st
   symlinkSync(join(root, 'web/node_modules'), join(directory, 'web/node_modules'));
   writeFileSync(join(directory, contracts), original);
   writeFileSync(join(directory, '.github/workflows/web-ci.yml'), YAML.stringify(webCI));
-  for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit']) {
+  for (const name of ['integration-smoke', 'pr-evidence', 'desktop-e2e', 'desktop-webkit', 'desktop-runtime', 'desktop-native-macos']) {
     copyFileSync(join(root, `.github/workflows/${name}.yml`), join(directory, `.github/workflows/${name}.yml`));
   }
   const git = (...args) => {
@@ -78,6 +78,11 @@ for (const [name, mutate] of [
   });
 }
 
+const step = (w, name) => w.jobs.parity.steps.find(s => s.name === name);
+const prerequisites = 'Set up ephemeral Linux prerequisites';
+const rustSetup = 'Set up Rust on ephemeral runners';
+const hostedOnly = "runner.environment == 'self-hosted'";
+
 const modify = change => directory => {
   const workflow = YAML.parse(original);
   change(workflow);
@@ -117,6 +122,7 @@ for (const [name, change] of [
   ['trigger list', w => { w.on = ['push', 'pull_request']; }],
   ['missing PR trigger', w => { delete w.on.pull_request; }],
   ['closed PRs only', w => { w.on.pull_request.types = ['closed']; }],
+  ['missing synchronize event', w => { w.on.pull_request.types = ['opened', 'reopened', 'ready_for_review', 'converted_to_draft']; }],
   ['ignored paths', w => { w.on.push['paths-ignore'] = ['**']; }],
   ['removed coverage', w => { w.on.push.paths.shift(); }],
   ['negative path', w => { w.on.pull_request.paths.push('!rust/**'); }],
@@ -127,7 +133,17 @@ for (const [name, change] of [
   ['job dependency', w => { w.jobs.parity.needs = ['skipped']; }],
   ['job failure ignored', w => { w.jobs.parity['continue-on-error'] = true; }],
   ['step false', w => { w.jobs.parity.steps[0].if = false; }],
+  ['step conditional runner', w => { w.jobs.parity.steps[0].if = "runner.environment == 'self-hosted'"; }],
+  ['step conditional always', w => { w.jobs.parity.steps[0].if = 'always() && false'; }],
+  ['always step failure ignored', w => { w.jobs.parity.steps[0].if = 'always()'; w.jobs.parity.steps[0]['continue-on-error'] = true; }],
   ['step failure ignored', w => { w.jobs.parity.steps[0]['continue-on-error'] = true; }],
+  ['verification only on ephemeral runners', w => { step(w, 'Verify contracts and frozen corpus').if = hostedOnly; }],
+  ['hosted Rust install only on ephemeral runners', w => { step(w, 'Install pinned Rust checks').if = hostedOnly; }],
+  ['verification disguised as bootstrap', w => { step(w, prerequisites).run += ' && npm run contracts:verify'; }],
+  ['bootstrap failure ignored', w => { step(w, prerequisites)['continue-on-error'] = true; }],
+  ['bootstrap with another condition', w => { step(w, prerequisites).if = `${hostedOnly} && false`; }],
+  ['Rust bootstrap with another action', w => { step(w, rustSetup).uses = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'; }],
+  ['Rust bootstrap with another toolchain', w => { step(w, rustSetup).with.toolchain = 'stable'; }],
   ['verification removed', w => { w.jobs.parity.steps = w.jobs.parity.steps.filter(s => !s.run?.includes('npm run contracts:verify')); }],
 ]) {
   test(`event tree rejects disabled workflow ${name}`, t => {
@@ -139,6 +155,23 @@ for (const [name, change] of [
   });
 }
 
+test('event tree limits runner conditions to the two bootstrap steps', t => {
+  const workflow = YAML.parse(original);
+  const conditioned = workflow.jobs.parity.steps.filter(s => s.if !== undefined && s.if !== 'always()');
+  assert.deepEqual(conditioned.map(s => [s.name, s.if]), [[prerequisites, hostedOnly], [rustSetup, hostedOnly]]);
+  const result = fixture(t).run();
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('event tree accepts always-run steps that propagate failure', t => {
+  const f = fixture(t, modify(w => {
+    const verification = w.jobs.parity.steps.find(s => s.run?.includes('npm run contracts:verify'));
+    verification.if = 'always()';
+  }));
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('event tree accepts original blob despite deleted worktree and moved HEAD', t => {
   const f = fixture(t);
   rmSync(join(f.directory, contracts));
@@ -146,7 +179,7 @@ test('event tree accepts original blob despite deleted worktree and moved HEAD',
   f.commit();
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'install_declarations=0 tool_specs=0 errors=0\n');
+  assert.equal(result.stdout, 'install_declarations=1 tool_specs=1 errors=0\n');
 });
 
 test('event tree ignores replacement commit', t => {
@@ -320,6 +353,8 @@ for (const [name, job, diagnostic] of [
   ['pr-evidence', 'lint-pr-body', 'UNPINNED_EVIDENCE_NODE'],
   ['desktop-e2e', 'linux-smoke', 'UNPINNED_E2E_NODE'],
   ['desktop-webkit', 'webkit-stl', 'UNPINNED_WEBKIT_NODE'],
+  ['desktop-runtime', 'runtime', 'UNPINNED_DESKTOP_NODE'],
+  ['desktop-native-macos', 'bundle', 'UNPINNED_DESKTOP_NODE'],
 ]) {
   test(`event tree rejects floating ${name} despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;
@@ -382,6 +417,8 @@ test('event tree rejects disabled smoke lane despite repaired checkout', t => {
 for (const [name, lane, code] of [
   ['desktop-e2e', 'linux-smoke', 'E2E'],
   ['desktop-webkit', 'webkit-stl', 'WEBKIT'],
+  ['desktop-runtime', 'runtime', 'DESKTOP'],
+  ['desktop-native-macos', 'bundle', 'DESKTOP'],
 ]) {
   test(`event tree rejects missing ${name} assertion despite repaired checkout`, t => {
     const path = `.github/workflows/${name}.yml`;

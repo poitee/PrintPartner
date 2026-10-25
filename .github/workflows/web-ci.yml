@@ -11,16 +11,8 @@ on:
       - "fixtures/drivers/bambu/**"
       - "scripts/**"
       - "manifests/**"
-      - "docs/**"
-      - ".agents/**"
       - ".cursor/skills/verify-print-partner/helpers/**"
       - "Caddyfile"
-      - "README.md"
-      - "THIRD_PARTY_NOTICES.md"
-      - "CHANGELOG.md"
-      - "OPERATIONS.md"
-      - ".github/FUNDING.yml"
-      - ".github/ISSUE_TEMPLATE/**"
       - "Dockerfile"
       - "docker-entrypoint.sh"
       - "docker-compose*.yml"
@@ -30,22 +22,15 @@ on:
       - ".github/workflows/**"
       - ".github/actions/**"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "web/**"
       - "fixtures/**"
       - "fixtures/drivers/bambu/**"
       - "scripts/**"
       - "manifests/**"
-      - "docs/**"
-      - ".agents/**"
       - ".cursor/skills/verify-print-partner/helpers/**"
       - "Caddyfile"
-      - "README.md"
-      - "THIRD_PARTY_NOTICES.md"
-      - "CHANGELOG.md"
-      - "OPERATIONS.md"
-      - ".github/FUNDING.yml"
-      - ".github/ISSUE_TEMPLATE/**"
       - "Dockerfile"
       - "docker-entrypoint.sh"
       - "docker-compose*.yml"
@@ -64,11 +49,12 @@ concurrency:
 
 jobs:
   web:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     permissions:
       contents: read
       actions: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 45 || 20 }}
     defaults:
       run:
         working-directory: web
@@ -76,6 +62,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - name: Check GitHub Actions are SHA-pinned
         working-directory: .
         run: bash scripts/check-github-actions-pinned.sh
@@ -127,10 +116,11 @@ jobs:
         run: npm run lint && npm run lint:dead && npm run typecheck && npm test
 
   web-build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     permissions:
       contents: read
       actions: read
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     defaults:
       run:
@@ -139,6 +129,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22.23.3"
@@ -158,14 +151,30 @@ jobs:
           node web/scripts/check-desktop-workflow-state.mjs
       - name: Run dependency lifecycle scripts
         run: npm rebuild
+      - name: Install Chrome libraries on ephemeral Linux
+        if: runner.environment == 'self-hosted'
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libcairo2 \
+            libcups2t64 libdbus-1-3 libexpat1 libgbm1 libglib2.0-0t64 \
+            libnss3 libpango-1.0-0 libxcomposite1 libxdamage1 libxfixes3 \
+            libxkbcommon0 libxrandr2
+      - name: Install Chrome on ephemeral Linux
+        if: runner.environment == 'self-hosted'
+        id: chrome
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        with:
+          chrome-version: stable
+          install-dependencies: false
       - name: Build, bundle, runtime and browser checks
         env:
-          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path || '/usr/bin/google-chrome' }}
         run: npm run build && npm run test:workflow-smoke && npm run test:bundles -w @print-partner/web && npm run test:runtime && npm run test:browser
 
   # The OrcaSlicer base image is about 1.7 GB. When the Actions cache has evicted it, the
   # registry pull alone can take 4 minutes, so this job has its own time limit (GRE-638).
   sidecar:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -190,6 +199,7 @@ jobs:
             -B -m unittest discover -v -p 'test_*.py'
 
   docker:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     needs: [web, web-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10

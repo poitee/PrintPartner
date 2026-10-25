@@ -207,6 +207,63 @@ fn preparation_matches_literal_node_results() {
     preparation_matches_cases(cases());
 }
 #[test]
+fn preparation_large_quantity_digest_matches_node() {
+    naming_override_case("large-filename-quantities");
+}
+
+fn large_quantity_snapshot() -> PreparedDraftSnapshot {
+    let case = cases()
+        .into_iter()
+        .find(|c| c["name"] == "large-filename-quantities")
+        .unwrap();
+    let (root, mut connection) = database(&case);
+    let reads = Reads {
+        case: case.clone(),
+        hashes: Default::default(),
+    };
+    let cancelled = AtomicBool::new(false);
+    let mut budget = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    prepare(
+        &mut connection,
+        "default",
+        1,
+        case["base"].clone(),
+        PreparationContext {
+            options: &options(&case),
+            repos: &root.path().join("repos"),
+        },
+        &reads,
+        &mut budget,
+    )
+    .unwrap()
+}
+
+#[test]
+fn preparation_large_quantity_keeps_integer_spelling() {
+    let prepared = large_quantity_snapshot();
+    let expected = [
+        "9007199254740991",
+        "9007199254740992",
+        "9007199254740992",
+        "1000000000000000100",
+        "100000000000000000000",
+        "1e+21",
+    ];
+    assert_eq!(prepared.parts.len(), expected.len());
+    for (part, expected) in prepared.parts.iter().zip(expected) {
+        assert_eq!(
+            String::from_utf8(part.json_fields(
+                &["quantityInferred", "quantityOverride", "quantityEffective"],
+                false
+            ))
+            .unwrap(),
+            format!(
+                "{{\"quantityInferred\":{expected},\"quantityOverride\":null,\"quantityEffective\":{expected}}}"
+            ),
+        );
+    }
+}
+#[test]
 fn full_naming_override_omits_role() {
     naming_override_case("naming-full-override-omits-role");
 }
@@ -235,6 +292,7 @@ fn preparation_matches_cases(cases: impl IntoIterator<Item = Value>) {
         };
         let cancelled = AtomicBool::new(false);
         let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+        LAYER_NAMING_COMPILES.with(|count| count.set(0));
         let result = if case["capture"] == true {
             let tx = connection.transaction().unwrap();
             capture(&tx, "default", 1, &reads, &mut b)
@@ -262,6 +320,7 @@ fn preparation_matches_cases(cases: impl IntoIterator<Item = Value>) {
             Err(e) => match e.downcast_ref::<Failure>() {
                 Some(Failure::NoLayers) => json!({"kind":"no_layers"}),
                 Some(Failure::NoStls) => json!({"kind":"no_stls"}),
+                Some(Failure::WouldWipe) => json!({"kind":"would_wipe"}),
                 None => json!({"error":e.to_string()}),
             },
         };
@@ -276,6 +335,8 @@ fn preparation_matches_cases(cases: impl IntoIterator<Item = Value>) {
             assert_eq!(*reads.hashes.lock().unwrap(), Vec::<String>::new());
         }
         if case["name"] == "layer-winners-and-conflicts" {
+            // Seven paths across two layers compile each layer's regexes once.
+            assert_eq!(LAYER_NAMING_COMPILES.with(|count| count.get()), 2);
             assert_eq!(
                 *reads.hashes.lock().unwrap(),
                 vec![
@@ -418,10 +479,9 @@ fn naming_comparisons_are_cumulative_and_cancellable() {
         ..NamingProfile::default()
     };
     let deep = format!("{}gear.stl", "folder/".repeat(40));
-    for (path, profile, cap) in [
-        ("gear.stl", &profile, 600),
-        (deep.as_str(), &NamingProfile::default(), 700),
-    ] {
+    let profile = LayerNaming::new(Arc::new(profile));
+    let default = LayerNaming::new(Arc::new(NamingProfile::default()));
+    for (path, profile, cap) in [("gear.stl", &profile, 600), (deep.as_str(), &default, 700)] {
         let cancelled = AtomicBool::new(false);
         let mut b = PreparationBudget::new(
             &cancelled,
@@ -598,8 +658,11 @@ fn invalid_stored_community_slugs_make_no_community_read() {
     assert!(!requests.is_empty());
     assert!(requests.iter().all(|slug| slug == "oracle-kit"));
     for slug in [
+        // ast-grep-ignore: no-writer-family-literal -- Test input that the slug check must refuse.
         "../kit-catalog",
+        // ast-grep-ignore: no-writer-family-literal -- Test input that the slug check must refuse.
         "kit-catalog",
+        "registry-index",
         "oracle-kit/..",
         "Oracle-Kit",
     ] {
@@ -609,4 +672,422 @@ fn invalid_stored_community_slugs_make_no_community_read() {
             "{slug:?}"
         );
     }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ClientAttempt {
+    Match,
+    Cancel,
+    Budget,
+    SortBudget(usize),
+    SortCancel(usize),
+    SortMatch,
+}
+struct ClientReads {
+    inner: Reads,
+    visits: Arc<std::sync::atomic::AtomicUsize>,
+    attempt: ClientAttempt,
+}
+impl DraftReads for ClientReads {
+    fn resolve_stl_root(
+        &self,
+        request: &OwnedStlReadRequest,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<Box<dyn StlRootRead>> {
+        if request.purpose() == StlPurpose::Revision {
+            let target = match self.attempt {
+                ClientAttempt::SortBudget(sort) | ClientAttempt::SortCancel(sort) => Some(sort),
+                _ => None,
+            };
+            if let Some(sort) = target {
+                PATH_SORT_TEST.with(|probe| {
+                    *probe.borrow_mut() = Some(PathSortProbe {
+                        remaining: sort,
+                        cancel: matches!(self.attempt, ClientAttempt::SortCancel(_)),
+                        comparisons: self.visits.clone(),
+                    })
+                });
+            }
+        }
+        self.inner.resolve_stl_root(request, b)
+    }
+    fn read_checkout_manifest(
+        &self,
+        request: &OwnedCheckoutReadRequest,
+        occurrence: CheckoutManifestUse,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        self.inner.read_checkout_manifest(request, occurrence, b)
+    }
+    fn read_catalog_document(
+        &self,
+        request: &OwnedCatalogReadRequest,
+        b: &mut PreparationBudget<'_>,
+    ) -> ReadResult<DocumentRead> {
+        b.check()?;
+        match request.purpose() {
+            CatalogPurpose::ShippedHintsFirst => {
+                let mut hints = self.inner.case["hints"].clone();
+                if matches!(self.attempt, ClientAttempt::Cancel | ClientAttempt::Budget) {
+                    for rule in hints["rules"].as_array_mut().unwrap().iter_mut().take(2) {
+                        rule["path"] = json!("new.stl");
+                    }
+                }
+                Ok(DocumentRead::Bytes(serde_json::to_vec(&hints).unwrap()))
+            }
+            CatalogPurpose::CustomHints => {
+                HINT_PATH_VISITS.with(|counter| *counter.borrow_mut() = Some(self.visits.clone()));
+                match self.attempt {
+                    ClientAttempt::Cancel => b.cancel_after_checks(3),
+                    ClientAttempt::Budget => b.limit_visits_after(1),
+                    _ => {}
+                }
+                Ok(DocumentRead::Missing)
+            }
+            _ => Ok(DocumentRead::Missing),
+        }
+    }
+}
+
+fn client_attempt(attempt: ClientAttempt) {
+    use crate::{Limits, WriterOwner, auth, read_model::Credential};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    let case: Value = serde_json::from_str(match attempt {
+        ClientAttempt::SortBudget(_) | ClientAttempt::SortCancel(_) | ClientAttempt::SortMatch => {
+            include_str!("../../tests/fixtures/preparation-path-sort-node.json")
+        }
+        _ => include_str!("../../tests/fixtures/preparation-hints-node.json"),
+    })
+    .unwrap();
+    let root = FixtureRoot(
+        std::env::temp_dir().join(format!("pp-preparation-client-{}", rand::random::<u64>())),
+    );
+    std::fs::create_dir_all(root.path()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let database = root.path().join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../../tests/fixtures/required-units/unchanged.db"),
+    )
+    .unwrap();
+    let connection = Connection::open(&database).unwrap();
+    let files: Vec<Value> = case["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| {
+            let file = root
+                .path()
+                .join("repos/1/revisions/fixture")
+                .join(path.as_str().unwrap());
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, path.as_str().unwrap()).unwrap();
+            json!({"source":1,"path":path,"content":path})
+        })
+        .collect();
+    let snapshot = || {
+        [
+            "plan_drafts",
+            "plan_draft_inputs",
+            "plan_draft_parts",
+            "plan_draft_required_unit_reconciliations",
+            "plan_draft_required_unit_assignments",
+        ]
+        .map(|table| {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    Ok((0..columns)
+                        .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                        .collect::<Vec<_>>())
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        })
+    };
+    let before = snapshot();
+    let owner = WriterOwner::open(root.path(), Limits::default()).unwrap().0;
+    let visits = Arc::new(AtomicUsize::new(0));
+    let reads = Arc::new(ClientReads {
+        inner: Reads {
+            case: json!({"files":files,"hints":case["hints"]}),
+            hashes: Default::default(),
+        },
+        visits: visits.clone(),
+        attempt,
+    });
+    let client = owner
+        .working_drafts_with_observations(
+            auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+            reads,
+            PreparationLimits::default(),
+        )
+        .unwrap();
+    let result = client.recompute(
+        Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+        super::PositiveId::new(1).unwrap(),
+        super::RecomputeRequest::new("first", true).unwrap(),
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_secs(60),
+    );
+    if !matches!(attempt, ClientAttempt::Match | ClientAttempt::SortMatch) {
+        let error = result.unwrap_err();
+        if matches!(
+            attempt,
+            ClientAttempt::Cancel | ClientAttempt::SortCancel(_)
+        ) {
+            assert!(
+                matches!(
+                    error.downcast_ref::<ReadFailure>(),
+                    Some(ReadFailure::Cancelled)
+                ),
+                "{error:?}"
+            );
+            assert_eq!(error.to_string(), "Cancelled");
+        } else {
+            assert_eq!(
+                error.to_string(),
+                if matches!(attempt, ClientAttempt::SortBudget(_)) {
+                    "LimitExceeded(ComparisonWork)"
+                } else {
+                    "LimitExceeded(Visits)"
+                }
+            );
+        }
+        assert_eq!(
+            visits.load(Ordering::Relaxed),
+            if matches!(
+                attempt,
+                ClientAttempt::SortBudget(_) | ClientAttempt::SortCancel(_)
+            ) {
+                1
+            } else {
+                2
+            }
+        );
+        assert_eq!(snapshot(), before);
+    } else {
+        let mut actual: Value =
+            serde_json::from_slice(&result.unwrap().into_json_body().into_bytes()).unwrap();
+        assert!(
+            actual["draft"]["createdAt"]
+                .as_str()
+                .unwrap()
+                .ends_with('Z')
+        );
+        actual["draft"]["createdAt"] = json!(true);
+        assert_eq!(actual, case["result"]);
+        // Two rules match the first path. The missing rule examines all four.
+        if attempt == ClientAttempt::Match {
+            assert_eq!(visits.load(Ordering::Relaxed), 6);
+        }
+    }
+    for file in &files {
+        assert_eq!(
+            std::fs::read(
+                root.path()
+                    .join("repos/1/revisions/fixture")
+                    .join(file["path"].as_str().unwrap())
+            )
+            .unwrap(),
+            file["content"].as_str().unwrap().as_bytes()
+        );
+    }
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn preparation_hint_stops_after_first_match() {
+    client_attempt(ClientAttempt::Match);
+}
+#[test]
+fn preparation_hint_search_honors_cancellation() {
+    client_attempt(ClientAttempt::Cancel);
+}
+#[test]
+fn preparation_hint_refusals_preserve_rows_and_files() {
+    client_attempt(ClientAttempt::Budget);
+}
+
+#[test]
+fn preparation_path_sort_exhausts_comparison_budget() {
+    for sort in [1, 2] {
+        client_attempt(ClientAttempt::SortBudget(sort));
+    }
+}
+#[test]
+fn preparation_path_sort_honors_cancellation() {
+    for sort in [1, 2] {
+        client_attempt(ClientAttempt::SortCancel(sort));
+    }
+}
+#[test]
+fn preparation_path_sort_preserves_node_order() {
+    client_attempt(ClientAttempt::SortMatch);
+}
+
+const PRESERVED_TABLES: &[&str] = &[
+    "plan_drafts",
+    "plan_draft_inputs",
+    "plan_draft_parts",
+    "plan_draft_required_unit_reconciliations",
+    "plan_draft_required_unit_assignments",
+    "plan_revision_parts",
+    "parts",
+];
+
+fn table_snapshot(connection: &Connection) -> Vec<Vec<Vec<String>>> {
+    PRESERVED_TABLES
+        .iter()
+        .map(|table| {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    Ok((0..columns)
+                        .map(|i| format!("{:?}", row.get_ref(i).unwrap()))
+                        .collect::<Vec<_>>())
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        })
+        .collect()
+}
+
+struct ReportedRecompute {
+    body: Vec<u8>,
+    rows_before: Vec<Vec<Vec<String>>>,
+    rows_after: Vec<Vec<Vec<String>>>,
+}
+
+fn recompute_reported(profile: u64, reported: &[&str], setup: &str) -> ReportedRecompute {
+    use crate::{Limits, WriterOwner, auth, read_model::Credential};
+    use std::time::Duration;
+    let root = FixtureRoot(
+        std::env::temp_dir().join(format!("pp-preparation-wipe-{}", rand::random::<u64>())),
+    );
+    std::fs::create_dir_all(root.path()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let database = root.path().join("print-partner.db");
+    std::fs::write(
+        &database,
+        include_bytes!("../../tests/fixtures/required-units/unchanged.db"),
+    )
+    .unwrap();
+    let connection = Connection::open(&database).unwrap();
+    if !setup.is_empty() {
+        connection.execute_batch(setup).unwrap();
+    }
+    let files: Vec<Value> = reported
+        .iter()
+        .map(|path| json!({"source":1,"path":path,"content":path}))
+        .collect();
+    let reads: Arc<dyn DraftReads> = Arc::new(Reads {
+        case: json!({"files":files}),
+        hashes: Default::default(),
+    });
+    let owner = WriterOwner::open(root.path(), Limits::default()).unwrap().0;
+    let client = owner
+        .working_drafts_with_observations(
+            auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+            reads,
+            PreparationLimits::default(),
+        )
+        .unwrap();
+    let rows_before = table_snapshot(&connection);
+    let body = client
+        .recompute(
+            Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+            super::PositiveId::new(profile).unwrap(),
+            super::RecomputeRequest::new("would-wipe", true).unwrap(),
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(60),
+        )
+        .unwrap()
+        .into_json_body()
+        .into_bytes();
+    owner.shutdown().unwrap();
+    let rows_after = table_snapshot(&connection);
+    ReportedRecompute {
+        body,
+        rows_before,
+        rows_after,
+    }
+}
+
+#[test]
+fn would_wipe_serializes_without_a_scanner() {
+    assert_eq!(
+        super::RecomputeOutcome::WouldWipe
+            .into_json_body()
+            .into_bytes(),
+        br#"{"kind":"would_wipe"}"#
+    );
+    assert_eq!(
+        super::RebaseOutcome::WouldWipe
+            .into_json_body()
+            .unwrap()
+            .into_bytes(),
+        br#"{"kind":"would_wipe"}"#
+    );
+}
+
+#[test]
+fn non_stl_scans_are_no_stls() {
+    let accepted = recompute_reported(1, &["captured-input.txt"], "");
+    assert_eq!(accepted.body, br#"{"kind":"no_stls"}"#);
+    assert_eq!(accepted.rows_before, accepted.rows_after);
+
+    let empty_prior = recompute_reported(
+        3,
+        &["captured-input.txt"],
+        "INSERT INTO build_profiles(id,tenant_id,name) VALUES(3,'default','Empty Build'); INSERT INTO profile_layers(tenant_id,profile_id,project_id,layer_type,layer_order) SELECT tenant_id,3,project_id,layer_type,layer_order FROM profile_layers WHERE profile_id=1",
+    );
+    assert_eq!(empty_prior.body, br#"{"kind":"no_stls"}"#);
+    assert_eq!(empty_prior.rows_before, empty_prior.rows_after);
+}
+
+#[test]
+fn valid_scans_do_not_report_would_wipe() {
+    let mixed = recompute_reported(1, &["notes.txt", "kept.stl"], "");
+    let body: Value = serde_json::from_slice(&mixed.body).unwrap();
+    assert_eq!(body["kind"], "created");
+    let parts = body["draft"]["parts"].as_array().unwrap();
+    let keys: Vec<&str> = parts
+        .iter()
+        .map(|part| part["partKey"].as_str().unwrap())
+        .collect();
+    let paths: Vec<&str> = parts
+        .iter()
+        .map(|part| part["relativePath"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["kept.stl"]);
+    assert_eq!(paths, ["kept.stl"]);
+    client_attempt(ClientAttempt::Match);
 }

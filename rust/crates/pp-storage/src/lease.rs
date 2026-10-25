@@ -20,8 +20,8 @@ pub struct LeaseRelease {
 }
 
 pub struct StorageLease {
-    advisory_lock: Option<File>,
     compatibility: Option<CompatibilityReservation>,
+    advisory_lock: Option<File>,
     admitted: Arc<AdmittedDirectory>,
     runtime_dir: PathBuf,
     release_allowed: bool,
@@ -40,6 +40,18 @@ impl CompatibilityReservation {
         let file = admitted.open_lock(c".desktop-lease").context(
             "Data directory already owned by standalone Node; stop it before starting Rust",
         )?;
+        validate_open_lock_identity(&file, &admitted.path.join(".desktop-lease"))
+            .context("Could not validate .desktop-lease compatibility reservation identity")?;
+        match fs4::FileExt::try_lock(&file) {
+            Ok(()) => {}
+            Err(fs4::TryLockError::WouldBlock) => anyhow::bail!(
+                "Data directory already owned; .desktop-lease compatibility reservation is locked"
+            ),
+            Err(fs4::TryLockError::Error(error)) => {
+                return Err(error)
+                    .context("Could not lock .desktop-lease compatibility reservation");
+            }
+        }
         validate_open_lock_identity(&file, &admitted.path.join(".desktop-lease"))
             .context("Could not validate .desktop-lease compatibility reservation identity")?;
         Ok(Self {
@@ -965,6 +977,21 @@ mod tests {
         assert!(!path.join(".desktop-lease").exists());
         let contender = File::open(path.join("printpartner.lock")).unwrap();
         fs4::FileExt::try_lock(&contender).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn gre_679_retained_drop_cleans_reservation_before_unlock() {
+        let path = directory();
+        let mut owner = StorageLease::acquire(&path).unwrap();
+        let runtime = owner.runtime_dir().to_owned();
+        owner.retain_on_drop();
+        CHECK_LOCK_DURING_RESERVATION_RELEASE.set(Some(path.clone()));
+        drop(owner);
+        assert!(CHECK_LOCK_DURING_RESERVATION_RELEASE.take().is_none());
+        assert!(!path.join(".desktop-lease").exists());
+        fs4::FileExt::try_lock(&File::open(path.join("printpartner.lock")).unwrap()).unwrap();
+        std::fs::remove_dir(runtime).unwrap();
         std::fs::remove_dir_all(path).unwrap();
     }
 

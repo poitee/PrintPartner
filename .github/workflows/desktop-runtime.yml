@@ -3,9 +3,11 @@ name: Desktop runtime
 on:
   workflow_dispatch:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - 'rust/**'
       - 'rust-toolchain.toml'
+      - 'scripts/setup-ci-linux.sh'
       - 'web/apps/server/**'
       - 'web/apps/web/**'
       - 'web/packages/domain/**'
@@ -20,6 +22,7 @@ on:
     paths:
       - 'rust/**'
       - 'rust-toolchain.toml'
+      - 'scripts/setup-ci-linux.sh'
       - 'web/apps/server/**'
       - 'web/apps/web/**'
       - 'web/packages/domain/**'
@@ -42,8 +45,11 @@ defaults:
     shell: bash
 
 jobs:
+  # Unit tests, clippy and fmt run in Rust cross-OS. This job keeps the proofs
+  # that need the built server: lifecycle evidence, Python drivers and smoke tests.
   runtime:
-    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
@@ -52,6 +58,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Configure sccache on pp-local
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
+          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
       - name: Initialize evidence
@@ -63,6 +84,7 @@ jobs:
           git rev-parse HEAD > "$PP_EVIDENCE/head.txt"
       - name: Run rust/scripts self-tests
         run: |
+          python3 rust/scripts/stress-group-cleanup.py --self-test 2>&1 | tee "$PP_EVIDENCE/stress-group-cleanup-self-tests.log"
           python3 rust/scripts/stage-desktop.py --self-test 2>&1 | tee "$PP_EVIDENCE/stage-desktop-self-tests.log"
           python3 rust/scripts/gateway-operations.py rust/crates/pp-gateway/operations.json --self-test 2>&1 | tee "$PP_EVIDENCE/gateway-operations-self-tests.log"
           python3 rust/scripts/native-process-probe.py --self-test 2>&1 | tee "$PP_EVIDENCE/native-process-probe-self-tests.log"
@@ -70,6 +92,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.23.3'
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v22.23.3"
       - name: Record storage-fixture executable
         run: |
           test "$(node --version)" = v22.23.3
@@ -77,6 +101,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v24.21.0"
       - name: Install pinned tools and build desktop assets
         run: |
           rustup toolchain install 1.99.0 --profile minimal
@@ -93,17 +119,10 @@ jobs:
           cargo build --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-server 2>&1 | tee "$PP_EVIDENCE/server-build.log"
           python3 rust/scripts/check-boundaries.py --self-test 2>&1 | tee "$PP_EVIDENCE/boundaries.log"
           python3 rust/scripts/check-domain-deps.py --self-test 2>&1 | tee "$PP_EVIDENCE/domain-deps.log"
-          cargo fmt --manifest-path rust/Cargo.toml --all --check 2>&1 | tee "$PP_EVIDENCE/fmt.log"
           git diff --exit-code -- rust/Cargo.lock web/package-lock.json
       - name: Run eight real core lifecycle tests
         run: |
           cargo test --manifest-path rust/Cargo.toml --locked -p pp-core --test runtime_m0 -- --nocapture --test-threads=1 2>&1 | tee "$PP_EVIDENCE/core-runtime.log"
-      - name: Run backend units and lint
-        run: |
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --lib --bins 2>&1 | tee "$PP_EVIDENCE/backend-units.log"
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-storage 2>&1 | tee "$PP_EVIDENCE/pp-storage-tests.log"
-          cargo test --manifest-path rust/Cargo.toml --locked -p pp-api --test auth_http 2>&1 | tee "$PP_EVIDENCE/pp-api-http.log"
-          cargo clippy --manifest-path rust/Cargo.toml --locked -p pp-api -p pp-storage -p pp-core -p pp-compat -p pp-gateway -p pp-server --all-targets -- -D warnings 2>&1 | tee "$PP_EVIDENCE/backend-clippy.log"
       - name: Prove measured compat repeated EOF cleanup
         run: |
           python3 rust/scripts/prove-measured-startup-death.py --scenario lifecycle --evidence "$PP_EVIDENCE/measured-lifecycle" 2>&1 | tee "$PP_EVIDENCE/measured-lifecycle-driver.log"
@@ -119,13 +138,6 @@ jobs:
       - name: Prove full built backend startup parent-death cleanup
         run: |
           python3 rust/scripts/prove-built-startup-death.py --node /usr/bin/node --negative-control --evidence "$PP_EVIDENCE/built-startup" 2>&1 | tee "$PP_EVIDENCE/built-startup-driver.log"
-      - name: Require nonzero API and storage test evidence
-        run: |
-          for suite in pp-api-http pp-storage-tests; do
-            passed="$(awk '/^test result: ok\./ { passed += $4 } END { print passed + 0 }' "$PP_EVIDENCE/$suite.log")"
-            test "$passed" -gt 0
-            echo "$suite: $passed tests passed" | tee -a "$PP_EVIDENCE/test-counts.txt" "$GITHUB_STEP_SUMMARY"
-          done
       - name: Verify authenticated workflow and process cleanup
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"
@@ -159,17 +171,40 @@ jobs:
             !${{ runner.temp }}/desktop-runtime-evidence/built-backend-upload/run-*/**/*.gcode
           if-no-files-found: error
           retention-days: 14
+      - name: Show sccache stats
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
 
   source-artifacts:
-    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Configure sccache on pp-local
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
+          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v24.21.0"
       - name: Install source artifact validation tools
         run: |
           rustup toolchain install 1.99.0 --profile minimal
@@ -222,8 +257,14 @@ jobs:
             ${{ runner.temp }}/source-archive-evidence/*.strace
           if-no-files-found: warn
           retention-days: 14
+      - name: Show sccache stats
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
 
   rust-verify:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -242,6 +283,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
+      - name: Verify Node runtime
+        run: test "$(node --version)" = "v24.21.0"
       - name: Install pinned tools
         run: |
           rustup toolchain install 1.99.0 --profile minimal

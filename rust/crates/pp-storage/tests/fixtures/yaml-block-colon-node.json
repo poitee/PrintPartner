@@ -1,0 +1,242 @@
+[
+  {
+    "name": "block-colon",
+    "source": "a:\n  []\n\n: ]",
+    "expected": {
+      "a": [],
+      "null": "]"
+    }
+  },
+  {
+    "name": "block-colon-crlf",
+    "source": "a:\r\n  []\r\n\r\n: ]",
+    "expected": {
+      "a": [],
+      "null": "]"
+    }
+  },
+  {
+    "name": "block-colon-cr",
+    "source": "a:\r  []\r\r: ]",
+    "expected": {
+      "a": [],
+      "null": "]"
+    }
+  },
+  {
+    "name": "block-colon-map",
+    "source": "a:\n  {}\n\n: }",
+    "expected": {
+      "a": {},
+      "null": "}"
+    }
+  },
+  {
+    "name": "block-colon-comma",
+    "source": "a:\n  []\n\n: ,",
+    "expected": {
+      "a": [],
+      "null": ","
+    }
+  },
+  {
+    "name": "block-colon-plain",
+    "source": "a:\n  []\n\n: x",
+    "expected": {
+      "a": [],
+      "null": "x"
+    }
+  },
+  {
+    "name": "same-line",
+    "source": "a: ]",
+    "expected": {
+      "a": "]"
+    }
+  },
+  {
+    "name": "empty-key",
+    "source": ": ]",
+    "expected": {
+      "null": "]"
+    }
+  },
+  {
+    "name": "root",
+    "source": "]",
+    "expected": "]"
+  },
+  {
+    "name": "sequence",
+    "source": "- ]",
+    "expected": [
+      "]"
+    ]
+  },
+  {
+    "name": "sequence-colon",
+    "source": "- ] : x",
+    "expected": [
+      {
+        "]": "x"
+      }
+    ]
+  },
+  {
+    "name": "key",
+    "source": "]: x",
+    "expected": {
+      "]": "x"
+    }
+  },
+  {
+    "name": "comment",
+    "source": "a: ] # c",
+    "expected": {
+      "a": "]"
+    }
+  },
+  {
+    "name": "hash-glued",
+    "source": "a: ]#c",
+    "expected": {
+      "a": "]#c"
+    }
+  },
+  {
+    "name": "quote",
+    "source": "a: ]\"b",
+    "expected": {
+      "a": "]\"b"
+    }
+  },
+  {
+    "name": "backslash",
+    "source": "a: ]\\b",
+    "expected": {
+      "a": "]\\b"
+    }
+  },
+  {
+    "name": "sentinel",
+    "source": "a: ]",
+    "expected": {
+      "a": "]"
+    }
+  },
+  {
+    "name": "multiline",
+    "source": "a: ]\n  more",
+    "expected": {
+      "a": "] more"
+    }
+  },
+  {
+    "name": "multiline-blank",
+    "source": "a: ]\n\n  more",
+    "expected": {
+      "a": "]\nmore"
+    }
+  },
+  {
+    "name": "multiline-key",
+    "source": "a: ]\n  more\nb: 1",
+    "expected": {
+      "a": "] more",
+      "b": 1
+    }
+  },
+  {
+    "name": "folded-colon-text",
+    "source": "a: ]\n  more:x",
+    "expected": {
+      "a": "] more:x"
+    }
+  },
+  {
+    "name": "explicit",
+    "source": "? ]\n: x",
+    "expected": {
+      "]": "x"
+    }
+  },
+  {
+    "name": "explicit-more",
+    "source": "? ]\n  more\n: x",
+    "expected": {
+      "] more": "x"
+    }
+  },
+  {
+    "name": "nested",
+    "source": "a:\n  b: ]\n    more\n  c: 1",
+    "expected": {
+      "a": {
+        "b": "] more",
+        "c": 1
+      }
+    }
+  },
+  {
+    "name": "tab-after-colon",
+    "source": "a:\t]",
+    "expected": {
+      "a": "]"
+    }
+  },
+  {
+    "name": "tag-str",
+    "source": "!!str ]",
+    "expected": "]"
+  },
+  {
+    "name": "flow-close",
+    "source": "{a: ]}",
+    "expected": null
+  },
+  {
+    "name": "bad-indent",
+    "source": "a:\n  []\n\n  : ]",
+    "expected": null
+  },
+  {
+    "name": "implicit-multiline-key",
+    "source": "]\n  more: x",
+    "expected": null
+  },
+  {
+    "name": "value-colon-continued",
+    "source": "a: ]\n  more: x",
+    "expected": null
+  },
+  {
+    "name": "same-line-colon",
+    "source": "a: ] : x",
+    "expected": null
+  },
+  {
+    "name": "tab-indent",
+    "source": "a: ]\n\tmore",
+    "expected": null
+  },
+  {
+    "name": "flow-extra",
+    "source": "a: []]",
+    "expected": null
+  },
+  {
+    "name": "second-document",
+    "source": "]\n---\n]",
+    "expected": null
+  },
+  {
+    "name": "tag-int",
+    "source": "!!int ]",
+    "expected": null
+  },
+  {
+    "name": "explicit-same-line",
+    "source": "? ] : x",
+    "expected": null
+  }
+]

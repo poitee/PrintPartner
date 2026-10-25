@@ -688,7 +688,7 @@ export default function CheckoffPage() {
 
         <PwaInstallBanner />
 
-        <PlanSpecialRequestLine note={specialRequest} />
+        <PlanSpecialRequestLine profileId={selectedProfileId} note={specialRequest} />
 
         <CheckoffPrinterStatusCard
           connectedPrinters={liveStrip.hostCount}

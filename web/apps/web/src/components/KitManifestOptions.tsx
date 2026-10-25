@@ -8,7 +8,7 @@ import {
 } from "../api/endpoints/planManifests";
 import type { RepoManifestOptionGroup } from "../api/endpoints/sourceArtifacts";
 import { useBuildSaveFlushRegistry } from "../context/BuildSaveFlushContext";
-import { useKitManifestAutosave } from "../hooks/useKitManifestAutosave";
+import { retainedFailedManifestSelections, useKitManifestAutosave } from "../hooks/useKitManifestAutosave";
 import { autosaveStatusLabel, shouldShowAutosaveRetry } from "../lib/autosaveStatus";
 import { ChevronDown } from "lucide-react";
 import { Badge } from "./ui/badge";
@@ -69,7 +69,7 @@ export default function KitManifestOptions({
   const [optionGroups, setOptionGroups] = useState<Record<string, RepoManifestOptionGroup>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const { registerFlush, unregisterFlush } = useBuildSaveFlushRegistry();
+  const registerFlush = useBuildSaveFlushRegistry();
 
   const onSaved = useCallback((kit: KitManifest) => {
     setSavedKit(kit);
@@ -88,7 +88,6 @@ export default function KitManifestOptions({
     onPersisted: onUpdated,
     onSaved,
     onRegisterFlush: registerFlush,
-    onUnregisterFlush: unregisterFlush,
   });
 
   const saveStatusLabel = autosaveStatusLabel(status);
@@ -146,7 +145,9 @@ export default function KitManifestOptions({
         }
         setInheritedSelections(inherited);
         setSavedSelections(explicitSelections);
-        setPendingSelections(explicitSelections);
+        const retainedSelections = retainedFailedManifestSelections(profileId);
+        setPendingSelections(retainedSelections ?? explicitSelections);
+        setUserEdited(retainedSelections != null);
         setLoaded(true);
       } catch (e) {
         if (!cancelled) {

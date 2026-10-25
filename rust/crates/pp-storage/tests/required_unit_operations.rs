@@ -389,10 +389,10 @@ fn missing_closed_stale_and_rebased_drafts_return_node_outcomes_without_writes()
         "expected_snapshot_digest":f.request()["expected_snapshot_digest"],
         "decisions":[{"kind":"replace","target_draft_part_id":99}]
     });
+    let missing = f.call(&client, "target", missing_target).unwrap_err();
+    assert_eq!(missing.to_string(), "Plan draft update failed");
     assert_eq!(
-        f.call(&client, "target", missing_target)
-            .unwrap_err()
-            .to_string(),
+        missing.root_cause().to_string(),
         "Required-unit reconciliation decision target is missing"
     );
     let profile = "UPDATE build_profiles SET accepted_plan_version=?1 WHERE id=1";
@@ -425,8 +425,41 @@ fn late_constraint_rolls_back_all_selection_rows() {
     let before = tables.map(|table| f.count(table));
     let selection = f.selection();
     let error = f.call(&client, "selection", f.request()).unwrap_err();
+    assert_eq!(error.to_string(), "Plan draft update failed");
     assert!(
-        error.to_string().contains("fixture late constraint"),
+        error
+            .chain()
+            .any(|cause| cause.to_string().contains("fixture late constraint")),
+        "{error:#}"
+    );
+    assert_eq!(tables.map(|table| f.count(table)), before);
+    assert_eq!(f.selection(), selection);
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn injected_sqlite_failure_maps_to_node_plan_draft_update_failed() {
+    let f = Fixture::new(UNCHANGED);
+    f.sql()
+        .execute_batch(
+            "CREATE TRIGGER reject_reconciliation BEFORE INSERT ON plan_draft_required_unit_reconciliations BEGIN SELECT RAISE(ABORT,'injected reconciliation failure'); END",
+        )
+        .unwrap();
+    let owner = f.open();
+    let client = owner.required_units_with_policy(neutral()).unwrap();
+    let tables = [
+        "plan_draft_required_unit_reconciliations",
+        "plan_draft_required_unit_decisions",
+        "plan_draft_required_unit_assignments",
+    ];
+    let before = tables.map(|table| f.count(table));
+    let selection = f.selection();
+    let error = f.call(&client, "selection", f.request()).unwrap_err();
+    assert_eq!(error.to_string(), "Plan draft update failed");
+    assert!(
+        error.chain().any(|cause| cause
+            .to_string()
+            .contains("injected reconciliation failure")),
         "{error:#}"
     );
     assert_eq!(tables.map(|table| f.count(table)), before);
@@ -480,7 +513,8 @@ fn decisions_that_do_not_fit_the_draft_return_node_errors_without_writes() {
         ),
     ] {
         let error = f.call(&client, "rejected", request(decision)).unwrap_err();
-        assert_eq!(error.to_string(), message);
+        assert_eq!(error.to_string(), "Plan draft update failed");
+        assert_eq!(error.root_cause().to_string(), message);
     }
     assert_eq!(f.count("plan_draft_required_unit_reconciliations"), 1);
     let accepted = f
@@ -763,7 +797,7 @@ fn fixture_runner_reports_the_node_result_and_its_restart_replay() {
         hex::encode(rand::random::<[u8; 16]>())
     ));
     std::fs::write(&request, f.request().to_string()).unwrap();
-    let output = child_process::command(env!("CARGO_BIN_EXE_required-unit-fixture"))
+    let output = child_process::command(child_process::bin_exe("required-unit-fixture"))
         .arg(&f.path)
         .args(["1", "2", "selection"])
         .arg(&request)

@@ -10,7 +10,7 @@ use std::{
 };
 
 #[cfg(feature = "desktop_rebuild")]
-pub(crate) const CURRENT_VERSION: u64 = 40;
+pub(crate) const CURRENT_VERSION: u64 = 41;
 #[cfg(not(feature = "desktop_rebuild"))]
 pub(crate) const CURRENT_VERSION: u64 = 35;
 
@@ -209,6 +209,8 @@ pub(crate) fn preflight(
     crate::uploads::validate_schema(&conn, version)?;
     #[cfg(feature = "desktop_rebuild")]
     crate::source_scan::validate_schema(&conn, version)?;
+    #[cfg(feature = "desktop_rebuild")]
+    crate::source_sync::validate_schema(&conn, version)?;
     Ok(version)
 }
 
@@ -399,6 +401,7 @@ pub(crate) fn initialize(
         crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
         crate::uploads::validate_schema(&conn, CURRENT_VERSION)?;
         crate::source_scan::validate_schema(&conn, CURRENT_VERSION)?;
+        crate::source_sync::validate_schema(&conn, CURRENT_VERSION)?;
     }
     // Node's fixture builder connects once to create the input and again to
     // create the expected database. The first Rust open must repeat that
@@ -472,9 +475,11 @@ fn install_steps(
     let mut first = first;
     let install_scan: fn(&Connection) -> Result<()> =
         |connection| Ok(connection.execute_batch(include_str!("source_scan/schema.sql"))?);
+    let install_sync: fn(&Connection) -> Result<()> =
+        |connection| Ok(connection.execute_batch(include_str!("source_sync/schema.sql"))?);
     for (step, install) in crate::uploads::SCHEMA_STEPS
         .into_iter()
-        .chain([(40, install_scan)])
+        .chain([(40, install_scan), (41, install_sync)])
     {
         if version < step {
             let target =
@@ -488,6 +493,7 @@ fn install_steps(
             install(&tx)?;
             crate::uploads::validate_schema(&tx, step)?;
             crate::source_scan::validate_schema(&tx, step)?;
+            crate::source_sync::validate_schema(&tx, step)?;
             tx.execute(
                 "UPDATE app_settings SET value=?1 WHERE tenant_id='default' AND key='schema_version'",
                 [step.to_string()],

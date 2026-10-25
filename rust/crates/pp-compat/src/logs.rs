@@ -220,7 +220,32 @@ fn secure_archives(directory: &File) -> std::io::Result<()> {
 
 /// Create with O_EXCL, then open an existing entry without O_CREAT. On macOS,
 /// racing dirfd-relative O_CREAT opens without O_EXCL can fail with ENOENT.
+///
+/// Another process can remove desktop.jsonl during this open, and the open
+/// then fails closed instead of retrying. An unlink or rename between EEXIST
+/// and the reopen returns ENOENT. An unlink after the open leaves
+/// `nlink == 0`, which `secure_log` refuses with InvalidInput. A rename after
+/// the open keeps `nlink == 1`, so the open succeeds on the renamed file.
+/// After either failure, startup fails and `Logs::event` drops its event. That
+/// is intended: the storage lease admits one owner per data directory and
+/// rotation holds the log mutex through its reopen, so only a writer outside
+/// that owner can reach either window.
 fn open_log(directory: &File) -> std::io::Result<File> {
+    open_log_observed(directory, |_| {})
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum OpenWindow {
+    /// O_EXCL returned EEXIST and the reopen without O_CREAT is next.
+    Reopen,
+    /// The entry is open and `secure_log` is next.
+    Secure,
+}
+
+fn open_log_observed(
+    directory: &File,
+    mut window: impl FnMut(OpenWindow),
+) -> std::io::Result<File> {
     let flags =
         libc::O_WRONLY | libc::O_APPEND | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
     let open = |flags| {
@@ -238,9 +263,13 @@ fn open_log(directory: &File) -> std::io::Result<File> {
         Ok(unsafe { File::from_raw_fd(fd) })
     };
     let file = match open(flags | libc::O_CREAT | libc::O_EXCL) {
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => open(flags)?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            window(OpenWindow::Reopen);
+            open(flags)?
+        }
         result => result?,
     };
+    window(OpenWindow::Secure);
     secure_log(&file)?;
     Ok(file)
 }
@@ -1017,6 +1046,53 @@ mod tests {
                 "trial {trial}: {opened:?}"
             );
             std::fs::remove_file(&path).unwrap();
+        }
+    }
+
+    #[test]
+    fn gre_701_unlink_before_reopen_fails_closed_without_recreating() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("logs/desktop.jsonl");
+        let directory = File::open(scratch.0.join("logs")).unwrap();
+        std::fs::write(&path, "").unwrap();
+        let mut windows = Vec::new();
+        let error = open_log_observed(&directory, |window| {
+            windows.push(window);
+            if window == OpenWindow::Reopen {
+                std::fs::remove_file(&path).unwrap();
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(windows, [OpenWindow::Reopen]);
+        assert!(std::fs::symlink_metadata(&path).is_err());
+    }
+
+    #[test]
+    fn gre_701_unlink_before_secure_fails_closed_for_created_and_existing_logs() {
+        for existing in [false, true] {
+            let scratch = Scratch::new();
+            let path = scratch.0.join("logs/desktop.jsonl");
+            let directory = File::open(scratch.0.join("logs")).unwrap();
+            if existing {
+                std::fs::write(&path, "").unwrap();
+            }
+            let mut windows = Vec::new();
+            let error = open_log_observed(&directory, |window| {
+                windows.push(window);
+                if window == OpenWindow::Secure {
+                    std::fs::remove_file(&path).unwrap();
+                }
+            })
+            .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            let expected: &[_] = if existing {
+                &[OpenWindow::Reopen, OpenWindow::Secure]
+            } else {
+                &[OpenWindow::Secure]
+            };
+            assert_eq!(windows, expected, "existing {existing}");
+            assert!(std::fs::symlink_metadata(&path).is_err());
         }
     }
 }

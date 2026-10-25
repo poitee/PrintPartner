@@ -38,6 +38,12 @@ pub const MAX_ENTRIES: usize = 10_000;
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const CANDIDATE: &str = ".pp-source-candidate";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+/// `PATH_MAX` counts the terminating NUL, so a consumer that opens a stored
+/// file by absolute path gets ENAMETOOLONG at this many bytes.
+#[cfg(target_os = "macos")]
+const PATH_MAX: usize = libc::PATH_MAX as usize;
+#[cfg(not(target_os = "macos"))]
+const PATH_MAX: usize = 4096;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -53,6 +59,12 @@ pub enum Error {
     InvalidIdentity,
     DuplicatePath,
     Limit,
+    /// The file's absolute published path would reach `PATH_MAX`, so readers
+    /// that open it by path could not.
+    StoredPathTooLong {
+        path: String,
+        bytes: usize,
+    },
     CorruptSnapshot,
     /// An intact revision published under the earlier lowercase path rule
     /// contains names that now collide under full Unicode case folding. It is
@@ -72,6 +84,13 @@ impl fmt::Display for Error {
                 "ambiguous-revision: published revision {key} has paths that collide under \
                  Unicode case folding; it is retained but cannot be reused, publish the \
                  corrected files under a new revision key"
+            ),
+            Self::StoredPathTooLong { path, bytes } => write!(
+                f,
+                "stored-path-too-long: {path} would be stored at an absolute path of {bytes} \
+                 bytes; this system opens paths of at most {} bytes; \
+                 use a shorter repository or folder path and retry the import",
+                PATH_MAX - 1
             ),
             _ => write!(f, "{}", self.category()),
         }
@@ -99,6 +118,7 @@ impl Error {
             Self::InvalidIdentity => "invalid-identity",
             Self::DuplicatePath => "duplicate-path",
             Self::Limit => "limit",
+            Self::StoredPathTooLong { .. } => "stored-path-too-long",
             Self::CorruptSnapshot => "corrupt-snapshot",
             Self::AmbiguousRevision(_) => "ambiguous-revision",
             Self::Io(_) => "io",
@@ -328,11 +348,14 @@ pub enum Publication {
 pub struct TenantRepos {
     tenant_id: String,
     root: Directory,
+    root_bytes: usize,
 }
 pub struct SourceRoot {
     tenant_id: String,
     source_id: u64,
     revisions: Directory,
+    /// Byte length of the absolute `<root>/<source>/revisions` path.
+    revisions_bytes: usize,
     lock: Arc<SourceLock>,
 }
 /// The per-Source advisory lock on this handle's revisions descriptor. The
@@ -424,9 +447,20 @@ impl TenantRepos {
         if tenant_id.trim().is_empty() || tenant_id.len() > 200 {
             return Err(Error::InvalidIdentity);
         }
+        let normalized: std::path::PathBuf = configured_repos.components().collect();
+        if configured_repos.as_os_str() != normalized.as_os_str() {
+            return Err(Error::UnsafePath);
+        }
+        let root = Directory::open_root(configured_repos)?;
         Ok(Self {
             tenant_id,
-            root: Directory::open_root(configured_repos)?,
+            root,
+            // `open_root` accepted only `/` and normal components.
+            root_bytes: configured_repos
+                .components()
+                .skip(1)
+                .map(|name| 1 + name.as_os_str().len())
+                .sum(),
         })
     }
     pub fn source(&self, source_id: u64) -> Result<SourceRoot> {
@@ -445,6 +479,7 @@ impl TenantRepos {
                 holders: Mutex::new(0),
             }),
             revisions,
+            revisions_bytes: self.root_bytes + format!("/{source_id}/revisions").len(),
         })
     }
 }
@@ -666,6 +701,19 @@ fn expected_paths(files: &[ContentFile], identity: TreeIdentity) -> BTreeSet<Str
     paths
 }
 
+/// Every published file, the manifest included, must stay openable by its
+/// absolute path.
+fn check_stored_path(revision_bytes: usize, path: &str) -> Result<()> {
+    let bytes = revision_bytes + 1 + path.len();
+    if bytes >= PATH_MAX {
+        return Err(Error::StoredPathTooLong {
+            path: path.to_owned(),
+            bytes,
+        });
+    }
+    Ok(())
+}
+
 fn canonical_destination(
     path: &SourcePath,
     directories: &mut BTreeMap<String, String>,
@@ -761,6 +809,8 @@ impl SourceRoot {
         input: &LocalFiles,
         budget: ArtifactBudget,
     ) -> Result<PublishedSnapshot> {
+        let revision_bytes = self.revisions_bytes + 1 + request.upstream_revision_key.len();
+        check_stored_path(revision_bytes, MANIFEST)?;
         let mut bytes = 0;
         let mut docs = 0;
         let mut stls = 0;
@@ -778,6 +828,7 @@ impl SourceRoot {
             // Keep the original spelling for reading case-sensitive inputs, but
             // share one deterministic spelling for destination directories.
             let path = canonical_destination(&selected.path, &mut directories)?;
+            check_stored_path(revision_bytes, path.as_str())?;
             // Folder canonicalization can introduce an exact omission overlap
             // that was absent from the original case-sensitive input paths.
             if omitted_paths.contains(path.as_str()) {

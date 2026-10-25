@@ -61,7 +61,7 @@ function Picker() {
     <span role="status">{plan.saving ? "Saving" : plan.draftError ? "Not saved" : "Saved"}</span>
     <span data-testid="quantity">{plan.review?.part_groups[0]?.parts[0]?.quantity_effective}</span>
     {plan.draftError && <p role="alert">{plan.draftError}</p>}
-    <button onClick={() => void plan.preparePlan().catch(() => {})}>Retry save</button>
+    <button onClick={() => void plan.retryPlanSave().catch(() => {})}>Retry save</button>
     <button onClick={() => void plan.discardPendingEdits().catch(() => {})}>Discard</button>
     <button onClick={() => void plan.setQuantity(part, 2).catch(() => {})}>Set quantity</button>
     <PlanFileSelection profileId={selection.profileId} disabled={false} />
@@ -194,7 +194,14 @@ it("discards an ambiguous command without replaying it before the next different
   vi.mocked(fetchPlanReview).mockResolvedValue(review(false, 7, 2));
   fireEvent.click(screen.getByRole("button", { name: "Discard" }));
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  act(() => {
+    for (const allowed of [true, false]) {
+      client.setQueryData<PlanReview>(queryKeys.planReview(7, true, allowed), (data) => data, { updatedAt: 1 });
+      client.setQueryData<PlanReview>(queryKeys.planReview(7, false, allowed), (data) => data, { updatedAt: 2 });
+    }
+  });
   fireEvent.click(screen.getByRole("button", { name: "Set quantity" }));
+  await waitFor(() => expect(savePlanChoices).toHaveBeenCalledTimes(3));
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
   expect(savePlanChoices).toHaveBeenCalledTimes(3);
   const calls = vi.mocked(savePlanChoices).mock.calls;
@@ -238,6 +245,74 @@ it("keeps a pending choice in its Build when the user switches Builds", async ()
   page.rerender(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
   await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
   expect(checked()).toBe("false");
+});
+
+it("failed_save_survives_navigation_without_resend", async () => {
+  vi.mocked(savePlanChoices).mockRejectedValueOnce(new EngineHttpError("Quantity is no longer valid", 422));
+  const page = mount();
+  await waitFor(() => expect(checked()).toBe("true"));
+  fireEvent.click(checkbox());
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Not saved"));
+  expect(savePlanChoices).toHaveBeenCalledOnce();
+  const original = vi.mocked(savePlanChoices).mock.calls[0];
+  expect(checked()).toBe("false");
+
+  selection.profileId = 8;
+  page.rerender(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
+  await waitFor(() => expect(checked()).toBe("true"));
+  expect(screen.getByRole("status").textContent).toBe("Saved");
+  expect(savePlanChoices).toHaveBeenCalledOnce();
+
+  selection.profileId = 7;
+  page.rerender(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Not saved"));
+  expect(checked()).toBe("false");
+  expect(savePlanChoices).toHaveBeenCalledOnce();
+
+  vi.mocked(savePlanChoices).mockResolvedValueOnce(saved(false));
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  expect(savePlanChoices).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(savePlanChoices).mock.calls[1]).toEqual(original);
+  expect(checked()).toBe("false");
+});
+
+it("failed_save_is_isolated_by_plan", async () => {
+  vi.mocked(savePlanChoices)
+    .mockRejectedValueOnce(new EngineHttpError("Quantity is no longer valid", 422))
+    .mockImplementation(async (id, request) => {
+      const decision = request.decisions[0];
+      return saved(decision?.kind === "set_included" ? decision.value : true, id, request.expected_base.plan_version + 1);
+    });
+  const page = mount();
+  await waitFor(() => expect(checked()).toBe("true"));
+  fireEvent.click(checkbox());
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Not saved"));
+  const failedCall = vi.mocked(savePlanChoices).mock.calls[0];
+  expect(failedCall?.[0]).toBe(7);
+
+  selection.profileId = 8;
+  page.rerender(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
+  await waitFor(() => expect(checked()).toBe("true"));
+  expect(screen.getByRole("status").textContent).toBe("Saved");
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(checkbox());
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  expect(checked()).toBe("false");
+  const planBCall = vi.mocked(savePlanChoices).mock.calls[1];
+  expect(planBCall?.[0]).toBe(8);
+  expect(planBCall?.[2]).not.toBe(failedCall?.[2]);
+
+  selection.profileId = 7;
+  page.rerender(<QueryClientProvider client={client}><PlanWorkspaceProvider><Picker /></PlanWorkspaceProvider></QueryClientProvider>);
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Not saved"));
+  expect(checked()).toBe("false");
+  expect(savePlanChoices).toHaveBeenCalledTimes(2);
+
+  vi.mocked(savePlanChoices).mockResolvedValueOnce(saved(false, 7, 2));
+  fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved"));
+  expect(vi.mocked(savePlanChoices).mock.calls[2]).toEqual(failedCall);
 });
 
 it("does not label a failed selection Saved when a different edit succeeds", async () => {

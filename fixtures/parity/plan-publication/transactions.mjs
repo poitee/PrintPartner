@@ -20,9 +20,10 @@ export async function transactions(root) {
   let clients;
   let definitions;
   try {
-    for (const id of ["first", "idempotent", "changed", "running-export", "uploaded-only", "mapped-remap", "mapped-remap-index-change", "mapped-remap-index-2", "mapped-remap-index-0", "renamed-part", "unsafe-remap", "inputs", "missing-reconciliation", "unresolved-reconciliation", "stale-reconciliation"]) {
-      const indexChange = id.startsWith("mapped-remap-index-");
-      const mapped = id === "mapped-remap" || indexChange || id === "renamed-part";
+    for (const id of ["first", "idempotent", "changed", "running-export", "uploaded-only", "mapped-remap", "mapped-remap-index-change", "mapped-remap-index-2", "mapped-remap-index-0", "renamed-part", "unsafe-remap", "inputs", "missing-reconciliation", "unresolved-reconciliation", "stale-reconciliation", "build-archived", "draft-changed", "base-changed", "corrupt-accepted-pointer", "already-applied", "idempotency-conflict", "production-active", "sparse-remap", "prior-completion-index-0", "prior-completion-index-1", "prior-completion-index-2"]) {
+      const priorCompletion = id.startsWith("prior-completion-index-");
+      const indexChange = id.startsWith("mapped-remap-index-") || priorCompletion;
+      const mapped = ["mapped-remap", "renamed-part", "production-active", "sparse-remap"].includes(id) || indexChange;
       const dir = mkdtempSync(join(tmpdir(), "pp-publication-"));
       const database = new SqliteDatabase(dir);
       let raw;
@@ -51,7 +52,7 @@ export async function transactions(root) {
           repo.addAddonLayer(profile.id, addon.id);
         }
         let sequence = 0;
-        const draft = (edit, reconcile = true) => {
+        const draft = (edit, reconcile = true, decisions = () => []) => {
           const created = repo.recomputePlanDraft({ profileId: profile.id, actor: "test:publication", idempotencyKey: `draft-${++sequence}`, applyManifest: false });
           assert.equal(created.kind, "created");
           let current = created.draft;
@@ -61,16 +62,24 @@ export async function transactions(root) {
             current = edited.draft;
           }
           if (!reconcile) return current;
-          const reconciled = repo.savePlanDraftRequiredUnitReconciliation({ profileId: profile.id, draftId: current.id, expectedSnapshotDigest: current.snapshotDigest, actorId: "test:publication", idempotencyKey: `reconcile-${sequence}`, decisions: [] });
+          const reconciled = repo.savePlanDraftRequiredUnitReconciliation({ profileId: profile.id, draftId: current.id, expectedSnapshotDigest: current.snapshotDigest, actorId: "test:publication", idempotencyKey: `reconcile-${sequence}`, decisions: decisions(current) });
           assert.equal(reconciled.kind, "saved");
           return reconciled.draft;
         };
         const command = (d) => ({ profileId: profile.id, draftId: d.id, expectedSnapshotDigest: d.snapshotDigest, expectedLifecycleVersion: d.lifecycleVersion, expectedBase: d.baseRevisionId == null ? { kind: "empty", planVersion: 0 } : { kind: "revision", revisionId: d.baseRevisionId, planVersion: d.basePlanVersion }, actorId: "test:publication", idempotencyKey: `apply-${sequence}`, remapCheckoffLinks: true });
         let d = draft((id === "stale-reconciliation" || indexChange) ? (partId) => ({ kind: "set_quantity_override", partIds: [partId], value: indexChange ? 3 : 2 }) : null, id !== "missing-reconciliation");
         let input = command(d);
-        if (["idempotent", "changed", "mapped-remap", "mapped-remap-index-change", "mapped-remap-index-2", "mapped-remap-index-0", "renamed-part", "unsafe-remap", "unresolved-reconciliation", "stale-reconciliation"].includes(id)) {
+        if (["idempotent", "changed", "mapped-remap", "mapped-remap-index-change", "mapped-remap-index-2", "mapped-remap-index-0", "renamed-part", "unsafe-remap", "unresolved-reconciliation", "stale-reconciliation", "corrupt-accepted-pointer", "already-applied", "idempotency-conflict", "production-active", "sparse-remap", "prior-completion-index-0", "prior-completion-index-1", "prior-completion-index-2"].includes(id)) {
           assert.equal(repo.applyPlanChanges(input).kind, "applied");
-          if (id !== "idempotent") {
+          if (id === "already-applied") input = { ...input, idempotencyKey: "apply-other" };
+          if (id === "idempotency-conflict") input = { ...input, expectedSnapshotDigest: "0".repeat(64) };
+          if (priorCompletion) {
+            // Same quantity, changed geometry: accepting prior completion renumbers the completed units.
+            raw.prepare("UPDATE print_progress SET completed=1 WHERE unit_index IN (1,2)").run();
+            writeFileSync(join(database.reposDir, locator, "bracket.stl"), "solid changed bracket");
+            d = draft(null, true, (current) => [{ kind: "accept_prior_completion", targetDraftPartId: current.parts[0].id, predecessorRevisionPartId: current.parts[0].baseRevisionPartId }]);
+            input = command(d);
+          } else if (!["idempotent", "already-applied", "idempotency-conflict"].includes(id)) {
             if (indexChange) raw.prepare("UPDATE print_progress SET completed=1 WHERE unit_index IN (1,2)").run();
             if (["unresolved-reconciliation", "stale-reconciliation"].includes(id)) raw.prepare("UPDATE print_progress SET completed=1").run();
             if (id === "unresolved-reconciliation") writeFileSync(join(database.reposDir, locator, "bracket.stl"), "solid changed bracket");
@@ -79,11 +88,21 @@ export async function transactions(root) {
             input = command(d);
           }
         }
+        if (id === "production-active") input = { ...input, remapCheckoffLinks: false };
+        if (id === "draft-changed") input = { ...input, expectedSnapshotDigest: "0".repeat(64) };
+        if (id === "base-changed") input = { ...input, expectedBase: { kind: "revision", revisionId: 1, planVersion: 1 } };
+        // Node checks archival before the profile row text limit.
+        if (id === "build-archived") raw.prepare("UPDATE build_profiles SET archived_at=?, name=?, special_request=? WHERE id=?").run(at, "n".repeat(40000), "s".repeat(40000), profile.id);
+        if (id === "corrupt-accepted-pointer") raw.prepare("UPDATE build_profiles SET accepted_plan_version=0 WHERE id=?").run(profile.id);
         if (mapped) {
           const p = raw.prepare("SELECT id FROM parts WHERE profile_id=?").get(profile.id);
-          const unit = { part_id: p.id, unit_index: id === "mapped-remap-index-change" ? 1 : id === "mapped-remap-index-2" ? 2 : 0 };
-          repo.setSetting("printer.checkoff_links", JSON.stringify([{ id: "kept-slot", filename: "bracket.stl", profile_id: profile.id, state: "watching", units: [unit], resolved_units: [{ ...unit, result: "printed" }] }]));
-          repo.setSetting("printer.send_queue", JSON.stringify([{ id: "kept-queue", profile_id: null, state: "error", checkoff_units: [unit] }]));
+          const index = { "mapped-remap-index-change": 1, "mapped-remap-index-2": 2, "prior-completion-index-1": 1, "prior-completion-index-2": 2 }[id] ?? 0;
+          const unit = { part_id: p.id, unit_index: index };
+          // sparse-remap omits the optional arrays; Node leaves them absent after a remap.
+          const link = { id: "kept-slot", filename: "bracket.stl", profile_id: profile.id, state: "watching", units: [unit] };
+          repo.setSetting("printer.checkoff_links", JSON.stringify([id === "sparse-remap" ? link : { ...link, resolved_units: [{ ...unit, result: "printed" }] }]));
+          const queue = { id: "kept-queue", profile_id: null, state: "error" };
+          repo.setSetting("printer.send_queue", JSON.stringify([id === "sparse-remap" ? queue : { ...queue, checkoff_units: [unit] }]));
         }
         if (id === "unsafe-remap") {
           const p = raw.prepare("SELECT id FROM parts WHERE profile_id=?").get(profile.id);

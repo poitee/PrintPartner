@@ -4,7 +4,7 @@ use crate::{
     read_model::Credential,
     required_units::{
         self, Outcome as WorkspaceOutcome, ReconciliationCommand, model,
-        storage::{Draft, draft, num, one, rows, text},
+        storage::{self, Draft, draft, num, one, rows, rows_checked, text},
         view::workspace,
     },
     writer_admission,
@@ -30,6 +30,11 @@ pub mod observation;
 mod preparation;
 #[cfg(test)]
 mod preparation_tests;
+mod rebase;
+pub mod save;
+pub use rebase::{
+    Conflict as RebaseConflict, Field as RebaseField, RebaseArgs, RebaseOutcome, RebaseRequest,
+};
 
 mod manifest;
 #[cfg(test)]
@@ -38,6 +43,8 @@ mod siblings;
 #[cfg(test)]
 mod siblings_tests;
 mod yaml;
+#[cfg(test)]
+mod yaml_continuation_tests;
 
 #[derive(Clone, Debug)]
 pub enum Request {
@@ -171,13 +178,8 @@ pub struct RecomputeRequest {
 }
 impl RecomputeRequest {
     pub fn new(idempotency_key: &str, apply_manifest: bool) -> Result<Self> {
-        let key = JsText::scalar(idempotency_key).trim_ecmascript();
-        ensure!(!key.is_empty(), "Plan draft idempotency key is required");
-        ensure!(key.units().len() <= 160, "Invalid idempotency key");
         Ok(Self {
-            idempotency_key: key
-                .as_scalar()
-                .ok_or_else(|| anyhow!("Invalid idempotency key"))?,
+            idempotency_key: self::idempotency_key(idempotency_key)?,
             apply_manifest,
         })
     }
@@ -188,6 +190,15 @@ impl RecomputeRequest {
             ..Default::default()
         }
     }
+}
+
+/// Node's trimmed `Idempotency-Key` header.
+fn idempotency_key(value: &str) -> Result<String> {
+    let key = JsText::scalar(value).trim_ecmascript();
+    ensure!(!key.is_empty(), "Plan draft idempotency key is required");
+    ensure!(key.units().len() <= 160, "Invalid idempotency key");
+    key.as_scalar()
+        .ok_or_else(|| anyhow!("Invalid idempotency key"))
 }
 
 /// Node's `recomputePlanDraft` result, after the service's Plan check.
@@ -202,6 +213,17 @@ pub enum RecomputeOutcome {
     IdempotencyConflict,
     NoLayers,
     NoStls,
+    WouldWipe,
+}
+
+/// Node's `PlanDraftWorkspaceService.recompute` result.
+#[derive(Debug)]
+pub enum RecomputeWorkspaceOutcome {
+    /// Node's `autoReconcile` over the created or existing draft.
+    Selected(WorkspaceOutcome),
+    /// Any other `recomputePlanDraft` result, which Node's `recomputeFailure`
+    /// maps.
+    Refused(RecomputeOutcome),
 }
 
 #[derive(Debug)]
@@ -462,6 +484,12 @@ pub(super) struct Write {
     operation: Operation,
 }
 enum Operation {
+    Save {
+        request: pp_contracts::autosave::SavePlanChoicesRequest,
+        key: String,
+        observations: Observations,
+        reply: mpsc::Sender<Result<save::Outcome>>,
+    },
     Edit {
         draft_id: PositiveId,
         request: EditRequest,
@@ -475,8 +503,19 @@ enum Operation {
     Recompute {
         request: RecomputeRequest,
         observations: Observations,
-        reply: mpsc::Sender<Result<RecomputeOutcome>>,
+        reply: RecomputeReply,
     },
+    Rebase {
+        draft_id: PositiveId,
+        idempotency_key: String,
+        request: RebaseRequest,
+        observations: Observations,
+        reply: mpsc::Sender<Result<RebaseOutcome>>,
+    },
+}
+enum RecomputeReply {
+    Draft(mpsc::Sender<Result<RecomputeOutcome>>),
+    Workspace(mpsc::Sender<Result<RecomputeWorkspaceOutcome>>),
 }
 impl WriterOwner {
     pub fn working_drafts_with_policy(
@@ -598,6 +637,83 @@ impl WorkingDraftClient {
         cancelled: Arc<AtomicBool>,
         wait: Duration,
     ) -> Result<RecomputeOutcome> {
+        self.enqueue_recompute(
+            credential,
+            profile,
+            request,
+            cancelled,
+            wait,
+            RecomputeReply::Draft,
+        )
+    }
+    /// Recomputes as Node's `PlanDraftWorkspaceService.recompute` does,
+    /// including its automatic Required-unit selection. The recompute commits
+    /// before the selection starts, so a selection error or cancellation keeps
+    /// it.
+    pub fn recompute_and_select(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        request: RecomputeRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<RecomputeWorkspaceOutcome> {
+        self.enqueue_recompute(
+            credential,
+            profile,
+            request,
+            cancelled,
+            wait,
+            RecomputeReply::Workspace,
+        )
+    }
+    fn enqueue_recompute<T>(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        request: RecomputeRequest,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+        reply: fn(mpsc::Sender<Result<T>>) -> RecomputeReply,
+    ) -> Result<T> {
+        let observations = self
+            .observations
+            .clone()
+            .ok_or_else(|| anyhow!("Working-draft observations are not configured"))?;
+        self.enqueue(cancelled, wait, |sender, cancelled| {
+            Envelope::WorkingDraftWrite {
+                command: Write {
+                    credential,
+                    profile,
+                    policy: self.policy,
+                    cancelled,
+                    operation: Operation::Recompute {
+                        request,
+                        observations,
+                        reply: reply(sender),
+                    },
+                },
+            }
+        })
+    }
+    /// Creates an open draft from a fresh preparation carrying the source
+    /// draft's Part decisions, as Node's `rebasePlanDraft` does. An open
+    /// source is abandoned in the same transaction. Node's service then selects
+    /// Required units; this method does not.
+    pub fn rebase(
+        &self,
+        credential: Credential,
+        profile: PositiveId,
+        args: RebaseArgs<'_>,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<RebaseOutcome> {
+        let RebaseArgs {
+            draft_id,
+            idempotency_key,
+            request,
+        } = args;
+        let idempotency_key = self::idempotency_key(idempotency_key)?;
         let observations = self
             .observations
             .clone()
@@ -609,7 +725,9 @@ impl WorkingDraftClient {
                     profile,
                     policy: self.policy,
                     cancelled,
-                    operation: Operation::Recompute {
+                    operation: Operation::Rebase {
+                        draft_id,
+                        idempotency_key,
                         request,
                         observations,
                         reply,
@@ -707,6 +825,7 @@ pub(super) fn write(
     connection: &mut Connection,
     command: Write,
     admission: writer_admission::Deadline,
+    tokens: &mut dyn crate::plan_publication::RequiredUnitTokenAllocator,
 ) {
     let Write {
         credential,
@@ -716,6 +835,29 @@ pub(super) fn write(
         operation,
     } = command;
     match operation {
+        Operation::Save {
+            request,
+            key,
+            observations,
+            reply,
+        } => {
+            let _ = reply.send(save::execute(
+                connection,
+                save::Command {
+                    input: save::SaveCommand {
+                        credential,
+                        profile,
+                        request,
+                        key,
+                    },
+                    policy,
+                    observations,
+                    cancelled,
+                },
+                tokens,
+                admission,
+            ));
+        }
         Operation::Edit {
             draft_id,
             request,
@@ -726,22 +868,9 @@ pub(super) fn write(
             });
             let _ = reply.send(edited.and_then(|edited| match edited {
                 Edited::Done(outcome) => Ok(outcome),
-                Edited::Unselected(digest) => {
-                    let command = ReconciliationCommand::new(
-                        profile,
-                        draft_id,
-                        serde_json::from_value(
-                            json!({"expected_snapshot_digest":digest, "decisions":[]}),
-                        )?,
-                        &format!("auto-{}", digest.as_str()),
-                        credential,
-                    )?;
-                    // Node's selection is a separate transaction with its own busy wait.
-                    let admission = writer_admission::Deadline::at_dequeue();
-                    transact(connection, admission, &cancelled, |tx| {
-                        required_units::reconcile::run(tx, &command, policy)
-                    })
-                }
+                Edited::Unselected(digest) => auto_select(
+                    connection, credential, policy, profile, draft_id, &digest, &cancelled,
+                ),
             }));
         }
         Operation::Abandon {
@@ -758,7 +887,7 @@ pub(super) fn write(
             observations,
             reply,
         } => {
-            let _ = reply.send(recompute(
+            let recomputed = recompute(
                 connection,
                 &credential,
                 policy,
@@ -766,9 +895,110 @@ pub(super) fn write(
                 &request,
                 &observations,
                 &cancelled,
+            );
+            match reply {
+                RecomputeReply::Draft(reply) => {
+                    let _ = reply.send(recomputed);
+                }
+                RecomputeReply::Workspace(reply) => {
+                    let _ = reply.send(recomputed.and_then(|outcome| {
+                        select_recomputed(
+                            connection, credential, policy, profile, &cancelled, outcome,
+                        )
+                    }));
+                }
+            }
+        }
+        Operation::Rebase {
+            draft_id,
+            idempotency_key,
+            request,
+            observations,
+            reply,
+        } => {
+            let _ = reply.send(rebase::rebase(
+                connection,
+                rebase::Args {
+                    credential: &credential,
+                    policy,
+                    profile_id: profile,
+                    draft_id,
+                    key: &idempotency_key,
+                    request: &request,
+                    observations: &observations,
+                    cancelled: &cancelled,
+                },
             ));
         }
     }
+}
+/// Node's `autoReconcile` after `recomputePlanDraft`. A draft that already has
+/// a selection returns its workspace from a read transaction.
+fn select_recomputed(
+    connection: &mut Connection,
+    credential: Credential,
+    policy: auth::AuthPolicy,
+    profile: PositiveId,
+    cancelled: &Arc<AtomicBool>,
+    outcome: RecomputeOutcome,
+) -> Result<RecomputeWorkspaceOutcome> {
+    let draft = match outcome {
+        RecomputeOutcome::Created { draft } | RecomputeOutcome::Existing { draft } => draft,
+        refused => return Ok(RecomputeWorkspaceOutcome::Refused(refused)),
+    };
+    let draft_id = draft.identity.draft_id;
+    if !draft.ordinary["requiredUnitReconciliation"].is_null() {
+        let read = Command {
+            credential,
+            profile,
+            request: Request::Workspace { draft_id },
+            policy,
+            cancelled: cancelled.clone(),
+        };
+        return match execute(connection, read)? {
+            Outcome::Workspace { workspace } => Ok(RecomputeWorkspaceOutcome::Selected(
+                WorkspaceOutcome::Ready { workspace },
+            )),
+            _ => Err(anyhow!("Recomputed Plan draft is missing")),
+        };
+    }
+    auto_select(
+        connection,
+        credential,
+        policy,
+        profile,
+        draft_id,
+        &draft.identity.snapshot_digest,
+        cancelled,
+    )
+    .map(RecomputeWorkspaceOutcome::Selected)
+}
+/// Node's `autoReconcile` for an unselected draft: a selection with no
+/// decisions, keyed by the snapshot digest.
+fn auto_select(
+    connection: &mut Connection,
+    credential: Credential,
+    policy: auth::AuthPolicy,
+    profile: PositiveId,
+    draft_id: PositiveId,
+    digest: &Digest,
+    cancelled: &AtomicBool,
+) -> Result<WorkspaceOutcome> {
+    let command = ReconciliationCommand::new(
+        profile,
+        draft_id,
+        serde_json::from_value(json!({"expected_snapshot_digest":digest, "decisions":[]}))?,
+        &format!("auto-{}", digest.as_str()),
+        credential,
+    )?;
+    // Node's selection is a separate transaction with its own busy wait.
+    let admission = writer_admission::Deadline::at_dequeue();
+    transact(connection, admission, cancelled, |tx| {
+        required_units::reconcile::run(tx, &command, policy, &mut || {
+            ensure!(!cancelled.load(Ordering::Acquire), Failure::Cancelled);
+            Ok(())
+        })
+    })
 }
 fn transact<T>(
     connection: &mut Connection,
@@ -1038,6 +1268,7 @@ fn recompute(
             return match error.downcast_ref() {
                 Some(preparation::Failure::NoLayers) => finished(RecomputeOutcome::NoLayers),
                 Some(preparation::Failure::NoStls) => finished(RecomputeOutcome::NoStls),
+                Some(preparation::Failure::WouldWipe) => finished(RecomputeOutcome::WouldWipe),
                 None => Err(error),
             };
         }
@@ -1094,7 +1325,7 @@ fn recompute(
             "UPDATE plan_drafts SET state='abandoned',lifecycle_version=lifecycle_version+1 WHERE tenant_id=? AND profile_id=? AND state='open'",
             params![tenant, profile],
         )?;
-        let id = insert_snapshot(tx, &tenant, &actor, profile, key, &prepared)?;
+        let id = insert_snapshot(tx, &tenant, &actor, profile, key, &prepared, None)?;
         let created = draft(tx, &tenant, profile, id)?
             .ok_or_else(|| anyhow!("Created Plan draft is missing"))?;
         Ok(RecomputeOutcome::Created {
@@ -1131,28 +1362,97 @@ fn winner(
     ))
 }
 
-/// One row per open draft with what `required_units::storage::draft` and the
-/// `saved` it calls read to load it. Each row they read costs a visit, and the
-/// reconciliation two because `draft` checks it before `saved` reads it. Every
-/// column they parse, hash or compare costs its bytes. Keep each table's line
-/// in step with those two functions.
-const OPEN_DRAFT_LOADS: &str = "WITH open AS (SELECT * FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open'),
-cost(id,visits,bytes) AS (
-SELECT id,1,LENGTH(CAST(concat(base_revision_id,base_plan_version,digest_format,snapshot_digest,current_required_unit_reconciliation_id) AS BLOB)) FROM open
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(i.source_id,i.source_layer,i.layer_order,i.tracking_kind,i.source_revision_id,i.manifest_digest,i.effective_naming_digest) AS BLOB)) FROM open o JOIN plan_draft_inputs i ON i.tenant_id=o.tenant_id AND i.draft_id=o.id
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(p.base_revision_part_id,p.part_key,p.relative_path,p.filename,p.source_layer,p.status,p.role_inferred,p.role_override,p.filament_color_id,p.filament_custom_hex,p.spoolman_spool_id,p.quantity_inferred,p.quantity_override,p.quantity_effective,p.included,p.notes,p.github_blob_url,p.geometry_same,p.requirement,p.option_group_id,p.manifest_source,p.artifact_digest) AS BLOB)) FROM open o JOIN plan_draft_parts p ON p.tenant_id=o.tenant_id AND p.draft_id=o.id
-UNION ALL SELECT o.id,2,LENGTH(CAST(concat(r.profile_id,r.draft_id,r.format,r.planning_digest,r.base_revision_id,r.base_mapping_digest,r.selection_basis_digest,r.selection_basis_json,r.decision_digest,r.result_kind,r.result_digest,r.result_json,r.reconciliation_digest,r.expected_assignment_count,r.finalized_at) AS BLOB)) FROM open o JOIN plan_draft_required_unit_reconciliations r ON r.tenant_id=o.tenant_id AND r.id=o.current_required_unit_reconciliation_id
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(x.kind,x.target_draft_part_id,x.predecessor_revision_part_id) AS BLOB)) FROM open o JOIN plan_draft_required_unit_decisions x ON x.tenant_id=o.tenant_id AND x.reconciliation_id=o.current_required_unit_reconciliation_id
-UNION ALL SELECT o.id,1,LENGTH(CAST(concat(a.kind,a.target_draft_part_id,a.unit_index,a.required_unit_token) AS BLOB)) FROM open o JOIN plan_draft_required_unit_assignments a ON a.tenant_id=o.tenant_id AND a.reconciliation_id=o.current_required_unit_reconciliation_id)
-SELECT o.id,SUM(c.visits) AS visits,SUM(c.bytes) AS bytes FROM open o JOIN cost c ON c.id=o.id GROUP BY o.id ORDER BY o.created_at,o.id";
+const ASSIGNMENT_ROW_WORK: usize = 1024;
+
+fn charge_open_draft(
+    tx: &Transaction<'_>,
+    tenant: &str,
+    id: i64,
+    budget: &mut observation::PreparationBudget<'_>,
+) -> Result<()> {
+    let tables = [
+        ("plan_drafts", storage::DRAFT_COLUMNS, "id=o.id", 1, 0),
+        (
+            "plan_draft_inputs",
+            storage::INPUT_COLUMNS,
+            "draft_id=o.id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_parts",
+            storage::PART_COLUMNS,
+            "draft_id=o.id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_reconciliations",
+            storage::RECONCILIATION_CHECK_COLUMNS,
+            "id=o.current_required_unit_reconciliation_id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_reconciliations",
+            storage::RECONCILIATION_COLUMNS,
+            "id=o.current_required_unit_reconciliation_id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_decisions",
+            storage::DECISION_COLUMNS,
+            "reconciliation_id=o.current_required_unit_reconciliation_id",
+            1,
+            0,
+        ),
+        (
+            "plan_draft_required_unit_assignments",
+            storage::ASSIGNMENT_COLUMNS,
+            "reconciliation_id=o.current_required_unit_reconciliation_id",
+            0,
+            ASSIGNMENT_ROW_WORK,
+        ),
+    ];
+    for (table, columns, predicate, visits, overhead) in tables {
+        budget.check()?;
+        let lengths = columns
+            .split(',')
+            .map(|column| format!("COALESCE(LENGTH(CAST(t.{column} AS BLOB)),0)"))
+            .collect::<Vec<_>>()
+            .join("+");
+        let sql = format!(
+            "SELECT {lengths} FROM plan_drafts o JOIN {table} t ON t.tenant_id=o.tenant_id AND t.{predicate} WHERE o.tenant_id=? AND o.id=?"
+        );
+        let mut statement = tx.prepare(&sql)?;
+        let mut query = statement.query(params![tenant, id])?;
+        let mut count = 0;
+        while let Some(row) = query.next()? {
+            budget.check()?;
+            ensure!(
+                count < storage::ROW_LIMIT,
+                "Reconciliation row limit exceeded"
+            );
+            count += 1;
+            for _ in 0..visits {
+                budget.visit(0)?;
+            }
+            budget.comparison(usize::try_from(row.get::<_, i64>(0)?)? + overhead)?;
+        }
+    }
+    Ok(())
+}
 
 /// Node's `carryOpenDraftEdits`. A Part edit can commit after preparation
 /// read the open draft, so its quantity override, and its inclusion when the
 /// caller keeps the current draft, replace the prepared values. Returns
 /// whether any Part changed.
 ///
-/// This runs under the writer lock, so `OPEN_DRAFT_LOADS` charges what
-/// loading each open draft reads to the recompute's budget first.
+/// This runs under the writer lock. `charge_open_draft` charges what loading
+/// each open draft reads to the recompute's budget first. A default-grant
+/// carry or a budget refusal can occupy the lock for seconds; there is no
+/// elapsed-time guarantee. GRE-706 callers must size wait and UX for that.
 fn carry_open_edits(
     tx: &Transaction<'_>,
     tenant: &str,
@@ -1162,12 +1462,20 @@ fn carry_open_edits(
     budget: &mut observation::PreparationBudget<'_>,
 ) -> Result<bool> {
     let mut edits = HashMap::new();
-    for open in rows(tx, OPEN_DRAFT_LOADS, &[&tenant, &profile])? {
-        for _ in 0..num(&open, "visits")? {
-            budget.visit(0)?;
-        }
-        budget.comparison(usize::try_from(num(&open, "bytes")?)?)?;
-        let Some(open) = draft(tx, tenant, profile, num(&open, "id")?)? else {
+    for open in rows_checked(
+        tx,
+        "SELECT id FROM plan_drafts WHERE tenant_id=? AND profile_id=? AND state='open' ORDER BY created_at,id",
+        &[&tenant, &profile],
+        &|| {
+            budget.check()?;
+            Ok(())
+        },
+    )? {
+        charge_open_draft(tx, tenant, num(&open, "id")?, budget)?;
+        let Some(open) = storage::draft_checked(tx, tenant, profile, num(&open, "id")?, &|| {
+            Ok(budget.check()?)
+        })?
+        else {
             continue;
         };
         for part in open.parts {
@@ -1212,9 +1520,10 @@ fn insert_snapshot(
     profile: i64,
     key: &str,
     prepared: &preparation::PreparedDraftSnapshot,
+    rebased_from: Option<&rebase::Source<'_>>,
 ) -> Result<i64> {
     tx.execute(
-        "INSERT INTO plan_drafts (tenant_id,profile_id,base_revision_id,base_plan_version,state,digest_format,snapshot_digest,created_by,idempotency_key,created_at) VALUES (?,?,?,?,'open','plan-draft-v1',?,?,?,?)",
+        "INSERT INTO plan_drafts (tenant_id,profile_id,base_revision_id,base_plan_version,state,digest_format,snapshot_digest,created_by,idempotency_key,created_at,rebased_from_draft_id,rebased_from_lifecycle_version,rebased_from_snapshot_digest) VALUES (?,?,?,?,'open','plan-draft-v1',?,?,?,?,?,?,?)",
         params![
             tenant,
             profile,
@@ -1224,6 +1533,9 @@ fn insert_snapshot(
             actor,
             key,
             auth::catalog_timestamp(),
+            rebased_from.map(|source| source.id),
+            rebased_from.map(|source| source.generation),
+            rebased_from.map(|source| source.digest),
         ],
     )?;
     let id = tx.last_insert_rowid();
@@ -1299,6 +1611,7 @@ impl RecomputeOutcome {
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::NoLayers => "no_layers",
             Self::NoStls => "no_stls",
+            Self::WouldWipe => "would_wipe",
         };
         outcome_json_body(kind, None, &[])
     }
@@ -1419,6 +1732,61 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_mid_carry_scan_stops_before_the_remaining_assignments() {
+        let (_database, mut connection) = Database::new();
+        let assignments: Vec<_> = (0..10000)
+            .map(|i| json!({"kind":"create","draftPartId":4,"unitIndex":i}))
+            .collect();
+        connection.execute_batch("DELETE FROM plan_draft_parts WHERE draft_id=2 AND id<>4; UPDATE plan_draft_parts SET quantity_effective=10000 WHERE id=4").unwrap();
+        connection.execute(
+            "INSERT INTO plan_draft_required_unit_reconciliations(tenant_id,profile_id,draft_id,format,planning_digest,base_revision_id,selection_basis_digest,selection_basis_json,decision_digest,result_kind,result_digest,result_json,reconciliation_digest,expected_assignment_count,actor_id,idempotency_key,payload_digest,created_at)
+             SELECT tenant_id,profile_id,id,'required-unit-reconciliation-v1','',base_revision_id,'','[]','','ready','',?,'',10000,created_by,'scan','','2026-01-01T00:00:00.000Z' FROM plan_drafts WHERE id=2",
+            [json!({"kind":"ready","assignments":assignments,"surplus":[]}).to_string()],
+        ).unwrap();
+        connection.execute_batch(
+            "WITH RECURSIVE units(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM units WHERE i<9999)
+             INSERT INTO plan_draft_required_unit_assignments(tenant_id,reconciliation_id,target_draft_part_id,unit_index,kind)
+             SELECT 'default',2,4,i,'create' FROM units;
+             UPDATE plan_draft_required_unit_reconciliations SET finalized_at=created_at WHERE id=2;
+             UPDATE plan_drafts SET current_required_unit_reconciliation_id=2 WHERE id=2;"
+        ).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let steps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = steps.clone();
+        connection
+            .progress_handler(
+                1,
+                Some(move || {
+                    if count.fetch_add(1, Ordering::Relaxed) >= 1000 {
+                        flag.store(true, Ordering::Release);
+                    }
+                    false
+                }),
+            )
+            .unwrap();
+        let before = connection.total_changes();
+        let tx = connection.transaction().unwrap();
+        let mut budget = observation::PreparationBudget::new(
+            &cancelled,
+            observation::PreparationLimits::default(),
+        )
+        .unwrap();
+        let error = carry_open_edits(&tx, "default", 1, &mut [], true, &mut budget).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(observation::ReadFailure::Cancelled)
+        ));
+        assert!(
+            steps.load(Ordering::Relaxed) < 2000,
+            "scanned {} VM steps",
+            steps.load(Ordering::Relaxed)
+        );
+        tx.rollback().unwrap();
+        assert_eq!(connection.total_changes(), before);
+    }
+
+    #[test]
     fn cancellation_while_loading_a_replay_is_not_existing() {
         let (_database, mut connection) = Database::new();
         assert!(matches!(
@@ -1488,5 +1856,31 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    /// Cancels on the first budget check inside the open-draft ID query, before
+    /// `charge_open_draft` runs.
+    #[test]
+    fn cancellation_during_the_open_draft_id_query_writes_nothing() {
+        let (_database, mut connection) = Database::new();
+        let before = connection.total_changes();
+        let tx = connection.transaction().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let mut budget = observation::PreparationBudget::new(
+            &cancelled,
+            observation::PreparationLimits::default(),
+        )
+        .unwrap();
+        budget.cancel_after_checks(0);
+        let error = carry_open_edits(&tx, "default", 1, &mut [], true, &mut budget).unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref(),
+                Some(observation::ReadFailure::Cancelled)
+            ),
+            "{error:?}"
+        );
+        tx.rollback().unwrap();
+        assert_eq!(connection.total_changes(), before);
     }
 }

@@ -1,0 +1,11 @@
+{
+  "fixture": "test/browser/gre-498-feature-proof-visibility.html",
+  "shots": [
+    "01-account-default",
+    "02-account-all-enabled",
+    "03-plan-default",
+    "04-plan-all-enabled",
+    "05-farm-queue-off",
+    "06-farm-queue-on"
+  ]
+}

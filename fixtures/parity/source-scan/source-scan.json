@@ -177,26 +177,136 @@
   ],
   "failures": [
     {
+      "id": "sql-null",
       "metadata": null,
       "detail": "disk read failed",
-      "result": {
-        "sync_error": "disk read failed",
-        "sync_required": true
-      },
+      "stored": "{\"sync_error\":\"disk read failed\",\"sync_required\":true}",
       "error": "disk read failed"
     },
     {
-      "metadata": {
-        "keep": 7,
-        "sync_error": "old",
-        "sync_required": false
-      },
+      "id": "object",
+      "metadata": "{\"keep\":7,\"sync_error\":\"old\",\"sync_required\":false}",
       "detail": "disk read failed",
-      "result": {
-        "keep": 7,
-        "sync_error": "disk read failed",
-        "sync_required": true
-      },
+      "stored": "{\"keep\":7,\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "empty-string",
+      "metadata": "",
+      "detail": "disk read failed",
+      "stored": "{\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "malformed",
+      "metadata": "{broken",
+      "detail": "disk read failed",
+      "stored": "{\"raw\":\"{broken\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "array",
+      "metadata": "[1,\"two\",null]",
+      "detail": "disk read failed",
+      "stored": "{\"raw\":\"[1,\\\"two\\\",null]\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "json-string",
+      "metadata": "\"hello\"",
+      "detail": "disk read failed",
+      "stored": "{\"raw\":\"\\\"hello\\\"\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "number",
+      "metadata": "42",
+      "detail": "disk read failed",
+      "stored": "{\"raw\":\"42\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "boolean",
+      "metadata": "false",
+      "detail": "disk read failed",
+      "stored": "{\"raw\":\"false\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "json-null",
+      "metadata": "null",
+      "detail": "disk read failed",
+      "stored": "{\"raw\":\"null\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "whitespace",
+      "metadata": "  ",
+      "detail": "disk read failed",
+      "stored": "{\"raw\":\"  \",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "overflow-object",
+      "metadata": "{\"keep\":7,\"x\":1e400,\"nested\":[-1e400,{\"x\":1e400}]}",
+      "detail": "disk read failed",
+      "stored": "{\"keep\":7,\"x\":null,\"nested\":[null,{\"x\":null}],\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "rounded-integer",
+      "metadata": "{\"x\":9007199254740993}",
+      "detail": "disk read failed",
+      "stored": "{\"x\":9007199254740992,\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "category",
+      "metadata": "{\"category\":\" Printers / Frame \"}",
+      "detail": "disk read failed",
+      "stored": "{\"category\":\"Printers/Frame\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "empty-category",
+      "metadata": "{\"category\":\" / / \"}",
+      "detail": "disk read failed",
+      "stored": "{\"category\":\"\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "nonstring-category",
+      "metadata": "{\"category\":7}",
+      "detail": "disk read failed",
+      "stored": "{\"category\":7,\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "lone-high-surrogate",
+      "metadata": "{\"keep\":7,\"x\":\"\\ud800\"}",
+      "detail": "disk read failed",
+      "stored": "{\"keep\":7,\"x\":\"\\ud800\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "lone-low-surrogate",
+      "metadata": "{\"x\":\"\\udc00\",\"\\udc00\":\"key\"}",
+      "detail": "disk read failed",
+      "stored": "{\"x\":\"\\udc00\",\"\\udc00\":\"key\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "surrogate-pairs",
+      "metadata": "{\"reversed\":\"\\ude00\\ud83d\",\"pair\":\"\\ud83d\\ude00\",\"category\":\" a / \\ud800 / \"}",
+      "detail": "disk read failed",
+      "stored": "{\"reversed\":\"\\ude00\\ud83d\",\"pair\":\"😀\",\"category\":\"a/\\ud800\",\"sync_error\":\"disk read failed\",\"sync_required\":true}",
+      "error": "disk read failed"
+    },
+    {
+      "id": "key-order",
+      "metadata": "{\"b\":1,\"10\":2,\"2\":3,\"b\":4,\"sync_error\":\"old\",\"01\":5,\"4294967295\":6}",
+      "detail": "disk read failed",
+      "stored": "{\"2\":3,\"10\":2,\"b\":4,\"sync_error\":\"disk read failed\",\"01\":5,\"4294967295\":6,\"sync_required\":true}",
       "error": "disk read failed"
     }
   ]

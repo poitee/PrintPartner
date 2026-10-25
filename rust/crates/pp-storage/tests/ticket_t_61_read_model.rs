@@ -348,6 +348,9 @@ fn ticket_t_61_read_model_missing_observations_are_errors() {
         available_input_roots: Default::default(),
         media_by_part_id: Default::default(),
     };
+    #[cfg(feature = "desktop_rebuild")]
+    assert!(views::review_json(&b.builds[0].accepted, false, &obs, &CatalogOnly).is_err());
+    #[cfg(not(feature = "desktop_rebuild"))]
     assert!(views::review(&b.builds[0].accepted, false, &obs, &CatalogOnly).is_err());
 }
 #[test]
@@ -633,6 +636,11 @@ fn read_model_folder_rule_without_functional_class_matches_catalog_digest() {
                     value["effective"]["folder_rules"][0]
                         .get("functional_class")
                         .is_none()
+                );
+                // Node digestEffectiveNaming writes `"functional_class":null`.
+                assert_eq!(
+                    value["effective_digest"],
+                    "93dd019de4c92f363ed93faee9025d4fcc9cbf94463444ed33bf26cc70faef1f"
                 );
             }
             (id, value["effective_digest"].as_str().unwrap().to_owned())

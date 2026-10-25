@@ -4,7 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import {
+  TENANT_FEATURE_TOGGLES_CAPABILITY,
+  type PlanDraftWorkspace,
+  type PlanFeatures,
+} from "@print-partner/contracts";
 import { EngineHttpError } from "../api/engineTransport";
 import {
   abandonPlanDraft,
@@ -21,6 +25,10 @@ import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "../queries/keys";
 import { usePlanDraftWorkspaceQuery } from "../queries/planDraft";
 import { WORKING_PLAN_CHANGED_MESSAGE } from "../lib/workingPlanChanged";
+import {
+  resetAuxiliarySaveIntentForTests,
+  retainFailedAuxiliarySave,
+} from "../lib/planAuxiliarySaveIntent";
 import {
   PlanWorkspaceProvider,
   usePlanWorkspace,
@@ -142,6 +150,8 @@ const profileSelectionState = vi.hoisted<{
   selectedProfileId: number | null;
 }>(() => ({ selectedProfileId: 7 }));
 
+const healthQueryState = vi.hoisted<{ capabilities: string[] }>(() => ({ capabilities: [] }));
+
 const editedWorkspace: PlanDraftWorkspace = {
   ...replacementWorkspace,
   draft: { ...replacementWorkspace.draft, snapshot_digest: "c".repeat(64) },
@@ -165,6 +175,13 @@ vi.mock("../api/endpoints/planDrafts", () => ({
 
 vi.mock("../hooks/useEngineHealth", () => ({
   useEngineHealth: () => ({ health: { ok: true } }),
+}));
+
+vi.mock("../queries/health", () => ({
+  useHealthQuery: () => ({
+    data: { ok: true, capabilities: healthQueryState.capabilities },
+    isSuccess: true,
+  }),
 }));
 
 vi.mock("./ProfileContext", () => ({
@@ -270,9 +287,11 @@ function deferred<T>() {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  resetAuxiliarySaveIntentForTests();
 });
 
 beforeEach(() => {
+  healthQueryState.capabilities = [];
   profileSelectionState.selectedProfileId = 7;
   draftQueryState.hasOpenDraft = true;
   draftQueryState.hasOtherWorkspace = false;
@@ -422,6 +441,114 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(editPlanDraftParts).not.toHaveBeenCalled();
     expect(applyPlanDraft).not.toHaveBeenCalled();
     expect(recomputePlanDraft).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { allowed: false, includeExcluded: true },
+    { allowed: false, includeExcluded: false },
+    { allowed: true, includeExcluded: true },
+    { allowed: true, includeExcluded: false },
+  ])("saves the current access review basis when allowed=$allowed and includeExcluded=$includeExcluded", async ({ allowed, includeExcluded }) => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    client.setQueryData(queryKeys.health, { ok: true, capabilities: healthQueryState.capabilities });
+    client.setQueryData<PlanFeatures>(queryKeys.planFeatures(7), {
+      profile_id: 7,
+      overrides: { spoolman: allowed },
+      effective: {
+        farm: { enabled: false, source: "default" },
+        orders: { enabled: false, source: "default" },
+        bambu: { enabled: false, source: "default" },
+        spoolman: { enabled: allowed, source: "plan" },
+      },
+    });
+    client.setQueryData(queryKeys.planReview(7, true, !allowed), savedChoices(1, 2).review);
+    client.setQueryData(queryKeys.planReview(7, false, !allowed), savedChoices(1, 2).review);
+    client.setQueryData(queryKeys.planReview(7, includeExcluded, allowed), savedChoices(1, 5).review);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.savePlanPartChanges([
+        { kind: "set_included", part: planRow, value: false },
+      ]);
+    });
+
+    expect(savePlanChoices).toHaveBeenCalledExactlyOnceWith(7, expect.objectContaining({
+      expected_base: { revision_id: 7, plan_version: 5 },
+      expected_draft: null,
+      decisions: [{
+        kind: "set_included",
+        target: {
+          part_key: "frame/bracket.stl",
+          relative_path: "frame/bracket.stl",
+          source_layer: "base:Voron",
+        },
+        value: false,
+      }],
+    }), expect.any(String));
+  });
+
+  it.each([true, false])("uses the newest same-access review when includeExcluded=%s", async (includeExcluded) => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    const client = new QueryClient();
+    client.setQueryData(queryKeys.planReview(7, !includeExcluded, true), savedChoices(1, 2).review);
+    await client.invalidateQueries({ queryKey: queryKeys.planReview(7, !includeExcluded, true), exact: true });
+    client.setQueryData(queryKeys.planReview(7, includeExcluded, true), savedChoices(1, 5).review);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+
+    await act(async () => {
+      await hook.result.current.savePlanPartChanges([{ kind: "set_included", part: planRow, value: false }]);
+    });
+
+    expect(savePlanChoices).toHaveBeenCalledExactlyOnceWith(7, expect.objectContaining({
+      expected_base: { revision_id: 7, plan_version: 5 },
+    }), expect.any(String));
+  });
+
+  it.each([true, false])("reads current access when a queued save runs after allowed=%s changes", async (allowed) => {
+    draftQueryState.hasOpenDraft = false;
+    draftQueryState.hasWorkspace = false;
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    client.setQueryData(queryKeys.health, { ok: true, capabilities: healthQueryState.capabilities });
+    const features: PlanFeatures = {
+      profile_id: 7,
+      overrides: { spoolman: allowed },
+      effective: {
+        farm: { enabled: false, source: "default" },
+        orders: { enabled: false, source: "default" },
+        bambu: { enabled: false, source: "default" },
+        spoolman: { enabled: allowed, source: "plan" },
+      },
+    };
+    client.setQueryData(queryKeys.planFeatures(7), features);
+    client.setQueryData(queryKeys.planReview(7, true, allowed), savedChoices(1, 2).review);
+    const first = deferred<SavePlanChoicesResponse>();
+    vi.mocked(savePlanChoices).mockReturnValueOnce(first.promise);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    let edits: Promise<void>[] = [];
+    act(() => {
+      edits = [
+        hook.result.current.savePlanPartChanges([{ kind: "set_included", part: planRow, value: false }]),
+        hook.result.current.savePlanPartChanges([{ kind: "set_included", part: planRow, value: true }]),
+      ];
+    });
+    await waitFor(() => expect(savePlanChoices).toHaveBeenCalledOnce());
+    await act(async () => {
+      client.setQueryData(queryKeys.planFeatures(7), {
+        ...features, effective: { ...features.effective, spoolman: { enabled: !allowed, source: "plan" } },
+      });
+      client.setQueryData(queryKeys.planReview(7, true, !allowed), savedChoices(1, 5).review);
+      first.resolve(savedChoices(1, 3));
+      await Promise.all(edits);
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(savePlanChoices).toHaveBeenLastCalledWith(7, expect.objectContaining({
+      expected_base: { revision_id: 7, plan_version: 5 },
+    }), expect.any(String));
   });
 
   it("saves inclusion from the accepted Plan without creating a draft in the browser", async () => {
@@ -642,6 +769,181 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1].expected_draft?.draft_id).toBe(10);
     expect(vi.mocked(savePlanChoices).mock.calls[0]?.[2]).not.toBe(vi.mocked(savePlanChoices).mock.calls[1]?.[2]);
     expect(recomputePlanDraft).not.toHaveBeenCalled();
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("failed_save_retains_original_request", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(definitive)
+      .mockResolvedValueOnce(savedChoices(2, 2));
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    const originalRequest = vi.mocked(savePlanChoices).mock.calls[0]?.[1];
+    expect(originalRequest?.decisions).toEqual([
+      expect.objectContaining({
+        kind: "set_quantity_override",
+        target: {
+          part_key: planRow.match_key,
+          relative_path: planRow.relative_path,
+          source_layer: planRow.source_layer,
+        },
+        value: 2,
+      }),
+    ]);
+
+    await act(async () => {
+      await hook.result.current.retryPlanSave();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[1]).toEqual(originalRequest);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("failed_save_retry_reuses_operation_identity", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(definitive)
+      .mockResolvedValueOnce(savedChoices(2, 2));
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    const retainedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+    expect(retainedKey).toEqual(expect.any(String));
+
+    await act(async () => {
+      await hook.result.current.retryPlanSave();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("preparePlan_does_not_resend_definitive_failed_ordinary_save", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    vi.mocked(savePlanChoices).mockRejectedValueOnce(definitive);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await expect(hook.result.current.preparePlan()).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.draftError).toBe("Quantity is no longer valid");
+  });
+
+  it("failed_save_definitive_apply_manifest_still_prepares", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    vi.mocked(savePlanChoices).mockRejectedValue(definitive);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    const rejectedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+
+    await act(async () => {
+      await hook.result.current.preparePlan({ applyManifest: true });
+    });
+    // applyManifest must reach prepare without resending the rejected payload, and must
+    // consume the definitive snapshot so a later plain preparePlan does not stick it.
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(savePlanChoices).mock.calls[0]?.[2]).toBe(rejectedKey);
+    expect(
+      vi.mocked(applyPlanDraft).mock.calls.length +
+        vi.mocked(abandonPlanDraft).mock.calls.length,
+    ).toBeGreaterThan(0);
+    expect(hook.result.current.draftError).toBeNull();
+
+    const prepareCallsAfterApply =
+      vi.mocked(applyPlanDraft).mock.calls.length +
+      vi.mocked(abandonPlanDraft).mock.calls.length;
+    await act(async () => {
+      await hook.result.current.preparePlan();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(applyPlanDraft).mock.calls.length +
+        vi.mocked(abandonPlanDraft).mock.calls.length,
+    ).toBeGreaterThan(prepareCallsAfterApply);
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("retry_with_failed_manifest_prepares_the_plan_once", async () => {
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+    const prepareCalls = () =>
+      vi.mocked(recomputePlanDraft).mock.calls.length +
+      vi.mocked(applyPlanDraft).mock.calls.length +
+      vi.mocked(abandonPlanDraft).mock.calls.length;
+    const before = prepareCalls();
+    let preparesBeforeManifestRetry: number | null = null;
+    // Stands in for KitManifestOptions, whose retried PUT ends in preparePlan({ applyManifest: true }).
+    retainFailedAuxiliarySave(7, "manifest", async () => {
+      preparesBeforeManifestRetry = prepareCalls() - before;
+      await hook.result.current.preparePlan({ applyManifest: true });
+    });
+
+    await act(async () => {
+      await hook.result.current.retryPlanSave();
+    });
+    expect(preparesBeforeManifestRetry).toBe(0);
+    expect(vi.mocked(recomputePlanDraft)).toHaveBeenLastCalledWith(7, { applyManifest: true });
+    expect(hook.result.current.draftError).toBeNull();
+  });
+
+  it("failed_save_409_recovery_issues_new_operation_key", async () => {
+    const definitive = new EngineHttpError("Quantity is no longer valid", 422);
+    const changed = { ...savedWorkspace, diff: { ...savedWorkspace.diff, base_is_current: false } };
+    vi.mocked(savePlanChoices)
+      .mockRejectedValueOnce(definitive)
+      .mockRejectedValueOnce(new EngineHttpError("Changed", 409, {
+        code: "base_changed", workspace: changed,
+      }))
+      .mockResolvedValueOnce({ ...savedChoices(2, 3), closed_draft_ids: [10] });
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace).not.toBeNull());
+
+    await act(async () => {
+      await expect(hook.result.current.setQuantity(planRow, 2)).rejects.toThrow(
+        "Quantity is no longer valid",
+      );
+    });
+    const retainedKey = vi.mocked(savePlanChoices).mock.calls[0]?.[2];
+    expect(retainedKey).toEqual(expect.any(String));
+
+    await act(async () => {
+      await hook.result.current.retryPlanSave();
+    });
+    expect(savePlanChoices).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(savePlanChoices).mock.calls[1]?.[2]).toBe(retainedKey);
+    expect(vi.mocked(savePlanChoices).mock.calls[2]?.[2]).not.toBe(retainedKey);
+    expect(rebasePlanDraft).toHaveBeenCalled();
     expect(hook.result.current.draftError).toBeNull();
   });
 

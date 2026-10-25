@@ -1,4 +1,6 @@
 use super::{AcceptedRead, Part, Provenance, Snapshot};
+#[cfg(feature = "desktop_rebuild")]
+use crate::manifest_text::{DraftPart, JsText};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -230,6 +232,7 @@ fn no_parts() -> Value {
         "build",
     )
 }
+#[cfg(not(feature = "desktop_rebuild"))]
 pub fn review(
     read: &AcceptedRead,
     include_excluded: bool,
@@ -249,12 +252,151 @@ pub fn review(
         _ => unreachable!(),
     }
 }
+#[cfg(feature = "desktop_rebuild")]
+/// Review response bytes preserving UTF-16 manifest metadata.
+pub struct ProjectReviewJsonBody {
+    bytes: Vec<u8>,
+    summary: Option<ProjectReviewSummaryJsonBody>,
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone)]
+/// Scalar Review summary, available for ready and empty reads.
+pub struct ProjectReviewSummaryJsonBody(Vec<u8>);
+
+#[cfg(feature = "desktop_rebuild")]
+impl ProjectReviewJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    pub fn summary_json(&self) -> Option<ProjectReviewSummaryJsonBody> {
+        self.summary.clone()
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+impl ProjectReviewSummaryJsonBody {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+struct ReviewProjection {
+    kind: &'static str,
+    ordinary: Value,
+    groups: Vec<(String, (String, Vec<DraftPart>))>,
+}
+#[cfg(feature = "desktop_rebuild")]
+impl ReviewProjection {
+    fn body_json(&self) -> Result<Vec<u8>> {
+        let object = self
+            .ordinary
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Review object missing"))?;
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.push("part_groups");
+        let mut bytes = vec![b'{'];
+        for (index, key) in keys.iter().enumerate() {
+            if index > 0 {
+                bytes.push(b',');
+            }
+            JsText::scalar(key).write_json(&mut bytes);
+            bytes.push(b':');
+            if *key != "part_groups" {
+                bytes.extend_from_slice(&serde_json::to_vec(&object[*key])?);
+                continue;
+            }
+            bytes.push(b'[');
+            for (index, (folder, (source, parts))) in self.groups.iter().enumerate() {
+                if index > 0 {
+                    bytes.push(b',');
+                }
+                bytes.extend_from_slice(b"{\"folder\":");
+                bytes.extend_from_slice(&serde_json::to_vec(folder)?);
+                bytes.extend_from_slice(b",\"source_layer\":");
+                bytes.extend_from_slice(&serde_json::to_vec(source)?);
+                bytes.extend_from_slice(b",\"parts\":[");
+                for (index, part) in parts.iter().enumerate() {
+                    if index > 0 {
+                        bytes.push(b',');
+                    }
+                    let mut fields = part
+                        .scalar
+                        .as_object()
+                        .ok_or_else(|| anyhow::anyhow!("Review Part object missing"))?
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>();
+                    let insertion = fields
+                        .iter()
+                        .position(|field| *field == "included")
+                        .ok_or_else(|| anyhow::anyhow!("Review Part inclusion missing"))?;
+                    fields.splice(insertion..insertion, ["requirement", "option_group_id"]);
+                    bytes.extend_from_slice(&part.json_fields(&fields, false));
+                }
+                bytes.push(b']');
+                bytes.push(b'}');
+            }
+            bytes.push(b']');
+        }
+        bytes.push(b'}');
+        Ok(bytes)
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+/// Projects a Review response without losing unpaired manifest surrogates.
+/// Product callers must also check `PP_DESKTOP_REBUILD`.
+pub fn review_json(
+    read: &AcceptedRead,
+    include_excluded: bool,
+    observations: &ReviewObservations,
+    provider: &dyn FilamentLookup,
+) -> Result<ProjectReviewJsonBody> {
+    if let Some(value) = unavailable(read) {
+        return Ok(ProjectReviewJsonBody {
+            bytes: serde_json::to_vec(&value)?,
+            summary: None,
+        });
+    }
+    let projection = match read {
+        AcceptedRead::Empty { profile } => ReviewProjection {
+            kind: "empty",
+            ordinary: json!({"profile_id":profile.id,"accepted_basis":null,"plan_name":profile.name,"layers":[],"totals":{"included_parts":0,"total_print_units":0,"by_role":{},"by_filament":{}},"issues":[no_parts()],"has_blockers":true}),
+            groups: Vec::new(),
+        },
+        AcceptedRead::Ready { snapshot } => {
+            project_review(snapshot, include_excluded, observations, provider)?
+        }
+        _ => unreachable!(),
+    };
+    let summary = ProjectReviewSummaryJsonBody(serde_json::to_vec(&summarize_review_body(
+        &projection.ordinary,
+    )?)?);
+    let mut bytes = b"{\"kind\":".to_vec();
+    bytes.extend_from_slice(&serde_json::to_vec(projection.kind)?);
+    bytes.extend_from_slice(b",\"body\":");
+    bytes.extend_from_slice(&projection.body_json()?);
+    bytes.push(b'}');
+    Ok(ProjectReviewJsonBody {
+        bytes,
+        summary: Some(summary),
+    })
+}
+#[cfg(not(feature = "desktop_rebuild"))]
+type ReviewProjection = Value;
+#[cfg(not(feature = "desktop_rebuild"))]
+type ReviewPart = Value;
+#[cfg(feature = "desktop_rebuild")]
+type ReviewPart = DraftPart;
+
 fn project_review(
     s: &Snapshot,
     include_excluded: bool,
     obs: &ReviewObservations,
     provider: &dyn FilamentLookup,
-) -> Result<Value> {
+) -> Result<ReviewProjection> {
     let mut issues = Vec::new();
     let mut layers = Vec::new();
     if let Provenance::Tracked { inputs, .. } = &s.provenance {
@@ -320,7 +462,7 @@ fn project_review(
             .cmp(b.filename.as_bytes())
             .then(a.projection_part_id.cmp(&b.projection_part_id))
     });
-    let mut grouped = BTreeMap::<String, (String, Vec<Value>)>::new();
+    let mut grouped = BTreeMap::<String, (String, Vec<ReviewPart>)>::new();
     let mut folder_order = Vec::new();
     for p in &parts {
         let media = obs.media_by_part_id.get(&p.projection_part_id);
@@ -342,7 +484,17 @@ fn project_review(
             .ok_or_else(|| anyhow::anyhow!("Included part has no filament resolution"))?;
         let printed = p.units.iter().filter(|u| u.completed).count() as i64;
         let mut row = json!({"id":p.projection_part_id,"match_key":p.part_key,"relative_path":p.relative_path,"filename":p.filename,"source_layer":p.source_layer,"status":p.status,"role":p.effective_role,"requirement":p.requirement,"option_group_id":p.option_group_id,"included":p.included,"filament_color_id":p.filament_color_id,"filament_custom_hex":p.filament_custom_hex,"spoolman_spool_id":p.spoolman_spool_id,"filament_display":display,"filament_hex":hex,"quantity_auto":p.quantity_inferred,"quantity_override":p.quantity_override,"quantity_effective":p.quantity_effective,"printed_count":printed,"print_units":p.units.iter().map(|u|u.completed).collect::<Vec<_>>(),"assembled_units":p.units.iter().map(|u|u.assembled).collect::<Vec<_>>(),"missing":printed<p.quantity_effective,"stl_missing":artifact_missing,"thumb_empty":thumb_empty});
+        #[cfg(feature = "desktop_rebuild")]
+        {
+            let object = row
+                .as_object_mut()
+                .ok_or_else(|| anyhow::anyhow!("Review Part object missing"))?;
+            object.shift_remove("requirement");
+            object.shift_remove("option_group_id");
+        }
         add_spools(&mut row, spools)?;
+        #[cfg(feature = "desktop_rebuild")]
+        let row = DraftPart::new(row, p.manifest.clone());
         let path = if p.relative_path.is_empty() {
             &p.filename
         } else {
@@ -388,11 +540,26 @@ fn project_review(
         (_, "(root)") => std::cmp::Ordering::Greater,
         _ => folder_compare(&a.0, &b.0),
     });
-    Ok(
-        json!({"profile_id":s.profile.id,"accepted_basis":{"profile_id":s.profile.id,"plan_version":s.plan_version,"plan_revision_id":s.revision_id,"plan_revision_digest":s.revision_digest,"required_unit_mapping_digest":s.required_unit_mapping_digest},"plan_name":s.profile.name,"layers":layers,"totals":{"included_parts":count,"total_print_units":total,"by_role":role_counts,"by_filament":filament_counts},"has_blockers":issues.iter().any(|i|i["severity"]=="blocker"),"issues":issues,"part_groups":groups.into_iter().map(|(folder,(source,parts))|json!({"folder":folder,"source_layer":source,"parts":parts})).collect::<Vec<_>>()}),
-    )
+    #[cfg(not(feature = "desktop_rebuild"))]
+    {
+        Ok(
+            json!({"profile_id":s.profile.id,"accepted_basis":{"profile_id":s.profile.id,"plan_version":s.plan_version,"plan_revision_id":s.revision_id,"plan_revision_digest":s.revision_digest,"required_unit_mapping_digest":s.required_unit_mapping_digest},"plan_name":s.profile.name,"layers":layers,"totals":{"included_parts":count,"total_print_units":total,"by_role":role_counts,"by_filament":filament_counts},"has_blockers":issues.iter().any(|i|i["severity"]=="blocker"),"issues":issues,"part_groups":groups.into_iter().map(|(folder,(source,parts))|json!({"folder":folder,"source_layer":source,"parts":parts})).collect::<Vec<_>>()}),
+        )
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        Ok(ReviewProjection {
+            kind: "ready",
+            ordinary: json!({"profile_id":s.profile.id,"accepted_basis":{"profile_id":s.profile.id,"plan_version":s.plan_version,"plan_revision_id":s.revision_id,"plan_revision_digest":s.revision_digest,"required_unit_mapping_digest":s.required_unit_mapping_digest},"plan_name":s.profile.name,"layers":layers,"totals":{"included_parts":count,"total_print_units":total,"by_role":role_counts,"by_filament":filament_counts},"has_blockers":issues.iter().any(|i|i["severity"]=="blocker"),"issues":issues}),
+            groups,
+        })
+    }
 }
+#[cfg(not(feature = "desktop_rebuild"))]
 pub fn summarize_review(body: &Value) -> Result<Value> {
+    summarize_review_body(body)
+}
+fn summarize_review_body(body: &Value) -> Result<Value> {
     let issues = body["issues"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Review issues missing"))?;

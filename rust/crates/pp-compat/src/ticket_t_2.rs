@@ -89,7 +89,7 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         .unwrap();
     super::SpawnSpec {
         account_pin: super::DesktopAccountPin::Disabled,
-        bundle: bundle(scratch),
+        bundle: super::release::MeasuredBundle::unchecked(bundle(scratch)),
         data_dir: scratch.root.join("data"),
         runtime_dir: scratch.root.join("runtime"),
         setup_padding: String::new(),
@@ -699,9 +699,28 @@ async fn wait_shell_crash(
     let mut startup_ticks = 0;
     let mut cleanup_ticks = 0;
     let mut next_tick = std::time::Instant::now();
+    let trace_started = std::time::Instant::now();
+    let trace = std::env::var_os("PP_GRE671_TRACE").is_some();
+    let mut previous = String::new();
     loop {
         let state = supervisor.handle.status.borrow().clone();
         let pids = recorded_pids(&scratch.pidfile());
+        if trace {
+            let pid = pids.get(expected - 1).copied();
+            let observation = format!(
+                "state={state:?} pid={pid:?} exited={} probes={} startup_ticks={startup_ticks} cleanup_ticks={cleanup_ticks}",
+                pid.is_some_and(shell_exited),
+                *supervisor.health_probes_completed.borrow(),
+            );
+            if observation != previous {
+                eprintln!(
+                    "GRE671 crash={expected} wall={:?} policy={:?} {observation}",
+                    trace_started.elapsed(),
+                    policy_started.elapsed(),
+                );
+                previous = observation;
+            }
+        }
         if pids.len() == expected
             && if guarded {
                 matches!(state, super::Status::Guarded)
@@ -731,6 +750,12 @@ async fn wait_shell_crash(
                 _ => None,
             };
             if let Some(tick) = tick {
+                if trace {
+                    eprintln!(
+                        "GRE671 crash={expected} wall={:?} advance={tick:?}",
+                        trace_started.elapsed()
+                    );
+                }
                 tokio::time::advance(tick).await;
                 next_tick = std::time::Instant::now() + Duration::from_secs(1);
             }
@@ -1318,7 +1343,9 @@ async fn ticket_t_2_process_exit_obeys_every_backoff_deadline_and_cap() {
     // prevent observation of the later backoff attempts. No child reaches Ready.
     let supervisor = super::Supervisor::launch_shell(
         super::ShellSpec {
-            script: r#"trap 'exit 7' USR1; read line || exit 0; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; echo $$ > "$data/armed"; while read line; do :; done"#,
+            // A signal arriving just before a blocking read can leave its trap
+            // pending until input arrives. Keep this crash fixture interruptible.
+            script: r#"trap 'exit 7' USR1; read line || exit 0; data=${line#*'"data_dir":"'}; data=${data%%'"'*}; echo $$ > "$data/armed"; while :; do :; done"#,
             ..shell_spec(&scratch)
         },
         super::SupervisorConfig {
@@ -1750,6 +1777,63 @@ fn startup_wait(limit: Duration, message: &str, mut ready: impl FnMut() -> bool)
     }
 }
 
+fn phased_startup_wait(
+    verified: &Path,
+    ready: &Path,
+    verification_timeout: Duration,
+    acknowledgement_timeout: Duration,
+    mut owner_alive: impl FnMut() -> bool,
+) {
+    startup_wait(
+        verification_timeout,
+        "measured release verification did not finish",
+        || {
+            assert!(owner_alive(), "owner exited before release verification");
+            verified.exists()
+        },
+    );
+    startup_wait(
+        acknowledgement_timeout,
+        "owner never acknowledged pending setup",
+        || {
+            assert!(owner_alive(), "owner exited before startup acknowledgement");
+            ready.exists()
+        },
+    );
+}
+
+#[test]
+fn measured_release_ack_deadline_excludes_verification() {
+    let root = std::env::temp_dir().join(format!(
+        "pp-phase-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let verified = root.join("release-verified");
+    let ready = root.join("owner-ready");
+    let verified_signal = verified.clone();
+    let ready_signal = ready.clone();
+    std::thread::spawn(move || {
+        // Verification runs long enough that an ack budget measured from phase
+        // start would already be exhausted by the time ready appears
+        // (verified@1000ms + ready@+100ms = 1100ms > 600ms ack). The real
+        // helper starts the ack window only after verified exists.
+        std::thread::sleep(Duration::from_millis(1000));
+        std::fs::write(&verified_signal, b"ok").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::write(&ready_signal, b"ok").unwrap();
+    });
+    phased_startup_wait(
+        &verified,
+        &ready,
+        Duration::from_secs(2),
+        Duration::from_millis(600),
+        || true,
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 struct StartupDeathFixture {
     owner: std::process::Child,
     peer: Option<std::process::Child>,
@@ -1856,6 +1940,12 @@ async fn measured_startup_owner_death_fixture() {
     };
     let scratch = Scratch { root: root.into() };
     let bundle = measured_startup_bundle();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
+    let verified = scratch.root.join("release-verified");
+    let temporary = verified.with_extension("tmp");
+    std::fs::write(&temporary, b"ok").unwrap();
+    std::fs::rename(&temporary, &verified).unwrap();
     if let Some(stage) = std::env::var_os(MEASURED_STARTUP_STAGE) {
         let executed = PathBuf::from(stage).join("web/startup-executed.json");
         if executed.exists() {
@@ -1869,8 +1959,6 @@ async fn measured_startup_owner_death_fixture() {
         setup_padding: "x".repeat(1024 * 1024),
         ..release_spec(&scratch)
     };
-    super::release::verify_bundle(&spec.bundle, &spec.bundle.web_root.join("apps/web/dist"))
-        .unwrap();
     let supervisor = super::Supervisor::start(spec).unwrap();
     let started = std::time::Instant::now();
     while recorded_pids(&scratch.pidfile()).is_empty() {
@@ -1910,6 +1998,7 @@ fn ticket_t_3_drain_force_killed_owner_during_startup_kills_group() {
         "ticket_t_2::startup_owner_death_fixture",
         &crate::tests::node_binary(),
         Duration::from_secs(8),
+        None,
     );
 }
 
@@ -1941,15 +2030,30 @@ fn measured_startup_bundle() -> super::Bundle {
 #[test]
 fn ticket_t_3_drain_measured_release_startup_parent_death() {
     let bundle = measured_startup_bundle();
-    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let bundle = super::release::verify_bundle(bundle, &assets).unwrap();
+    // Run 38941881212 timed one idle macOS verify_bundle at 10.7–19.7s. This
+    // budget also covers re-executing the helper. The 30s acknowledgement
+    // starts only after the helper publishes release-verified. The budget
+    // holds only when the test runs alone, so nextest.toml gives it every test
+    // thread. On hosted macos-26, sharing the default nextest profile's test
+    // threads with other real-process tests, the whole test took 65.9s (run
+    // 40169439947) and cycle 1 alone took more than 60s (run 40194530057). The
+    // same runners took 12.9s and 20.8s in the later desktop_rebuild-on pass.
     startup_owner_death_cycles(
         "ticket_t_2::measured_startup_owner_death_fixture",
         &bundle.node,
         Duration::from_secs(30),
+        Some(Duration::from_secs(60)),
     );
 }
 
-fn startup_owner_death_cycles(helper: &str, node: &Path, startup_timeout: Duration) {
+fn startup_owner_death_cycles(
+    helper: &str,
+    node: &Path,
+    startup_timeout: Duration,
+    release_verification_timeout: Option<Duration>,
+) {
     use std::os::unix::process::{CommandExt, ExitStatusExt};
 
     assert!(node.is_file(), "native Node executable missing");
@@ -1967,17 +2071,27 @@ fn startup_owner_death_cycles(helper: &str, node: &Path, startup_timeout: Durati
             scratch,
         };
         let ready = fixture.scratch.root.join("owner-ready");
-        startup_wait(
-            startup_timeout,
-            "owner never acknowledged pending setup",
-            || {
-                assert!(
-                    fixture.owner.try_wait().unwrap().is_none(),
-                    "owner exited before startup acknowledgement"
-                );
-                ready.exists()
-            },
-        );
+        if let Some(verification_timeout) = release_verification_timeout {
+            phased_startup_wait(
+                &fixture.scratch.root.join("release-verified"),
+                &ready,
+                verification_timeout,
+                startup_timeout,
+                || fixture.owner.try_wait().unwrap().is_none(),
+            );
+        } else {
+            startup_wait(
+                startup_timeout,
+                "owner never acknowledged pending setup",
+                || {
+                    assert!(
+                        fixture.owner.try_wait().unwrap().is_none(),
+                        "owner exited before startup acknowledgement"
+                    );
+                    ready.exists()
+                },
+            );
+        }
         let pid: u32 = std::fs::read_to_string(ready).unwrap().parse().unwrap();
         assert_eq!(recorded_pids(&fixture.scratch.pidfile()), vec![pid]);
         assert!(startup_process_live(pid));
@@ -2172,7 +2286,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
     use axum::{body::Body, http::Request};
 
     let bundle = measured_startup_bundle();
-    super::release::verify_bundle(&bundle, &bundle.web_root.join("apps/web/dist")).unwrap();
+    let assets = bundle.web_root.join("apps/web/dist");
     assert_eq!(bundle.runtime_version, "0.0.0-gre448-simulator-web");
     let mut completed: Vec<MeasuredLifecycleCycle> = Vec::new();
     for cycle in 0..3 {
@@ -2182,7 +2296,7 @@ async fn ticket_t_3_drain_measured_release_repeated_eof_cleanup() {
         let scratch = Scratch::new("measured-lifecycle");
         let events = scratch.root.join("data/lifecycle-events");
         let supervisor = super::Supervisor::start(super::SpawnSpec {
-            bundle: bundle.clone(),
+            bundle: super::release::verify_bundle(bundle.clone(), &assets).unwrap(),
             gateway_rate_limit: false,
             before_setup: Box::new(MeasuredLifecycleCycle::before_setup),
             ..release_spec(&scratch)
@@ -2362,4 +2476,33 @@ fn ticket_t_3_drain_rate_limit_debits_require_current_generation_signature() {
         let (encoded, signature) = debit(generation, bucket, time);
         assert_eq!(endpoint.rate_limit_bucket(&encoded, &signature), None);
     }
+}
+
+#[tokio::test]
+async fn ticket_t_2_respawn_blocked_during_verification_starts_no_child() {
+    let scratch = Scratch::new("respawn-disarmed");
+    let bundle = measured_startup_bundle();
+    let assets = bundle.web_root.join("apps/web/dist");
+    let executed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let recorded = executed.clone();
+    let spec = super::SpawnSpec {
+        bundle: super::release::verify_bundle(bundle, &assets).unwrap(),
+        before_setup: Box::new(move |_, _| {
+            recorded.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }),
+        ..release_spec(&scratch)
+    };
+    let logs = super::logs::Logs::open(spec.data_dir.join("logs")).unwrap();
+    let disarmed = CancellationToken::new();
+    disarmed.cancel();
+    let error = super::Process::spawn(&spec, &logs, &CancellationToken::new(), Some(&disarmed))
+        .await
+        .err()
+        .expect("a blocked respawn must not start a child");
+    assert_eq!(
+        error.to_string(),
+        "Compatibility restart blocked during release verification"
+    );
+    assert!(!executed.load(std::sync::atomic::Ordering::SeqCst));
 }

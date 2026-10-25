@@ -18,6 +18,7 @@ const sourceNaming = override => `UPDATE projects SET metadata_json='${JSON.stri
 const overrideFiles = ['[c]lens.stl', '[a]arm_x2.stl'].map(path => ({ source: 2, path, content: path }));
 const overrideNaming = { ...naming, roles: naming.roles.map(role => role.id === 'clear' ? { ...role, markers: ['[c]'] } : role) };
 const cases = [
+  { name: 'large-filename-quantities', files: ['9007199254740991', '9007199254740992', '9007199254740993', '1000000000000000128', '100000000000000000000', '1000000000000000000000'].map((quantity, i) => ({ source: 1, path: `part${i}_x${quantity}.stl`, content: quantity })) },
   { name: 'spoolman-default-disabled', files, sql: setting('role_filaments_1', spoolDefaults) },
   { name: 'spoolman-user-enabled', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: true })}` },
   { name: 'spoolman-plan-disabled', files, sql: `${setting('role_filaments_1', spoolDefaults)}; ${setting('feature_toggles', { spoolman: true })}; ${setting('feature_toggles:plan:1', { spoolman: false })}` },

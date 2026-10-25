@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PartRow, PlanDraftWorkspace } from "@print-partner/contracts";
 import type { PlanReview } from "../api/endpoints/planManifests";
 import {
+  maskSpoolmanReviewPart,
   mergeAssembledIntoReview,
   mergeProgressIntoReview,
   sourceLabelFromLayer,
@@ -211,5 +212,34 @@ describe("mergeProgressIntoReview + assembly tracking", () => {
     });
     expect(next.part_groups[0].parts[0].assembled_units).toBeUndefined();
     expect(next.part_groups[0].parts[0].printed_count).toBe(1);
+  });
+});
+
+
+describe("maskSpoolmanReviewPart", () => {
+  it.each([
+    { filament_color_id: " spoolman:int-1:filament:2 ", spoolman_spool_id: null },
+    { filament_color_id: null, spoolman_spool_id: " spoolman:int-1:spool:5 " },
+  ])("masks enrichment for assignment %j", (assignment) => {
+    const part = {
+      ...samplePart({ id: 1, ...assignment }),
+      filament_display: "Spoolman Blue", filament_hex: "#0000ff",
+      filament_custom_hex: "#123456", spool_badge: "450g left",
+      spool_summary: [{ remaining_g: 450, spool_id: 5 }],
+    };
+    expect(maskSpoolmanReviewPart(part)).toEqual({
+      ...part, filament_display: "", filament_hex: "#123456",
+      spool_badge: null, spool_summary: undefined,
+    });
+    expect(part.filament_display).toBe("Spoolman Blue");
+  });
+
+  it.each(["  ", "spoolman:int-1:spool:5"])("preserves catalog color enrichment for spool reference %s", (spoolman_spool_id) => {
+    const part = {
+      ...samplePart({ id: 1, filament_color_id: "catalog:red", spoolman_spool_id }),
+      filament_display: "Catalog Red", filament_hex: "#ff0000",
+      spool_badge: "450g left", spool_summary: [{ remaining_g: 450, spool_id: 5 }],
+    };
+    expect(maskSpoolmanReviewPart(part)).toEqual({ ...part, spool_badge: null, spool_summary: undefined });
   });
 });

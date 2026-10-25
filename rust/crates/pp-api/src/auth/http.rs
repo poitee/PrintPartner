@@ -11,7 +11,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use pp_storage::auth::{AuthClient, Outcome, Provider, Request, Secret};
+#[cfg(feature = "desktop_rebuild")]
+use pp_storage::auth::rebuild::RebuildAuthClient;
+use pp_storage::auth::{AuthClient, AuthReply, Outcome, Provider, Request, Secret};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -100,9 +102,41 @@ impl AuthHttpConfig {
 type RateSources = HashMap<(IpAddr, bool), (Instant, u32)>;
 
 #[derive(Clone)]
+pub enum AuthBackend {
+    Pool(AuthClient),
+    #[cfg(feature = "desktop_rebuild")]
+    Rebuild(RebuildAuthClient),
+}
+impl AuthBackend {
+    fn submit(
+        &self,
+        request: Request,
+        cancelled: Arc<AtomicBool>,
+        wait: Duration,
+    ) -> Result<AuthReply> {
+        match self {
+            Self::Pool(client) => client.submit(request, cancelled, wait),
+            #[cfg(feature = "desktop_rebuild")]
+            Self::Rebuild(client) => client.submit(request, cancelled, wait),
+        }
+    }
+}
+impl From<AuthClient> for AuthBackend {
+    fn from(client: AuthClient) -> Self {
+        Self::Pool(client)
+    }
+}
+#[cfg(feature = "desktop_rebuild")]
+impl From<RebuildAuthClient> for AuthBackend {
+    fn from(client: RebuildAuthClient) -> Self {
+        Self::Rebuild(client)
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct App {
     pub(super) config: AuthHttpConfig,
-    pub(super) auth: AuthClient,
+    pub(super) auth: AuthBackend,
     pub(super) providers: ProviderClient,
     mail: ResetMailer,
     rates: Arc<Mutex<RateSources>>,
@@ -111,14 +145,14 @@ pub(super) struct App {
 }
 pub fn auth_router(
     config: AuthHttpConfig,
-    auth: AuthClient,
+    auth: impl Into<AuthBackend>,
     providers: ProviderClient,
     mail: ResetMailer,
 ) -> Router {
     let discord = providers.configured(Provider::Discord);
     let app = App {
         config,
-        auth,
+        auth: auth.into(),
         providers,
         mail,
         rates: Arc::default(),
@@ -231,7 +265,7 @@ async fn guard(State(app): State<App>, request: axum::extract::Request, next: Ne
     }
     next.run(request).await
 }
-pub(super) async fn invoke(auth: &AuthClient, request: Request) -> Result<Outcome, Failure> {
+pub(super) async fn invoke(auth: &AuthBackend, request: Request) -> Result<Outcome, Failure> {
     static WAITERS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
     let permit = WAITERS
         .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(64)))
@@ -473,7 +507,24 @@ async fn change(
     headers: HeaderMap,
     input: Result<Json<Value>, JsonRejection>,
 ) -> Result<Response, Failure> {
-    let session = wire::session(&headers)?;
+    // Node resolves the cookie in onRequest before field checks. Match that so a
+    // nonempty invalid, expired, or revoked token refuses with 401 before 400.
+    let raw = wire::cookie(&headers, "pp_session")
+        .filter(|value| !value.is_empty())
+        .ok_or(Failure(StatusCode::UNAUTHORIZED, "Authentication required"))?;
+    match invoke(
+        &app.auth,
+        Request::ResolveSession {
+            token: Secret::new(raw.clone()),
+        },
+    )
+    .await?
+    {
+        Outcome::User(Some(_)) => {}
+        _ => {
+            return Err(Failure(StatusCode::UNAUTHORIZED, "Authentication required"));
+        }
+    }
     let value = body(input)?;
     let current = text(&value, "current_password");
     let replacement = text(&value, "new_password");
@@ -486,7 +537,7 @@ async fn change(
     let outcome = invoke(
         &app.auth,
         Request::ChangePassword {
-            session,
+            session: Secret::new(raw),
             current: Secret::new(current),
             replacement: Secret::new(replacement),
         },
@@ -572,16 +623,23 @@ async fn rotate_key(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Response, Failure> {
-    created(
-        invoke(
-            &app.auth,
-            Request::RotateKey {
-                session: wire::session(&headers)?,
-                key_id: id,
-            },
-        )
-        .await?,
+    match invoke(
+        &app.auth,
+        Request::RotateKey {
+            session: wire::session(&headers)?,
+            key_id: id,
+        },
     )
+    .await?
+    {
+        outcome @ Outcome::KeyCreated { .. } => created(outcome),
+        // Node's regenerate route answers foreign and missing IDs with its full problem body.
+        _ => Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail":"API key not found","title":"Not Found","status":404})),
+        )
+            .into_response()),
+    }
 }
 async fn revoke_key(
     State(app): State<App>,

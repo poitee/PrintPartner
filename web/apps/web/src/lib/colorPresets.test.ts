@@ -43,6 +43,36 @@ describe("applyColorPreset", () => {
     expect(count).toBe(0);
   });
 
+  it.each([
+    { label: "denied", options: { allowSpoolman: () => false } },
+    { label: "allowed", options: { allowSpoolman: () => true } },
+    { label: "no options", options: undefined },
+  ])("clears an explicitly unassigned preset role with $label access", async ({ options }) => {
+    const unassigned = { role: "body", filament_color_id: null, filament_custom_hex: null, spoolman_spool_id: null };
+
+    const count = await applyColorPreset(1, preset([unassigned]), options);
+
+    expect(count).toBe(1);
+    expect(vi.mocked(filamentsApi.saveRoleFilament).mock.calls).toEqual([
+      [1, { ...unassigned, refresh_thumbnails: false }],
+    ]);
+  });
+
+  it.each([
+    { ...catalogRole, filament_color_id: "spoolman:1:filament:42" },
+    { ...catalogRole, filament_color_id: null, spoolman_spool_id: "spoolman:1:spool:99" },
+    { ...catalogRole, filament_color_id: null, spoolman_spool_id: "99" },
+  ])("skips a denied Spoolman-only assignment but still clears an unassigned role: %j", async (spoolmanRole) => {
+    const unassigned = { role: "accent", filament_color_id: null, filament_custom_hex: null, spoolman_spool_id: null };
+
+    const count = await applyColorPreset(1, preset([spoolmanRole, unassigned]), { allowSpoolman: () => false });
+
+    expect(count).toBe(1);
+    expect(vi.mocked(filamentsApi.saveRoleFilament).mock.calls).toEqual([
+      [1, { ...unassigned, refresh_thumbnails: false }],
+    ]);
+  });
+
   it("rejects before writing if isCurrent returns false", async () => {
     await expect(applyColorPreset(1, preset([catalogRole]), { isCurrent: () => false }))
       .rejects.toThrow("Plan switch or permission changed.");

@@ -780,6 +780,8 @@ export type SourceSummary = {
   update_checked_at?: string | null;
   /** Count of synced markdown/PDF docs indexed for this source. */
   doc_count?: number;
+  /** Observed catalog metadata version. Present only while the desktop rebuild guard is on. */
+  catalog_metadata_version?: number;
 };
 
 export type SourceRevision = {

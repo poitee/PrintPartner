@@ -296,6 +296,35 @@ fn ticket_t_59_catalog_work_delete_ordering() {
     owner.shutdown().unwrap();
 }
 #[test]
+fn gre601_duplicate_direct_source_lease_preserves_typed_catalog_context() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Typed busy context");
+    let active = client
+        .begin_work(id, &AtomicBool::new(false), Duration::from_secs(5))
+        .unwrap();
+    let duplicate = client.begin_work(id, &AtomicBool::new(false), Duration::from_secs(5));
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        let error = duplicate
+            .err()
+            .expect("duplicate direct Source lease accepted");
+        assert!(
+            error
+                .downcast_ref::<pp_storage::catalog::SourceBusy>()
+                .is_some()
+        );
+        assert_eq!(error.to_string(), "Source work is already active");
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    {
+        assert!(duplicate.is_ok());
+    }
+    drop(active);
+    owner.shutdown().unwrap();
+}
+#[test]
 fn ticket_t_59_catalog_categories_naming_and_import_invalidation() {
     let fixture = Fixture::new();
     let owner = fixture.open();
@@ -1200,6 +1229,42 @@ fn gre600_default_catalog_rejects_rebuild_operations() {
             .unwrap();
         assert!(error.to_string().contains("unknown variant"));
     }
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[test]
+fn catalog_metadata_token_is_ignored_without_desktop_rebuild() {
+    let fixture = Fixture::new();
+    let owner = fixture.open();
+    let client = owner.local_source_catalog();
+    let id = create(&client, "Tokenless");
+    let updated = value(
+        &client,
+        Request::Update {
+            id,
+            patch: SourcePatch {
+                metadata: Some(
+                    serde_json::from_value(json!({"custom_name": "Flag off rename"})).unwrap(),
+                ),
+                metadata_version: Some(4),
+                ..Default::default()
+            },
+        },
+    );
+    assert_eq!(updated["metadata"]["custom_name"], "Flag off rename");
+    assert!(updated.get("catalog_metadata_version").is_none());
+    let raw: String = fixture
+        .sql()
+        .query_row(
+            "SELECT metadata_json FROM projects WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let stored: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(stored["custom_name"], "Flag off rename");
+    assert!(stored.get("catalog_metadata_version").is_none());
+    owner.shutdown().unwrap();
 }
 
 #[cfg(feature = "desktop_rebuild")]

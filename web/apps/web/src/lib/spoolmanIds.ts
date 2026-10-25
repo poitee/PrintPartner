@@ -5,6 +5,11 @@ export function hasSpoolmanAssignment(assignment: {
   return Boolean(assignment.filament_color_id?.trim().startsWith("spoolman:") || assignment.spoolman_spool_id?.trim());
 }
 
+export function hasSpoolmanColorOrigin(assignment: Parameters<typeof hasSpoolmanAssignment>[0]): boolean {
+  return hasSpoolmanAssignment({ filament_color_id: assignment.filament_color_id })
+    || (!assignment.filament_color_id?.trim() && hasSpoolmanAssignment(assignment));
+}
+
 export function parseSpoolmanFilamentId(
   colorId: string,
 ): { integrationId: string; filamentId: number } | null {

@@ -300,7 +300,12 @@ import {
 import { docTitleFromPath } from "./source-docs-model.js";
 import { sourceNamingResponse } from "./source-naming-model.js";
 import { sourceRevision } from "./source-revision-model.js";
-import { sourceSummary } from "./source-summary-model.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
+import {
+  readCatalogMetadataVersion,
+  sourceSummary,
+  withNextCatalogMetadataVersion,
+} from "./source-summary-model.js";
 import { requiredText, sha256Digest } from "./write-validation.js";
 
 function withoutSpoolmanReferences(filamentColorId: string | null) {
@@ -542,6 +547,15 @@ export class SourceActivationConflictError extends Error {
   constructor() {
     super("Source changed during sync; revision was not activated");
     this.name = "SourceActivationConflictError";
+  }
+}
+
+export class CatalogMetadataConflict extends Error {
+  readonly code = "catalog_metadata_conflict" as const;
+
+  constructor() {
+    super("Catalog metadata changed; retry from the current version");
+    this.name = "CatalogMetadataConflict";
   }
 }
 
@@ -2717,7 +2731,9 @@ export class AppRepository {
       const row = this.getProjectRow(sourceId);
       if (!row) return { kind: "source_not_found" };
       const metadata = parseProjectMetadata(row.metadataJson) ?? {};
-      const nextMetadata = { ...metadata, naming };
+      const nextMetadata = desktopFeaturesEnabled()
+        ? withNextCatalogMetadataVersion({ ...metadata, naming }, readCatalogMetadataVersion(metadata))
+        : { ...metadata, naming };
       const effective = resolveNamingProfile(this.getGlobalNaming(), nextMetadata).toDict();
       const result = this.db
         .update(this.schema.projects)
@@ -2839,9 +2855,13 @@ export class AppRepository {
         const explicitCategory =
           typeof metadata.category === "string" ? metadata.category.trim() : "";
         if (hasExplicitCategory && explicitCategory === category) continue;
+        const nextMetadata = { ...metadata, category };
+        const storedMetadata = desktopFeaturesEnabled()
+          ? withNextCatalogMetadataVersion(nextMetadata, readCatalogMetadataVersion(metadata))
+          : nextMetadata;
         this.db
           .update(this.schema.projects)
-          .set({ metadataJson: JSON.stringify({ ...metadata, category }) })
+          .set({ metadataJson: JSON.stringify(storedMetadata) })
           .where(
             and(
               eq(this.schema.projects.tenantId, this.tenantId),
@@ -3623,7 +3643,13 @@ export class AppRepository {
         sourceType,
         role: input.role ?? "unassigned",
         localPath,
-        metadataJson: input.metadata ? JSON.stringify(input.metadata) : null,
+        metadataJson: input.metadata
+          ? JSON.stringify(
+              desktopFeaturesEnabled()
+                ? withNextCatalogMetadataVersion({ ...input.metadata }, 0)
+                : input.metadata,
+            )
+          : null,
       })
       .returning()
       .get();
@@ -3659,10 +3685,18 @@ export class AppRepository {
       last_synced_at: string | null;
       last_commit_sha: string | null;
       localPath: string;
+      metadata_version: number | null;
     }>,
   ): SourceSummary {
     const row = this.getProjectRow(id);
     if (!row) throw new Error("Source not found");
+    if (desktopFeaturesEnabled() && patch.metadata_version != null) {
+      if (!Number.isSafeInteger(patch.metadata_version)) {
+        throw new Error("metadata_version must be an integer");
+      }
+      const current = readCatalogMetadataVersion(parseProjectMetadata(row.metadataJson));
+      if (patch.metadata_version !== current) throw new CatalogMetadataConflict();
+    }
 
     const updates: Partial<typeof this.schema.projects.$inferInsert> = {};
     if (patch.name != null) updates.name = patch.name.trim();
@@ -3712,6 +3746,12 @@ export class AppRepository {
       delete metadata[REMOTE_CHECKED_AT_KEY];
       delete metadata.sync_error;
       updates.metadataJson = JSON.stringify(metadata);
+    }
+    const metadataJson = updates.metadataJson;
+    if (desktopFeaturesEnabled() && metadataJson != null) {
+      const current = readCatalogMetadataVersion(parseProjectMetadata(row.metadataJson));
+      const written = JSON.parse(metadataJson) as Record<string, unknown>;
+      updates.metadataJson = JSON.stringify(withNextCatalogMetadataVersion(written, current));
     }
 
     this.db.update(this.schema.projects).set(updates).where(eq(this.schema.projects.id, id)).run();
@@ -6026,11 +6066,14 @@ export class AppRepository {
     };
   }
 
-  private applyCheckoffRemap(plan: CheckoffRemapPlan, finalRemap: ReadonlyMap<string, number>): void {
+  private applyCheckoffRemap(
+    plan: CheckoffRemapPlan,
+    finalRemap: ReadonlyMap<string, { readonly part_id: number; readonly unit_index: number }>,
+  ): void {
     if (finalRemap.size === 0) return;
     const remapUnit = (unit: { part_id: number; unit_index: number }) => {
       const next = finalRemap.get(`${unit.part_id}:${unit.unit_index}`);
-      return next ? { ...unit, part_id: next } : unit;
+      return next ? { ...unit, ...next } : unit;
     };
     if (plan.checkoffLinksRaw != null) {
       const links = JSON.parse(plan.checkoffLinksRaw) as Array<Record<string, unknown>>;
@@ -6508,6 +6551,9 @@ export class AppRepository {
             .all()
             .map((row) => [row.id, row.matchKey] as const),
         );
+        const includedDraftPartIds = new Set(
+          prepared.parts.filter((part) => part.included).map((part) => part.draftPartId),
+        );
         const newPartByMatchKey = new Map(
           prepared.parts.map((part) => [
             part.partKey,
@@ -6534,6 +6580,20 @@ export class AppRepository {
               .map((row) => [row.id, row.profileId] as const),
           ),
           newPartByMatchKey,
+          oldTokenByCoordinate: new Map(
+            baseUnits.map((unit) => {
+              const projectionPartId = predecessorProjectionByRevisionPartId.get(unit.revisionPartId);
+              if (projectionPartId == null) throw new Error("Required-unit predecessor Part is missing");
+              return [`${projectionPartId}:${unit.priorIndex}`, unit.token] as const;
+            }),
+          ),
+          newCoordinateByToken: new Map(
+            prepared.progress.flatMap((unit) =>
+              unit.token != null && includedDraftPartIds.has(unit.draftPartId)
+                ? [[unit.token, { draftPartId: unit.draftPartId, unitIndex: unit.unitIndex }] as const]
+                : [],
+            ),
+          ),
         });
         if (assessment.kind === "unsafe") {
           return {
@@ -6725,11 +6785,11 @@ export class AppRepository {
         revisionPartByDraftPart.set(part.draftPartId, revisionPart.id);
       }
       if (checkoffRemapPlan) {
-        const finalRemap = new Map<string, number>();
-        for (const [key, draftPartId] of checkoffRemapPlan.remapByDraftPart) {
-          const projectionPartId = projectionByDraftPart.get(draftPartId);
+        const finalRemap = new Map<string, { part_id: number; unit_index: number }>();
+        for (const [key, target] of checkoffRemapPlan.remapByCoordinate) {
+          const projectionPartId = projectionByDraftPart.get(target.draftPartId);
           if (!projectionPartId) throw new Error("Checkoff remap target Part is missing");
-          finalRemap.set(key, projectionPartId);
+          finalRemap.set(key, { part_id: projectionPartId, unit_index: target.unitIndex });
         }
         this.applyCheckoffRemap(checkoffRemapPlan, finalRemap);
       }

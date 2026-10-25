@@ -46,7 +46,7 @@ pub struct SourceCatalogClient {
     client: SettingsClient,
     authority: Authority,
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSource {
     pub name: String,
@@ -61,15 +61,29 @@ pub struct CreateSource {
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourcePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    #[serde(default, deserialize_with = "nullable")]
+    #[serde(
+        default,
+        deserialize_with = "nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tag: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
+    /// Caller-observed catalog metadata version. Omitted requests overwrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_version: Option<i64>,
 }
 fn nullable<'de, D: serde::Deserializer<'de>>(
     d: D,
@@ -181,6 +195,10 @@ pub struct SourceSummary {
     pub update_status: Option<String>,
     pub update_checked_at: Option<String>,
     pub doc_count: i64,
+    /// Present only while the desktop rebuild runtime flag is on.
+    #[cfg(feature = "desktop_rebuild")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_metadata_version: Option<i64>,
 }
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -295,6 +313,10 @@ impl State {
         self.active
             .values()
             .any(|binding| binding.tenant == tenant && binding.id == id)
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    pub(crate) fn incarnation(&self) -> &str {
+        &self.incarnation
     }
     pub(crate) fn next_token(&self) -> Result<u64> {
         self.issued_high_water
@@ -669,9 +691,15 @@ pub(super) fn execute(
         }
     }
 }
-fn trim(s: &str) -> &str {
-    s.trim_matches(|c:char|matches!(c,'\u{0009}'..='\u{000d}'|' '|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}'))
+fn js_space(c: char) -> bool {
+    matches!(c,'\u{0009}'..='\u{000d}'|' '|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}')
 }
+fn trim(s: &str) -> &str {
+    s.trim_matches(js_space)
+}
+#[cfg(feature = "desktop_rebuild")]
+const CATALOG_METADATA_VERSION: &str = "catalog_metadata_version";
+
 fn metadata(raw: Option<String>) -> Option<Map<String, Value>> {
     raw.filter(|s| !s.is_empty())
         .map(|s| match serde_json::from_str::<Value>(&s) {
@@ -679,8 +707,92 @@ fn metadata(raw: Option<String>) -> Option<Map<String, Value>> {
             _ => Map::from_iter([("raw".into(), Value::String(s))]),
         })
 }
+
+#[cfg(feature = "desktop_rebuild")]
+fn metadata_guard_enabled() -> bool {
+    matches!(
+        std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
+        Some("1" | "true")
+    )
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn catalog_metadata_version_of(map: &Map<String, Value>) -> i64 {
+    match map.get(CATALOG_METADATA_VERSION) {
+        Some(Value::Number(number)) => number.as_i64().filter(|value| *value >= 0).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn publish_catalog_metadata_version(metadata: &mut Option<Map<String, Value>>) -> Option<i64> {
+    if !metadata_guard_enabled() {
+        return None;
+    }
+    let version = metadata
+        .as_ref()
+        .map(catalog_metadata_version_of)
+        .unwrap_or(0);
+    if let Some(map) = metadata.as_mut() {
+        map.shift_remove(CATALOG_METADATA_VERSION);
+    }
+    Some(version)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn stamp_catalog_metadata_version(map: &mut Map<String, Value>, current: i64) -> Result<()> {
+    map.shift_remove(CATALOG_METADATA_VERSION);
+    let next = current.checked_add(1).ok_or_else(|| {
+        anyhow!(CatalogFailure::Input(
+            "Catalog metadata version overflow".into()
+        ))
+    })?;
+    map.insert(CATALOG_METADATA_VERSION.into(), json!(next));
+    Ok(())
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn stored_catalog_metadata_version(tx: &Transaction<'_>, tenant: &str, id: i64) -> Result<i64> {
+    let raw: Option<String> = tx.query_row(
+        "SELECT metadata_json FROM projects WHERE tenant_id=?1 AND id=?2",
+        params![tenant, id],
+        |row| row.get(0),
+    )?;
+    Ok(metadata(raw)
+        .as_ref()
+        .map(catalog_metadata_version_of)
+        .unwrap_or(0))
+}
+/// `categories::normalize` over WTF-8. Lone surrogates are not whitespace, so trimming stops at them.
+#[cfg(feature = "desktop_rebuild")]
+pub(crate) fn normalize_category_path(category: &[u8]) -> Vec<u8> {
+    category
+        .split(|byte| *byte == b'/')
+        .map(|segment| {
+            let head = segment
+                .utf8_chunks()
+                .next()
+                .map_or("", |chunk| chunk.valid());
+            let segment = &segment[head.len() - head.trim_start_matches(js_space).len()..];
+            let tail = segment
+                .utf8_chunks()
+                .last()
+                .filter(|chunk| chunk.invalid().is_empty())
+                .map_or("", |chunk| chunk.valid());
+            &segment[..segment.len() - (tail.len() - tail.trim_end_matches(js_space).len())]
+        })
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(&b'/')
+}
 fn read_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceSummary> {
     let metadata = metadata(row.get(15)?);
+    #[cfg(feature = "desktop_rebuild")]
+    let (metadata, catalog_metadata_version) = {
+        let mut metadata = metadata;
+        let version = publish_catalog_metadata_version(&mut metadata);
+        (metadata, version)
+    };
     let m = metadata.clone().unwrap_or_default();
     let role: String = row
         .get::<_, Option<String>>(5)?
@@ -734,6 +846,8 @@ fn read_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceSummary> {
             .and_then(Value::as_str)
             .map(str::to_owned),
         metadata,
+        #[cfg(feature = "desktop_rebuild")]
+        catalog_metadata_version,
     })
 }
 const SELECT: &str = "SELECT p.id,p.name,p.url,p.source_kind,p.source_type,p.role,p.branch,p.tag,p.local_path,p.last_synced_at,p.last_commit_sha,p.current_source_revision_id,p.docs_url,p.manifest_community_slug,(SELECT count(*) FROM source_docs d WHERE d.project_id=p.id AND d.tenant_id=p.tenant_id),p.metadata_json FROM projects p";
@@ -771,6 +885,15 @@ fn list(tx: &Transaction<'_>, tenant: &str) -> Result<Vec<SourceSummary>> {
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 fn save_metadata(tx: &Transaction<'_>, tenant: &str, id: i64, m: Map<String, Value>) -> Result<()> {
+    #[cfg(feature = "desktop_rebuild")]
+    let m = {
+        let mut m = m;
+        if metadata_guard_enabled() {
+            let current = stored_catalog_metadata_version(tx, tenant, id)?;
+            stamp_catalog_metadata_version(&mut m, current)?;
+        }
+        m
+    };
     tx.execute(
         "UPDATE projects SET metadata_json=?1 WHERE tenant_id=?2 AND id=?3",
         params![json::metadata(&m)?, tenant, id],
@@ -779,6 +902,15 @@ fn save_metadata(tx: &Transaction<'_>, tenant: &str, id: i64, m: Map<String, Val
 }
 fn patch(tx: &Transaction<'_>, tenant: &str, id: i64, p: SourcePatch) -> Result<SourceSummary> {
     let mut row = require(tx, tenant, id)?;
+    #[cfg(feature = "desktop_rebuild")]
+    if metadata_guard_enabled()
+        && let Some(expected) = p.metadata_version
+    {
+        let current = row.catalog_metadata_version.unwrap_or(0);
+        if expected != current {
+            return Err(CatalogFailure::Conflict.into());
+        }
+    }
     let (source_kind, original_metadata): (String, Option<String>) = tx.query_row(
         "SELECT source_kind,metadata_json FROM projects WHERE tenant_id=?1 AND id=?2",
         params![tenant, id],
@@ -837,6 +969,12 @@ fn patch(tx: &Transaction<'_>, tenant: &str, id: i64, p: SourcePatch) -> Result<
         m.insert("remote_update_status".into(), json!("unknown"));
         m.shift_remove("remote_checked_at");
         m.shift_remove("sync_error");
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    if metadata_changed && metadata_guard_enabled() {
+        let current = row.catalog_metadata_version.unwrap_or(0);
+        let map = row.metadata.get_or_insert_default();
+        stamp_catalog_metadata_version(map, current)?;
     }
     tx.execute("UPDATE projects SET name=?1,url=?2,branch=?3,tag=?4,source_kind=?5,source_type=?6,role=?7,metadata_json=?8 WHERE tenant_id=?9 AND id=?10",params![row.name,row.url,row.branch,row.tag,row.source_kind,row.source_type,row.role,if metadata_changed {row.metadata.map(|m|json::metadata(&m)).transpose()?}else{original_metadata},tenant,id])?;
     require(tx, tenant, id)
@@ -1037,7 +1175,8 @@ fn create_source(
         }
         .into(),
     );
-    tx.execute("INSERT INTO projects(tenant_id,name,url,branch,tag,source_kind,source_type,role,metadata_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![tenant,name,s.url.unwrap_or_default(),s.branch.unwrap_or("main".into()),s.tag.as_deref().map(trim).filter(|s|!s.is_empty()),kind,source_type,s.role.unwrap_or("unassigned".into()),s.metadata.map(|m|json::metadata(&m)).transpose()?])?;
+    let metadata_json = stamped_create_metadata(s.metadata)?;
+    tx.execute("INSERT INTO projects(tenant_id,name,url,branch,tag,source_kind,source_type,role,metadata_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![tenant,name,s.url.unwrap_or_default(),s.branch.unwrap_or("main".into()),s.tag.as_deref().map(trim).filter(|s|!s.is_empty()),kind,source_type,s.role.unwrap_or("unassigned".into()),metadata_json])?;
     let id = tx.last_insert_rowid();
     let path = state.directory.join("repos").join(id.to_string());
     tx.execute(
@@ -1045,6 +1184,22 @@ fn create_source(
         params![path.to_string_lossy(), tenant, id],
     )?;
     require(tx, tenant, id)
+}
+
+fn stamped_create_metadata(metadata: Option<Map<String, Value>>) -> Result<Option<String>> {
+    let Some(metadata) = metadata else {
+        return Ok(None);
+    };
+    #[cfg(feature = "desktop_rebuild")]
+    let metadata = {
+        let mut metadata = metadata;
+        if metadata_guard_enabled() {
+            metadata.shift_remove(CATALOG_METADATA_VERSION);
+            metadata.insert(CATALOG_METADATA_VERSION.into(), json!(1));
+        }
+        metadata
+    };
+    Ok(Some(json::metadata(&metadata)?))
 }
 
 fn set_setting(tx: &Transaction<'_>, tenant: &str, key: &str, value: String) -> Result<()> {
@@ -1098,6 +1253,10 @@ fn delete(tx: &Transaction<'_>, state: &State, tenant: &str, id: i64) -> Result<
         return Ok(Deletion::NotFound);
     };
     if state.source_busy(tenant, id) || crate::jobs::source_reserved(tx, tenant, id)? {
+        return Ok(Deletion::ActiveWork);
+    }
+    #[cfg(feature = "desktop_rebuild")]
+    if crate::uploads::source_reserved(tx, tenant, id)? {
         return Ok(Deletion::ActiveWork);
     }
     if tx.query_row(

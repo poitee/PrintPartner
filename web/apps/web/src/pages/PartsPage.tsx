@@ -24,7 +24,7 @@ import { cn } from "../lib/utils";
 
 export default function PartsPage() {
   const { selectedProfileId, profiles } = useProfileSelection();
-  const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, saving, refresh, mergeConflict, discardPendingEdits } = usePlanWorkspace();
+  const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, retryPlanSave, saving, refresh, mergeConflict, discardPendingEdits } = usePlanWorkspace();
   const layers = usePlanLayersQuery(selectedProfileId);
   const sheetRef = useRef<ReviewPartsSheetHandle>(null);
   const prepared = useRef<number | null>(null);
@@ -88,7 +88,7 @@ export default function PartsPage() {
               <Button variant="secondary" disabled={saving} onClick={() => void discardPendingEdits().catch(() => {})}>Discard pending edits and use saved Plan</Button>
             </div>
           )}
-          <Button variant="secondary" disabled={saving} onClick={() => void preparePlan().catch(() => {})}>Retry save</Button>
+          <Button variant="secondary" disabled={saving} onClick={() => void retryPlanSave().catch(() => {})}>Retry save</Button>
         </div>
       )}
       {selectedProfileId != null && (
@@ -108,7 +108,7 @@ export default function PartsPage() {
         <p className="text-sm text-muted-foreground">{saving || loading || draftLoading ? "Loading your files…" : "Your files will appear here once the sources are ready."}</p>
       ) : (
         <>
-          <KitManifestOptions profileId={selectedProfileId} disabled={disabled} onUpdated={() => preparePlan({ applyManifest: true })} compact />
+          <KitManifestOptions key={selectedProfileId} profileId={selectedProfileId} disabled={disabled} onUpdated={() => preparePlan({ applyManifest: true })} compact />
           <PlanFileSelection profileId={selectedProfileId} disabled={loading} />
           <section id="materials" className="space-y-2">
             <h2 className="text-sm font-semibold">Colors and materials</h2>

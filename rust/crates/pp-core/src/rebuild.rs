@@ -11,7 +11,9 @@ impl DesktopRebuild {
         self.0
     }
 
-    fn from_value(value: Option<&str>) -> Self {
+    /// Capture a startup `PP_DESKTOP_REBUILD` value. Only exactly `1` or `true`
+    /// enable the setting, and only when compiled with `desktop_rebuild`.
+    pub fn from_value(value: Option<&str>) -> Self {
         Self(cfg!(feature = "desktop_rebuild") && matches!(value, Some("1" | "true")))
     }
 }

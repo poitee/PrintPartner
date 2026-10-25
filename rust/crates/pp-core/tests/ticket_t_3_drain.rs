@@ -6,45 +6,46 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 use tokio::process::Command;
 
-fn child_program() -> &'static Path {
-    static BIN: OnceLock<PathBuf> = OnceLock::new();
-    BIN.get_or_init(|| {
-        let dir = std::env::var_os("CARGO_TARGET_TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        let source = dir.join(format!("pp-t3-drain-child-{}.rs", std::process::id()));
-        let binary = dir.join(format!("pp-t3-drain-child-{}", std::process::id()));
-        std::fs::write(&source, include_str!("fixtures/drain_child.rs")).unwrap();
-        let status = std::process::Command::new(
-            std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned()),
-        )
-        .args(["--edition=2021", "-O"])
-        .arg(&source)
-        .arg("-o")
-        .arg(&binary)
-        .status()
-        .expect("rustc unavailable");
-        assert!(status.success(), "drain child failed to compile");
-        binary
-    })
+fn child_program() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::Builder::new()
+        .prefix("pp-t3-child-")
+        .tempdir()
+        .unwrap();
+    let source = dir.path().join("drain_child.rs");
+    let binary = dir.path().join("drain_child");
+    std::fs::write(&source, include_str!("fixtures/drain_child.rs")).unwrap();
+    let status =
+        std::process::Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned()))
+            .args(["--edition=2021", "-O"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&binary)
+            .status()
+            .expect("rustc unavailable");
+    assert!(status.success(), "drain child failed to compile");
+    (dir, binary)
 }
 
-struct GroupGuard(u32);
+struct GroupGuard {
+    pid: u32,
+    _program: tempfile::TempDir,
+}
 impl Drop for GroupGuard {
     fn drop(&mut self) {
-        reap_process_group(self.0);
+        reap_process_group(self.pid);
     }
 }
 
 async fn spawn(mode: &str, argument: &Path) -> (tokio::process::Child, u32, GroupGuard) {
-    let mut command = Command::new(child_program());
+    let (program, binary) = child_program();
+    let mut command = Command::new(binary);
     command
         .arg(mode)
         .arg(argument)
@@ -55,7 +56,14 @@ async fn spawn(mode: &str, argument: &Path) -> (tokio::process::Child, u32, Grou
         .process_group(0);
     let child = command.spawn().unwrap();
     let pid = child.id().unwrap();
-    (child, pid, GroupGuard(pid))
+    (
+        child,
+        pid,
+        GroupGuard {
+            pid,
+            _program: program,
+        },
+    )
 }
 
 async fn wait_for_text(path: &Path, expected: &str) {
@@ -157,8 +165,11 @@ async fn ticket_t_3_drain_waits_out_blocking_work_before_close() {
 
 #[tokio::test]
 async fn ticket_t_3_drain_sigterm_reaps_the_group() {
-    let dir = std::env::temp_dir().join(format!("pp-t3-coop-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::Builder::new()
+        .prefix("pp-t3-drain-")
+        .tempdir()
+        .unwrap();
+    let dir = scratch.path();
     let pidfile = dir.join("grand.pid");
     let (mut child, pid, _guard) = spawn("cooperative", &pidfile).await;
     let grand = wait_for_pid(&pidfile).await;
@@ -179,13 +190,15 @@ async fn ticket_t_3_drain_sigterm_reaps_the_group() {
     assert!(process_group_absent(pid));
     assert!(!process_alive(grand));
     assert!(elapsed < Duration::from_secs(2));
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]
 async fn ticket_t_3_drain_force_kill_waits_out_the_grace() {
-    let dir = std::env::temp_dir().join(format!("pp-t3-force-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::Builder::new()
+        .prefix("pp-t3-drain-")
+        .tempdir()
+        .unwrap();
+    let dir = scratch.path();
     let pidfile = dir.join("grand.pid");
     let (mut child, pid, _guard) = spawn("stubborn", &pidfile).await;
     let grand = wait_for_pid(&pidfile).await;
@@ -205,15 +218,17 @@ async fn ticket_t_3_drain_force_kill_waits_out_the_grace() {
     assert!(elapsed >= grace);
     assert!(elapsed < Duration::from_secs(2));
     assert!(stdin.is_some());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[tokio::test]
 async fn ticket_t_3_drain_second_start_sees_a_dead_group() {
     let mut pids = Vec::new();
-    for index in 0..2 {
-        let dir = std::env::temp_dir().join(format!("pp-t3-repeat-{}-{index}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+    for _ in 0..2 {
+        let scratch = tempfile::Builder::new()
+            .prefix("pp-t3-drain-")
+            .tempdir()
+            .unwrap();
+        let dir = scratch.path();
         let pidfile = dir.join("grand.pid");
         let (mut child, pid, _guard) = spawn("cooperative", &pidfile).await;
         let _grand = wait_for_pid(&pidfile).await;
@@ -224,15 +239,17 @@ async fn ticket_t_3_drain_second_start_sees_a_dead_group() {
         assert!(report.group_absent);
         assert!(process_group_absent(pid));
         pids.push(pid);
-        std::fs::remove_dir_all(&dir).unwrap();
     }
     assert_ne!(pids[0], pids[1]);
 }
 
 #[tokio::test]
 async fn ticket_t_3_drain_eof_watchdog_follows_the_compat_flag() {
-    let dir = std::env::temp_dir().join(format!("pp-t3-eof-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let scratch = tempfile::Builder::new()
+        .prefix("pp-t3-drain-")
+        .tempdir()
+        .unwrap();
+    let dir = scratch.path();
     let armed = dir.join("armed");
     let disarmed = dir.join("disarmed");
     let (mut armed_child, armed_pid, _armed_guard) = spawn("eof", &armed).await;
@@ -267,5 +284,47 @@ async fn ticket_t_3_drain_eof_watchdog_follows_the_compat_flag() {
     assert!(!events.contains("EOF"));
     assert!(started.elapsed() >= grace);
     assert!(stdin.is_some());
-    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[path = "support/scratch.rs"]
+mod scratch;
+
+#[test]
+fn scratch_root_is_empty_after_drain_tests() {
+    scratch::assert_test_run_clean(&[
+        "--skip",
+        "scratch_root_is_empty_after_drain_tests",
+        "--test-threads=1",
+    ]);
+}
+
+#[tokio::test]
+async fn scratch_cleanup_on_child_panic() {
+    let path = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let observed = path.clone();
+    let failure = tokio::spawn(async move {
+        let scratch = tempfile::tempdir().unwrap();
+        let pidfile = scratch.path().join("grand.pid");
+        let (_child, pid, guard) = spawn("cooperative", &pidfile).await;
+        let grand = wait_for_pid(&pidfile).await;
+        *observed.lock().unwrap() = Some((
+            scratch.path().to_owned(),
+            guard._program.path().to_owned(),
+            pid,
+            grand,
+        ));
+        panic!("exercise child and scratch cleanup while unwinding");
+    })
+    .await
+    .unwrap_err();
+    assert!(failure.is_panic());
+    let (data, program, pid, grand) = path.lock().unwrap().take().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !process_group_absent(pid) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(process_group_absent(pid));
+    assert!(!process_alive(grand));
+    assert!(!data.exists());
+    assert!(!program.exists());
 }

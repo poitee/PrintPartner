@@ -1,12 +1,23 @@
 name: Rust cross-OS
 
-# Every PR builds and tests the Rust workspace on Linux, macOS and Windows,
-# with the desktop_rebuild feature off and on. See docs/development/ci.md.
+# Relevant PRs test Rust on Linux and Windows. Ready PRs with the macos label also
+# test macOS. PR gate keeps clippy + doctests for both feature states (macOS PRs
+# still skip desktop_rebuild=on as before). nextest with desktop_rebuild on is
+# skipped on self-hosted Linux PR runners (pp-local ~67m monolithic). Windows PRs
+# (including pp-local-win) and hosted Linux PRs still run it. macOS PRs skip it.
+# On main push, merge_group, and workflow_dispatch, Linux archives desktop_rebuild
+# nextest once and runs --partition slice:m/3 across the three pp-local slots.
+# Schedule keeps the in-job monolithic desktop_rebuild nextest on ubuntu-latest.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
   push:
     branches: [main]
   workflow_dispatch:
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: '37 7 * * *'
 
 permissions:
   contents: read
@@ -23,48 +34,98 @@ env:
   CARGO_TERM_COLOR: always
   # Snapshot baselines must be committed; CI must never accept or create them.
   INSTA_UPDATE: 'no'
+  # CI-only: cut debuginfo from full (2) to line tables. Keeps panic locations;
+  # do not put these in .cargo/config or profile.toml for developer machines.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
-  rust:
-    name: rust (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # Runner labels, per-OS package scope and per-OS test filters live only here.
-        include:
-          - os: linux
-            runner: ubuntu-latest
-            scope: [--workspace]
-            tests: all()
-          # These tests fail on macOS. Each skipped term names the ticket that removes it
-          # (docs/development/ci.md#macos-exclusions):
-          #   GRE-645: the runtime_m0 binary, ticket_t_2:: and ticket_t_12_missing_config_...
-          - os: macos
-            runner: macos-26
-            scope: [--workspace]
-            tests: >-
-              not (
-              binary_id(pp-core::runtime_m0)
-              | (package(pp-compat) & test(/^ticket_t_2::/))
-              | test(=origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it)
-              )
-          # These crates still use Unix-only APIs or depend on one that does.
-          # Each port ticket deletes its line (docs/development/ci.md#windows-exclusions).
-          - os: windows
-            runner: windows-latest
-            scope:
-              - --workspace
-              - --exclude pp-storage --exclude pp-source # GRE-653
-              - --exclude pp-compat --exclude pp-core # GRE-654
-              - --exclude pp-api --exclude pp-gateway --exclude pp-server # GRE-655
-              - --exclude pp-desktop # GRE-656
-            tests: all()
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+  changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.select.outputs.relevant }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Select changed inputs
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_*path_filter.py'
+          python3 -B -m unittest discover -s scripts -p test_alert_macos_main.py
+          python3 scripts/ci-path-filter.py rust
+
+  rust-linux-build:
+    name: rust (linux) build
+    needs: changes
+    # Explicit jobs keep each required check present when selection skips it.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
+    # Same-repo PRs, main push, merge_group, and manual dispatch use pp-local so a
+    # desktop_rebuild nextest archive matches the three partition runners. Schedule
+    # stays on ubuntu-latest with the in-job monolithic rebuild-on nextest.
+    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
+    env:
+      RUST_OS: linux
+      CARGO_SCOPE: --workspace
+      NEXTEST_FILTER: all()
+      NEXTEST_PROFILE: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && 'pp-local-linux' || 'default' }}
+    # PRs skip only nextest desktop_rebuild-on (~67m on #1021). Clippy/doctests
+    # still run both feature states (except macOS PRs, unchanged). 90m covers both.
+    timeout-minutes: 90
+    steps: &rust-steps
+      - name: Require successful input selection
+        env:
+          SELECTOR_RESULT: ${{ needs.changes.result }}
+        run: test "$SELECTOR_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure sccache on pp-local
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
+          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
+      - name: Set up ephemeral Linux prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Prepare Python tool cache for the VM user
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        run: |
+          sudo mkdir -p /Users/runner/hostedtoolcache
+          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
+      - name: Set up Python 3.12 on ephemeral macOS
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS manifest Python
+        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
+        env:
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: |
+          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
+          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
+      - name: Verify preinstalled Python on ephemeral Windows
+        if: runner.environment == 'self-hosted' && runner.os == 'Windows'
+        id: py-windows
+        run: |
+          py -3.13 --version
+          py -3.13 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print("python-path=" + sys.executable)' >> "$GITHUB_OUTPUT"
+      - name: Set up Rust on ephemeral runners
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
       - name: Install the pinned toolchain from rust-toolchain.toml
@@ -72,14 +133,17 @@ jobs:
         run: |
           rustup toolchain install
           rustc --version
+      # Only main saves; PRs and other refs restore main's entry when keys match.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: runner.environment != 'self-hosted' || runner.os != 'Linux'
         with:
           workspaces: rust -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: nextest@0.9.148
       - name: Install Linux desktop dependencies
-        if: matrix.os == 'linux'
+        if: env.RUST_OS == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -100,6 +164,7 @@ jobs:
         id: assets
         env:
           VITE_PRINT_PARTNER_DESKTOP: '1'
+          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path || steps.py-windows.outputs.python-path || 'python3' }}
         run: |
           set -euo pipefail
           node_path=$(node -p process.execPath)
@@ -109,11 +174,11 @@ jobs:
           echo "PP_TEST_NODE=$node_path" >> "$GITHUB_ENV"
           npm --prefix web ci
           npm --prefix web run build
-          python3 rust/scripts/build-desktop-manifest.py --web web --node "$node_path" --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
+          "$MANIFEST_PYTHON" rust/scripts/build-desktop-manifest.py --web web --node "$node_path" --output rust/bundle-manifest.json --commit "$GITHUB_SHA"
       # The default macOS TMPDIR is case-insensitive, sits under the /var symlink and is
       # too long for Unix socket paths. The tests need a TMPDIR that is none of these.
       - name: Mount a short case-sensitive TMPDIR
-        if: matrix.os == 'macos'
+        if: env.RUST_OS == 'macos'
         run: |
           set -euo pipefail
           hdiutil create -size 8g -type SPARSE -fs 'Case-sensitive APFS' -volname pptmp "$RUNNER_TEMP/pptmp.sparseimage"
@@ -126,13 +191,292 @@ jobs:
         run: cargo fmt --manifest-path rust/Cargo.toml --all --check
       - name: clippy (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going -- -D warnings
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --all-targets --keep-going -- -D warnings
       - name: clippy (desktop_rebuild on)
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
+        # Keep rebuild-on clippy on Linux/Windows PRs; macOS PRs still skip it.
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
+        run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
       - name: nextest (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}'
+        timeout-minutes: 45
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER"
+      - name: Archive nextest (desktop_rebuild on)
+        # Main push / merge_group / workflow_dispatch: build once for slice partitions.
+        # PRs never archive; they keep skipping the rebuild-on suite on pp-local.
+        # zstd level 11 shrinks transfer vs default 0 (upload previously >17–33m).
+        id: archive-rebuild
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
+        timeout-minutes: 45
+        run: cargo nextest archive --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --features desktop_rebuild -E "$NEXTEST_FILTER" --archive-file nextest-archive-desktop-rebuild.tar.zst --zstd-level 11
+      - name: Upload nextest desktop_rebuild archive
+        if: ${{ !cancelled() && steps.archive-rebuild.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-archive-linux-desktop-rebuild
+          path: nextest-archive-desktop-rebuild.tar.zst
+          # Already zstd-compressed; skip artifact gzip re-compress (was the bulk of upload wall time).
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      # Partitions must reuse the exact measured trees embedded in the archive
+      # binaries (include_bytes! of bundle-manifest.json). Rebuilding web assets
+      # on each partition runner changes digests and fails release verification.
+      # Dependency inventory follows workspace links into package trees and records
+      # dist/current as a symlink to dist/releases/<id> plus files under that
+      # release path. Pack the full dist/ trees without -h so restore keeps that
+      # topology; packing only current with -h flattens the link and mismatches.
+      - name: Pack desktop release assets for partitions
+        id: pack-assets
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
+        run: |
+          set -euo pipefail
+          test -f "$GITHUB_WORKSPACE/rust/bundle-manifest.json"
+          test -f "$GITHUB_WORKSPACE/web/apps/web/dist/desktop-build.json"
+          test -L "$GITHUB_WORKSPACE/web/apps/server/dist/current"
+          test -L "$GITHUB_WORKSPACE/web/packages/contracts/dist/current"
+          test -L "$GITHUB_WORKSPACE/web/packages/domain/dist/current"
+          test -f "$GITHUB_WORKSPACE/web/apps/server/dist/current/desktop-resolution.js"
+          server_release=$(readlink "$GITHUB_WORKSPACE/web/apps/server/dist/current")
+          contracts_release=$(readlink "$GITHUB_WORKSPACE/web/packages/contracts/dist/current")
+          domain_release=$(readlink "$GITHUB_WORKSPACE/web/packages/domain/dist/current")
+          test -f "$GITHUB_WORKSPACE/web/apps/server/dist/${server_release}/desktop-resolution.js"
+          tar -C "$GITHUB_WORKSPACE" -cf - \
+            rust/bundle-manifest.json \
+            web/apps/web/dist \
+            web/apps/server/dist \
+            web/packages/contracts/dist \
+            web/packages/domain/dist \
+            | zstd -T0 -11 -o desktop-release-assets.tar.zst
+          tar --use-compress-program=zstd -tf desktop-release-assets.tar.zst > desktop-release-assets.list
+          grep -Fx 'web/apps/server/dist/current' desktop-release-assets.list
+          grep -Fx "web/apps/server/dist/${server_release}/desktop-resolution.js" desktop-release-assets.list
+          grep -Fx 'web/packages/contracts/dist/current' desktop-release-assets.list
+          grep -Fx 'web/packages/domain/dist/current' desktop-release-assets.list
+          grep -qF "web/packages/contracts/dist/${contracts_release}/" desktop-release-assets.list
+          grep -qF "web/packages/domain/dist/${domain_release}/" desktop-release-assets.list
+          grep -Fx 'web/apps/web/dist/desktop-build.json' desktop-release-assets.list
+          ls -lh desktop-release-assets.tar.zst
+          if [ -f nextest-archive-desktop-rebuild.tar.zst ]; then
+            ls -lh nextest-archive-desktop-rebuild.tar.zst
+          fi
+      - name: Upload desktop release assets
+        if: ${{ !cancelled() && steps.pack-assets.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-release-assets-linux
+          path: desktop-release-assets.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - name: Remove partition archives from the workspace
+        if: ${{ always() && (steps.archive-rebuild.outcome == 'success' || steps.pack-assets.outcome == 'success') }}
+        run: |
+          set -euo pipefail
+          rm -f nextest-archive-desktop-rebuild.tar.zst \
+            desktop-release-assets.tar.zst desktop-release-assets.list
       - name: nextest (desktop_rebuild on)
+        # Bound self-hosted Linux PR runtime only (pp-local ~67m). Windows PRs
+        # keep rebuild-on nextest even when pp-local-win is self-hosted. Hosted
+        # Linux PRs keep it. macOS PRs still skip it. Linux main push / merge_group /
+        # workflow_dispatch use the archived slice partitions instead. Schedule keeps
+        # this in-job pass on ubuntu-latest.
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (github.event_name != 'pull_request' || env.RUST_OS == 'windows' || (env.RUST_OS == 'linux' && runner.environment != 'self-hosted')) && !(env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')) }}
+        timeout-minutes: 75
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild
+      # nextest does not run doctests.
+      - name: doctests (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ join(matrix.scope, ' ') }} --no-fail-fast -E '${{ matrix.tests }}' --features desktop_rebuild
+        run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc
+      - name: doctests (desktop_rebuild on)
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
+        run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc --features desktop_rebuild
+      - name: Show sccache stats
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
+
+  # Three fleet Linux slots (see docs/development/ci.md). Only main push,
+  # merge_group, and workflow_dispatch; PRs keep skipping desktop_rebuild nextest.
+  rust-linux-rebuild:
+    name: rust (linux) rebuild ${{ matrix.partition }}/3
+    needs: [rust-linux-build]
+    # Draft guard first (merge-group workflow tests). Event filter still keeps
+    # partitions off pull_request; only push / merge_group / workflow_dispatch.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result == 'success' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'))
+    runs-on: ${{ fromJSON('["self-hosted","linux","x64","pp-local"]') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
+    env:
+      RUST_OS: linux
+      NEXTEST_FILTER: all()
+      NEXTEST_PROFILE: pp-local-linux
+    # Compressed archive download plus a full slice must stay under this budget.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up ephemeral Linux prerequisites
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Fetch pinned historical schema commits
+        run: rust/scripts/fetch-historical-schema-commits.sh
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: nextest@0.9.148
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+            libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - name: Install pinned storage-fixture Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.3'
+      - name: Record storage-fixture executable
+        run: |
+          test "$(node --version)" = v22.23.3
+          echo "PP_SCHEMA_PARITY_NODE=$(node -p process.execPath)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+      # Install lockfile dependencies only. Do not rebuild web or regenerate the
+      # manifest: archived binaries embed digests from the build job.
+      - name: Install web dependencies for release verification
+        run: |
+          set -euo pipefail
+          node_path=$(node -p process.execPath)
+          sudo ln -sf "$node_path" /usr/bin/node
+          echo "PP_TEST_NODE=$node_path" >> "$GITHUB_ENV"
+          npm --prefix web ci
+      - name: Download desktop release assets
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: desktop-release-assets-linux
+      - name: Restore desktop release assets
+        run: |
+          set -euo pipefail
+          test -f desktop-release-assets.tar.zst
+          tar --use-compress-program=zstd -C "$GITHUB_WORKSPACE" -xf desktop-release-assets.tar.zst
+          for link in \
+            web/apps/server/dist/current \
+            web/packages/contracts/dist/current \
+            web/packages/domain/dist/current
+          do
+            if [ ! -L "$link" ]; then
+              echo "missing symlink after restore: $link" >&2
+              ls -la "$(dirname "$link")" >&2 || true
+              exit 1
+            fi
+          done
+          for f in \
+            rust/bundle-manifest.json \
+            web/apps/web/dist/desktop-build.json \
+            web/apps/server/dist/current/desktop-resolution.js
+          do
+            if [ ! -f "$f" ]; then
+              echo "missing after restore: $f" >&2
+              ls -la "$(dirname "$f")" >&2 || true
+              exit 1
+            fi
+          done
+      - name: Download nextest desktop_rebuild archive
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: nextest-archive-linux-desktop-rebuild
+      - name: nextest desktop_rebuild partition
+        timeout-minutes: 55
+        # Remap the archived workspace root (rust/) onto this runner's checkout so
+        # partitions do not require identical absolute paths across pp-local slots.
+        run: cargo nextest run --archive-file nextest-archive-desktop-rebuild.tar.zst --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:${{ matrix.partition }}/3 --no-fail-fast -E "$NEXTEST_FILTER"
+
+  # Preserve the required check name rust (linux). Partitions are skipped on PRs
+  # and on schedule (monolithic in-job rebuild-on nextest).
+  rust-linux:
+    name: rust (linux)
+    needs: [rust-linux-build, rust-linux-rebuild]
+    # Draft guard first. !cancelled() so cancel reports skipped, not aggregate fail.
+    # Rebuild may be skipped on PRs/schedule; push / merge_group / dispatch require success.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result != 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require linux build and rebuild partitions
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUILD_RESULT: ${{ needs.rust-linux-build.result }}
+          REBUILD_RESULT: ${{ needs.rust-linux-rebuild.result }}
+        run: |
+          set -euo pipefail
+          test "$BUILD_RESULT" = success
+          case "$EVENT_NAME" in
+            push|merge_group|workflow_dispatch)
+              test "$REBUILD_RESULT" = success
+              ;;
+            *)
+              case "$REBUILD_RESULT" in
+                success|skipped) ;;
+                *)
+                  echo "rust-linux-rebuild result=$REBUILD_RESULT" >&2
+                  exit 1
+                  ;;
+              esac
+              ;;
+          esac
+
+  rust-macos:
+    name: rust (macos)
+    needs: changes
+    # macOS is opt-in on ready PRs, and always selected on non-PR events.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false') && (github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'macos'))))
+    concurrency:
+      group: rust-macos-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macos","arm64","pp-local-mac"]') || 'macos-26' }}
+    env:
+      RUST_OS: macos
+      CARGO_SCOPE: --workspace
+      NEXTEST_FILTER: all()
+    timeout-minutes: 90
+    steps: *rust-steps
+
+  rust-windows:
+    name: rust (windows)
+    needs: changes
+    # Explicit jobs keep each required check present when selection skips it.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.PP_LOCAL_WIN == 'true') && fromJSON('["self-hosted","windows","x64","pp-local-win"]') || 'windows-latest' }}
+    env:
+      RUST_OS: windows
+      # Unix-only crates; remove each exclusion when its port ticket is fixed.
+      CARGO_SCOPE: >-
+        --workspace
+        --exclude pp-storage --exclude pp-source
+        --exclude pp-compat --exclude pp-core
+        --exclude pp-api --exclude pp-gateway --exclude pp-server
+        --exclude pp-desktop
+      NEXTEST_FILTER: all()
+    timeout-minutes: 90
+    steps: *rust-steps
+
+  alert-macos-main:
+    needs: [rust-linux, rust-macos, rust-windows]
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (failure() && github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Open or update the macOS main failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALERT_KIND: rust
+        run: python3 scripts/alert-macos-main.py

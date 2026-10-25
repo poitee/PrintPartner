@@ -1,6 +1,7 @@
-import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL, parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 import { readFarmAccess } from "../lib/farm-access.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
+import { readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import { chargeTenantDiskBytes, TenantDiskQuotaError } from "../lib/tenant-disk-quota.js";
 import {
   OwnershipAdmissionError,
@@ -10,7 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
-import type { AssistantActionType, AssistantProposedAction, PrinterHostStatus } from "@print-partner/contracts";
+import type { AssistantActionType, AssistantProposedAction } from "@print-partner/contracts";
 import {
   categoryLeafName,
   categoryParentPath,
@@ -25,10 +26,12 @@ import {
   findSourceCategoryPath,
   moveSourceCategoryPath,
 } from "@print-partner/domain";
-import { SourceActivationConflictError, type AppRepository } from "../db/repository.js";
+import { CatalogMetadataConflict, SourceActivationConflictError, type AppRepository } from "../db/repository.js";
+import { desktopFeaturesEnabled } from "../lib/feature-toggles.js";
 import { AcceptedPlanOperationalIntegrityError } from "../db/accepted-plan-operational.js";
 import { acceptedPlanBasis, acceptedProgressSummary } from "../db/accepted-plan-progress.js";
 import type { IntegrationPort } from "../integrations/store.js";
+import { probeFleetHostStatus } from "../services/printer-fleet-status.js";
 import { loadKitCatalog } from "../services/kit-catalog.js";
 import { loadKitManifest, saveKitManifest } from "../services/kit-manifest-store.js";
 import {
@@ -2898,47 +2901,28 @@ export async function invokeAssistantTool(
           // print_jobs unreadable — idle_since degrades to null, status still works.
         }
 
-        const printers = await Promise.all(
-          fleet.map(async (m) => {
-            let state: string = "unknown";
-            let message: string | null = null;
-            let activeJob: string | null = null;
-            let progress: number | null = null;
-            let etaSeconds: number | null = null;
-            let hostStatus: PrinterHostStatus | null = null;
-            if (m.integration_id && ctx.integrations) {
-              try {
-                const status = await ctx.integrations.getStatus(m.integration_id);
-                hostStatus = status;
-                state = status.state;
-                message = status.message ?? null;
-                activeJob = ((status as Record<string, unknown>).filename as string | null) ?? null;
-                progress = typeof status.progress === "number" ? status.progress : null;
-                etaSeconds = typeof status.eta_seconds === "number" ? status.eta_seconds : null;
-              } catch {
-                state = "offline";
-              }
-            }
+        const hostStatuses = await probeFleetHostStatus(ctx.repo, ctx.integrations, fleet);
+        const printers = fleet.map((m, i) => {
+          const hostStatus = hostStatuses[i] ?? null;
+          const state = hostStatus?.state ?? "unknown";
+          const filament = printerFilamentStatus(m, lookupSpools, hostStatus);
 
-            const filament = printerFilamentStatus(m, lookupSpools, hostStatus);
-
-            return {
-              id: m.id,
-              name: m.name,
-              state,
-              active_job: activeJob,
-              progress,
-              eta_seconds: etaSeconds,
-              message,
-              integration_id: m.integration_id ?? null,
-              idle_since: idleSinceFor(state, m.id, lastActivity),
-              filament_slots: filament.slots,
-              filament_remaining_g: filament.filament_remaining_g,
-              needs_filament_swap: filament.needs_filament_swap,
-              filament_swap_reason: filament.filament_swap_reason,
-            };
-          }),
-        );
+          return {
+            id: m.id,
+            name: m.name,
+            state,
+            active_job: hostStatus?.filename ?? null,
+            progress: typeof hostStatus?.progress === "number" ? hostStatus.progress : null,
+            eta_seconds: typeof hostStatus?.eta_seconds === "number" ? hostStatus.eta_seconds : null,
+            message: hostStatus?.message ?? null,
+            integration_id: m.integration_id ?? null,
+            idle_since: idleSinceFor(state, m.id, lastActivity),
+            filament_slots: filament.slots,
+            filament_remaining_g: filament.filament_remaining_g,
+            needs_filament_swap: filament.needs_filament_swap,
+            filament_swap_reason: filament.filament_swap_reason,
+          };
+        });
         return {
           content: JSON.stringify({
             printer_count: fleet.length,
@@ -2958,6 +2942,10 @@ export async function invokeAssistantTool(
       }
 
       case "get_print_stats": {
+        const access = readFarmAccess(() => ctx.repo);
+        if (access.kind !== "allowed") {
+          return { content: JSON.stringify({ error: access.error, code: access.code }) };
+        }
         // `hours` is optional (default 8h / overnight); when present it must be a
         // finite, positive number within a sane window. Reject bad input instead of
         // silently falling back to the default, so callers can tell "no window given"
@@ -3073,6 +3061,7 @@ export async function applyAssistantAction(
   status?: number;
   code?: string;
   detail?: string;
+  error?: string;
   job_id?: string;
   result?: Record<string, unknown>;
 }> {
@@ -3156,6 +3145,10 @@ export async function applyAssistantAction(
             break;
           }
         }
+        const access = readFeatureAccess(() => deps.repo, "orders");
+        if (access.kind !== "allowed") {
+          return { ok: false, status: access.kind === "invalid" ? 409 : 403, code: access.code, detail: access.error };
+        }
         const created = deps.repo.transaction(() => {
           const profile = deps.repo.createProfile(name);
           deps.repo.updateProfileSpecialRequest(profile.id, request);
@@ -3177,9 +3170,21 @@ export async function applyAssistantAction(
         const rawPatch = action.params.patch;
         if (!rawPatch || typeof rawPatch !== "object" || Array.isArray(rawPatch)) return { ok: false, detail: "patch required" };
         const patch = rawPatch as Record<string, unknown>;
+        let metadataVersion: number | undefined;
+        if (desktopFeaturesEnabled() && Object.prototype.hasOwnProperty.call(patch, "metadata_version")) {
+          const token = patch.metadata_version;
+          if (token !== null && token !== undefined) {
+            if (typeof token !== "number" || !Number.isSafeInteger(token)) {
+              const detail = "metadata_version must be an integer";
+              return { ok: false, detail, error: detail };
+            }
+            metadataVersion = token;
+          }
+        }
         const allowed = new Set(["name", "url", "branch", "tag", "source_kind", "source_type", "role", "metadata", "manifest_community_slug"]);
         const clean: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(patch)) if (allowed.has(key)) clean[key] = value;
+        if (metadataVersion !== undefined) clean.metadata_version = metadataVersion;
         if (Object.keys(clean).length === 0) return { ok: false, detail: "patch has no supported fields" };
         if (clean.metadata != null && (typeof clean.metadata !== "object" || Array.isArray(clean.metadata))) return { ok: false, detail: "metadata must be an object" };
         if (clean.manifest_community_slug !== undefined) {
@@ -3189,7 +3194,15 @@ export async function applyAssistantAction(
             return { ok: false, detail: INVALID_COMMUNITY_MANIFEST_SLUG_DETAIL };
           }
         }
-        const updated = deps.repo.updateSource(sourceId, clean as Parameters<AppRepository["updateSource"]>[1]);
+        let updated: ReturnType<AppRepository["updateSource"]>;
+        try {
+          updated = deps.repo.updateSource(sourceId, clean as Parameters<AppRepository["updateSource"]>[1]);
+        } catch (error) {
+          if (error instanceof CatalogMetadataConflict) {
+            return { ok: false, code: error.code, detail: error.message, error: error.message };
+          }
+          throw error;
+        }
         outcome = {
           ok: true,
           result: {

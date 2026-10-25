@@ -1,5 +1,7 @@
 #[path = "tests/client.rs"]
 mod client;
+#[path = "tests/policy.rs"]
+mod policy;
 
 use super::*;
 use crate::manifest_text::{JsText, ManifestText, OptionGroupId, PartManifestMetadata};
@@ -78,6 +80,18 @@ fn preparation_matches_literal_node_digests_progress_and_slots() {
             "{}",
             case["id"]
         );
+        let mut unsorted = case.clone();
+        if let Some(assignments) = unsorted["input"]["assignments"].as_array_mut() {
+            assignments.reverse();
+        }
+        let unsorted = self::prepared(&unsorted).unwrap();
+        let unsorted_slots: Vec<_> = unsorted.assignments.iter().map(Assignment::slot).collect();
+        assert_eq!(
+            (unsorted.digest, unsorted.progress, unsorted_slots),
+            (prepared.digest.clone(), prepared.progress.clone(), slots),
+            "{} unsorted",
+            case["id"]
+        );
         let mut reversed = prepared.parts;
         reversed.reverse();
         assert_eq!(model::revision_digest(&reversed).unwrap(), prepared.digest);
@@ -86,6 +100,263 @@ fn preparation_matches_literal_node_digests_progress_and_slots() {
             assert_ne!(model::revision_digest(&reversed).unwrap(), prepared.digest);
         }
     }
+}
+
+#[test]
+fn preparation_text_limit_counts_node_fields_as_utf8() {
+    let case = golden()["prepare"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "create")
+        .unwrap()
+        .clone();
+    let prepare = |surrogates: usize| {
+        let mut parts: Vec<DraftPart> = case["input"]["draft"]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .cloned()
+            .map(part)
+            .collect();
+        // Buffer.byteLength counts a lone surrogate as 3 bytes; its JSON escape is 6.
+        parts[0].manifest.requirement =
+            Some(ManifestText(JsText::from_units(vec![0xD800; surrogates])));
+        model::prepare(parts, &case["input"]["assignments"], &HashMap::new()).map(|_| ())
+    };
+    // The other named fields hold 51 bytes: 51 + 3 * 21828 = 65535.
+    prepare(21828).unwrap();
+    assert_eq!(error(prepare(21829)), "Accepted operational row text limit");
+}
+
+#[test]
+fn inserted_rows_match_node_publication_text_boundaries() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../fixtures/parity/publication-row-text/node.json"
+    ))
+    .unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let table = case["table"].as_str().unwrap();
+        let mut row = case["row"].clone();
+        for value in row.as_object_mut().unwrap().values_mut() {
+            if value.is_object() {
+                *value = json!(format!(
+                    "{}{}",
+                    value["repeat"]
+                        .as_str()
+                        .unwrap()
+                        .repeat(value["count"].as_u64().unwrap() as usize),
+                    value["suffix"].as_str().unwrap_or("")
+                ));
+            }
+        }
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let columns = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|key| model::snake(key))
+            .collect::<Vec<_>>()
+            .join(",");
+        tx.execute_batch(&format!("CREATE TABLE {table}({columns})"))
+            .unwrap();
+        let result = super::insert(&tx, table, &row, false);
+        match case["expected"].as_str().unwrap() {
+            "accepted" => {
+                result.unwrap_or_else(|err| panic!("{}: {err}", case["id"]));
+                let extra: String = tx
+                    .query_row(
+                        &format!("SELECT fixture_extra_text FROM {table}"),
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(extra, "😀".repeat(16385), "{}", case["id"]);
+            }
+            "accepted_operational_row_text_limit" => {
+                assert_eq!(
+                    error(result),
+                    "Accepted operational row text limit",
+                    "{}",
+                    case["id"]
+                );
+                let count: i64 = tx
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(count, 0, "{}", case["id"]);
+            }
+            outcome => panic!("Unknown Node outcome: {outcome}"),
+        }
+    }
+}
+
+#[test]
+fn inserted_rows_count_only_node_named_text_fields() {
+    for (table, fields, excluded) in [
+        (
+            "plan_revision_input_sets",
+            vec!["tenantId", "inputSetDigest", "recordedAt", "recordedAt"],
+            "formatVersion",
+        ),
+        (
+            "plan_revision_inputs",
+            vec![
+                "tenant_id",
+                "source_layer",
+                "tracking_kind",
+                "manifest_digest",
+                "effective_naming_digest",
+            ],
+            "source_id",
+        ),
+        (
+            "plan_revisions",
+            vec![
+                "tenantId",
+                "provenanceKind",
+                "digestFormat",
+                "snapshotDigest",
+                "createdBy",
+                "acceptedBy",
+                "createdAt",
+                "acceptedAt",
+            ],
+            "profileId",
+        ),
+        (
+            "required_units",
+            vec!["tenantId", "token", "objectName", "createdAt"],
+            "profileId",
+        ),
+        (
+            "plan_revision_required_unit_sets",
+            vec!["tenantId", "format", "mappingDigest", "createdAt"],
+            "profileId",
+        ),
+        ("plan_revision_required_units", vec![], "requiredUnitToken"),
+        ("print_progress", vec![], "tenantId"),
+        ("plan_apply_requests", vec![], "actorId"),
+        ("plan_apply_admissions", vec![], "requestFormat"),
+    ] {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        let mut row = json!({excluded: "extra"});
+        for field in &fields {
+            row[*field] = json!("");
+        }
+        let columns = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|key| model::snake(key))
+            .collect::<Vec<_>>()
+            .join(",");
+        tx.execute_batch(&format!("CREATE TABLE {table}({columns})"))
+            .unwrap();
+        if fields.is_empty() {
+            row[excluded] = json!("é".repeat(32769));
+            super::insert(&tx, table, &row, false).unwrap();
+        } else {
+            for field in &fields {
+                let occurrences = fields.iter().filter(|other| *other == field).count();
+                row[*field] = json!("é".repeat(32768 / occurrences));
+                super::insert(&tx, table, &row, false)
+                    .unwrap_or_else(|err| panic!("{table}.{field}: {err}"));
+                row[*field] = json!(format!("{}x", row[*field].as_str().unwrap()));
+                assert_eq!(
+                    error(super::insert(&tx, table, &row, false)),
+                    "Accepted operational row text limit",
+                    "{table}.{field}"
+                );
+                row[*field] = json!("");
+            }
+        }
+        let stored: String = tx
+            .query_row(
+                &format!("SELECT {} FROM {table} LIMIT 1", model::snake(excluded)),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, row[excluded].as_str().unwrap());
+    }
+}
+
+#[test]
+fn inserted_parts_count_tenant_and_lossless_manifest_utf8() {
+    for table in ["parts", "plan_revision_parts"] {
+        let mut connection = Connection::open_in_memory().unwrap();
+        let tx = connection.transaction().unwrap();
+        tx.execute_batch(&format!("CREATE TABLE {table}(tenant_id,filename,match_key,requirement,option_group_id,manifest_source)")).unwrap();
+        let mut part = DraftPart::new(
+            json!({"tenantId":"tenant", "filename":"é", "matchKey":"ignored".repeat(10000)}),
+            PartManifestMetadata {
+                requirement: Some(ManifestText(JsText::from_units(vec![0xD800; 21842]))),
+                option_group_id: Some(OptionGroupId(JsText::scalar("é"))),
+                manifest_source: None,
+            },
+        );
+        super::insert_part(&tx, table, &part).unwrap();
+        let mut statement = tx
+            .prepare(&format!("SELECT requirement FROM {table}"))
+            .unwrap();
+        let mut rows = statement.query([]).unwrap();
+        let stored = crate::manifest_text::read_manifest_text(
+            rows.next().unwrap().unwrap().get_ref(0).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            stored.as_ref(),
+            part.manifest.requirement.as_ref().map(|text| &text.0)
+        );
+        part.manifest.option_group_id = Some(OptionGroupId(JsText::scalar("éx")));
+        assert_eq!(
+            error(super::insert_part(&tx, table, &part)),
+            "Accepted operational row text limit"
+        );
+    }
+}
+
+#[test]
+fn input_validation_counts_named_fields_and_tenant() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    let tx = connection.transaction().unwrap();
+    tx.execute_batch("CREATE TABLE projects(id,tenant_id); CREATE TABLE source_revisions(id,tenant_id,project_id,upstream_revision_key,manifest_digest,snapshot_locator,synced_at,completeness,extra)").unwrap();
+    let tenant = "é".repeat(32731);
+    tx.execute("INSERT INTO projects VALUES(1,?)", [&tenant])
+        .unwrap();
+    let mut input = json!({"sourceId":1,"sourceLayer":"s","trackingKind":"untracked","sourceRevisionId":null,"manifestDigest":null,"effectiveNamingDigest":"a".repeat(64),"extra":"ignored".repeat(10000)});
+    validate_inputs(&tx, &tenant, std::slice::from_ref(&input)).unwrap();
+    input["sourceLayer"] = json!("sx");
+    assert_eq!(
+        error(validate_inputs(&tx, &tenant, &[input])),
+        "Accepted operational row text limit"
+    );
+
+    tx.execute("INSERT INTO projects VALUES(2,'tenant')", [])
+        .unwrap();
+    let upstream = "é".repeat(32729);
+    tx.execute(
+        "INSERT INTO source_revisions VALUES(3,'tenant',2,?,?,'','','complete',?)",
+        params![upstream, "a".repeat(64), "ignored".repeat(1000)],
+    )
+    .unwrap();
+    let input = json!({"sourceId":2,"sourceLayer":"s","trackingKind":"revision","sourceRevisionId":3,"manifestDigest":"a".repeat(64),"effectiveNamingDigest":"b".repeat(64)});
+    validate_inputs(&tx, "tenant", std::slice::from_ref(&input)).unwrap();
+    tx.execute(
+        "UPDATE source_revisions SET upstream_revision_key=upstream_revision_key || 'x'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        error(validate_inputs(&tx, "tenant", &[input])),
+        "Accepted operational row text limit"
+    );
 }
 
 #[test]
@@ -529,6 +800,96 @@ fn empty_settings_and_model_utilities_preserve_reference_behavior() {
     write_remap(&tx, "tenant", empty, &HashMap::new(), &HashMap::new()).unwrap();
 }
 
+#[test]
+fn client_validates_reused_required_unit_named_utf8_text_at_boundary() {
+    use crate::auth::Secret;
+    use sha2::{Digest, Sha256};
+
+    let data = golden();
+    let case = data["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == "changed")
+        .unwrap();
+    let input = &case["input"];
+    let unit = &case["before"]["required_units"][0];
+    let other_bytes: usize = ["tenant_id", "token", "object_name"]
+        .iter()
+        .map(|field| unit[*field].as_str().unwrap().len())
+        .sum();
+    for excess in [0, 1] {
+        let bytes = 65536 - other_bytes + excess;
+        let created_at = format!("{}{}", "é".repeat(bytes / 2), "x".repeat(bytes % 2));
+        assert_eq!(created_at.len() + other_bytes, 65536 + excess);
+        let mut corrupted = case.clone();
+        corrupted["before"]["required_units"][0]["created_at"] = json!(created_at);
+        let c = transaction::database(
+            &json!({"definitions":data["transactionSchema"]}),
+            &corrupted,
+        );
+        c.execute_batch("DROP TABLE plan_apply_admissions; UPDATE app_settings SET value='35' WHERE key='schema_version' AND tenant_id='default'").unwrap();
+        let session = "reused-unit-text-session";
+        let digest = hex::encode(Sha256::digest(session.as_bytes()));
+        c.execute_batch("INSERT INTO users(id,display_name,is_admin,created_at) VALUES('default','Fixture',0,'2026-09-06T00:00:00.000Z')").unwrap();
+        c.execute("INSERT INTO sessions(id,user_id,expires_at,provider) VALUES(?,'default','2099-01-01T00:00:00.000Z','email')", [digest]).unwrap();
+        let dir = crate::tests::directory("reused-unit-text");
+        c.backup("main", dir.join("print-partner.db"), None)
+            .unwrap();
+        drop(c);
+        let (owner, _) = WriterOwner::open(&dir, crate::Limits::default()).unwrap();
+        let command = PublicationCommand::new(
+            serde_json::from_value(input["profileId"].clone()).unwrap(),
+            serde_json::from_value(input["draftId"].clone()).unwrap(),
+            serde_json::from_value(json!({
+                "expected_snapshot_digest":input["expectedSnapshotDigest"],
+                "expected_lifecycle_version":input["expectedLifecycleVersion"],
+                "expected_base":{
+                    "revision_id":input["expectedBase"]["revisionId"],
+                    "plan_version":input["expectedBase"]["planVersion"]
+                },
+                "remap_checkoff_links":true
+            }))
+            .unwrap(),
+            input["idempotencyKey"].as_str().unwrap().into(),
+            Credential::Session(Secret::new(session.into())),
+        )
+        .unwrap();
+        let result = owner
+            .publication()
+            .apply(command, &AtomicBool::new(false), Duration::ZERO);
+        owner.shutdown().unwrap();
+        let c = Connection::open(dir.join("print-partner.db")).unwrap();
+        let state: (i64, i64, i64) = c.query_row(
+            "SELECT accepted_plan_version,(SELECT COUNT(*) FROM plan_revisions),(SELECT COUNT(*) FROM plan_apply_requests) FROM build_profiles WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        let stored: String = c
+            .query_row(
+                "SELECT created_at FROM required_units WHERE token=?",
+                [unit["token"].as_str().unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(c);
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(stored, created_at);
+        if excess == 0 {
+            assert!(matches!(result.unwrap(), Outcome::Applied { .. }));
+            assert_eq!(state, (2, 2, 2));
+        } else {
+            let error = result.err().unwrap();
+            assert_eq!(error.to_string(), "Plan draft update failed");
+            assert_eq!(
+                error.root_cause().to_string(),
+                "Accepted operational row text limit"
+            );
+            assert_eq!(state, (1, 1, 1));
+        }
+    }
+}
+
 mod transaction {
     use super::super::*;
     use rusqlite::{Connection, types::ValueRef};
@@ -649,6 +1010,13 @@ mod transaction {
                 ],
             );
         }
+        if result["kind"] == "production_active" {
+            result = json!({
+                "kind": "production_active",
+                "checkoff_link_count": outcome["checkoffLinkCount"],
+                "send_queue_item_count": outcome["sendQueueItemCount"],
+            });
+        }
         result
     }
     pub(super) fn replace_time(value: &mut Value, actual: &str, expected: &Value) {
@@ -676,6 +1044,9 @@ mod transaction {
             "mapped-remap-index-0",
             "mapped-remap-index-2",
             "renamed-part",
+            "prior-completion-index-0",
+            "prior-completion-index-1",
+            "prior-completion-index-2",
         ] {
             assert!(
                 cases.iter().any(|case| case["id"] == id),
@@ -702,18 +1073,13 @@ mod transaction {
                 assert_eq!(expected["kind"], "applied");
                 let job = &case["before"]["durable_jobs"][0];
                 expected = json!({"kind":"execution_conflict","operations":[{"operation_id":job["id"],"kind":job["kind"],"state":job["state"]}]});
-            } else if case["id"] == "mapped-remap-index-0" {
-                assert_eq!(expected["kind"], "applied");
-                assert_token_consistent_remap(case, None);
-                expected = json!({"kind":"checkoff_remap_unsafe","unmappable":[{"linkId":"kept-slot","filename":"bracket.stl","reason":"Required unit at Part 1 index 0 is absent or excluded in the selected Plan"}]});
             }
             assert_eq!(actual, expected, "{}", case["id"]);
-            let state =
-                if actual["kind"] == "execution_conflict" || case["id"] == "mapped-remap-index-0" {
-                    &case["before"]
-                } else {
-                    &case["after"]
-                };
+            let state = if actual["kind"] == "execution_conflict" {
+                &case["before"]
+            } else {
+                &case["after"]
+            };
             for table in [
                 "build_profiles",
                 "parts",
@@ -732,16 +1098,12 @@ mod transaction {
             ] {
                 let mut actual = snapshot(&c, table);
                 replace_time(&mut actual, &at, &fixture["at"]);
-                if case["id"] == "mapped-remap-index-change" && table == "app_settings" {
-                    assert_token_consistent_remap(case, Some(&actual));
-                } else {
-                    assert_eq!(
-                        actual,
-                        state.get(table).cloned().unwrap_or(json!([])),
-                        "{} {table}",
-                        case["id"]
-                    );
-                }
+                assert_eq!(
+                    actual,
+                    state.get(table).cloned().unwrap_or(json!([])),
+                    "{} {table}",
+                    case["id"]
+                );
             }
             if actual["kind"] == "checkoff_remap_unsafe" {
                 assert_eq!(snapshot(&c, "plan_apply_admissions"), json!([]));
@@ -770,84 +1132,6 @@ mod transaction {
                 .unwrap(),
                 0
             );
-        }
-    }
-
-    fn assert_token_consistent_remap(case: &Value, actual: Option<&Value>) {
-        let token = |state: &Value, coordinate: &Value| {
-            let part = state["plan_revision_parts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|part| part["projection_part_id"] == coordinate["part_id"])
-                .unwrap();
-            state["plan_revision_required_units"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|unit| {
-                    unit["revision_part_id"] == part["id"]
-                        && unit["revision_id"] == part["revision_id"]
-                        && unit["unit_index"] == coordinate["unit_index"]
-                })
-                .unwrap()["required_unit_token"]
-                .clone()
-        };
-        let mut expected_settings = case["after"]["app_settings"].clone();
-        for (key, field) in [
-            ("printer.checkoff_links", "units"),
-            ("printer.checkoff_links", "resolved_units"),
-            ("printer.send_queue", "checkoff_units"),
-        ] {
-            let coordinate = |settings: &Value| {
-                let setting = settings
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|setting| setting["key"] == key)
-                    .unwrap();
-                let rows: Value = serde_json::from_str(setting["value"].as_str().unwrap()).unwrap();
-                rows[0][field][0].clone()
-            };
-            let before = token(
-                &case["before"],
-                &coordinate(&case["before"]["app_settings"]),
-            );
-            let node = token(&case["after"], &coordinate(&case["after"]["app_settings"]));
-            assert_ne!(node, before, "{key} {field}");
-            if let Some(actual) = actual {
-                assert_eq!(before, "ppu_00000000000000000000000000000002");
-                assert_eq!(node, "ppu_00000000000000000000000000000003");
-                assert_eq!(
-                    token(&case["after"], &coordinate(actual)),
-                    before,
-                    "{key} {field}"
-                );
-                let setting = expected_settings
-                    .as_array_mut()
-                    .unwrap()
-                    .iter_mut()
-                    .find(|setting| setting["key"] == key)
-                    .unwrap();
-                let mut rows: Value =
-                    serde_json::from_str(setting["value"].as_str().unwrap()).unwrap();
-                rows[0][field][0]["unit_index"] = json!(0);
-                setting["value"] = json!(rows.to_string());
-            } else {
-                assert_eq!(before, "ppu_00000000000000000000000000000001");
-                assert_eq!(node, "ppu_00000000000000000000000000000002");
-                assert!(
-                    case["after"]["plan_revision_required_units"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .filter(|unit| unit["revision_id"] == 2)
-                        .all(|unit| unit["required_unit_token"] != before)
-                );
-            }
-        }
-        if let Some(actual) = actual {
-            assert_eq!(*actual, expected_settings);
         }
     }
 

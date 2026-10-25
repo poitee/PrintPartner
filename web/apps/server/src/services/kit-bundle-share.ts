@@ -1,5 +1,5 @@
 import { importRulesForProject, resolveSourceCategory } from "@print-partner/domain";
-import { parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
+import { isCommunityManifestSlug, parseCommunityManifestSlug } from "../lib/community-manifest-slug.js";
 
 type KitBundleProjectRow = {
   name: string;
@@ -144,8 +144,9 @@ export function kitSourceRefToExportRecord(ref: KitBundleSourceRef): Record<stri
   if (ref.tag) {
     out.tag = ref.tag;
   }
-  if (ref.manifest_community_slug) {
-    out.manifest_community_slug = ref.manifest_community_slug;
+  const manifestSlug = ref.manifest_community_slug?.trim();
+  if (manifestSlug && manifestSlug !== "registry-index" && isCommunityManifestSlug(manifestSlug)) {
+    out.manifest_community_slug = manifestSlug;
   }
   return out;
 }

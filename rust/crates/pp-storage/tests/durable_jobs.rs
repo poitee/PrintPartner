@@ -1,6 +1,6 @@
 include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/common/claimed_attempt.rs"
+    "/src/claimed_attempt.rs"
 ));
 use anyhow::Result;
 use pp_storage::{
@@ -18,7 +18,7 @@ use std::{
 };
 
 const CURRENT_SCHEMA: u64 = if cfg!(feature = "desktop_rebuild") {
-    40
+    41
 } else {
     35
 };
@@ -1002,6 +1002,10 @@ fn ticket_t_28_recovery_every_existing_kind_has_incomplete_intent_policy() {
     assert_eq!(payloads.len(), kinds.len());
     for (payload, kind) in payloads.into_iter().zip(kinds) {
         assert_eq!(payload.kind(), kind);
+        // Rebuild Sync effects belong to the batch journal, covered by source_sync tests.
+        if cfg!(feature = "desktop_rebuild") && kind == JobKind::Sync {
+            continue;
+        }
         let (path, owner) = fixture();
         #[cfg(feature = "desktop_rebuild")]
         assert_eq!(source(&owner.local_source_catalog(), "Fixture source"), 1);
@@ -1441,7 +1445,7 @@ fn ticket_t_28_claims_schema35_migration_rollback_and_backup_restart() {
     let fixture = Connection::open(path.join("print-partner.db")).unwrap();
     #[cfg(feature = "desktop_rebuild")]
     fixture
-        .execute_batch("DROP TABLE source_scan_executions; DROP TABLE plan_apply_admissions; DROP TABLE source_preclaim_refusals; DROP TABLE source_revision_observations; DROP TABLE source_revision_artifacts; DROP TABLE source_revision_attempts; DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TRIGGER trg_source_revisions_provenance_immutable_update; DROP TRIGGER trg_source_revisions_provenance_immutable_delete")
+        .execute_batch("DROP TABLE source_sync_targets; DROP TABLE source_sync_batches; DROP TABLE source_scan_executions; DROP TABLE plan_apply_admissions; DROP TABLE source_preclaim_refusals; DROP TABLE source_revision_observations; DROP TABLE source_revision_artifacts; DROP TABLE source_revision_attempts; DROP TABLE source_import_quota; DROP TABLE source_import_operations; DROP TRIGGER trg_source_revisions_provenance_immutable_update; DROP TRIGGER trg_source_revisions_provenance_immutable_delete")
         .unwrap();
     fixture.execute_batch("DROP TABLE durable_job_reconciliations; DROP TABLE durable_job_history; DROP TABLE durable_job_keys; DROP TABLE durable_jobs; UPDATE app_settings SET value='34' WHERE tenant_id='default' AND key='schema_version'; CREATE TRIGGER reject_schema35 BEFORE UPDATE ON app_settings WHEN NEW.key='schema_version' AND NEW.value='35' BEGIN SELECT RAISE(ABORT,'fixture migration constraint'); END;").unwrap();
     drop(fixture);
@@ -4121,17 +4125,28 @@ fn integration_wildcard_uncertainty_and_abandon_guard_until_matching_resolution(
         Payload::Sync { project_ids: None },
         Payload::CheckSourceUpdates {},
     ] {
+        if cfg!(feature = "desktop_rebuild") && matches!(payload, Payload::Sync { .. }) {
+            continue;
+        }
         let (path, owner) = fixture();
         let catalog = owner.local_source_catalog();
         let id = source(&catalog, "Wildcard");
         let another = source(&catalog, "Wildcard other");
+        let sync = matches!(payload, Payload::Sync { .. });
         let queued = enqueue(&owner, "wildcard", payload);
         assert_eq!(deletion(&catalog, id), Deletion::ActiveWork);
         let worker = owner.job_worker(admission()).unwrap();
         let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
         assert!(source_lease(&worker, &lease, None).is_err());
-        let mut live = source_lease(&worker, &lease, Some(id)).unwrap();
-        live.release().unwrap();
+        // Sync reserves each target's Source when it claims the target.
+        if cfg!(feature = "desktop_rebuild") && sync {
+            assert!(source_lease(&worker, &lease, Some(id)).is_err());
+        } else {
+            source_lease(&worker, &lease, Some(id))
+                .unwrap()
+                .release()
+                .unwrap();
+        }
         worker
             .update(
                 &mut lease,
@@ -4977,10 +4992,12 @@ fn scoped_sync_reserves_and_leases_only_listed_sources() {
     assert!(source_lease(&worker, &lease, None).is_err());
     assert!(source_lease(&worker, &lease, Some(outside)).is_err());
     for id in [first, second] {
-        source_lease(&worker, &lease, Some(id))
-            .unwrap()
-            .release()
-            .unwrap();
+        let source_work = source_lease(&worker, &lease, Some(id));
+        // Sync reserves each target's Source when it claims the target.
+        #[cfg(feature = "desktop_rebuild")]
+        assert!(source_work.is_err());
+        #[cfg(not(feature = "desktop_rebuild"))]
+        source_work.unwrap().release().unwrap();
     }
     let unrelated = enqueue(
         &owner,
@@ -5002,9 +5019,25 @@ fn scoped_sync_reserves_and_leases_only_listed_sources() {
         .update(&mut other_lease, WorkerOperation::Finish(None))
         .unwrap();
     assert!(worker.claim().unwrap().is_none());
-    worker
-        .update(&mut lease, WorkerOperation::Finish(None))
+    let finish = worker.update(&mut lease, WorkerOperation::Finish(None));
+    #[cfg(feature = "desktop_rebuild")]
+    {
+        assert_eq!(
+            finish.unwrap_err().to_string(),
+            "Sync operation belongs to its journal owner"
+        );
+        assert_eq!(get(&owner, &sync.job_id).state, PersistentState::Running);
+        assert!(worker.claim().unwrap().is_none());
+        call(
+            &owner,
+            UserOperation::Cancel {
+                job_id: sync.job_id,
+            },
+        )
         .unwrap();
+    }
+    #[cfg(not(feature = "desktop_rebuild"))]
+    finish.unwrap();
     assert!(worker.claim().unwrap().is_some());
     owner.shutdown().unwrap();
 }
@@ -5260,16 +5293,14 @@ fn individual_source_claim_skips_busy_head_without_mutating_it() {
             project_id: free_id as u64,
         },
     );
-    call(
-        &owner,
-        UserOperation::Cancel {
-            job_id: first.job_id,
-        },
-    )
-    .unwrap();
+    worker
+        .update(&mut active.lease, WorkerOperation::Finish(None))
+        .unwrap();
+    assert_eq!(get(&owner, &first.job_id).state, PersistentState::Succeeded);
     let before = get(&owner, &waiting.job_id);
     let mut other = worker.claim().unwrap().unwrap();
     assert_eq!(other.job.job_id, free.job_id);
+    assert!(worker.claim().unwrap().is_none());
     let after = get(&owner, &waiting.job_id);
     assert_eq!(after.state_version, before.state_version);
     assert_eq!(after.attempt, before.attempt);

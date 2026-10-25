@@ -1,4 +1,7 @@
 #[cfg(feature = "desktop_rebuild")]
+pub mod production;
+
+#[cfg(feature = "desktop_rebuild")]
 mod auth_scheduler;
 #[cfg(feature = "desktop_rebuild")]
 use auth_scheduler::*;
@@ -6,6 +9,8 @@ pub mod auth;
 #[cfg(feature = "desktop_rebuild")]
 pub mod build_graph;
 pub mod catalog;
+#[cfg(feature = "desktop_rebuild")]
+pub mod checkoff_progress;
 #[cfg(feature = "desktop_rebuild")]
 pub mod features;
 pub mod jobs;
@@ -26,6 +31,8 @@ pub mod required_units;
 mod schema;
 #[cfg(feature = "desktop_rebuild")]
 pub mod source_scan;
+#[cfg(feature = "desktop_rebuild")]
+pub mod source_sync;
 #[cfg(feature = "desktop_rebuild")]
 pub mod uploads;
 #[cfg(feature = "desktop_rebuild")]
@@ -127,7 +134,12 @@ enum Envelope {
     #[cfg(feature = "desktop_rebuild")]
     Uploads {
         command: uploads::Command,
-        reply: mpsc::Sender<Result<uploads::Operation>>,
+        reply: mpsc::Sender<Result<uploads::UploadsOutcome>>,
+    },
+    #[cfg(feature = "desktop_rebuild")]
+    Checkoff {
+        command: checkoff_progress::Command,
+        reply: mpsc::Sender<Result<checkoff_progress::Response>>,
     },
     Read {
         command: read_model::Command,
@@ -485,6 +497,7 @@ impl WriterOwner {
         let lease = lease::StorageLease::acquire_locked(locked)?;
         let path = lease.data_dir().join("print-partner.db");
         let version = lease.preflight()?;
+        // Preserve one literal per line so the covers suppression applies only to that literal.
         #[rustfmt::skip]
         let directories = [
             "repos",
@@ -660,12 +673,24 @@ impl WriterOwner {
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::Uploads { command, reply } => {
                         let changes_accounting = command.changes_accounting();
+                        let changes_before = connection.total_changes();
                         let result =
                             uploads::execute(&mut connection, &catalog_state, command, admission);
-                        if result.is_ok() && changes_accounting {
+                        if result.is_ok()
+                            && changes_accounting
+                            && connection.total_changes() != changes_before
+                        {
                             worker.import_epoch.fetch_add(1, Ordering::AcqRel);
                         }
                         let _ = reply.send(result);
+                    }
+                    #[cfg(feature = "desktop_rebuild")]
+                    Envelope::Checkoff { command, reply } => {
+                        let _ = reply.send(checkoff_progress::execute(
+                            &mut connection,
+                            command,
+                            admission,
+                        ));
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::WorkingDraft { command, reply } => {
@@ -673,7 +698,12 @@ impl WriterOwner {
                     }
                     #[cfg(feature = "desktop_rebuild")]
                     Envelope::WorkingDraftWrite { command } => {
-                        working_drafts::write(&mut connection, command, admission);
+                        working_drafts::write(
+                            &mut connection,
+                            command,
+                            admission,
+                            publication_tokens.as_mut(),
+                        );
                     }
                     Envelope::Read { command, reply } => {
                         let _ = reply.send(read_model::execute(&mut connection, command));
@@ -700,7 +730,16 @@ impl WriterOwner {
                         let _ = reply.send(result);
                     }
                     Envelope::Jobs { command, reply } => {
-                        let _ = reply.send(jobs::execute(
+                        // A cancel can settle an import's reservation.
+                        #[cfg(feature = "desktop_rebuild")]
+                        let cancels = matches!(
+                            &command,
+                            jobs::Command::User {
+                                operation: jobs::UserOperation::Cancel { .. },
+                                ..
+                            }
+                        );
+                        let result = jobs::execute(
                             &mut connection,
                             command,
                             effect_policy,
@@ -709,7 +748,12 @@ impl WriterOwner {
                             &worker.job_subscriptions,
                             #[cfg(feature = "desktop_rebuild")]
                             &mut catalog_state,
-                        ));
+                        );
+                        #[cfg(feature = "desktop_rebuild")]
+                        if cancels && result.is_ok() {
+                            worker.import_epoch.fetch_add(1, Ordering::AcqRel);
+                        }
+                        let _ = reply.send(result);
                     }
                     Envelope::Setting { work, reply } => {
                         let _ = reply.send(execute(&mut connection, work, admission));

@@ -57,6 +57,52 @@ fn budget() -> ArtifactBudget {
 }
 
 #[test]
+fn configured_repository_roots_reject_non_normalized_spellings() {
+    let fixture = Fixture::new();
+    for spelling in [
+        format!("{}/./repos", fixture.0.display()),
+        format!("{}//repos", fixture.0.display()),
+        format!("{}/repos/", fixture.0.display()),
+        format!("{}/repos/.", fixture.0.display()),
+        format!("/{}/repos", fixture.0.display()),
+        format!("{}/missing/./repos", fixture.0.display()),
+    ] {
+        let result = TenantRepos::open("tenant-fixture".into(), std::path::Path::new(&spelling));
+        assert!(
+            matches!(result, Err(pp_source::Error::UnsafePath)),
+            "configured root must reject {spelling:?} as unsafe-path"
+        );
+    }
+}
+
+#[test]
+fn configured_repository_roots_accept_normalized_utf8_and_filesystem_root() {
+    TenantRepos::open("tenant-fixture".into(), std::path::Path::new("/")).unwrap();
+    let fixture = Fixture::new();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    for name in ["repos", "répos"] {
+        let root = fixture.0.join(name);
+        if name != "repos" {
+            fs::create_dir(&root).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
+        let mut source = repos.source(42).unwrap();
+        assert_eq!(
+            source
+                .materialize(request(), &input, budget())
+                .unwrap()
+                .publication,
+            Publication::Created
+        );
+        assert_eq!(
+            fs::read(root.join("42/revisions/caller-uuid/part.stl")).unwrap(),
+            b"solid bytes"
+        );
+    }
+}
+
+#[test]
 fn searchable_ancestor_without_read_access_allows_publication_and_reuse() {
     let fixture = Fixture::new();
     struct RestorePermissions<'a>(&'a std::path::Path, fs::Permissions);
@@ -314,6 +360,110 @@ fn max_flat_snapshot_publishes_and_retries_cleanly() {
 }
 
 #[test]
+fn published_paths_stop_one_byte_short_of_path_max() {
+    let path_max = if cfg!(target_os = "macos") {
+        1024
+    } else {
+        4096
+    };
+    let fixture = Fixture::new();
+    let root = fixture.0.join("répos");
+    fs::rename(fixture.0.join("repos"), &root).unwrap();
+    // Revision keys "fits" and "fits2" give the same file stored paths one
+    // byte apart.
+    let prefix = root.join("42/revisions/fits/");
+    let mut label = String::new();
+    while path_max - 1 - prefix.as_os_str().len() - label.len() > 250 {
+        label.push_str(&"d".repeat(99));
+        label.push('/');
+    }
+    let file = path_max - 1 - prefix.as_os_str().len() - label.len();
+    label.push_str(&format!("{}.stl", "f".repeat(file - 4)));
+    assert_eq!(prefix.as_os_str().len() + label.len(), path_max - 1);
+    let input = fixture.0.join("input").join(&label);
+    fs::create_dir_all(input.parent().unwrap()).unwrap();
+    fs::write(&input, b"solid long").unwrap();
+    let mut req = request();
+    req.files[0].path = SourcePath::try_from(label.clone()).unwrap();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
+    let mut source = repos.source(42).unwrap();
+
+    req.upstream_revision_key = "fits2".into();
+    let error = source
+        .materialize(req.clone(), &input, budget())
+        .unwrap_err();
+    assert_eq!(error.category(), "stored-path-too-long");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "stored-path-too-long: {label} would be stored at an absolute path of {} bytes; \
+             this system opens paths of at most {} bytes; \
+             use a shorter repository or folder path and retry the import",
+            path_max,
+            path_max - 1
+        )
+    );
+    let revisions = root.join("42/revisions");
+    assert!(!revisions.join("fits2").exists());
+    assert!(!revisions.join(".pp-source-candidate").exists());
+
+    req.upstream_revision_key = "fits".into();
+    let published = source.materialize(req, &input, budget()).unwrap();
+    assert_eq!(published.publication, Publication::Created);
+    assert_eq!(fs::read(prefix.join(&label)).unwrap(), b"solid long");
+}
+
+#[test]
+fn published_manifest_also_stops_one_byte_short_of_path_max() {
+    let path_max = if cfg!(target_os = "macos") {
+        1024
+    } else {
+        4096
+    };
+    let fixture = Fixture::new();
+    // Under revision key "k2", `<root>/42/revisions/k2/<manifest>` is
+    // exactly `path_max` bytes, while `part.stl` still fits.
+    let root_bytes = path_max - "/42/revisions/k2/".len() - pp_source::MANIFEST.len();
+    let mut root = fixture.0.clone();
+    while root_bytes - root.as_os_str().len() > 101 {
+        root.push("d".repeat(99));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    root.push("e".repeat(root_bytes - root.as_os_str().len() - 1));
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(root.as_os_str().len(), root_bytes);
+    let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
+    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let mut source = repos.source(42).unwrap();
+    let mut req = request();
+
+    req.upstream_revision_key = "k2".into();
+    let error = source
+        .materialize(req.clone(), &input, budget())
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "stored-path-too-long: {} would be stored at an absolute path of {path_max} \
+             bytes; this system opens paths of at most {} bytes; \
+             use a shorter repository or folder path and retry the import",
+            pp_source::MANIFEST,
+            path_max - 1
+        )
+    );
+    assert!(!root.join("42/revisions/k2").exists());
+
+    req.upstream_revision_key = "k".into();
+    source.materialize(req, &input, budget()).unwrap();
+    let manifest = root.join("42/revisions/k").join(pp_source::MANIFEST);
+    assert_eq!(manifest.as_os_str().len(), path_max - 1);
+    assert!(fs::read(manifest).unwrap().starts_with(b"{"));
+}
+
+#[test]
 fn cli_retry_reuses_revision_after_inputs_are_deleted() {
     use std::io::Write;
     use std::process::Stdio;
@@ -328,7 +478,7 @@ fn cli_retry_reuses_revision_after_inputs_are_deleted() {
         "reservedStoredBytes": 1024 * 1024, "snapshot": request(),
     });
     let invoke = || {
-        let mut child = test_process::command(env!("CARGO_BIN_EXE_pp-source"))
+        let mut child = test_process::command(test_process::bin_exe("pp-source"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

@@ -1,8 +1,9 @@
-import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { join } from "node:path";
 import { z } from "zod";
 import { resolvedFileUnderRoot } from "../lib/secure-path.js";
+import { readFeatureAccess } from "../lib/feature-access.js";
+import { hasSpoolmanAssignment, readSpoolmanAccess, spoolmanAccessProblem } from "../lib/spoolman-access.js";
 import type {
   AcceptedProfileProgress,
   AcceptedProfileSummary,
@@ -311,6 +312,14 @@ export async function registerPlanRoutes(
     const preflight = presentProfile(accepted, contract);
     if (preflight.kind === "unavailable") {
       return sendLegacyFailure(request, reply, "update_plan", preflight.failure, id);
+    }
+    if (body.special_request !== undefined) {
+      const access = readFeatureAccess(() => deps.repo, "orders", id);
+      if (access.kind !== "allowed") {
+        return reply.status(access.kind === "disabled" ? 403 : 500).send({
+          detail: access.error, code: access.code,
+        });
+      }
     }
     try {
       let header =
@@ -757,6 +766,9 @@ export async function registerPlanRoutes(
       return reply.status(409).send({
         detail: acceptedStateDetail(snapshot.kind),
       });
+    }
+    if (snapshot.snapshot.profile.archivedAt) {
+      return sendAcceptedFilamentFailure(reply, { kind: "plan_archived" });
     }
     const savedDefaults = loadRoleFilamentDefaults(deps.repo, id);
     const includedParts = snapshot.snapshot.parts.filter((part) => part.included);

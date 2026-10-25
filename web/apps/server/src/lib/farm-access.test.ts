@@ -173,7 +173,7 @@ describe("tenant-global farm access through live handlers", () => {
     vi.stubGlobal("fetch", network);
     const list = await client.listTools();
     expect(list.tools.some((tool) => tool.name === "get_farm_status")).toBe(false);
-    expect(list.tools.some((tool) => tool.name === "get_print_stats")).toBe(true);
+    expect(list.tools.some((tool) => tool.name === "get_print_stats")).toBe(false);
     const call = await client.callTool({ name: "get_farm_status" });
     expect(call.isError).toBe(true);
     expect(toolData(call)).toEqual(disabled);
@@ -181,13 +181,18 @@ describe("tenant-global farm access through live handlers", () => {
     expect(reads.mock.calls).toEqual([]);
     expect(network.mock.calls).toEqual([]);
     expect(toolData(await client.callTool({ name: "list_pending_actions" }))).toEqual({ actions: [] });
-    expect(toolData(await client.callTool({ name: "get_print_stats" }))).toMatchObject({ plates_sent: 0 });
+    const stats = await client.callTool({ name: "get_print_stats" });
+    expect(stats.isError).toBe(true);
+    expect(toolData(stats)).toEqual(disabled);
+    expect(JSON.parse((await invokeAssistantTool("get_print_stats", {}, { repo })).content)).toEqual(disabled);
     const unknown = await client.callTool({ name: "missing_tool" });
     expect(unknown.isError).toBe(true);
     expect(toolData(unknown)).toEqual({ error: "Unknown tool: missing_tool" });
     repo.setSetting("feature_toggles", '{"farm":true}');
     expect((await client.listTools()).tools.some((tool) => tool.name === "get_farm_status")).toBe(true);
+    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(true);
     expect(toolData(await client.callTool({ name: "get_farm_status" }))).toMatchObject({ printer_count: 0 });
+    expect(toolData(await client.callTool({ name: "get_print_stats" }))).toMatchObject({ plates_sent: 0 });
     expect(JSON.parse((await invokeAssistantTool("get_farm_status", {}, { repo })).content)).toMatchObject({ printer_count: 0 });
   });
   it("denied assistant calls skip fleet, host and Spoolman reads that enabled calls perform", async () => {
