@@ -994,7 +994,8 @@ Snapshots now report `public_result` as `result`, never the internal receipt, an
 filters (`LegacyListFilter`: status, `since` in milliseconds against finish time or
 else update time, and profile) and Node's newest-first order. Ties keep enqueue order.
 Quarantined and unreadable rows are skipped. Turning HTTP query strings into
-`LegacyListFilter` is GRE-795 (`docs/gre-795-jobs-http.md`).
+`LegacyListFilter` is GRE-795 (`docs/gre-795-jobs-http.md`). Read-one HTTP at
+`/jobs/{id}` and `/api/v1/jobs/{id}` is GRE-796 (`docs/gre-796-jobs-http.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes

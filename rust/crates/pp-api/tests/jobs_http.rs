@@ -1,5 +1,8 @@
 use pp_storage::{Limits, WriterOwner};
 use reqwest::{Client, Method};
+
+#[cfg(feature = "desktop_rebuild")]
+use reqwest::Response;
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
@@ -124,6 +127,19 @@ impl Server {
         )
     }
 
+    /// Sends a request whose body is not parsed: `POST` refusals carry no JSON.
+    #[cfg(feature = "desktop_rebuild")]
+    async fn send_raw(&self, method: Method, path: &str, headers: &[(&str, &str)]) -> Response {
+        let mut request = self
+            .client
+            .request(method, format!("{}{path}", self.origin))
+            .header("Origin", &self.origin);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.send().await.unwrap()
+    }
+
     async fn stop(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
@@ -159,9 +175,11 @@ async fn feature_off_404() {
     let snapshot = files(&directory);
     let before = job_rows(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
-    let (status, body) = server.send(Method::GET, "/api/v1/jobs", &[]).await;
-    assert_eq!(status, 404);
-    assert!(body.get("jobs").is_none());
+    for path in ["/api/v1/jobs", "/api/v1/jobs/missing", "/jobs/missing"] {
+        let (status, body) = server.send(Method::GET, path, &[]).await;
+        assert_eq!(status, 404, "{path}");
+        assert!(body.get("jobs").is_none() && body.get("job_id").is_none());
+    }
     server.stop().await;
     assert_eq!(
         (files(&directory), job_rows(&directory)),
@@ -179,6 +197,24 @@ async fn jobs_list_matches_node_filters() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn jobs_list_flag_off_and_wrong_tenant_are_refused() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_detail_aliases_match() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_detail_head_has_no_body_and_keeps_status() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_detail_mutations_and_ws_unregistered() {
     feature_off_404().await;
 }
 
@@ -780,6 +816,439 @@ async fn jobs_list_refuses_foreign_host_and_origin() {
         .await;
     assert_eq!(status, 200);
     assert_eq!(body["jobs"].as_array().unwrap().len(), 1);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn enqueue_and_finish_public(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    token: &str,
+) -> String {
+    use pp_storage::{
+        auth::Secret,
+        jobs::{
+            CompletedResult, Credential, JobKind, Outcome, Payload, SourceUpdatesResult,
+            UserOperation, WorkerAdmission, WorkerOperation,
+        },
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let job_id = match owner
+        .lock()
+        .unwrap()
+        .jobs(chosen)
+        .unwrap()
+        .submit(
+            Credential::Session(Secret::new(token.to_owned())),
+            UserOperation::Enqueue {
+                key: "detail".into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        Outcome::Job(job, _) => job.job_id,
+        _ => panic!("enqueued job expected"),
+    };
+    let worker = owner
+        .lock()
+        .unwrap()
+        .job_worker_with_policy(
+            chosen,
+            WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert_eq!(lease.job_id(), job_id);
+    worker
+        .update(&mut lease, WorkerOperation::Progress(40))
+        .unwrap();
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                    checked: vec![],
+                    skipped: vec![],
+                    updates_available: 0,
+                    checked_count: 0,
+                })),
+            },
+        )
+        .unwrap();
+    job_id
+}
+
+/// `/jobs/{id}` and `/api/v1/jobs/{id}` return the same public snapshot; refusals
+/// leave rows and files unchanged.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_detail_aliases_match() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie_a = register(&bootstrap, "job-detail-a@example.test").await;
+    let cookie_b = register(&bootstrap, "job-detail-b@example.test").await;
+    let token = cookie_a.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let headers = [("Cookie", cookie_a.as_str())];
+    let (status_v1, body_v1) = server
+        .send(Method::GET, &format!("/api/v1/jobs/{job_id}"), &headers)
+        .await;
+    let (status_root, body_root) = server
+        .send(Method::GET, &format!("/jobs/{job_id}"), &headers)
+        .await;
+    assert_eq!(status_v1, 200);
+    assert_eq!((status_root, body_root), (status_v1, body_v1.clone()));
+    assert_eq!(body_v1["job_id"], job_id);
+    assert_eq!(body_v1["status"], "done");
+    assert_eq!(body_v1["kind"], "check-source-updates");
+    assert!(body_v1.get("result").is_some());
+    assert_eq!(body_v1["error"], Value::Null);
+
+    for path in [
+        format!("/api/v1/jobs/{job_id}-missing"),
+        format!("/jobs/{job_id}-missing"),
+    ] {
+        let (status, body) = server.send(Method::GET, &path, &headers).await;
+        assert_eq!(status, 404, "{path}");
+        assert_eq!(body, serde_json::json!({"detail": "Job not found"}));
+    }
+    let (status, body) = server
+        .send(
+            Method::GET,
+            &format!("/api/v1/jobs/{job_id}"),
+            &[("Cookie", cookie_b.as_str())],
+        )
+        .await;
+    assert_eq!(status, 404);
+    assert_eq!(body, serde_json::json!({"detail": "Job not found"}));
+    let (status, body) = server
+        .send(Method::GET, &format!("/jobs/{job_id}"), &[])
+        .await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        body,
+        serde_json::json!({"detail": "Authentication required"})
+    );
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+    // Flag-off 404 for these aliases is covered by feature-off stubs and
+    // `jobs_list_flag_off_and_wrong_tenant_are_refused` (empty router).
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// The API-key credential selects the configured tenant exactly as the session
+/// cookie does: same status and body at both aliases, while a key minted for
+/// another tenant stays refused. Rows are unchanged; only WAL bytes may grow,
+/// because every admitted command opens a `BEGIN IMMEDIATE` transaction.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_detail_api_key_matches_cookie() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let (cookie_a, tenant_a) = register_account(&bootstrap, "job-detail-key-a@example.test").await;
+    let (cookie_b, _tenant_b) = register_account(&bootstrap, "job-detail-key-b@example.test").await;
+    let key_a = create_api_key(&bootstrap, &cookie_a).await;
+    let key_b = create_api_key(&bootstrap, &cookie_b).await;
+    let token = cookie_a.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, &tenant_a, Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let bearer_a = format!("Bearer {key_a}");
+    let bearer_b = format!("Bearer {key_b}");
+    for path in [format!("/api/v1/jobs/{job_id}"), format!("/jobs/{job_id}")] {
+        let (status_key, body_key) = server
+            .send(Method::GET, &path, &[("Authorization", bearer_a.as_str())])
+            .await;
+        let (status_cookie, body_cookie) = server
+            .send(Method::GET, &path, &[("Cookie", cookie_a.as_str())])
+            .await;
+        assert_eq!(status_key, 200, "{path}");
+        assert_eq!(
+            (status_cookie, body_cookie),
+            (status_key, body_key.clone()),
+            "{path}"
+        );
+        assert_eq!(body_key["job_id"], job_id, "{path}");
+        assert_eq!(body_key["status"], "done", "{path}");
+        assert_eq!(body_key["kind"], "check-source-updates", "{path}");
+        assert!(body_key.get("result").is_some(), "{path}");
+
+        // A key minted for another tenant cannot read this row through either alias.
+        let (status, body) = server
+            .send(Method::GET, &path, &[("Authorization", bearer_b.as_str())])
+            .await;
+        assert_eq!(status, 401, "{path}");
+        assert_eq!(
+            body,
+            serde_json::json!({"detail": "Authentication required"}),
+            "{path}"
+        );
+    }
+    assert_eq!(job_rows(&directory), before);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Mutation routes and `/ws/jobs/{id}` stay unregistered: `POST` answers 405 on
+/// both aliases with an empty body, and a full WS upgrade handshake to
+/// `/ws/jobs/{id}` answers 404. No row is created or changed.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_detail_mutations_and_ws_unregistered() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-detail-405@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let headers = [("Cookie", cookie.as_str())];
+
+    // The path matches a registered route but the method does not, so the router
+    // refuses with 405 rather than falling through to 404.
+    for path in [format!("/jobs/{job_id}"), format!("/api/v1/jobs/{job_id}")] {
+        let response = server.send_raw(Method::POST, &path, &headers).await;
+        assert_eq!(response.status(), 405, "{path}");
+        assert_eq!(response.bytes().await.unwrap().len(), 0, "{path}");
+    }
+
+    // `/ws/jobs/{id}` is not mounted even with a full WS upgrade handshake.
+    let ws = server
+        .client
+        .get(format!("{}/ws/jobs/{job_id}", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Sec-WebSocket-Version", "13")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ws.status(), 404);
+
+    // The same id still reads back over GET, so the 405 was method-only.
+    let (status, body) = server
+        .send(Method::GET, &format!("/jobs/{job_id}"), &headers)
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["job_id"], job_id);
+    assert_eq!(job_rows(&directory), before);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// HEAD shares status and auth with GET and returns an empty body.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_detail_head_has_no_body_and_keeps_status() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (owner, directory) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-detail-head@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("true")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    for path in [format!("/api/v1/jobs/{job_id}"), format!("/jobs/{job_id}")] {
+        let get = server
+            .client
+            .request(Method::GET, format!("{}{path}", server.origin))
+            .header("Origin", &server.origin)
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        let get_status = get.status();
+        let get_body = get.bytes().await.unwrap();
+        assert_eq!(get_status, 200, "{path}");
+        assert!(!get_body.is_empty(), "{path}");
+
+        let head = server
+            .client
+            .request(Method::HEAD, format!("{}{path}", server.origin))
+            .header("Origin", &server.origin)
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(head.status(), get_status, "{path}");
+        assert_eq!(head.bytes().await.unwrap().len(), 0, "{path}");
+    }
+
+    let missing = format!("/jobs/{job_id}-missing");
+    let get = server
+        .client
+        .request(Method::GET, format!("{}{missing}", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get.status(), 404);
+    let _ = get.bytes().await.unwrap();
+    let head = server
+        .client
+        .request(Method::HEAD, format!("{}{missing}", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head.status(), 404);
+    assert_eq!(head.bytes().await.unwrap().len(), 0);
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
     server.stop().await;
     shutdown(owner, directory);
 }
