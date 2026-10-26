@@ -15,4 +15,4 @@ rule:
     - any:
         - kind: string_literal
         - kind: raw_string_literal
-    - regex: '(?i)(^|["/\\])(covers|kit-catalog|path-hints|manifests|thumbs|custom_filaments|ambrosia_fallback)([./\\"#]|$)'
+    - regex: '(?i)(^|["/\\])(covers|kit-catalog|path-hints|manifests|thumbs|custom_filaments|ambrosia_fallback|assistant-domain)([./\\"#]|$)'

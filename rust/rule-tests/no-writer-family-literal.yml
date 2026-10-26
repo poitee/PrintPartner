@@ -3,6 +3,7 @@ valid:
   - 'fn unrelated() { let _ = "discovers"; let _ = "kit-catalogue.yaml"; let _ = "my-manifests/file"; }'
   - 'fn unrelated() { /* "covers" */ let _ = "source-covers"; }'
   - 'fn unrelated() { let _ = "accepted-thumbnails"; let _ = "custom-filaments"; let _ = "filament-catalog"; let _ = "thumbsDir"; }'
+  - 'fn unrelated() { let _ = "assistant-domains"; let _ = "my-assistant-domain"; }'
 invalid:
   - '#[cfg(test)] mod fixtures { fn helper() { let _ = "covers"; } }'
   - '#[test] fn fixture() { let _ = "kit-catalog.yaml"; }'
@@ -24,6 +25,8 @@ invalid:
   - 'fn helper() { let _ = format!("{}/thumbs/{}.png", root, basis); }'
   - 'fn helper() { let _ = "custom_filaments.json"; }'
   - 'fn helper() { let _ = "data/ambrosia_fallback.json"; }'
+  - 'fn helper() { let _ = "assistant-domain"; }'
+  - 'fn helper() { let _ = "data/Assistant-Domain/_global/merge_conflicts.yaml"; }'
   - '#[cfg(any(test, unix))] fn production() { let _ = "covers"; }'
   - '#[cfg(not(test))] fn production() { let _ = "covers"; }'
   - '#[cfg(test)] fn fixture() {} fn production() { let _ = "covers"; }'

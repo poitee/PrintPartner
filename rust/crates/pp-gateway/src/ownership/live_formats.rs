@@ -19,6 +19,7 @@ pub enum LiveFormatId {
     AcceptedThumbnails,
     CustomFilaments,
     FilamentCatalog,
+    AssistantDomain,
 }
 
 impl LiveFormatId {
@@ -37,6 +38,9 @@ impl LiveFormatId {
             Self::AcceptedThumbnails => "accepted-thumbnails",
             Self::CustomFilaments => "custom-filaments",
             Self::FilamentCatalog => "filament-catalog",
+            // Names the format, does not write it.
+            // ast-grep-ignore: no-writer-family-literal
+            Self::AssistantDomain => "assistant-domain",
         }
     }
 }
@@ -54,6 +58,7 @@ impl ResourceId {
             Self::File(FileFamily::AcceptedThumbnails) => LiveFormatId::AcceptedThumbnails,
             Self::File(FileFamily::CustomFilaments) => LiveFormatId::CustomFilaments,
             Self::File(FileFamily::FilamentCatalog) => LiveFormatId::FilamentCatalog,
+            Self::File(FileFamily::AssistantDomain) => LiveFormatId::AssistantDomain,
         }
     }
 }
@@ -150,6 +155,10 @@ pub(super) struct LiveFormats {
     custom_filaments: LiveFormat,
     #[serde(rename = "filament-catalog")]
     filament_catalog: LiveFormat,
+    // Names the format, does not write it.
+    // ast-grep-ignore: no-writer-family-literal
+    #[serde(rename = "assistant-domain")]
+    assistant_domain: LiveFormat,
 }
 
 impl LiveFormats {
@@ -164,6 +173,7 @@ impl LiveFormats {
             LiveFormatId::AcceptedThumbnails => self.accepted_thumbnails,
             LiveFormatId::CustomFilaments => self.custom_filaments,
             LiveFormatId::FilamentCatalog => self.filament_catalog,
+            LiveFormatId::AssistantDomain => self.assistant_domain,
         }
     }
 
@@ -178,6 +188,7 @@ impl LiveFormats {
             LiveFormatId::AcceptedThumbnails,
             LiveFormatId::CustomFilaments,
             LiveFormatId::FilamentCatalog,
+            LiveFormatId::AssistantDomain,
         ] {
             let format = self.get(id);
             if format.node_reads == 0 || format.rust_writes == RustWrites::Version(0) {
