@@ -1745,6 +1745,8 @@ Unlike the reference, selection validation runs inside the write transaction.
 Unlike both Node and the reference, save rejects unknown group and variant IDs,
 as required by this slice. D10b's validator continues to check cardinality;
 the command adds unknown-ID checks without changing `observation.rs`.
+Kit refusal texts and Plan id handling follow Node, as the GRE-451
+`manifest-http` parity corpus checks: an id that names no Plan is 404.
 Save observes attached checkouts even when selections are omitted, as the
 reference does, so source failures and stale stamps still refuse that save.
 Node only builds option groups when the update supplies selections.

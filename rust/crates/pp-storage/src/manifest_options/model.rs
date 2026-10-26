@@ -41,6 +41,10 @@ impl Selection {
 
 impl KitManifest {
     pub fn from_request(bytes: &[u8]) -> Result<Self, ManifestInputDetail> {
+        // Node's Fastify leaves an empty body without a content type undefined.
+        if bytes.is_empty() {
+            return Err("kit is required".into());
+        }
         let value = json::parse(bytes).map_err(request_error)?;
         let JsonValue::Object(wrapper) = value else {
             return Err("kit is required".into());
@@ -141,44 +145,52 @@ fn selections(
         return Err("kit.selections must be an object".into());
     };
     let mut output = OrderedObject::default();
+    // Node's parseManifestSelections: every entry must be a nonblank string
+    // before duplicates are checked, and each refusal names its path.
     for (group, value) in groups.iter() {
         if group.is_ecmascript_blank() {
-            return Err("kit.selections group id is required".into());
+            return Err("kit.selections group ids must not be empty".into());
         }
-        let selection = match value {
-            JsonValue::Text(value) => Selection::Scalar(normalized_variant(group, value.clone())?),
-            JsonValue::Array(values) => {
-                let mut normalized = Vec::with_capacity(values.len());
-                let mut unique = BTreeSet::new();
-                for value in values {
-                    let JsonValue::Text(value) = value else {
-                        return Err(selection_error(group));
-                    };
-                    let value = normalized_variant(group, value.clone())?;
-                    if !unique.insert(value.units().to_vec()) {
-                        return Err(selection_error(group));
+        let selection =
+            match value {
+                JsonValue::Array(values) => {
+                    let mut normalized = Vec::with_capacity(values.len());
+                    for (index, value) in values.iter().enumerate() {
+                        normalized.push(variant(value).ok_or_else(|| {
+                            ManifestInputDetail::group(
+                                group,
+                                &format!("[{index}] must be a non-empty string"),
+                            )
+                        })?);
                     }
-                    normalized.push(value);
+                    let mut unique = BTreeSet::new();
+                    if !normalized
+                        .iter()
+                        .all(|value| unique.insert(value.units().to_vec()))
+                    {
+                        return Err(ManifestInputDetail::group(
+                            group,
+                            " must not contain duplicate variant ids",
+                        ));
+                    }
+                    Selection::Array(normalized)
                 }
-                Selection::Array(normalized)
-            }
-            _ => return Err(selection_error(group)),
-        };
+                value => Selection::Scalar(variant(value).ok_or_else(|| {
+                    ManifestInputDetail::group(group, " must be a non-empty string")
+                })?),
+            };
         output.insert(group.clone(), selection);
     }
     Ok(output)
 }
 
-fn normalized_variant(group: &JsText, value: JsText) -> Result<JsText, ManifestInputDetail> {
-    let value = value.trim_ecmascript();
-    if value.units().is_empty() {
-        return Err(selection_error(group));
-    }
-    Ok(value)
-}
-
-fn selection_error(group: &JsText) -> ManifestInputDetail {
-    ManifestInputDetail::group(group, " must contain unique nonempty variant ids")
+/// A variant id: a string that is not blank after an ECMAScript trim.
+fn variant(value: &JsonValue) -> Option<JsText> {
+    let JsonValue::Text(value) = value else {
+        return None;
+    };
+    let value = value.clone().trim_ecmascript();
+    (!value.units().is_empty()).then_some(value)
 }
 
 fn replacements(
@@ -193,7 +205,11 @@ fn replacements(
     let mut output = OrderedObject::default();
     for (key, value) in values.iter() {
         let JsonValue::Text(value) = value else {
-            return Err("kit.replacements must map strings to strings".into());
+            return Err(ManifestInputDetail::keyed(
+                "kit.replacements.",
+                key,
+                " must be a string",
+            ));
         };
         output.insert(key.clone(), value.clone());
     }

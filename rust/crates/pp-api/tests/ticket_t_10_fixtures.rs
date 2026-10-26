@@ -1031,16 +1031,31 @@ mod ticket_t_10_fixtures {
     }
 
     /// Replays every case in order with the fixture session, comparing each
-    /// response and the tables it changed.
-    async fn replay_seeded(served: &Served, sandbox: &Sandbox, fixture: &SeededFixture) -> Report {
-        let mut ledger = Ledger::new(vec![]).unwrap();
+    /// response and the tables it changed. A corrected case is a Rust refusal,
+    /// so it must change nothing, whatever Node wrote.
+    async fn replay_seeded(
+        served: &Served,
+        sandbox: &Sandbox,
+        fixture: &SeededFixture,
+        corrections: Vec<Correction>,
+    ) -> Report {
+        let refused: Vec<&str> = corrections
+            .iter()
+            .map(|correction| correction.case)
+            .collect();
+        let mut ledger = Ledger::new(corrections).unwrap();
         for case in &fixture.cases {
             let (actual, changed) =
                 send_case(served, FIXTURE_COOKIE, sandbox, case, &case.path).await;
             ledger
                 .compare(&case.id, &case.node, &actual)
                 .unwrap_or_else(|error| panic!("{error}"));
-            assert_eq!(changed, case.changed, "{}: changed tables", case.id);
+            let expected = if refused.contains(&case.id.as_str()) {
+                &[][..]
+            } else {
+                &case.changed[..]
+            };
+            assert_eq!(changed, expected, "{}: changed tables", case.id);
         }
         ledger.finish().unwrap()
     }
@@ -1070,7 +1085,7 @@ mod ticket_t_10_fixtures {
         })
         .await
         .unwrap();
-        let report = replay_seeded(&served, &sandbox, &fixture).await;
+        let report = replay_seeded(&served, &sandbox, &fixture, vec![]).await;
         served.stop().await.unwrap();
         owner.shutdown().unwrap();
         print_report("drafts-http", &report);
@@ -1099,12 +1114,66 @@ mod ticket_t_10_fixtures {
         })
         .await
         .unwrap();
-        let report = replay_seeded(&served, &sandbox, &fixture).await;
+        let report = replay_seeded(&served, &sandbox, &fixture, vec![]).await;
         served.stop().await.unwrap();
         owner.shutdown().unwrap();
         print_report("layers-http", &report);
         assert_eq!(report.matched, 33);
         assert_eq!(report.corrected.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn manifest_flat_v1_v2_match_node_responses_and_changed_tables() {
+        use pp_api::builds::{BuildHttpConfig, build_router};
+
+        let fixture = seeded_fixture(
+            include_str!("../../../../fixtures/parity/manifest-http/node.json"),
+            "manifest-http",
+            46,
+        );
+        let unknown_group = |case: &'static str, group: &str| Correction {
+            case,
+            kind: CorrectionKind::Validation,
+            reason: "Rust refuses a selection for an option group no attached Source defines \
+                     (docs/desktop-rebuild.md); Node skips the check and saves it",
+            rust: Exchange {
+                status: 400,
+                body: json!({"detail": format!("kit.selections.{group} is an unknown option group")}),
+                set_cookie: vec![],
+            },
+        };
+        let corrections = vec![
+            Correction {
+                case: "save_malformed_json_flat",
+                kind: CorrectionKind::Security,
+                reason: "Rust does not expose Fastify parser codes or messages",
+                rust: Exchange {
+                    status: 400,
+                    body: json!({"detail": "Request is invalid"}),
+                    set_cookie: vec![],
+                },
+            },
+            unknown_group("save_unknown_group_v1", "toolhead"),
+            unknown_group("save_unknown_group_list_flat", "extras"),
+        ];
+        assert!(fixture.seed.is_some());
+        let sandbox = Sandbox::new("t10-manifest").unwrap();
+        let owner = open_seeded(&sandbox, &fixture);
+        let graph = owner.build_graph_with_policy(ACCOUNT_POLICY).unwrap();
+        let served = Served::start(|origin| {
+            build_router(
+                BuildHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                graph,
+            )
+        })
+        .await
+        .unwrap();
+        let report = replay_seeded(&served, &sandbox, &fixture, corrections).await;
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        print_report("manifest-http", &report);
+        assert_eq!(report.matched, 43);
+        assert_eq!(report.corrected.len(), 3);
     }
 
     #[test]
