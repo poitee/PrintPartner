@@ -88,7 +88,7 @@ The command does not cover these checks:
 
 - `rust (windows)` and `rust (macos)`. They need Windows and macOS runners. The command reports both as `SKIP`.
 - `Lint Evidence block`. It reads the pull request body. The command reports it as `SKIP`.
-- `cargo deny check` (`desktop-deny.yml`). It runs on changes to `rust/**`. To run it locally, use `cargo deny --manifest-path rust/Cargo.toml --all-features check`. CI also runs `cargo deny --manifest-path rust/fuzz/Cargo.toml --all-features --locked check advisories`.
+- `cargo deny check` (`desktop-deny.yml`). It runs on changes to `rust/**`. To run it locally, use `cargo deny --manifest-path rust/Cargo.toml --all-features check`. CI also runs `cargo deny --manifest-path rust/fuzz/Cargo.toml --all-features --locked check`.
 - The Linux rebuild partitions, the Desktop runtime, Native macOS bundle, web and Docker workflows, and the `contracts:verify` and `test:desktop-parity` steps of `desktop-contracts.yml`.
 
 ## Run a job locally

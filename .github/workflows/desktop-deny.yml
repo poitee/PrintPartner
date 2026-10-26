@@ -36,11 +36,10 @@ jobs:
       # The fuzz crate is excluded from the workspace and keeps its own
       # Cargo.lock. --locked fails when that lock no longer satisfies the
       # workspace's exact pins (it sat on tokio 1.53.2 after #1144, GRE-989).
-      # Advisories only: libfuzzer-sys is NCSA, outside the shipped licenses.
+      # Full check: rust/deny.toml scopes libfuzzer-sys's NCSA to that crate.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           manifest-path: rust/fuzz/Cargo.toml
           command: check
           arguments: --all-features --locked
-          command-arguments: advisories
           rust-version: '1.99.0'
