@@ -75,7 +75,7 @@ impl Fixture {
     }
 
     fn acquisitions(&self) -> SourceAcquisitions {
-        SourceAcquisitions::new(self.owner.as_ref().unwrap(), policy(), QUOTA).unwrap()
+        SourceAcquisitions::new(self.owner.as_ref().unwrap(), policy(), QUOTA, 1).unwrap()
     }
 
     fn credential(&self) -> Credential {
