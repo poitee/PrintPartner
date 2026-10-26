@@ -1,7 +1,7 @@
 //! Cutover commits after drain and graceful Node exit, while the storage lease is held.
 //! An operation can switch only when every participant is fenced from Node: the
 //! gateway fences HTTP routes, and Node reads the committed record at startup and
-//! skips each participant listed in `node-fenced-participants.json`.
+//! skips or refuses each participant listed in `node-fenced-participants.json`.
 
 use super::{
     Owner,
@@ -617,24 +617,32 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn ticket_t_3_drain_node_fence_list_names_bundled_workers() {
+    fn ticket_t_3_drain_node_fence_list_names_bundled_operations() {
         let index = super::super::manifest::admit_bundled_manifest().unwrap();
         let fenced = NODE_FENCED.as_ref().unwrap();
-        assert_eq!(
-            fenced.iter().collect::<Vec<_>>(),
-            ["worker.startManagedProfileSync"]
-        );
         assert_eq!(admit_bundled_node_fences(), Ok(()));
+        // Node fences whole operations: every non-HTTP participant of each
+        // listed operation, and nothing outside them.
+        let mut expected = BTreeSet::new();
+        for operation in ["profile.sync", "source.sync"] {
+            expected.extend(
+                index
+                    .participants_of(operation)
+                    .into_iter()
+                    .filter(|id| !id.starts_with("http."))
+                    .map(str::to_owned),
+            );
+        }
+        assert_eq!(fenced, &expected);
+        assert_eq!(fenced.len(), 10);
         for participant in fenced {
-            assert!(participant.starts_with("worker."), "{participant}");
-            assert!(index.lookup(participant).is_ok(), "{participant}");
             assert!(node_fences(participant));
         }
         assert!(node_fences("http.GET /ws/profile-sync"));
         for unfenced in [
-            "worker.startSourceWatcher",
             "job.printer-upload",
-            "assistant.propose_import_source_files",
+            "assistant.propose_add_source",
+            "startup.seedStockSlicerInstancesIfEmpty",
         ] {
             assert!(!node_fences(unfenced), "{unfenced}");
         }

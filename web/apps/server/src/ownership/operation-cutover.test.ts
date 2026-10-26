@@ -1,10 +1,19 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
+import * as sourceManifestMigration from "../services/source-manifest-migration.js";
+import * as sourceWatcher from "../services/source-watcher.js";
+import {
+  OwnershipAdmissionError,
+  SOURCE_SYNC_PARTICIPANTS,
+  requireSourceSyncParticipant,
+  resetSourceSyncAdmissionSession,
+  sourceSyncAdmissionReceiptPath,
+} from "./source-sync-admission.js";
 
 const profileSync = vi.hoisted(() => ({
   startManagedProfileSync: vi.fn(() => ({
@@ -19,11 +28,23 @@ vi.mock("../services/profile-sync-manager.js", () => ({
   startManagedProfileSync: profileSync.startManagedProfileSync,
 }));
 
+vi.mock("../services/source-watcher.js", { spy: true });
+vi.mock("../services/source-manifest-migration.js", { spy: true });
+
 const PROFILE_SYNC_PARTICIPANTS = [
   "http.GET /ws/profile-sync",
   "http.HEAD /ws/profile-sync",
   "worker.startManagedProfileSync",
 ];
+
+function captured(run: () => unknown): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
 
 // The exact shape pp-gateway's cutover commit writes.
 function record(operation: string, participants: readonly string[]): string {
@@ -39,6 +60,9 @@ describe("operation cutover record at Node startup", () => {
 
   afterEach(() => {
     profileSync.startManagedProfileSync.mockClear();
+    vi.mocked(sourceWatcher.startSourceWatcher).mockClear();
+    vi.mocked(sourceManifestMigration.migrateLegacySourceManifestOverridesForTenant).mockClear();
+    resetSourceSyncAdmissionSession();
     for (const root of roots) rmSync(root, { recursive: true, force: true });
     roots.length = 0;
   });
@@ -50,7 +74,7 @@ describe("operation cutover record at Node startup", () => {
     const ports = createSelfHostPorts(dataDir);
     await ports.db.connect();
     try {
-      return { app: await buildApp({ ...loadConfig(), dataDir }, ports), ports };
+      return { app: await buildApp({ ...loadConfig(), dataDir }, ports), ports, dataDir };
     } catch (error) {
       ports.db.close();
       throw error;
@@ -74,6 +98,7 @@ describe("operation cutover record at Node startup", () => {
     const { app, ports } = await start();
     try {
       expect(profileSync.startManagedProfileSync).toHaveBeenCalledOnce();
+      expect(sourceWatcher.startSourceWatcher).toHaveBeenCalledOnce();
       expect(app.hasRoute({ method: "GET", url: "/ws/profile-sync" })).toBe(true);
     } finally {
       await app.close();
@@ -109,6 +134,44 @@ describe("operation cutover record at Node startup", () => {
       await app.close();
       ports.db.close();
     }
+  });
+
+  it("fences every Source Sync participant after Rust takes the operation", async () => {
+    const { app, ports, dataDir } = await start((dir) => {
+      writeFileSync(join(dir, "operation-cutover.json"), record("source.sync", SOURCE_SYNC_PARTICIPANTS));
+    });
+    try {
+      expect(sourceWatcher.startSourceWatcher).not.toHaveBeenCalled();
+      expect(sourceManifestMigration.migrateLegacySourceManifestOverridesForTenant).not.toHaveBeenCalled();
+      expect(existsSync(sourceSyncAdmissionReceiptPath(dataDir))).toBe(false);
+      for (const url of ["/jobs/sync", "/api/v1/jobs/check-source-updates"]) {
+        const refused = await app.inject({ method: "POST", url, payload: {} });
+        expect(refused.statusCode, url).toBe(503);
+        expect(refused.json(), url).toEqual({
+          // Both aliases check the canonical route first.
+          detail: `Rust owns source.sync; Node does not run http.POST ${url.replace("/api/v1", "")}`,
+        });
+      }
+      for (const id of SOURCE_SYNC_PARTICIPANTS.filter((participant) => !participant.startsWith("http."))) {
+        const refusal = captured(() => requireSourceSyncParticipant(id));
+        expect(refusal, id).toBeInstanceOf(OwnershipAdmissionError);
+        expect(refusal, id).toMatchObject({ code: "rust_owner", statusCode: 503 });
+      }
+      expect(profileSync.startManagedProfileSync).toHaveBeenCalledOnce();
+      const unrelated = await app.inject({ method: "GET", url: "/slicer-instances" });
+      expect(unrelated.statusCode).toBe(200);
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
+  it("refuses to start when the record gives Rust only part of Source Sync", async () => {
+    const partial = SOURCE_SYNC_PARTICIPANTS.filter((id) => id !== "worker.startSourceWatcher");
+    expect(await startupError((dataDir) => {
+      writeFileSync(join(dataDir, "operation-cutover.json"), record("source.sync", partial));
+    })).toBe('cutover gives Rust part of source.sync; missing=["worker.startSourceWatcher"]');
+    expect(sourceWatcher.startSourceWatcher).not.toHaveBeenCalled();
   });
 
   it("refuses to start when Rust owns a participant Node cannot fence", async () => {

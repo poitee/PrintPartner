@@ -814,3 +814,45 @@ other workers, jobs, startup hooks and assistant dispatch, and a live
 `CoreRuntime` cutover of `profile.sync`, are outside this slice (GRE-593 owns
 the complete inventory). Actual Mac logout stays a parent gate. GRE-448 stays
 open.
+
+## Source Sync switches with its jobs, watcher, hooks and assistant actions
+
+`source.sync` groups 30 HTTP routes and aliases (GET routes bring their HEAD
+twins) with nine non-HTTP participants:
+the four source jobs (`job.sync`, `job.import-scan`, `job.extract-source-docs`,
+`job.check-source-updates`), the startup and scheduled source watcher, the legacy
+manifest migration, MCP `start_sync` and the assistant action
+`propose_import_source_files`. Until this slice none of the nine was on the Node
+fence list, so `cutover::plan` refused the operation with `node_cannot_fence`.
+
+Every one of those participants already passes through
+`requireSourceSyncParticipant` before it reads or publishes. Node now reads the
+cutover record before Source Sync admission. When the record gives Rust all nine
+non-HTTP participants, admission writes no Node receipt and every later
+`requireSourceSyncParticipant` call fails with `OwnershipAdmissionError`
+`rust_owner` (HTTP 503). Node skips the source watcher and the legacy migration
+at startup, after a backup restore, and in the MCP stdio server. A record that
+gives Rust only some of the nine stops Node startup. Profile sync and unrelated
+routes keep running in Node. The fence list now holds exactly the non-HTTP
+participants of `profile.sync` and `source.sync`, and a pp-gateway unit test
+holds it to that.
+
+Tests:
+
+- `ticket_t_3_drain_cutover_switches_source_sync_as_one_operation` commits all
+  39 participants, recovers them as Rust-owned, and refuses each of nine planted
+  records that leaves one non-HTTP participant with Node.
+- `ticket_t_3_drain_node_fence_list_names_bundled_operations` holds the list to
+  the two operations' non-HTTP participants.
+- `ticket_t_3_drain_cutover_refuses_participant_node_cannot_fence` now uses
+  `job.printer-upload`, which Node still cannot fence.
+- Node `src/ownership/operation-cutover.test.ts`: with a `source.sync` record
+  the watcher and migration never start, no admission receipt is written,
+  `POST /jobs/sync` and `/api/v1/jobs/check-source-updates` return 503, and all
+  nine non-HTTP participants refuse with `rust_owner`. A partial record stops
+  startup.
+
+Still open: Rust handlers for Source Sync (Rust-owned requests return
+`rust_owner_unavailable`), fences for the export and printer-upload jobs, the
+other assistant actions and startup hooks (they are not grouped into operations
+yet; GRE-593 owns that inventory), a live `CoreRuntime` cutover, and Mac logout.
