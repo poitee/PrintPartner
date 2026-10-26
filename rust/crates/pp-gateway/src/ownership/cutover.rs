@@ -1,5 +1,7 @@
 //! Cutover commits after drain and graceful Node exit, while the storage lease is held.
-//! Only HTTP-only operations can switch until Node can honor the ownership record.
+//! An operation can switch only when every participant is fenced from Node: the
+//! gateway fences HTTP routes, and Node reads the committed record at startup and
+//! skips or refuses each participant listed in `node-fenced-participants.json`.
 
 use super::{
     Owner,
@@ -25,6 +27,45 @@ const RECORD_SCHEMA: &str = "pp-operation-cutover-v1";
 const PARITY_SCHEMA: &str = "pp-operation-parity-v1";
 const TEMPORARY_PREFIX: &str = ".operation-cutover.";
 const TEMPORARY_SUFFIX: &str = ".tmp";
+const NODE_FENCED_SCHEMA: &str = "pp-node-fenced-participants-v1";
+const BUNDLED_NODE_FENCED: &str =
+    include_str!("../../../../../web/apps/server/src/data/node-fenced-participants.json");
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeFenced {
+    schema: String,
+    participants: Vec<String>,
+}
+
+static NODE_FENCED: std::sync::LazyLock<Result<BTreeSet<String>, String>> =
+    std::sync::LazyLock::new(|| {
+        let fenced: NodeFenced = serde_json::from_str(BUNDLED_NODE_FENCED)
+            .map_err(|error| format!("bundled Node fence list does not parse: {error}"))?;
+        if fenced.schema != NODE_FENCED_SCHEMA {
+            return Err(format!(
+                "bundled Node fence list has schema {}, expected {NODE_FENCED_SCHEMA}",
+                fenced.schema
+            ));
+        }
+        Ok(fenced.participants.into_iter().collect())
+    });
+
+/// Checks the bundled Node fence list before routes are served, so a broken
+/// list stops startup instead of refusing every cutover.
+pub fn admit_bundled_node_fences() -> Result<(), String> {
+    NODE_FENCED.as_ref().map(|_| ()).map_err(Clone::clone)
+}
+
+/// Whether a Rust-owned `participant` cannot also run in Node. The gateway
+/// fences HTTP routes; Node fences the listed participants at startup. A
+/// broken bundled list fences nothing, so cutover stays refused.
+pub fn node_fences(participant: &str) -> bool {
+    participant.starts_with("http.")
+        || NODE_FENCED
+            .as_ref()
+            .is_ok_and(|fenced| fenced.contains(participant))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -265,7 +306,7 @@ fn switchable<'a>(
     }) {
         return Err(Blocked::NotSwitchable(id));
     }
-    if let Some(id) = participants.iter().find(|id| !id.starts_with("http.")) {
+    if let Some(id) = participants.iter().find(|id| !node_fences(id)) {
         return Err(Blocked::NodeCannotFence(id));
     }
     Ok(participants)
@@ -572,12 +613,52 @@ fn append_evidence_with_directory_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
     use serde_json::json;
 
     #[test]
+    fn ticket_t_3_drain_node_fence_list_names_bundled_operations() {
+        let index = super::super::manifest::admit_bundled_manifest().unwrap();
+        let fenced = NODE_FENCED.as_ref().unwrap();
+        assert_eq!(admit_bundled_node_fences(), Ok(()));
+        // Node fences whole operations: every non-HTTP participant of each
+        // listed operation, and nothing outside them.
+        let mut expected = BTreeSet::new();
+        for operation in [
+            "profile.sync",
+            "source.sync",
+            "export.accepted-plate-3mf",
+            "export.checklist-html",
+            "export.direct-3mf",
+            "export.kit-bundle",
+            "export.stl-pack",
+        ] {
+            expected.extend(
+                index
+                    .participants_of(operation)
+                    .into_iter()
+                    .filter(|id| !id.starts_with("http."))
+                    .map(str::to_owned),
+            );
+        }
+        assert_eq!(fenced, &expected);
+        assert_eq!(fenced.len(), 15);
+        for participant in fenced {
+            assert!(node_fences(participant));
+        }
+        assert!(node_fences("http.GET /ws/profile-sync"));
+        for unfenced in [
+            "job.printer-upload",
+            "assistant.propose_add_source",
+            "startup.seedStockSlicerInstancesIfEmpty",
+        ] {
+            assert!(!node_fences(unfenced), "{unfenced}");
+        }
+    }
+
+    #[test]
     fn ticket_t_3_drain_evidence_directory_sync_failure_preserves_authority() {
-        let dir = std::env::temp_dir().join(format!("pp-evidence-sync-{}", rand::random::<u64>()));
-        fs::create_dir(&dir).unwrap();
+        let dir = Scratch::new("pp-evidence-sync-");
         let index = super::super::manifest::admit_bundled_manifest().unwrap();
         let operation = "http:POST /plans current";
         let parity = json!({
@@ -607,7 +688,7 @@ mod tests {
             expected_log.push(b'\n');
             let error =
                 append_evidence_with_directory_sync(&dir, &Evidence::Cutover(&receipt), |path| {
-                    assert_eq!(path, dir);
+                    assert_eq!(path, &*dir);
                     assert_eq!(fs::read(path.join(EVIDENCE_FILE)).unwrap(), expected_log);
                     Err(std::io::Error::from_raw_os_error(libc::EIO))
                 })
@@ -620,13 +701,11 @@ mod tests {
         assert_eq!(owners.owner_of("http.POST /plans"), Owner::Rust);
         assert_eq!(owners.owner_of("http.POST /api/v1/plans"), Owner::Node);
         assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), authority);
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn ticket_t_3_drain_cutover_directory_fsync_failure_is_unproved_after_rename() {
-        let dir = std::env::temp_dir().join(format!("pp-cutover-sync-{}", rand::random::<u64>()));
-        fs::create_dir(&dir).unwrap();
+        let dir = Scratch::new("pp-cutover-sync-");
         let index = super::super::manifest::admit_bundled_manifest().unwrap();
         let operation = "http:POST /plans current";
         let parity = json!({
@@ -658,7 +737,6 @@ mod tests {
         assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), expected);
         assert_eq!(owners.owner_of("http.POST /plans"), Owner::Rust);
         assert_eq!(owners.owner_of("http.POST /api/v1/plans"), Owner::Node);
-        fs::remove_dir_all(dir).unwrap();
         assert_eq!(
             serde_json::to_value(receipt).unwrap(),
             json!({

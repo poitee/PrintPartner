@@ -16,6 +16,10 @@ pub enum LiveFormatId {
     KitCatalog,
     PathHints,
     CommunityManifests,
+    AcceptedThumbnails,
+    CustomFilaments,
+    FilamentCatalog,
+    AssistantDomain,
 }
 
 impl LiveFormatId {
@@ -31,6 +35,12 @@ impl LiveFormatId {
             // ast-grep-ignore: no-writer-family-literal
             Self::PathHints => "path-hints",
             Self::CommunityManifests => "community-manifests",
+            Self::AcceptedThumbnails => "accepted-thumbnails",
+            Self::CustomFilaments => "custom-filaments",
+            Self::FilamentCatalog => "filament-catalog",
+            // Names the format, does not write it.
+            // ast-grep-ignore: no-writer-family-literal
+            Self::AssistantDomain => "assistant-domain",
         }
     }
 }
@@ -45,6 +55,10 @@ impl ResourceId {
             Self::File(FileFamily::KitCatalog) => LiveFormatId::KitCatalog,
             Self::File(FileFamily::PathHints) => LiveFormatId::PathHints,
             Self::File(FileFamily::CommunityManifests) => LiveFormatId::CommunityManifests,
+            Self::File(FileFamily::AcceptedThumbnails) => LiveFormatId::AcceptedThumbnails,
+            Self::File(FileFamily::CustomFilaments) => LiveFormatId::CustomFilaments,
+            Self::File(FileFamily::FilamentCatalog) => LiveFormatId::FilamentCatalog,
+            Self::File(FileFamily::AssistantDomain) => LiveFormatId::AssistantDomain,
         }
     }
 }
@@ -135,6 +149,16 @@ pub(super) struct LiveFormats {
     path_hints: LiveFormat,
     #[serde(rename = "community-manifests")]
     community_manifests: LiveFormat,
+    #[serde(rename = "accepted-thumbnails")]
+    accepted_thumbnails: LiveFormat,
+    #[serde(rename = "custom-filaments")]
+    custom_filaments: LiveFormat,
+    #[serde(rename = "filament-catalog")]
+    filament_catalog: LiveFormat,
+    // Names the format, does not write it.
+    // ast-grep-ignore: no-writer-family-literal
+    #[serde(rename = "assistant-domain")]
+    assistant_domain: LiveFormat,
 }
 
 impl LiveFormats {
@@ -146,6 +170,10 @@ impl LiveFormats {
             LiveFormatId::KitCatalog => self.kit_catalog,
             LiveFormatId::PathHints => self.path_hints,
             LiveFormatId::CommunityManifests => self.community_manifests,
+            LiveFormatId::AcceptedThumbnails => self.accepted_thumbnails,
+            LiveFormatId::CustomFilaments => self.custom_filaments,
+            LiveFormatId::FilamentCatalog => self.filament_catalog,
+            LiveFormatId::AssistantDomain => self.assistant_domain,
         }
     }
 
@@ -157,6 +185,10 @@ impl LiveFormats {
             LiveFormatId::KitCatalog,
             LiveFormatId::PathHints,
             LiveFormatId::CommunityManifests,
+            LiveFormatId::AcceptedThumbnails,
+            LiveFormatId::CustomFilaments,
+            LiveFormatId::FilamentCatalog,
+            LiveFormatId::AssistantDomain,
         ] {
             let format = self.get(id);
             if format.node_reads == 0 || format.rust_writes == RustWrites::Version(0) {

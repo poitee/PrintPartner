@@ -2,6 +2,80 @@
 
 Golden data captured from the TypeScript app, used as the reference for the Rust port.
 
+## Parity runner (GRE-451, T-10-fixtures)
+
+`pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security, WebSocket, or durable-store) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
+
+`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http` and `catalog-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+
+## jobs-http/node.json (GRE-451)
+
+`generate.mjs` registers Node's real job read routes, flat and under `/api/v1`, over an `InProcessJobRunner` that has finished an update check and, a second later, failed a checklist export for profile 7. It records 13 complete responses: the `/api/v1/jobs` list under each filter, both jobs on both read-one aliases, and an unknown id on both aliases. Job ids and timestamps become labels numbered in first-seen order (`job-1`, `time-1`); `pp_api::fixtures::Labels` labels the Rust responses the same way.
+
+`ticket_t_10_fixtures` replays the cases against `jobs_router`, with 5 exact matches and 8 declared durable-store corrections: Rust snapshots add `created_at`, and a failed durable job reports "Job failed" and its last progress instead of the handler's in-memory error (both documented for GRE-609 in `docs/desktop-rebuild.md`). The reads change no table or file. Node's read-one returns the stored snapshot without `updated_at`, which only its list adds; Rust's read-one now does the same.
+
+```sh
+node fixtures/parity/jobs-http/generate.mjs --check
+```
+
+## plans-http/node.json (GRE-451)
+
+`generate.mjs` builds Node's real app (`buildApp` over self-host ports, no API key) on a scratch data directory and sends 28 requests in order to the Plan routes Rust's `build_router` serves: create, list, read-one, layers, touch and delete, each on the flat, `/api/v1` and `/api/v2` mounts, plus duplicate, blank, unnamed and unknown-id refusals. Each case records the complete response and the database tables it changed. Plan ids are sequential on a fresh database and stay literal; timestamps become `time-N` labels.
+
+`ticket_t_10_fixtures` replays the cases in order against `build_router` with a session cookie and compares each response and each case's changed tables, with 27 exact matches and 1 declared durable-store correction. Node's `POST /plans` inserts the Plan before it looks up `base_project_id`, so a refused create leaves a Plan behind. Rust refuses before it writes: that case changes no table in Rust, and the list after it does not show the leftover Plan. The fixture made two Rust fixes go red then green. `/api/v1` now answers with Node's legacy summary (`remaining_units` and `total_units` instead of `accepted_progress`, with Node's 409 and 500 refusals when accepted progress is unavailable). A create body with no `name`, or a null one, now gets "Profile name is required".
+
+```sh
+node fixtures/parity/plans-http/generate.mjs --check
+```
+
+## drafts-http/node.json (GRE-451)
+
+`generate.mjs` builds Node's real app on a copy of `rust/crates/pp-storage/tests/fixtures/required-units/unchanged.db`, where Plan 1 has consumed draft 1 and open draft 2 and Plan 2 belongs to another tenant. It sends 30 requests in order to the draft routes Rust's `draft_router` serves, on the flat and `/api/v2` mounts: list, workspace read, part edit (including a replayed edit), abandon, and their invalid-id, invalid-body, missing, foreign-tenant, stale and not-open refusals. Each case records the complete response and the tables it changed. No response carries a clock value, so nothing is labelled.
+
+`ticket_t_10_fixtures` replays the cases against `draft_router` on its own copy of the same database, with that database's session cookie: 30 exact matches, no corrections, and the same changed tables for every case.
+
+```sh
+node fixtures/parity/drafts-http/generate.mjs --check
+```
+
+## layers-http/node.json (GRE-451)
+
+`generate.mjs` uses the same copied database after its `seed` SQL adds three Sources with no files (two for tenant `default`, one for `foreign`). It sends 33 requests in order to the Plan layer mutations Rust's `build_router` serves, on the flat, `/api/v1` and `/api/v2` mounts: attach an add-on, replace it, set the base, detach, and their duplicate, missing, foreign and no-Source refusals. Two cases send `project_id` as `2.0` and `1e0`; their bodies are recorded verbatim as `rawBody`, because `JSON.stringify` would write them as integers. Each case records the complete response and the tables it changed.
+
+`ticket_t_10_fixtures` runs the same seed on its copy and replays the cases against `build_router`: 33 exact matches, no corrections, and the same changed tables for every case. The fixture made one Rust fix go red then green. Node reads `project_id` with `Number()`, so a body with no usable id (missing, `null`, `0`) passes Node's Plan check and then finds no Source: 404 "Project not found" (or "Layer not found" for a replace of a layer the Plan does not have). Rust refused such a body with 400 "Request is invalid"; it now gives Node's answers and writes nothing. A body that is not a JSON object is still a 400. A second fix also went red then green: Rust read `project_id` only as an integer, so `2.0` found no Source, while Node's `Number()` reads it as 2. Rust now accepts any whole-number JSON value.
+
+```sh
+node fixtures/parity/layers-http/generate.mjs --check
+```
+
+## manifest-http/node.json (GRE-451)
+
+`generate.mjs` uses the same copied database after its `seed` SQL adds two Sources with no local checkout, Plan 3 (base and add-on layers on those Sources, with a stored kit) and Plan 4 (no layers, with a stored kit that is not JSON). It sends 46 requests in order to the kit-manifest and plan-manifest-builder routes Rust's `build_router` serves, on the flat, `/api/v1` and `/api/v2` mounts: kit reads (stored, unreadable, never saved, `HEAD`), builder reads, saves (full, partial, unknown keys), and refusals for missing, foreign, zero and non-numeric Plan ids, a missing body, malformed JSON, and every field the kit parser checks. Each case records the complete response and the tables it changed.
+
+Plan 1's base Source names a local checkout. Rust reads checkouts only through a `DraftReads` adapter, and production does not wire one yet, so Rust answers a builder read or kit save on Plan 1 with 503 "Manifest source observation failed". The corpus reads Plan 1's kit, which needs no checkout, and leaves option groups from real checkouts to the slice that wires the adapter.
+
+`ticket_t_10_fixtures` runs the same seed on its copy and replays the cases against `build_router`: 43 exact matches and 3 declared corrections. A corrected case must change no table. Malformed JSON gets Rust's "Request is invalid" (security: no Fastify parser codes). Two saves select an option group that no attached Source defines: Node skips the check and saves, Rust refuses with "is an unknown option group", as `docs/desktop-rebuild.md` documents (validation). They run last, so no later read sees Node's write.
+
+The fixture made three Rust fixes go red then green. A Plan id that cannot name a Plan (`0`, `abc`, `-1`, `1.5`) is now Node's 404 "Profile not found" after authentication, instead of 400 "Request is invalid". An empty body is now "kit is required". Selection and replacement refusals now use Node's text: `kit.selections group ids must not be empty`, `kit.selections.<group> must be a non-empty string`, `kit.selections.<group>[<index>] must be a non-empty string` (checked for every entry before duplicates), `kit.selections.<group> must not contain duplicate variant ids` and `kit.replacements.<key> must be a string`.
+
+```sh
+node fixtures/parity/manifest-http/generate.mjs --check
+```
+
+## catalog-http/node.json (GRE-451)
+
+`generate.mjs` uses the same copied database after its `seed` SQL adds Source 2 (tenant `default`, with an import rule and a category), Source 3 (tenant `foreign`) and five activity events, one for `foreign`, one of another kind and one whose payload is not JSON. It sends 56 requests in order to the catalog routes Rust's `admit_catalog_routes` serves, on the flat and `/api/v1` mounts: Source list, detail, create, patch and delete, import rules, Source activity, Source naming, Source categories, global STL naming and its preview, with their missing, foreign, non-numeric, duplicate, retained-history and invalid-body refusals. Each case records the complete response and the tables it changed. A created Source's `local_path` sits under Node's scratch data directory, so the golden writes that directory as `{data}`, and the Rust test writes its sandbox the same way.
+
+Creating a GitHub Source makes Node start a `sync` job, which would clone over the network. The generator replaces the job runner's `start` with a stub that records the call, and the case lists it under `effects`. Rust's catalog create starts no job; the test checks that the only recorded effect is that one `sync` start, and that Rust and Node changed the same tables (`projects` only).
+
+`ticket_t_10_fixtures` runs the same seed on its copy and replays the cases against `admit_catalog_routes`: 53 exact matches and 3 declared corrections, none of which writes anything. Malformed JSON gets Rust's "Invalid JSON body" (security: no Fastify parser codes). Renaming a Source to a taken name gets "Source already exists: <name>", Node's create refusal, instead of Node's SQLite constraint text (security). An invalid global naming profile gets Rust's "Invalid export role order" instead of zod's issue path (validation).
+
+The fixture made three Rust fixes go red then green. Source naming refusals now carry Node's `code` (`source_not_found`, `invalid_source_naming`, `source_naming_conflict`, `invalid_source_naming_state`) next to `detail`. A naming id that is not a positive integer (`abc`) is now Node's 400 "Source id must be a positive integer" instead of 404, and a body without a boolean `use_defaults` gets Node's discriminator message. The naming preview now writes a whole `quantity` as `2`, as `JSON.stringify` does, instead of `2.0`.
+
+```sh
+node fixtures/parity/catalog-http/generate.mjs --check
+```
+
 ## auth-reset/node.json (GRE-864)
 
 `generate.mjs` drives Node's `POST /auth/forgot-password` for a known account, an unknown account, and a rejected loopback delivery. The golden records one shared public response, plus delivery counts, reset-token counts, and the mail-failure error class. Addresses and tokens stay out of the file. `rust/crates/pp-api/tests/auth_reset_parity.rs` replays the cases. See [auth-reset/README.md](auth-reset/README.md).

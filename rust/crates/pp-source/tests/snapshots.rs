@@ -1,6 +1,10 @@
 use pp_source::{ArtifactBudget, Publication, SnapshotRequest, TenantRepos};
 use serde::Deserialize;
-use std::{collections::BTreeMap, fs};
+use std::{collections::BTreeMap, fs, os::unix::fs::DirBuilderExt};
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -10,13 +14,13 @@ struct Fixture {
 
 fn assert_fixture(name: &str, fixture: &str) {
     let fixture: Fixture = serde_json::from_str(fixture).unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    // Source roots reject symlink ancestors (including /var on macOS).
-    let root = fs::canonicalize(temp.path()).unwrap();
+    let root = Scratch::new("pp-source-snapshot-");
     let input = root.join("input");
     let repos = root.join("repos");
-    fs::create_dir(&input).unwrap();
-    fs::create_dir(&repos).unwrap();
+    // Pin modes so source roots accept them under a permissive umask.
+    for dir in [&input, &repos] {
+        fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+    }
     for (path, content) in fixture.tree {
         let path = input.join(path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();

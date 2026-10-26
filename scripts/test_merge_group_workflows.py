@@ -13,6 +13,22 @@ ROOT = Path(__file__).resolve().parents[1]
 EVENT = json.loads((ROOT / "scripts/fixtures/merge_group/checks_requested.json").read_text())
 
 
+def evaluate_if(expression, contexts):
+    """Evaluate an `a.b == 'x' && c != 'y'` step condition; reject any other shape."""
+    result = True
+    for clause in expression.split("&&"):
+        left, op, right = clause.strip().partition(" == ")
+        if not op:
+            left, op, right = clause.strip().partition(" != ")
+        if not op or not (right.startswith("'") and right.endswith("'")):
+            raise ValueError(f"unsupported condition clause: {clause!r}")
+        value = contexts
+        for key in left.split("."):
+            value = value.get(key, "") if isinstance(value, dict) else ""
+        result = result and ((value == right[1:-1]) == (op == " == "))
+    return result
+
+
 class MergeGroupWorkflowTests(unittest.TestCase):
     def test_drafts_skip_every_pr_ci_job_and_ready_events_restart_them(self):
         guard = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
@@ -77,11 +93,45 @@ class MergeGroupWorkflowTests(unittest.TestCase):
             if step.get("uses", "").startswith("actions/setup-node@") or step.get("name") == "Verify Node version":
                 # check-ci-tool-pins requires the Node pin and its assertion to run unconditionally.
                 self.assertNotIn("if", step)
+            elif step.get("name") == "Lint pull request Evidence block":
+                # Dependabot PRs carry generated bodies with no Evidence block, so only they skip the lint.
+                self.assertEqual(
+                    step["if"],
+                    "github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'",
+                )
             else:
                 self.assertEqual(step["if"], "github.event_name == 'pull_request'")
         for event in ("pull_request", "merge_group"):
             self.assertNotIn("paths", workflow["on"][event])
             self.assertNotIn("paths-ignore", workflow["on"][event])
+
+    def test_dependabot_score_status_runs_only_for_dependabot_pull_request_runs(self):
+        workflow = yaml.load((ROOT / ".github/workflows/dependabot-score-status.yml").read_text(),
+                             Loader=yaml.BaseLoader)
+        self.assertEqual(workflow["permissions"], {})
+        job = workflow["jobs"]["post-pp-score"]
+        self.assertEqual(job["permissions"], {"contents": "read", "statuses": "write"})
+        guard = "(github.event_name != 'pull_request' || !github.event.pull_request.draft) && ("
+        self.assertTrue(job["if"].startswith(guard) and job["if"].endswith(")"))
+        for author, runs in (("dependabot[bot]", True), ("poitee", False)):
+            with self.subTest(author=author):
+                contexts = {"github": {"event": {"pull_request": {"user": {"login": author}}}}}
+                self.assertEqual(evaluate_if(job["if"][len(guard):-1], contexts), runs)
+
+    def test_only_dependabot_pull_requests_skip_the_evidence_lint(self):
+        workflow = yaml.load((ROOT / ".github/workflows/pr-evidence.yml").read_text(),
+                             Loader=yaml.BaseLoader)
+        lint = next(step for step in workflow["jobs"]["lint-pr-body"]["steps"]
+                    if step.get("name") == "Lint pull request Evidence block")
+        for event, login, runs in (("pull_request", "dependabot[bot]", False),
+                                   ("pull_request", "poitee", True),
+                                   ("pull_request", "github-actions[bot]", True),
+                                   ("pull_request", "dependabot", True),
+                                   ("merge_group", "dependabot[bot]", False)):
+            with self.subTest(event=event, login=login):
+                contexts = {"github": {"event_name": event, "event": {
+                    "pull_request": {"user": {"login": login}}}}}
+                self.assertEqual(evaluate_if(lint["if"], contexts), runs)
 
     def test_required_lint_and_rust_jobs_use_the_filter(self):
         for filename, kind, contexts in (

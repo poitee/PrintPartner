@@ -450,7 +450,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: rust -> target
-      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: nextest@0.9.148
       - name: Test owned image cleanup and native holder reporting
@@ -498,11 +498,12 @@ jobs:
             lsof +f -- "$fixture_mount" || echo "::warning::lsof found no holders or failed at $fixture_mount (status $?)"
             # A forced unmount can succeed while ejecting the backing device still returns EBUSY.
             # The mount path is then an ordinary directory, so retry with the attached device.
-            for attempt in 1 2 3; do
+            # storagekitd can hold the raw device for 5+ seconds after the unmount.
+            for attempt in {1..10}; do
               if hdiutil detach -force "$fixture_device"; then
                 exit "$result"
               fi
-              if [[ "$attempt" -lt 3 ]]; then
+              if [[ "$attempt" -lt 10 ]]; then
                 sleep 2
               fi
             done

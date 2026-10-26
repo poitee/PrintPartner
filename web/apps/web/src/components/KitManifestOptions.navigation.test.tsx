@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMemoryRouter, RouterProvider, useLocation } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryRouter, MemoryRouter, RouterProvider, useLocation } from "react-router-dom";
 import BuildSaveNavigationGuard from "./BuildSaveNavigationGuard";
 import { LibraryDraftProvider } from "../context/LibraryDraftContext";
 import KitManifestOptions from "./KitManifestOptions";
 import { BuildSaveFlushProvider } from "../context/BuildSaveFlushContext";
+import { resetKitManifestAutosaveForTests } from "../hooks/useKitManifestAutosave";
+import { resetAuxiliarySaveIntentForTests } from "../lib/planAuxiliarySaveIntent";
 
 const mocks = vi.hoisted(() => ({ save: vi.fn() }));
 
@@ -45,9 +47,17 @@ vi.mock("../api/endpoints/planManifests", async (importOriginal) => {
 });
 
 describe("KitManifestOptions guarded navigation", () => {
+  // An unmount flush can settle after afterEach, so each test also starts from a clean slate.
+  beforeEach(() => {
+    resetKitManifestAutosaveForTests();
+    resetAuxiliarySaveIntentForTests();
+  });
+
   afterEach(() => {
     cleanup();
     mocks.save.mockReset();
+    resetKitManifestAutosaveForTests();
+    resetAuxiliarySaveIntentForTests();
   });
 
   it("keeps a failed variant edit on Plan when browser Back also fails to save", async () => {
@@ -71,10 +81,28 @@ describe("KitManifestOptions guarded navigation", () => {
     await screen.findByText("Save failed — retry");
     expect(mocks.save).toHaveBeenCalledTimes(1);
     act(() => { void router.navigate(-1); });
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(2));
     await waitFor(() => expect([...router.state.blockers.values()][0]?.state).toBe("unblocked"));
+    // Back is not a deliberate Retry, so the refused kit stays retained and unsent.
+    expect(mocks.save).toHaveBeenCalledTimes(1);
     expect(router.state.location.pathname).toBe("/plan");
     expect(screen.getByRole("button", { name: "Custom" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("shows a failed variant edit after the editor remounts and retries it there", async () => {
+    mocks.save.mockRejectedValue(new Error("offline"));
+    const editor = () => <MemoryRouter><BuildSaveFlushProvider><KitManifestOptions profileId={2} /></BuildSaveFlushProvider></MemoryRouter>;
+    const first = render(editor());
+    fireEvent.click(await screen.findByRole("button", { name: "Custom" }));
+    await screen.findByText("Save failed — retry");
+    first.unmount();
+
+    render(editor());
+    await screen.findByText("Save failed — retry");
+    expect(screen.getByRole("button", { name: "Custom" }).getAttribute("aria-pressed")).toBe("true");
+    mocks.save.mockImplementation(async (_profileId, kit) => kit);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Saved");
+    expect(mocks.save).toHaveBeenCalledTimes(2);
+    expect(mocks.save.mock.calls[1]?.[1]).toEqual(mocks.save.mock.calls[0]?.[1]);
+  });
 });

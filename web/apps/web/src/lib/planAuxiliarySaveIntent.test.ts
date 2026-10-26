@@ -10,21 +10,18 @@ afterEach(() => {
 });
 
 describe("planAuxiliarySaveIntent", () => {
-  it("failed_special_request_retry_preserves_order", async () => {
+  it("retries every retained save when an earlier retry fails", async () => {
     const order: string[] = [];
-    retainFailedAuxiliarySave(7, "manifest", async () => {
+    retainFailedAuxiliarySave(7, "special_request", "offline", async () => {
+      order.push("special_request");
+      throw new Error("offline");
+    });
+    retainFailedAuxiliarySave(7, "manifest", "offline", async () => {
       order.push("manifest");
     });
-    retainFailedAuxiliarySave(7, "special_request", async () => {
-      order.push("special_request");
-    });
-    // Re-retain special_request: insertion slot stays, so manifest still runs first.
-    retainFailedAuxiliarySave(7, "special_request", async () => {
-      order.push("special_request");
-    });
 
-    await retryFailedAuxiliarySaves(7);
+    await expect(retryFailedAuxiliarySaves(7)).rejects.toThrow("offline");
 
-    expect(order).toEqual(["manifest", "special_request"]);
+    expect(order).toEqual(["special_request", "manifest"]);
   });
 });

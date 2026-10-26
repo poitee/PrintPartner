@@ -9,6 +9,7 @@ import {
   type PlanFeatures,
 } from "@print-partner/contracts";
 import PartsPage from "./PartsPage";
+import { BuildSaveFlushProvider } from "../context/BuildSaveFlushContext";
 
 const state = vi.hoisted(() => ({
   capabilities: [] as string[],
@@ -89,7 +90,9 @@ function renderPage() {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter>
-        <PartsPage />
+        <BuildSaveFlushProvider>
+          <PartsPage />
+        </BuildSaveFlushProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );

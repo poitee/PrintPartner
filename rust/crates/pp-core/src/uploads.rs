@@ -271,7 +271,10 @@ impl SourceImports {
 
     pub fn get(&self, credential: Credential, key: String) -> Result<Operation> {
         let op = self.client.get(credential, key)?;
-        self.verify_artifact(&op)?;
+        ensure!(
+            self.artifact_intact(&op)?,
+            "Accepted artifact requires repair"
+        );
         Ok(op)
     }
 
@@ -320,6 +323,7 @@ impl SourceImports {
         let live =
             source_work.ok_or_else(|| anyhow!("Supplied import claim missing Source authority"))?;
         let mut op = self.worker.import_phase(&lease, &live, Phase::Read)?;
+        let mut unverified = false;
         let result = (|| -> Result<()> {
             if job.cancel_requested && op.receipt.is_none() {
                 op = self.worker.import_phase(&lease, &live, Phase::Fail)?;
@@ -462,7 +466,10 @@ impl SourceImports {
                 return Ok(());
             }
             if op.state == State::Published {
-                self.verify_artifact(&op)?;
+                if !self.artifact_intact(&op)? {
+                    unverified = true;
+                    return Err(anyhow!("Accepted artifact requires repair"));
+                }
                 op = self.worker.import_phase(&lease, &live, Phase::Activate)?;
             }
             if through == Through::Activated {
@@ -476,11 +483,16 @@ impl SourceImports {
         // as the only copy, so a failed attempt leaves it for `work_frozen`.
         // Once the retained capture is consumed, a deterministic failure is
         // terminal: it must reach `Fail` and cleanup instead of requeueing
-        // forever.
+        // forever. A stop requested through `cancelled` is not deterministic,
+        // so it leaves the import for restart recovery to resume, and it takes
+        // precedence: a deterministic failure seen by a cancelled attempt
+        // fails on the next attempt instead. A published import retries
+        // activation, unless its artifact is missing or no longer matches.
         if result.is_err()
+            && !cancelled.load(Ordering::Acquire)
             && !(op.state == State::Admitted && matches!(op.input, Input::Captured(_)))
             && op.receipt.is_none()
-            && op.state != State::Published
+            && (op.state != State::Published || unverified)
             && self.worker.import_phase(&lease, &live, Phase::Fail).is_ok()
             && self.cleanup(&op).is_ok()
         {
@@ -490,20 +502,30 @@ impl SourceImports {
         result.map(|()| Some(op))
     }
 
-    fn verify_artifact(&self, op: &Operation) -> Result<()> {
-        if let Some(artifact) = &op.artifact {
-            let root = TenantRepos::open(op.tenant.clone(), &self.repos)?
-                .source(op.source_id.try_into()?)?;
-            let verified = root.verify_published(&artifact.upstream_key)?;
-            ensure!(
-                verified.stored_bytes == artifact.stored_bytes
-                    && verified.manifest_digest == artifact.manifest_digest
-                    && verified.snapshot_locator == artifact.locator
-                    && artifact_files(&verified.files)? == artifact.files,
-                "Accepted artifact requires repair"
-            );
-        }
-        Ok(())
+    /// Reports whether the published revision still matches the recorded
+    /// artifact. A missing, corrupt, or mismatched revision is `Ok(false)`
+    /// because a retry sees the same bytes; other I/O errors propagate so the
+    /// import requeues.
+    fn artifact_intact(&self, op: &Operation) -> Result<bool> {
+        let Some(artifact) = &op.artifact else {
+            return Ok(true);
+        };
+        let root =
+            TenantRepos::open(op.tenant.clone(), &self.repos)?.source(op.source_id.try_into()?)?;
+        let verified = match root.verify_published(&artifact.upstream_key) {
+            Ok(verified) => verified,
+            Err(error)
+                if matches!(&error, pp_source::Error::Io(io)
+                    if io.kind() != std::io::ErrorKind::NotFound) =>
+            {
+                return Err(error.into());
+            }
+            Err(_) => return Ok(false),
+        };
+        Ok(verified.stored_bytes == artifact.stored_bytes
+            && verified.manifest_digest == artifact.manifest_digest
+            && verified.snapshot_locator == artifact.locator
+            && artifact_files(&verified.files)? == artifact.files)
     }
 
     fn cleanup(&self, op: &Operation) -> Result<()> {

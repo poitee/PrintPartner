@@ -1,0 +1,20 @@
+{
+  "schema": "pp-node-fenced-participants-v1",
+  "participants": [
+    "assistant.propose_import_source_files",
+    "job.check-source-updates",
+    "job.export-accepted-plate-3mf",
+    "job.export-checklist-html",
+    "job.export-direct-3mf",
+    "job.export-kit-bundle",
+    "job.export-stl-pack",
+    "job.extract-source-docs",
+    "job.import-scan",
+    "job.sync",
+    "mcp.start_sync",
+    "migration.migrateLegacySourceManifestOverridesForTenant",
+    "startup.startSourceWatcher",
+    "worker.startManagedProfileSync",
+    "worker.startSourceWatcher"
+  ]
+}

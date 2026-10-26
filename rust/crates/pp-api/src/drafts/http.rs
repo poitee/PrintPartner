@@ -56,7 +56,7 @@ impl DraftHttpConfig {
         )
     }
 
-    fn from_startup(origin: &str, api_key_tenant: &str, flag: Option<&str>) -> Result<Self> {
+    pub fn from_startup(origin: &str, api_key_tenant: &str, flag: Option<&str>) -> Result<Self> {
         let listener = LoopbackOrigin::parse(origin)?;
         require_api_key_tenant(api_key_tenant)?;
         Ok(Self {

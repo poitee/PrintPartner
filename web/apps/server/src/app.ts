@@ -39,7 +39,8 @@ import {
 } from "./middleware/tenant-context.js";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
-import { beginSourceSyncAdmission } from "./ownership/source-sync-admission.js";
+import { rustOwnedNodeParticipants } from "./ownership/operation-cutover.js";
+import { beginSourceSyncAdmission, sourceSyncOwnedByRust } from "./ownership/source-sync-admission.js";
 import { dirname, join, resolve } from "node:path";
 import { isBrowserDocumentNavigation, isSpaClientPath } from "./lib/spa-nav.js";
 import type { SaasDbStore } from "./adapters/saas/index.js";
@@ -354,12 +355,16 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   if (repository) {
     const statusExecution = new StatusExecution();
     app.addHook("preClose", async () => { await statusExecution.stop(); });
-    beginSourceSyncAdmission(config.dataDir);
+    // Rust owns a fenced operation's participants and every route alias; Node runs none of them.
+    const rustOwned = rustOwnedNodeParticipants(config.dataDir);
+    beginSourceSyncAdmission(config.dataDir, rustOwned);
     if (config.deployMode === "self-host" && !mappedDesktopTenant()) {
       migrateLegacySelfHostExports(config.dataDir, repository);
     }
     const backgroundTenantIds = () => configuredTenantIds(config, authStore);
     const migrateLegacySourceManifests = async (): Promise<void> => {
+      // The migration is a Source Sync participant; Rust runs it after cutover.
+      if (sourceSyncOwnedByRust()) return;
       for (const tenantId of backgroundTenantIds()) {
         const report = await migrateLegacySourceManifestOverridesForTenant(
           repository,
@@ -413,7 +418,11 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     }
 
     let profileSyncHandle: ManagedProfileSyncHandle | null = null;
-    if (config.deployMode === "self-host" && !config.multiUser) {
+    if (
+      config.deployMode === "self-host" &&
+      !config.multiUser &&
+      !rustOwned.has("worker.startManagedProfileSync")
+    ) {
       const { startManagedProfileSync } = await import("./services/profile-sync-manager.js");
       const { broadcastProfileSync, registerProfileSyncWebSocket } = await import(
         "./services/profile-sync-broadcast.js"
@@ -466,24 +475,26 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
       reposDir: coreDeps.reposDir,
     });
 
-    // Start background source watcher
-    const { startSourceWatcher } = await import("./services/source-watcher.js");
-    const watcherHandle = startSourceWatcher({
-      repo: repository,
-      reposDir: coreDeps.reposDir,
-      listTenantIds: backgroundTenantIds,
-      tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes,
-      getSettings: () => {
-        const webhookUrl = repository.getSetting("discord_notify_webhook_url") || null;
-        const notifyOnUpdate = repository.getSetting("discord_notify_on_update", "1") !== "0";
-        const notifyOnSync = repository.getSetting("discord_notify_on_sync", "0") !== "0";
-        const autoSyncUpdates = repository.getSetting("discord_auto_sync_updates", "1") !== "0";
-        return { discordWebhookUrl: webhookUrl, notifyOnUpdate, notifyOnSync, autoSyncUpdates };
-      },
-    });
-    app.addHook("onClose", async () => {
-      watcherHandle.stop();
-    });
+    // Start background source watcher unless Rust owns Source Sync.
+    if (!sourceSyncOwnedByRust()) {
+      const { startSourceWatcher } = await import("./services/source-watcher.js");
+      const watcherHandle = startSourceWatcher({
+        repo: repository,
+        reposDir: coreDeps.reposDir,
+        listTenantIds: backgroundTenantIds,
+        tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes,
+        getSettings: () => {
+          const webhookUrl = repository.getSetting("discord_notify_webhook_url") || null;
+          const notifyOnUpdate = repository.getSetting("discord_notify_on_update", "1") !== "0";
+          const notifyOnSync = repository.getSetting("discord_notify_on_sync", "0") !== "0";
+          const autoSyncUpdates = repository.getSetting("discord_auto_sync_updates", "1") !== "0";
+          return { discordWebhookUrl: webhookUrl, notifyOnUpdate, notifyOnSync, autoSyncUpdates };
+        },
+      });
+      app.addHook("onClose", async () => {
+        watcherHandle.stop();
+      });
+    }
 
     // Register backup routes (available regardless of auth mode)
     if (!mappedDesktopTenant()) await registerBackupRoutes(app, {
@@ -613,7 +624,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
 export async function startServer(config: ServerConfig) {
   const releaseOwner = acquireDataDirectory(config.dataDir);
   try {
-    beginSourceSyncAdmission(config.dataDir);
+    beginSourceSyncAdmission(config.dataDir, rustOwnedNodeParticipants(config.dataDir));
     validateProductionConfig(config);
     const ownership = rustOwnedCopy(config.dataDir);
     if (!mappedDesktopTenant() && !config.databaseUrl && ownership.kind !== "foreign") {

@@ -11,6 +11,10 @@ use serde_json::{Value, json};
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::process::Command;
 
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 const HTTPS_ORIGIN: &str = "https://127.0.0.1:48921";
 const LOGIN_LOOPBACK: &str = "pp_session=<token>; Max-Age=1209600; Path=/; HttpOnly; SameSite=Lax";
 const LOGIN_HTTPS_NODE: &str =
@@ -241,15 +245,12 @@ struct Server {
     owner: Option<WriterOwner>,
     task: tokio::task::JoinHandle<()>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    directory: PathBuf,
+    /// Removed by its own drop, after `Drop for Server` shuts the owner down.
+    _directory: Scratch,
 }
 impl Server {
     async fn start(transport: Transport) -> Self {
-        let mut bytes = [0; 12];
-        getrandom::fill(&mut bytes).unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("pp-auth-cookie-rust-{}", hex::encode(bytes)));
-        std::fs::create_dir(&directory).unwrap();
+        let directory = Scratch::new("pp-auth-cookie-rust-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -289,7 +290,7 @@ impl Server {
             owner: Some(owner),
             task,
             shutdown: Some(shutdown),
-            directory,
+            _directory: directory,
         }
     }
     async fn post(
@@ -332,7 +333,6 @@ impl Server {
         self.shutdown.take().unwrap().send(()).unwrap();
         (&mut self.task).await.unwrap();
         self.owner.take().unwrap().shutdown().unwrap();
-        std::fs::remove_dir_all(&self.directory).unwrap();
     }
 }
 impl Drop for Server {
@@ -341,7 +341,6 @@ impl Drop for Server {
         if let Some(owner) = self.owner.take() {
             owner.shutdown().unwrap();
         }
-        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 

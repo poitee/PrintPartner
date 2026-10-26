@@ -18,6 +18,8 @@ WORKFLOW = Path(__file__).resolve().parents[1] / '.github/workflows/desktop-nati
 STEP = '      - name: Verify source Unicode and case regressions on macOS\n'
 ROWS = 'id,name\n1,disposable fixture\n'
 DEVICE = '/dev/disk42'
+# storagekitd can hold the raw image device for 5+ seconds after a forced unmount.
+FORCE_ATTEMPTS = 10
 TOOLS = r'''
 import json, os, pathlib, plistlib, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
@@ -239,7 +241,7 @@ class CleanupTest(unittest.TestCase):
     def test_cleanup_preserves_failed_test_status(self):
         result, mount, trace = self.run_step(status=23, diagnostic=7, force=9)
         self.assertEqual(result.returncode, 23)
-        self.assertEqual(trace, self.forced_trace(mount, count=3))
+        self.assertEqual(trace, self.forced_trace(mount, count=FORCE_ATTEMPTS))
         self.assertEqual(result.stdout, self.diagnostic_output(mount)
                          + 'lsof: diagnostic refused\n'
                          + f'::warning::lsof found no holders or failed at {mount} (status 7)\n'
@@ -249,7 +251,7 @@ class CleanupTest(unittest.TestCase):
     def test_cleanup_errors_preserve_successful_test_status(self):
         result, mount, trace = self.run_step(diagnostic=1, force=9)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(trace, self.forced_trace(mount, count=3))
+        self.assertEqual(trace, self.forced_trace(mount, count=FORCE_ATTEMPTS))
         self.assertEqual(result.stdout, self.diagnostic_output(mount)
                          + 'lsof: diagnostic refused\n'
                          + f'::warning::lsof found no holders or failed at {mount} (status 1)\n'
@@ -257,7 +259,7 @@ class CleanupTest(unittest.TestCase):
         self.assert_preserved(mount)
 
     def test_forced_detach_retries_busy_device_without_warning(self):
-        for count in (2, 3):
+        for count in (2, 4, FORCE_ATTEMPTS):
             with self.subTest(count=count):
                 result, mount, trace = self.run_step(status=23, force='16 ' * (count - 1) + '0')
                 self.assertEqual(result.returncode, 23)
@@ -289,7 +291,7 @@ class CleanupTest(unittest.TestCase):
                     if succeeds:
                         self.assertEqual(trace, self.retries(mount, succeeds))
                     else:
-                        self.assertEqual(trace, self.forced_trace(mount, count=3 if force else 1))
+                        self.assertEqual(trace, self.forced_trace(mount, count=FORCE_ATTEMPTS if force else 1))
                         expected = self.diagnostic_output(mount)
                         if diagnostic:
                             expected += ('lsof: diagnostic refused\n'

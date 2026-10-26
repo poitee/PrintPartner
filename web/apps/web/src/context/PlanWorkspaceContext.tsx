@@ -63,7 +63,7 @@ import {
   WorkingPlanChangedError,
 } from "../lib/workingPlanChanged";
 import { useProfileSelection } from "./ProfileContext";
-import { retryFailedAuxiliarySaves } from "../lib/planAuxiliarySaveIntent";
+import { hasFailedAuxiliarySave, retryFailedAuxiliarySaves } from "../lib/planAuxiliarySaveIntent";
 import { usePlanFileChoices, type PlanFileChoice } from "../hooks/usePlanFileChoices";
 
 /** The Plan row being edited — enough identity to find it in the saved draft. */
@@ -838,7 +838,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
   const { choices: pendingFileChoices, saving: savingFiles, error: fileChoiceError, select: setFilesIncluded, flush: flushFileChoices, hasPending: hasPendingFileChoices, discard: discardFileChoices } = usePlanFileChoices(selectedProfileId, saveFileChoices);
   const setIncluded = useCallback((part: PlanEditablePart, included: boolean) => setFilesIncluded([part], included), [setFilesIncluded]);
-  const replayRetainedOrdinarySave = useCallback(async (options?: { applyManifest?: boolean }) => {
+  const replayRetainedOrdinarySave = useCallback(async (options?: { applyManifest?: boolean }, prepare = true) => {
     if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
       await flushFileChoices(selectedProfileId);
       if (!options?.applyManifest) return;
@@ -866,6 +866,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       await editDraft(retained.edits, selectedProfileId);
       if (!options?.applyManifest) return;
     }
+    if (!prepare) return;
     await prepareCurrentPlan(options);
     if (skippedDefinitiveReplay && selectedProfileId != null) {
       failedOrdinarySaveByBuild.current.delete(selectedProfileId);
@@ -915,10 +916,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const retryPlanSave = useCallback(
     async (options?: { applyManifest?: boolean }) => {
-      await replayRetainedOrdinarySave(options);
-      if (selectedProfileId != null) {
-        await retryFailedAuxiliarySaves(selectedProfileId);
+      if (selectedProfileId == null) {
+        await replayRetainedOrdinarySave(options);
+        return;
       }
+      // A retained manifest retry prepares the Plan with the manifest once its PUT lands,
+      // so preparing here first would only build a Plan from the stale manifest.
+      const manifestRetryPrepares = hasFailedAuxiliarySave(selectedProfileId, "manifest");
+      await replayRetainedOrdinarySave(options, !manifestRetryPrepares);
+      await retryFailedAuxiliarySaves(selectedProfileId);
     },
     [replayRetainedOrdinarySave, selectedProfileId],
   );

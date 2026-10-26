@@ -22,10 +22,19 @@ fn automation_marker() -> &'static str {
 }
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    // Hold tracing rows and arm the crash hook before anything can log; rows
+    // reach core.log once core startup admits the data directory. A failure
+    // before that point is reported on stderr only.
+    let core_log = pp_core::CoreLog::buffered();
+    if !core_log.install() {
+        eprintln!("core_log_unavailable: subscriber_already_installed");
+    }
+    match run(&core_log) {
         Ok(code) => std::process::ExitCode::from(code),
         Err(error) => {
-            eprintln!("{}", startup_diagnostic(&error));
+            let diagnostic = startup_diagnostic(&error);
+            tracing::error!("{diagnostic}");
+            eprintln!("{diagnostic}");
             if cfg!(debug_assertions)
                 && std::env::args().any(|argument| argument == "--test-exit-seconds")
             {
@@ -92,7 +101,7 @@ fn show_startup_error() {
         .show();
 }
 
-fn run() -> Result<u8> {
+fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -167,6 +176,14 @@ fn run() -> Result<u8> {
     let mut core = runtime
         .block_on(CoreRuntime::start(launch))
         .context("Desktop core startup failed")?;
+    // Core startup admitted the data directory; flush the held rows and
+    // record tracing and panics in its logs folder, telemetry or not.
+    if let Err(error) = core_log.attach(&data) {
+        eprintln!(
+            "core_log_unavailable: os_error={}",
+            error.raw_os_error().unwrap_or_default()
+        );
+    }
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
         let launch_url = core.take_launch_target()?.into_url();
@@ -333,10 +350,14 @@ fn build_tray(
     let recover = MenuItem::with_id(app, "recover", "Restart service", false, None::<&str>)?;
     let logs = MenuItem::with_id(app, "logs", "View logs", true, None::<&str>)?;
     let folder = MenuItem::with_id(app, "data", "Open data folder", true, None::<&str>)?;
+    let log_folder = MenuItem::with_id(app, "log_folder", "Reveal log folder", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
     let recovery_ui = std::env::var("PP_DESKTOP_RECOVERY_UI").is_ok_and(|value| value == "1");
     let menu = if recovery_ui {
-        Menu::with_items(app, &[&show, &status, &logs, &recover, &folder, &quit])?
+        Menu::with_items(
+            app,
+            &[&show, &status, &logs, &log_folder, &recover, &folder, &quit],
+        )?
     } else {
         Menu::with_items(app, &[&show, &status, &recover, &quit])?
     };
@@ -365,6 +386,7 @@ fn build_tray(
             }
             "logs" if recovery_ui => diagnostics.view_logs(app),
             "data" if recovery_ui => diagnostics.open_data(app),
+            "log_folder" if recovery_ui => diagnostics.reveal_logs(app),
             "quit" => app.exit(0),
             _ => {}
         })

@@ -5,28 +5,32 @@ use pp_source::{
 use std::{
     fs::{self, File, OpenOptions},
     io::{Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    os::unix::fs::DirBuilderExt,
+    path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 use zip::{ZipWriter, write::SimpleFileOptions};
-static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// Removed when the scratch drops, including while a test unwinds from a panic.
+struct Fixture(Scratch);
 impl Fixture {
     fn new() -> Self {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(".media-tests")
-            .join(format!(
-                "{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-        fs::create_dir_all(root.join("repos")).unwrap();
-        fs::create_dir(root.join("input")).unwrap();
+        let root = Scratch::new("pp-source-media-");
+        // Pin modes so source roots accept them under a permissive umask.
+        for dir in ["repos", "input"] {
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(root.join(dir))
+                .unwrap();
+        }
         Self(root)
     }
     fn model(&self, triangles: usize) {
@@ -101,11 +105,6 @@ impl Fixture {
     fn candidate(&self) -> PathBuf {
         self.0
             .join("repos/42/revisions/.pp-source-media/.candidate")
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
     }
 }
 fn path(value: &str) -> SourcePath {

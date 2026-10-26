@@ -1,7 +1,7 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { scratchDir } from "../test/scratch.js";
 import {
   analyzeBuildRequest,
   buildEvidenceFromUploadedSource,
@@ -194,7 +194,7 @@ describe("Build planning", () => {
   });
 
   it("records every structural tree difference and detects renames", () => {
-    const root = mkdtempSync(join(tmpdir(), "build-planning-diff-"));
+    const root = scratchDir("build-planning-diff-");
     const official = join(root, "official");
     const overlay = join(root, "overlay");
     mkdirSync(join(official, "STLs", "Toolhead"), { recursive: true });
@@ -230,7 +230,7 @@ describe("Build planning", () => {
   });
 
   it("hydrates pinned Source evidence and builds the overlapping-source ledger", () => {
-    const root = mkdtempSync(join(tmpdir(), "build-planning-hydrate-"));
+    const root = scratchDir("build-planning-hydrate-");
     const official = join(root, "official");
     const overlay = join(root, "overlay");
     mkdirSync(official);
@@ -268,7 +268,7 @@ describe("Build planning", () => {
   });
 
   it.each(["revision", "content", "new difference"])("invalidates source choices after a %s change", (change) => {
-    const root = mkdtempSync(join(tmpdir(), "planning-choice-refresh-"));
+    const root = scratchDir("planning-choice-refresh-");
     const base = join(root, "base");
     const overlay = join(root, "overlay");
     mkdirSync(join(base, "parts"), { recursive: true });
@@ -298,7 +298,7 @@ describe("Build planning", () => {
   });
 
   it("invalidates a draft when a new unresolved source difference appears", () => {
-    const root = mkdtempSync(join(tmpdir(), "planning-draft-refresh-"));
+    const root = scratchDir("planning-draft-refresh-");
     const base = join(root, "base");
     const overlay = join(root, "overlay");
     mkdirSync(join(base, "parts"), { recursive: true });
@@ -327,7 +327,7 @@ describe("Build planning", () => {
   });
 
   it("invalidates a draft when an overlay is replaced by an identical source", () => {
-    const root = mkdtempSync(join(tmpdir(), "planning-overlay-replacement-"));
+    const root = scratchDir("planning-overlay-replacement-");
     const base = join(root, "base");
     const overlay = join(root, "overlay");
     mkdirSync(base);
@@ -365,7 +365,7 @@ describe("Build planning", () => {
   });
 
   it("compares the structural base with every vendor overlay", () => {
-    const root = mkdtempSync(join(tmpdir(), "build-planning-overlays-"));
+    const root = scratchDir("build-planning-overlays-");
     const paths = ["base", "overlay-a", "overlay-b"].map((name) => join(root, name));
     for (const path of paths) mkdirSync(path);
     writeFileSync(join(paths[0]!, "part.stl"), "base");

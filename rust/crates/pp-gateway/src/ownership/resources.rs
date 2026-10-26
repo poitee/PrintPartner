@@ -47,6 +47,10 @@ pub enum FileFamily {
     KitCatalog,
     PathHints,
     CommunityManifests,
+    AcceptedThumbnails,
+    CustomFilaments,
+    FilamentCatalog,
+    AssistantDomain,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -159,6 +163,16 @@ enum ReviewedEntry {
     GetBuildWorkflow { resources: Vec<ResourceId> },
     #[serde(rename = "tool.compare_plans")]
     ComparePlans { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_review")]
+    GetPlanReview { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.find_filament_matches")]
+    FindFilamentMatches { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.search_plan_parts")]
+    SearchPlanParts { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_interaction_graph")]
+    GetInteractionGraph { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.check_stack_compatibility")]
+    CheckStackCompatibility { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -414,6 +428,46 @@ impl ReviewedEntry {
             Self::GetRemaining { resources } => {
                 ("tool.get_remaining", resources, accepted_plan_operational())
             }
+            Self::GetPlanReview { resources } => {
+                let mut expected = accepted_plan_operational();
+                expected.extend([
+                    Table(AppSettings),
+                    File(FileFamily::AcceptedThumbnails),
+                    File(FileFamily::CustomFilaments),
+                    File(FileFamily::FilamentCatalog),
+                ]);
+                ("tool.get_plan_review", resources, expected)
+            }
+            Self::FindFilamentMatches { resources } => (
+                "tool.find_filament_matches",
+                resources,
+                BTreeSet::from([File(FileFamily::FilamentCatalog)]),
+            ),
+            Self::SearchPlanParts { resources } => (
+                "tool.search_plan_parts",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(Parts)]),
+            ),
+            Self::GetInteractionGraph { resources } => (
+                "tool.get_interaction_graph",
+                resources,
+                BTreeSet::from([
+                    File(FileFamily::AssistantDomain),
+                    File(FileFamily::KitCatalog),
+                ]),
+            ),
+            Self::CheckStackCompatibility { resources } => (
+                "tool.check_stack_compatibility",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    File(FileFamily::SourceWorkspace),
+                    File(FileFamily::AssistantDomain),
+                    File(FileFamily::KitCatalog),
+                ]),
+            ),
             Self::GetPrinterCheckoff { resources } => (
                 "tool.get_printer_checkoff",
                 resources,
@@ -766,6 +820,11 @@ impl Declarations {
             "tool.propose_verify_printer_checkoff",
             "tool.get_plan_checkoff",
             "tool.get_remaining",
+            "tool.get_plan_review",
+            "tool.find_filament_matches",
+            "tool.search_plan_parts",
+            "tool.get_interaction_graph",
+            "tool.check_stack_compatibility",
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
             "tool.get_build_planning_state",

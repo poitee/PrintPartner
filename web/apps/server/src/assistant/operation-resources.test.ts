@@ -26,6 +26,9 @@ import { newBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build
 import { digestPlanDraft } from "../services/plan-drafts.js";
 import { acceptedPlanBasis } from "../db/accepted-plan-progress.js";
 import { acceptPlanForTest } from "../test/accept-plan.js";
+import { THUMBNAIL_RENDERER_VERSION } from "@print-partner/contracts";
+import { writeAcceptedMediaPng } from "../lib/accepted-media-cache.js";
+import { acceptedPartMediaIdentity } from "../services/accepted-part-media.js";
 import { createJobRunner } from "../services/job-runner.js";
 import { WORKFLOW_GUIDE } from "../routes/workflow-guide.js";
 import { getLogger } from "../services/logger.js";
@@ -76,9 +79,10 @@ const FILE_RESOURCES = ["file:source-workspace", "table:projects", "table:source
 const manifest = z.object({ live_formats: z.object({
   "path-hints": z.object({ node_reads: z.number() }),
   "community-manifests": z.object({ node_reads: z.number() }),
+  "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -3071,6 +3075,10 @@ function recipeSelect(statement: unknown, tenantId: string, planId?: number): st
   return tableForObservedSelect(sql, tenantId);
 }
 
+// Classifies each observed file call and nothing else: a `readFileSync` of a catalog candidate is
+// file:kit-catalog, a realpath/lstat/stat inside a workspace root is file:source-workspace, and any
+// other call fails the test. With no observed calls it returns [], so adding its result to a union
+// after every call never contributes a resource that call did not observe.
 function recipeFileResources(candidates: string[], workspaceRoots: string[]): string[] {
   const resources = new Set<string>();
   for (const { api, args } of observer.state.files) {
@@ -3085,6 +3093,11 @@ function recipeFileResources(candidates: string[], workspaceRoots: string[]): st
     resources.add("file:source-workspace");
   }
   return [...resources];
+}
+
+// One isolated-policy resolution of a source workspace, in the order the repository probes it.
+function isolatedWorkspaceProbe(repos: string, workspace: string): [string, ...unknown[]][] {
+  return [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", workspace], ["statSync", workspace]];
 }
 
 it("traces get_build_recipe layers, kit, decisions, catalog and tenant isolation", async () => {
@@ -3280,9 +3293,9 @@ it("traces get_build_recipe isolated workspace probes against its operation-wide
     const observed = [...new Set(statements.map((sql) => recipeSelect(sql, "default", plan.id)))].sort();
     expect(observed).toEqual(BUILD_RECIPE_TABLES);
     for (const resource of observed) union.add(resource);
+    const probe = isolatedWorkspaceProbe(repos, workspace);
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([...probe, ["readFileSync", candidates[0]!, "utf8"], ...probe]);
     for (const resource of recipeFileResources([...candidates, ...shipped], [repos, workspace])) union.add(resource);
-    expect(observer.state.files.some(({ api }) => api === "readFileSync")).toBe(true);
-    expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
     expect([...union].sort()).toEqual(BUILD_RECIPE_UNION);
   } finally {
     vi.unstubAllEnvs();
@@ -3703,9 +3716,9 @@ it("traces compare_plans isolated workspace probes against its operation-wide un
     const observed = [...new Set(statements.map((sql) => comparePlansSelect(sql, "default", [planA.id, planB.id])))].sort();
     expect(observed).toEqual(BUILD_RECIPE_TABLES);
     for (const resource of observed) union.add(resource);
+    const recipe = [...isolatedWorkspaceProbe(repos, workspace), ["readFileSync", candidates[0]!, "utf8"], ...isolatedWorkspaceProbe(repos, workspace)];
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([...recipe, ...recipe]);
     for (const resource of recipeFileResources([...candidates, ...shipped], [repos, workspace])) union.add(resource);
-    expect(observer.state.files.some(({ api }) => api === "readFileSync")).toBe(true);
-    expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
     expect([...union].sort()).toEqual(BUILD_RECIPE_UNION);
   } finally {
     vi.unstubAllEnvs();
@@ -4301,19 +4314,21 @@ async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printe
   return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
 }
 
-function acceptedPlanFixture(isolated: boolean) {
+function acceptedPlanFixture(isolated: boolean, options: { stls?: string[]; roleFilaments?: Record<string, string> } = {}) {
+  const { stls = ["bracket_x2.stl"], roleFilaments } = options;
   const repos = join(dataDir, "repos");
   const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
   const source = repo.createSource({ name: "Accepted", source_kind: "local" });
   const workspace = join(repos, String(source.id));
   const snapshot = join(workspace, "revisions", "a");
   fs.mkdirSync(snapshot, { recursive: true });
-  fs.writeFileSync(join(snapshot, "bracket_x2.stl"), "solid b\nendsolid b\n");
+  for (const stl of stls) fs.writeFileSync(join(snapshot, stl), "solid b\nendsolid b\n");
   sqlite.prepare("UPDATE projects SET local_path = ?, last_synced_at = ? WHERE id = ?").run(workspace, "2026-01-01T00:00:00.000Z", source.id);
   const revision = repo.recordSourceRevision({ sourceId: source.id, upstreamRevisionKey: "a", manifestDigest: "a".repeat(64), snapshotLocator: `${source.id}/revisions/a`, syncedAt: "2026-01-01T00:00:00.000Z", completeness: "complete" });
   sqlite.prepare("UPDATE projects SET current_source_revision_id = ? WHERE id = ?").run(revision.id, source.id);
-  repo.updateImportRules(source.id, ["bracket_x2.stl"]);
+  repo.updateImportRules(source.id, stls);
   const plan = repo.createProfile("Accepted plan", source.id);
+  if (roleFilaments) repo.setSetting(`role_filaments_${plan.id}`, JSON.stringify(Object.fromEntries(Object.entries(roleFilaments).map(([role, filament_color_id]) => [role, { filament_color_id }]))));
   expect(acceptPlanForTest(repo, plan.id).merged).toBe(true);
   const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
   if (accepted.kind !== "ready") throw new Error(`Accepted fixture is ${accepted.kind}`);
@@ -4502,6 +4517,493 @@ for (const isolated of [false, true]) {
     for (const tool of CHECKOFF_READS) assertAcceptedPlanDeclaration(tool, [...(isolated ? ["file:source-workspace"] : []), ...ACCEPTED_PLAN_TABLES], declared);
   });
 }
+
+const PLAN_REVIEW_UNION = ["file:accepted-thumbnails", "file:custom-filaments", "file:filament-catalog", "file:source-workspace", "table:app_settings", ...ACCEPTED_PLAN_TABLES].sort();
+const PLAN_REVIEW_TABLES = ["table:app_settings", ...ACCEPTED_PLAN_TABLES].sort();
+// loadFilamentCatalog candidates, resolved from services/filament-catalog.ts.
+const FILAMENT_CATALOG_CANDIDATES = ["../data/ambrosia_fallback.json", "../../data/ambrosia_fallback.json"].map((path) => fileURLToPath(new URL(path, new URL("../services/filament-catalog.ts", import.meta.url))));
+const PLAN_REVIEW_COLORS = { primary: "abs-matte::black-pantone-7c", accent: "custom-abc", clear: "spoolman:sm:filament:7" };
+// The Node filament catalog is cached per process; only the first catalog color resolution reads it.
+let filamentCatalogLoaded = false;
+
+function planReviewSelect(statement: unknown, tenantId: string): string[] {
+  const sql = z.string().parse(statement);
+  if (/^select "[a-z_]+"(?:, "[a-z_]+")* from "app_settings" /.test(sql)) return [tableForObservedSelect(sql, tenantId)];
+  return acceptedPlanSelect(sql, tenantId);
+}
+
+function planReviewFileResources(files: { api: string; args: unknown[]; result?: unknown }[], roots: { repos: string; thumbsDir: string; dataDir: string }): string[] {
+  const descriptors = new Map<number, string>();
+  const resources = new Set<string>();
+  for (const { api, args, result } of files) {
+    const path = typeof args[0] === "number" ? descriptors.get(args[0]) : args[0];
+    if (typeof path !== "string") throw new Error(`Unclassified filesystem call ${api}`);
+    if (under(roots.repos, path) && ["lstatSync", "realpathSync", "statSync", "readdirSync"].includes(api)) {
+      resources.add("file:source-workspace");
+    } else if (under(roots.thumbsDir, path) && ["lstatSync", "openSync", "fstatSync", "readSync", "closeSync"].includes(api)) {
+      if (api === "openSync" && typeof result === "number") descriptors.set(result, path);
+      if (api === "closeSync" && typeof args[0] === "number") descriptors.delete(args[0]);
+      resources.add("file:accepted-thumbnails");
+    } else if (path === join(roots.dataDir, "custom_filaments.json") && ["existsSync", "readFileSync"].includes(api)) {
+      resources.add("file:custom-filaments");
+    } else if (FILAMENT_CATALOG_CANDIDATES.includes(path) && ["existsSync", "readFileSync"].includes(api)) {
+      resources.add("file:filament-catalog");
+    } else {
+      throw new Error(`Unclassified filesystem call ${api} ${path}`);
+    }
+  }
+  expect(descriptors.size).toBe(0);
+  return [...resources];
+}
+
+async function tracePlanReview(input: Record<string, unknown>, expected: { tables: string[]; files: string[] }, options: {
+  repository: AppRepository; tenantId?: string; activePlanId?: number; context?: { dataDir?: string; thumbsDir?: string };
+}) {
+  const { repository, tenantId = "default", activePlanId, context = {} } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("get_plan_review", input, { repo: repository, activePlanId, ...context })); }
+  finally { observer.state.active = false; }
+  const tables = [...new Set(statements.flatMap((sql) => planReviewSelect(sql, tenantId)))].sort();
+  expect(tables).toEqual(expected.tables);
+  const files = planReviewFileResources(observer.state.files, { repos: join(dataDir, "repos"), thumbsDir: join(dataDir, "thumbs"), dataDir }).sort();
+  const catalogRead = observer.state.files.filter(({ args }) => typeof args[0] === "string" && FILAMENT_CATALOG_CANDIDATES.includes(args[0]));
+  if (catalogRead.length > 0) {
+    expect(filamentCatalogLoaded, "the process-wide filament catalog loads once").toBe(false);
+    expect(catalogRead.map(({ api, args }) => [api, ...args])).toEqual([["existsSync", FILAMENT_CATALOG_CANDIDATES[0]], ["readFileSync", FILAMENT_CATALOG_CANDIDATES[0], "utf8"]]);
+    filamentCatalogLoaded = true;
+  }
+  expect(files.filter((file) => file !== "file:filament-catalog")).toEqual(expected.files);
+  const union = unions.get("get_plan_review") ?? new Set<string>();
+  for (const resource of [...tables, ...files]) union.add(resource);
+  unions.set("get_plan_review", union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+async function spoolmanStub() {
+  const http = await import("node:http");
+  const requests: string[] = [];
+  const server = http.createServer((request, response) => {
+    requests.push(request.url ?? "");
+    response.setHeader("content-type", "application/json");
+    response.end(request.url === "/api/v1/filament" ? JSON.stringify([{ id: 7, name: "Spool PLA", color_hex: "112233", vendor: { name: "V" } }]) : "[]");
+  });
+  await new Promise<void>((listening) => server.listen(0, "127.0.0.1", () => listening()));
+  const { port } = z.object({ port: z.number() }).parse(server.address());
+  return { url: `http://127.0.0.1:${port}`, requests, close: () => new Promise<void>((closed) => server.close(() => closed())) };
+}
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces get_plan_review filaments, thumbnails, fallback and tenants against its declaration under ${policy} policy`, async () => {
+    const catalogWasLoaded = filamentCatalogLoaded;
+    const spoolman = await spoolmanStub();
+    try {
+      repo.setSetting("integrations", JSON.stringify([{ id: "sm", type: "spoolman", name: "Spoolman", config: { base_url: spoolman.url, enabled: true }, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }]));
+      fs.writeFileSync(join(dataDir, "custom_filaments.json"), JSON.stringify({ filaments: [{ id: "custom-abc", display_name: "Mine", product_line: "Custom", hex: "#445566", combo_label: "Mine" }] }));
+      const { repository, plan, idle } = acceptedPlanFixture(isolated, { stls: ["bracket_x2.stl", "clip_[a].stl", "duct_[c].stl"], roleFilaments: PLAN_REVIEW_COLORS });
+      const thumbsDir = join(dataDir, "thumbs");
+      fs.mkdirSync(thumbsDir, { recursive: true });
+      const context = { dataDir, thumbsDir };
+      const files = ["file:accepted-thumbnails", "file:custom-filaments", "file:source-workspace"];
+      const review = {
+        plan_id: plan.id,
+        plan_name: "Accepted plan",
+        has_blockers: false,
+        blocker_count: 0,
+        warning_count: 0,
+        issue_codes: [],
+        sample_issues: [],
+        totals: { included_parts: 3, total_print_units: 4, by_role: { primary: 1, accent: 1, clear: 1 }, by_filament: { "ABS Matte · Black (Pantone 7C)": 2, Mine: 1, "V · Spool PLA": 1 } },
+        layers: [{ type: "base", source: "Accepted", synced: true }],
+      };
+      expect(await tracePlanReview({ plan_id: plan.id }, { tables: PLAN_REVIEW_TABLES, files }, { repository, activePlanId: idle.id, context })).toEqual(review);
+      expect(spoolman.requests.length).toBeGreaterThan(0);
+      expect(new Set(spoolman.requests)).toEqual(new Set(["/api/v1/filament", "/api/v1/spool"]));
+      expect(filamentCatalogLoaded).toBe(true);
+
+      const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+      if (accepted.kind !== "ready") throw new Error(`Accepted fixture is ${accepted.kind}`);
+      const bracket = accepted.snapshot.parts.find((part) => part.filename === "bracket_x2.stl")!;
+      writeAcceptedMediaPng({ thumbsDir, basis: acceptedPartMediaIdentity(bracket, "thumbnail").basis, png: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) });
+      for (const plan_id of [String(plan.id), plan.id + 0.9]) {
+        expect(await tracePlanReview({ plan_id }, { tables: PLAN_REVIEW_TABLES, files }, { repository, activePlanId: idle.id, context })).toEqual(review);
+      }
+      expect(observer.state.files.some(({ api, args }) => api === "openSync" && typeof args[0] === "string" && under(thumbsDir, args[0]))).toBe(true);
+      expect(await tracePlanReview({}, { tables: PLAN_REVIEW_TABLES, files }, { repository, activePlanId: plan.id, context })).toEqual(review);
+      expect(await tracePlanReview({ plan_id: 999999 }, { tables: PLAN_REVIEW_TABLES, files }, { repository, activePlanId: plan.id, context })).toEqual(review);
+
+      vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+      try {
+        const requests = spoolman.requests.length;
+        const disabled = { ...review, totals: { ...review.totals, by_filament: { "ABS Matte · Black (Pantone 7C)": 2, Mine: 1, "spoolman:sm:filament:7": 1 } } };
+        expect(await tracePlanReview({ plan_id: plan.id }, { tables: PLAN_REVIEW_TABLES, files }, { repository, context })).toEqual(disabled);
+        expect(spoolman.requests.length).toBe(requests);
+        repo.setSetting("feature_toggles", JSON.stringify({ spoolman: true }));
+        expect(await tracePlanReview({ plan_id: plan.id }, { tables: PLAN_REVIEW_TABLES, files }, { repository, context })).toEqual(review);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const withoutDataDir = await tracePlanReview({ plan_id: plan.id }, { tables: [...ACCEPTED_PLAN_TABLES].sort(), files: ["file:source-workspace"] }, { repository });
+      expect(withoutDataDir).toEqual({ ...review, totals: { ...review.totals, by_filament: { "ABS Matte · Black (Pantone 7C)": 2, "custom-abc": 1, "spoolman:sm:filament:7": 1 } } });
+
+      for (const plan_id of [undefined, null, "invalid"]) {
+        expect(await tracePlanReview({ plan_id }, { tables: [], files: [] }, { repository, context })).toEqual({ error: "plan_id required" });
+      }
+      expect(await tracePlanReview({ plan_id: 999999 }, { tables: ["table:build_profiles"], files: [] }, { repository, context })).toEqual({ error: "Plan not found" });
+      expect(await tracePlanReview({ plan_id: plan.id }, { tables: ["table:build_profiles"], files: [] }, { repository, tenantId: "other", context })).toEqual({ error: "Plan not found" });
+      expect(await tracePlanReview({ plan_id: idle.id }, { tables: IDLE_PLAN_TABLES, files: [] }, { repository, context })).toEqual({
+        plan_id: idle.id,
+        plan_name: "Not accepted",
+        has_blockers: true,
+        blocker_count: 1,
+        warning_count: 0,
+        issue_codes: ["no_included_parts"],
+        sample_issues: [{ severity: "blocker", code: "no_included_parts", message: "No parts are included in this build." }],
+        totals: { included_parts: 0, total_print_units: 0, by_role: {}, by_filament: {} },
+        layers: [],
+      });
+    } finally {
+      await spoolman.close();
+    }
+    const observed = [...unions.get("get_plan_review") ?? []].sort();
+    expect(observed).toEqual(catalogWasLoaded ? PLAN_REVIEW_UNION.filter((resource) => resource !== "file:filament-catalog") : PLAN_REVIEW_UNION);
+    const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === "tool.get_plan_review");
+    if (!entry || entry.operation === "source.sync") throw new Error("Missing get_plan_review declaration");
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(PLAN_REVIEW_UNION);
+  });
+}
+
+it("traces find_filament_matches validation, catalog ranking and tenants against the shipped catalog only", async () => {
+  const catalogWasLoaded = filamentCatalogLoaded;
+  fs.writeFileSync(join(dataDir, "custom_filaments.json"), JSON.stringify({ filaments: [{ id: "custom-abc", display_name: "Mine", product_line: "Custom", hex: "#445566", combo_label: "Mine" }] }));
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, tenantId = "default") {
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("find_filament_matches", input, { repo, dataDir })); }
+    finally { observer.state.active = false; }
+    expect(statements).toEqual([]);
+    const files = planReviewFileResources(observer.state.files, { repos: join(dataDir, "repos"), thumbsDir: join(dataDir, "thumbs"), dataDir });
+    if (files.length > 0) {
+      expect(filamentCatalogLoaded, "the process-wide filament catalog loads once").toBe(false);
+      expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([["existsSync", FILAMENT_CATALOG_CANDIDATES[0]], ["readFileSync", FILAMENT_CATALOG_CANDIDATES[0], "utf8"]]);
+      filamentCatalogLoaded = true;
+    }
+    for (const resource of files) union.add(resource);
+    return z.object({ matches: z.array(z.object({ id: z.string() }).passthrough()).optional(), exact_available: z.boolean().optional(), error: z.string().optional() }).strict().parse(JSON.parse(output.content));
+  }
+  expect(await trace({})).toEqual({ error: "name required" });
+  expect(await trace({ name: "  " })).toEqual({ error: "name required" });
+  expect(await trace({ name: "black", color_hex: "black" })).toEqual({ error: "color_hex must be a six-digit hex color" });
+  const exact = await trace({ name: "Black (Pantone 7C)", brand: "ABS Matte" });
+  expect(exact.exact_available).toBe(true);
+  expect(exact.matches?.[0]?.id).toBe("abs-matte::black-pantone-7c");
+  expect(await trace({ name: "Black (Pantone 7C)", brand: "ABS Matte" }, "other")).toEqual(exact);
+  const broad = await trace({ name: "black", color_hex: "#000000" });
+  expect(broad.matches?.length).toBe(20);
+  // The custom filament store is not part of the matcher's catalog.
+  expect(await trace({ name: "Mine" })).toEqual({ matches: [], exact_available: false });
+  expect([...union]).toEqual(catalogWasLoaded ? [] : ["file:filament-catalog"]);
+  const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === "tool.find_filament_matches");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing find_filament_matches declaration");
+  expect(entry.resources).toEqual([{ kind: "file", name: "filament-catalog" }]);
+});
+
+function searchPlanPartsSelect(statement: unknown, tenantId: string): string {
+  const sql = z.string().parse(statement);
+  const id = "-?(?:0|[1-9][0-9]*)(?:\\.0)?";
+  const tenant = `"build_profiles"\\."tenant_id" = '${tenantId}'`;
+  if (sql.startsWith('select "id", "name", "order_number", "archived_at" from "build_profiles"')) return tableForObservedSelect(sql, tenantId);
+  if (new RegExp(`^select "id" from "build_profiles" where \\(${tenant} and "build_profiles"\\."id" = ${id}\\)$`).test(sql)) return "table:build_profiles";
+  if (new RegExp(`^select count\\(\\*\\) from "parts" where "parts"\\."profile_id" = ${id}$`).test(sql)) return "table:parts";
+  if (new RegExp(`^select "id", (?:"[a-z_]+", )*"[a-z_]+" from "parts" where "parts"\\."profile_id" = ${id} order by "parts"\\."filename" asc limit ${id}(?: offset ${id})?$`).test(sql)) return "table:parts";
+  throw new Error(`Unsupported SQL: ${sql}`);
+}
+
+it("traces search_plan_parts lookup, fallback, limits and tenants against its literal union", async () => {
+  const { plan, idle, foreign } = acceptedPlanFixture(false, { stls: ["bracket_x2.stl", "clip_[a].stl", "duct_[c].stl"] });
+  const parts = repo.listParts(plan.id).parts;
+  const union = new Set<string>();
+  async function trace(input: Record<string, unknown>, tables: string[], options: { tenantId?: string; activePlanId?: number } = {}) {
+    const { tenantId = "default", activePlanId } = options;
+    statements = [];
+    observer.state.files = [];
+    observer.state.active = true;
+    let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+    try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("search_plan_parts", input, { repo, activePlanId })); }
+    finally { observer.state.active = false; }
+    expect(observer.state.files).toEqual([]);
+    const observed = [...new Set(statements.map((sql) => searchPlanPartsSelect(sql, tenantId)))].sort();
+    expect(observed).toEqual(tables);
+    for (const resource of observed) union.add(resource);
+    return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  }
+  const both = ["table:build_profiles", "table:parts"];
+  const hit = (filename: string) => {
+    const part = parts.find((candidate) => candidate.filename === filename)!;
+    return { part_id: part.id, filename, relative_path: filename, role: part.role, included: true };
+  };
+  const found = (query: string, filenames: string[], planId = plan.id) => ({
+    plan_id: planId,
+    query,
+    count: filenames.length,
+    parts: filenames.map(hit),
+    hint: filenames.length === 0 ? "No parts matched. Ensure the plan has been recomputed, or try a shorter filename fragment." : "Use part_id with ui_highlight_part to open Review/Checkoff preview.",
+  });
+  expect(await trace({ plan_id: plan.id, query: " BRACKET " }, both)).toEqual(found("BRACKET", ["bracket_x2.stl"]));
+  expect(await trace({ plan_id: String(plan.id), query: ".stl", limit: 2 }, both)).toEqual(found(".stl", ["bracket_x2.stl", "clip_[a].stl"]));
+  expect(await trace({ plan_id: plan.id, query: ".stl", limit: 0 }, both)).toEqual(found(".stl", ["bracket_x2.stl"]));
+  expect(await trace({ query: "duct" }, both, { activePlanId: plan.id })).toEqual(found("duct", ["duct_[c].stl"]));
+  expect(await trace({ plan_id: foreign.id, query: "duct" }, both, { activePlanId: plan.id })).toEqual(found("duct", ["duct_[c].stl"]));
+  expect(await trace({ plan_id: idle.id, query: "duct" }, both)).toEqual(found("duct", [], idle.id));
+  expect(await trace({ plan_id: plan.id, query: "  " }, ["table:build_profiles"])).toEqual({ error: "query required" });
+  expect(await trace({ query: "duct" }, [])).toEqual({ error: "plan_id required" });
+  for (const plan_id of [999999, foreign.id]) expect(await trace({ plan_id, query: "duct" }, ["table:build_profiles"])).toEqual({ error: "plan_id required" });
+  expect(await trace({ plan_id: plan.id, query: "duct" }, ["table:build_profiles"], { tenantId: "other" })).toEqual({ error: "plan_id required" });
+  expect([...union].sort()).toEqual(both);
+  const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === "tool.search_plan_parts");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing search_plan_parts declaration");
+  expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(both);
+  expect(() => searchPlanPartsSelect('select "id" from "parts" where "parts"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => searchPlanPartsSelect(`select "id" from "build_profiles" where ("build_profiles"."tenant_id" = 'other' and "build_profiles"."id" = 1.0)`, "default")).toThrow("Unsupported SQL:");
+});
+
+it("rejects reads outside the get_plan_review declaration", () => {
+  const roots = { repos: join(dataDir, "repos"), thumbsDir: join(dataDir, "thumbs"), dataDir };
+  for (const access of [
+    { api: "readFileSync", args: [join(dataDir, "outside.txt")] },
+    { api: "writeFileSync", args: [join(dataDir, "custom_filaments.json")] },
+    { api: "unlinkSync", args: [join(dataDir, "thumbs", "a.png")] },
+    { api: "readFileSync", args: [join(dataDir, "manifests", "kit-catalog.json")] },
+    { api: "readSync", args: [42] },
+  ]) {
+    expect(() => planReviewFileResources([access], roots)).toThrow("Unclassified filesystem call");
+  }
+  expect(() => planReviewSelect('select "id" from "source_docs" where "source_docs"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => planReviewSelect(`select "tenant_id", "key", "value" from "app_settings" where ("app_settings"."tenant_id" = 'other' and "app_settings"."key" = 'integrations')`, "default")).toThrow("Unsupported SQL:");
+  expect(planReviewSelect(`select "tenant_id", "key", "value" from "app_settings" where ("app_settings"."tenant_id" = 'default' and "app_settings"."key" = 'integrations')`, "default")).toEqual(["table:app_settings"]);
+});
+
+it("pins accepted thumbnails to Node's renderer version", () => {
+  expect(THUMBNAIL_RENDERER_VERSION).toBe(String(manifest.live_formats["accepted-thumbnails"].node_reads));
+});
+
+const SHIPPED_DOMAIN_ROOT = fileURLToPath(new URL("../data/assistant-domain", import.meta.url));
+const STACK_TABLES = ["table:build_profiles", "table:profile_layers", "table:projects"];
+const STACK_UNION = ["file:assistant-domain", "file:kit-catalog", "file:source-workspace", ...STACK_TABLES].sort();
+type InteractionTool = "get_interaction_graph" | "check_stack_compatibility";
+
+function interactionFileResources(files: { api: string; args: unknown[] }[], roots: { domain: string[]; catalog: string[]; workspace: string[] }): string[] {
+  const resources = new Set<string>();
+  for (const { api, args } of files) {
+    const path = args[0];
+    if (typeof path !== "string") throw new Error(`Unclassified filesystem call ${api}`);
+    const domainRead = (api === "existsSync" && args.length === 1)
+      || (api === "readdirSync" && args.length === 2 && JSON.stringify(args[1]) === '{"withFileTypes":true}')
+      || (api === "readFileSync" && args.length === 2 && args[1] === "utf8");
+    if (domainRead && roots.domain.some((root) => under(root, path))) resources.add("file:assistant-domain");
+    else if (api === "readFileSync" && args[1] === "utf8" && roots.catalog.includes(path)) resources.add("file:kit-catalog");
+    else if (["realpathSync", "lstatSync", "statSync"].includes(api) && args.length === 1 && roots.workspace.some((root) => under(root, path))) resources.add("file:source-workspace");
+    else throw new Error(`Unclassified filesystem call ${api} ${path}`);
+  }
+  return [...resources].sort();
+}
+
+function stackSelect(statement: unknown, tenantId: string): string {
+  const sql = z.string().parse(statement);
+  const id = "-?(?:0|[1-9][0-9]*)(?:\\.0)?";
+  const tenant = (table: string) => `"${table}"\\."tenant_id" = '${tenantId}'`;
+  const shapes: [string, RegExp][] = [
+    ["build_profiles", new RegExp(`^select "id", "name", "order_number", "archived_at" from "build_profiles" where \\(${tenant("build_profiles")} and "build_profiles"\\."id" = ${id}\\)$`)],
+    ["build_profiles", new RegExp(`^select "id" from "build_profiles" where \\(${tenant("build_profiles")} and "build_profiles"\\."id" = ${id}\\)$`)],
+    ["profile_layers", new RegExp(`^select (?:"[a-z_]+", )*"[a-z_]+" from "profile_layers" where "profile_layers"\\."profile_id" = ${id} order by "profile_layers"\\."layer_order" asc$`)],
+    ["projects", new RegExp(`^select (?:"[a-z_]+", )*"[a-z_]+" from "projects" where \\(${tenant("projects")} and "projects"\\."id" = ${id}\\)$`)],
+  ];
+  const match = shapes.find(([, pattern]) => pattern.test(sql));
+  if (!match) throw new Error(`Unsupported SQL: ${sql}`);
+  return `table:${match[0]}`;
+}
+
+function interactionDomainFixture() {
+  const domain = join(dataDir, "assistant-domain");
+  const write = (path: string, text: string) => { fs.mkdirSync(dirname(join(domain, path)), { recursive: true }); fs.writeFileSync(join(domain, path), text); };
+  write("sources/Toolhead-A/compatibility.yaml", ["source_name: Toolhead-A", "kind: toolhead", "conflicts_with: [Toolhead-B]", "not_for: [Fixture]", "replaces_parts:", "  - from_slug_or_path: stock/hotend_mount.stl", "    to_slug_or_path: a/mount.stl"].join("\n"));
+  write("sources/Toolhead-B/compatibility.yaml", ["source_name: Toolhead-B", "kind: toolhead"].join("\n"));
+  write("sources/Broken/compatibility.yaml", "[invalid");
+  write("sources/notes.md", "not a source directory");
+  write("_global/merge_conflicts.yaml", ["conflicts:", "  - slug_or_path: frame/skirt.stl", "    sources: [Fixture, Toolhead-A]", "    resolution: Prefer the Toolhead-A copy."].join("\n"));
+  const catalog = deploymentCatalogCandidates(dataDir)[0]!;
+  fs.writeFileSync(catalog, JSON.stringify({ version: 1, bases: {}, addon_categories: { probe: { rule: "pick_one", replaces_slot: "z_probe", sources: [{ name: "Probe-X" }, { name: "Probe-Y" }] }, accent: { rule: "pick_any", sources: [{ name: "Accent" }] } }, stack_presets: {} }));
+  return { domain, roots: { domain: [domain, SHIPPED_DOMAIN_ROOT], catalog: [...deploymentCatalogCandidates(dataDir), ...SHIPPED_CATALOG_CANDIDATES], workspace: [join(dataDir, "repos")] } };
+}
+
+async function traceInteraction(tool: InteractionTool, input: Record<string, unknown>, options: { repository?: AppRepository; tenantId?: string; activePlanId?: number; roots: { domain: string[]; catalog: string[]; workspace: string[] } }) {
+  const { repository = repo, tenantId = "default", activePlanId, roots } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, dataDir, activePlanId })); }
+  finally { observer.state.active = false; }
+  const tables = [...new Set(statements.map((sql) => stackSelect(sql, tenantId)))].sort();
+  const files = interactionFileResources(observer.state.files, roots);
+  return { body: z.record(z.string(), z.unknown()).parse(JSON.parse(output.content)), tables, files, calls: observer.state.files.map(({ api, args }) => [api, ...args]) };
+}
+
+function graphReads(domain: string, catalog: string | null): [string, ...unknown[]][] {
+  const shipped = join(SHIPPED_DOMAIN_ROOT, "sources");
+  return [
+    ["existsSync", join(domain, "sources")],
+    ["readdirSync", join(domain, "sources"), { withFileTypes: true }],
+    ...["Broken", "Toolhead-A", "Toolhead-B"].map((name): [string, ...unknown[]] => ["readFileSync", join(domain, "sources", name, "compatibility.yaml"), "utf8"]),
+    // The module and source data roots are the same directory when tests run from src.
+    ["existsSync", shipped], ["readdirSync", shipped, { withFileTypes: true }],
+    ["existsSync", shipped], ["readdirSync", shipped, { withFileTypes: true }],
+    ...(catalog ? [["readFileSync", catalog, "utf8"] as [string, ...unknown[]]] : []),
+    ["existsSync", join(domain, "_global", "merge_conflicts.yaml")],
+    ["readFileSync", join(domain, "_global", "merge_conflicts.yaml"), "utf8"],
+  ];
+}
+
+const TOOLHEAD_A = {
+  source_name: "Toolhead-A", kind: "toolhead", attaches_to_bases: [], conflicts_with: ["Toolhead-B"], not_for: ["Fixture"], replaces_slots: ["toolhead"],
+  replaces_parts: [{ from_source: null, from_slug_or_path: "stock/hotend_mount.stl", to_slug_or_path: "a/mount.stl" }], replaces: [],
+  catalog_category: null, catalog_slot: null, merge_conflict_ids: ["frame/skirt.stl"],
+};
+
+it("traces get_interaction_graph domain packs, catalog slots and tenants with zero SQL", async () => {
+  const { domain, roots } = interactionDomainFixture();
+  const catalog = deploymentCatalogCandidates(dataDir)[0]!;
+  const union = new Set<string>();
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    async function trace(input: Record<string, unknown>, tenantId = "default") {
+      const traced = await traceInteraction("get_interaction_graph", input, { roots, tenantId });
+      expect(traced.tables).toEqual([]);
+      for (const resource of traced.files) union.add(resource);
+      return traced;
+    }
+    for (const input of [{}, { source_name: "  " }, { source_name: 7 }]) {
+      expect(await trace(input)).toEqual({ body: { error: "source_name required" }, tables: [], files: [], calls: [] });
+    }
+    const exact = await trace({ source_name: " Toolhead-A " });
+    expect(exact.body).toEqual(TOOLHEAD_A);
+    expect(exact.calls).toEqual(graphReads(domain, catalog));
+    expect((await trace({ source_name: "toolhead-a" })).body).toEqual(TOOLHEAD_A);
+    expect((await trace({ source_name: "Toolhead-A" }, "other")).body).toEqual(TOOLHEAD_A);
+    const probe = await trace({ source_name: "Probe-X" });
+    expect(probe.body).toEqual({
+      source_name: "Probe-X", kind: null, attaches_to_bases: [], conflicts_with: ["Probe-Y"], not_for: [], replaces_slots: ["z_probe"],
+      replaces_parts: [], replaces: [], catalog_category: "probe", catalog_slot: "z_probe", merge_conflict_ids: [],
+    });
+    // A catalog slot hit reloads the catalog for its replaces_slot.
+    expect(probe.calls).toEqual([...graphReads(domain, catalog), ["readFileSync", catalog, "utf8"]]);
+    for (const source_name of ["Nope", "Broken", "Accent"]) {
+      const missing = await trace({ source_name });
+      expect(missing.body).toEqual({ error: `No interaction data for "${source_name}"`, hint: "Use an exact catalog/domain source_name." });
+      expect(missing.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+    }
+    fs.rmSync(domain, { recursive: true });
+    fs.rmSync(catalog);
+    const shipped = await trace({ source_name: "Toolhead-A" });
+    expect(shipped.body).toEqual({ error: 'No interaction data for "Toolhead-A"', hint: "Use an exact catalog/domain source_name." });
+    expect(shipped.calls.filter(([api]) => api === "readFileSync").map(([, path]) => path)).toEqual([...deploymentCatalogCandidates(dataDir), ...SHIPPED_CATALOG_CANDIDATES.slice(0, 2), join(SHIPPED_DOMAIN_ROOT, "_global", "merge_conflicts.yaml")]);
+    expect(shipped.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+  } finally { vi.unstubAllEnvs(); }
+  expect([...union].sort()).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+  const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === "tool.get_interaction_graph");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing get_interaction_graph declaration");
+  expect(entry.resources).toEqual([{ kind: "file", name: "assistant-domain" }, { kind: "file", name: "kit-catalog" }]);
+});
+
+for (const isolated of [false, true]) {
+  it(`traces check_stack_compatibility layers, additions, plan fallback and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { roots } = interactionDomainFixture();
+    const repos = join(dataDir, "repos");
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const toolheadB = repo.createSource({ name: "Toolhead-B", source_kind: "local" }).id;
+    const workspaces = [sourceId, toolheadB].map((id) => join(repos, String(id)));
+    for (const [index, id] of [sourceId, toolheadB].entries()) {
+      fs.mkdirSync(workspaces[index]!, { recursive: true });
+      sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspaces[index], id);
+    }
+    const plan = repo.createProfile("Stack", sourceId);
+    repo.addAddonLayer(plan.id, toolheadB);
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    const union = new Set<string>();
+    const probes = isolated ? workspaces.flatMap((workspace) => isolatedWorkspaceProbe(repos, workspace)) : [];
+    vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+    try {
+      async function trace(input: Record<string, unknown>, tables: string[], options: { tenantId?: string; activePlanId?: number } = {}) {
+        const traced = await traceInteraction("check_stack_compatibility", input, { roots, repository, ...options });
+        expect(traced.tables).toEqual(tables);
+        for (const resource of [...traced.tables, ...traced.files]) union.add(resource);
+        return traced;
+      }
+      const conflict = { severity: "warning", code: "compat_conflict", message: '"Toolhead-A" conflicts with "Toolhead-B".', sources: ["Toolhead-A", "Toolhead-B"] };
+      const curated = { severity: "info", code: "merge_conflict_curated", message: "frame/skirt.stl: Prefer the Toolhead-A copy.", sources: ["Fixture", "Toolhead-A"], conflict_id: "frame/skirt.stl" };
+      const explicit = await trace({ layers: [" Fixture ", "Toolhead-A", "Toolhead-B", "", 7], plan_id: plan.id }, ["table:build_profiles"]);
+      expect(explicit.body).toEqual({
+        plan_id: plan.id,
+        layers: ["Fixture", "Toolhead-A", "Toolhead-B", "7"],
+        warnings: [conflict, { severity: "warning", code: "compat_slot", message: 'Slot "toolhead" has multiple occupants: Toolhead-A, Toolhead-B.', sources: ["Toolhead-A", "Toolhead-B"], slot: "toolhead" }, curated],
+        suggested_excludes: ["hotend_mount.stl"],
+        conflicts: [{ a: "Toolhead-A", b: "Toolhead-B", reason: "conflicts_with" }, { a: "Toolhead-A", b: "Toolhead-B", reason: "slot:toolhead" }],
+        slots_occupied: { toolhead: ["Toolhead-A", "Toolhead-B"] },
+      });
+      expect(explicit.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+      const layered = ["table:build_profiles", "table:profile_layers", "table:projects"];
+      const stored = await trace({ plan_id: String(plan.id) }, layered);
+      expect(stored.body).toEqual({ plan_id: plan.id, layers: ["Fixture", "Toolhead-B"], warnings: [], suggested_excludes: [], conflicts: [], slots_occupied: { toolhead: ["Toolhead-B"] } });
+      expect(stored.calls.slice(0, probes.length)).toEqual(probes);
+      expect(stored.files).toEqual(isolated ? ["file:assistant-domain", "file:kit-catalog", "file:source-workspace"] : ["file:assistant-domain", "file:kit-catalog"]);
+      const adding = await trace({ adding: " Toolhead-A " }, layered, { activePlanId: plan.id });
+      expect(adding.body).toMatchObject({ plan_id: plan.id, adding: "Toolhead-A", layers: ["Fixture", "Toolhead-B", "Toolhead-A"], suggested_excludes: ["hotend_mount.stl"] });
+      expect(z.object({ warnings: z.array(z.object({ code: z.string() }).passthrough()) }).passthrough().parse(adding.body).warnings.map(({ code }) => code)).toEqual([
+        "compat_conflict", "compat_slot", "compat_not_for", "compat_replace_part", "merge_conflict_curated", "compat_conflict", "compat_slot", "merge_conflict_curated",
+      ]);
+      // A foreign or missing explicit plan falls back to the active plan, then to no layers.
+      expect((await trace({ plan_id: foreign.id }, layered, { activePlanId: plan.id })).body).toMatchObject({ plan_id: plan.id, layers: ["Fixture", "Toolhead-B"] });
+      for (const plan_id of [foreign.id, 999999]) {
+        const empty = await trace({ plan_id }, ["table:build_profiles"]);
+        expect(empty.body).toEqual({ plan_id: null, layers: [], warnings: [], suggested_excludes: [], conflicts: [], slots_occupied: {} });
+        expect(empty.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+      }
+      expect((await trace({ plan_id: plan.id }, ["table:build_profiles"], { tenantId: "other" })).body).toMatchObject({ plan_id: null, layers: [] });
+      expect((await trace({}, [])).body).toMatchObject({ plan_id: null, layers: [] });
+      // An unvalidated active plan from another tenant fails the layer read before any file read.
+      const refused = await trace({}, ["table:build_profiles"], { activePlanId: foreign.id });
+      expect(refused.body).toEqual({ error: "Profile not found" });
+      expect(refused.calls).toEqual([]);
+    } finally { vi.unstubAllEnvs(); }
+    expect([...union].sort()).toEqual(isolated ? STACK_UNION : STACK_UNION.filter((resource) => resource !== "file:source-workspace"));
+    const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === "tool.check_stack_compatibility");
+    if (!entry || entry.operation === "source.sync") throw new Error("Missing check_stack_compatibility declaration");
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(STACK_UNION);
+  });
+}
+
+it("rejects reads outside the interaction graph declarations", () => {
+  const { domain, roots } = interactionDomainFixture();
+  for (const access of [
+    { api: "readFileSync", args: [join(root, "README.md"), "utf8"] },
+    { api: "writeFileSync", args: [join(domain, "_global", "merge_conflicts.yaml"), "conflicts: []"] },
+    { api: "readFileSync", args: [join(dataDir, "custom_filaments.json"), "utf8"] },
+    { api: "statSync", args: [join(dataDir, "outside.txt")] },
+    { api: "readSync", args: [42] },
+  ]) {
+    expect(() => interactionFileResources([access], roots)).toThrow("Unclassified filesystem call");
+  }
+  expect(() => stackSelect('select "id" from "source_docs" where "source_docs"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => stackSelect(`select "id" from "build_profiles" where ("build_profiles"."tenant_id" = 'other' and "build_profiles"."id" = 1.0)`, "default")).toThrow("Unsupported SQL:");
+  expect(stackSelect(`select "id" from "build_profiles" where ("build_profiles"."tenant_id" = 'default' and "build_profiles"."id" = 1.0)`, "default")).toBe("table:build_profiles");
+});
 
 it.each(CHECKOFF_READS)("traces %s isolated symlink snapshot refusal before a unit summary", async (tool) => {
   const { repository, workspace, plan } = acceptedPlanFixture(true);
@@ -5180,3 +5682,5 @@ it("traces build planning proposal creators against the app_settings brief looku
   );
   expect(repo.getSetting(`build_planning.v1.${plan.id}`)).toBe(before);
 });
+
+

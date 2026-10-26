@@ -5,7 +5,8 @@
     "deployMode": "self-host",
     "singleUserAuth": true,
     "multiUser": false,
-    "sessionCookieSecure": false
+    "sessionCookieSecure": false,
+    "sameOriginRequests": true
   },
   "account": {
     "email": "fixture@example.test",

@@ -10,9 +10,13 @@ use pp_storage::{
 use reqwest::{Client, Method};
 use serde_json::{Map, Value, json};
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 #[cfg(feature = "desktop_rebuild")]
 #[path = "../../pp-storage/tests/common/process.rs"]
@@ -27,16 +31,12 @@ fn policy() -> AuthPolicy {
     }
 }
 
-fn open() -> (Arc<Mutex<WriterOwner>>, PathBuf) {
-    let directory = std::env::temp_dir().join(format!("pp-catalog-http-{}", random()));
+/// Returns the directory first so that, on panic, `owner` drops before the
+/// scratch directory is removed.
+fn open() -> (Scratch, Arc<Mutex<WriterOwner>>) {
+    let directory = Scratch::new("pp-catalog-http-");
     let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
-    (Arc::new(Mutex::new(owner)), directory)
-}
-
-fn random() -> String {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).unwrap();
-    hex::encode(bytes)
+    (directory, Arc::new(Mutex::new(owner)))
 }
 
 fn sample(name: &str, note: &str) -> CreateSource {
@@ -206,9 +206,9 @@ async fn listener() -> (tokio::net::TcpListener, String) {
     (listener, origin)
 }
 
-fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: PathBuf) {
+fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: Scratch) {
     seal(owner);
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 }
 
 fn seal(owner: Arc<Mutex<WriterOwner>>) {
@@ -259,7 +259,7 @@ fn stored_rows(directory: &Path) -> Vec<String> {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn catalog_reads_flag_off_are_404() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let before = {
         let guard = owner.lock().unwrap();
         seed(&guard)
@@ -298,7 +298,7 @@ async fn catalog_patch_wrong_owner_is_refused() {
 
 #[cfg(not(feature = "desktop_rebuild"))]
 async fn unmounted_write(method: Method, path: &str, body: Value) {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let before = {
         let guard = owner.lock().unwrap();
         seed(&guard)
@@ -319,7 +319,7 @@ async fn unmounted_write(method: Method, path: &str, body: Value) {
 #[tokio::test]
 async fn catalog_reads_flag_off_are_404() {
     use pp_api::catalog::{CatalogHttpConfig, admit_catalog_routes};
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let before = {
         let guard = owner.lock().unwrap();
         seed(&guard)
@@ -461,7 +461,7 @@ async fn catalog_reads_match_existing_source_metadata() {
         auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
         catalog::{CatalogHttpConfig, admit_catalog_routes},
     };
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let seeded = {
         let guard = owner.lock().unwrap();
         seed(&guard)
@@ -627,13 +627,13 @@ fn assert_source(actual: &Value, expected: &Value, directory: &Path) {
 }
 
 #[cfg(feature = "desktop_rebuild")]
-async fn serve(account_tenant: bool) -> (Arc<Mutex<WriterOwner>>, PathBuf, Server, String) {
+async fn serve(account_tenant: bool) -> (Scratch, Arc<Mutex<WriterOwner>>, Server, String) {
     use pp_api::{
         auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
         catalog::{CatalogHttpConfig, admit_catalog_routes},
     };
     use pp_storage::auth::SessionTenantPolicy;
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = if account_tenant {
         AuthPolicy {
             registration: pp_storage::auth::RegistrationPolicy::FirstAccountOnly,
@@ -672,14 +672,14 @@ async fn serve(account_tenant: bool) -> (Arc<Mutex<WriterOwner>>, PathBuf, Serve
         .next()
         .unwrap()
         .to_owned();
-    (owner, directory, server, cookie)
+    (directory, owner, server, cookie)
 }
 
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_create_patch_match_node_coercions() {
     let fixture = node_fixture();
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let (status, created) = server
         .exchange(
             Method::POST,
@@ -733,7 +733,7 @@ async fn catalog_create_patch_match_node_coercions() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_patch_wrong_owner_is_refused() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let seeded = {
         let guard = owner.lock().unwrap();
         seed(&guard)
@@ -803,7 +803,7 @@ async fn catalog_patch_wrong_owner_is_refused() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_delete_wrong_owner_is_refused() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let seeded = {
         let guard = owner.lock().unwrap();
         seed(&guard)
@@ -894,7 +894,7 @@ async fn refuse(server: &Server, cookie: &str, path: &str, detail: &str) {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_delete_busy_source_preserves_revisions() {
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let history = post_source(&server, &cookie, "History").await;
     let referenced = post_source(&server, &cookie, "Referenced").await;
     let history_id = history["id"].as_i64().unwrap();
@@ -1033,7 +1033,7 @@ fn storage_preview(owner: &WriterOwner, relative_path: &str, profile: Option<Val
 #[tokio::test]
 async fn catalog_global_naming_round_trip() {
     use pp_storage::catalog::{Outcome, Request};
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let default = default_naming_profile();
     let (status, got) = server
         .send(Method::GET, "/settings/stl-naming", &[("Cookie", &cookie)])
@@ -1114,7 +1114,7 @@ async fn catalog_global_naming_round_trip() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_global_naming_preserves_source_override() {
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let created = post_source(&server, &cookie, "Override").await;
     let id = created["id"].as_i64().unwrap();
     let mut override_profile = default_naming_profile();
@@ -1172,7 +1172,7 @@ async fn catalog_global_naming_preserves_source_override() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_naming_preview_matches_storage() {
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let created = post_source(&server, &cookie, "Naming").await;
     let id = created["id"].as_i64().unwrap();
     let mut override_profile = default_naming_profile();
@@ -1217,7 +1217,7 @@ async fn catalog_naming_preview_matches_storage() {
         expected,
         json!({
             "role":"accent",
-            "quantity":3.0,
+            "quantity":3,
             "part_slug":"bracket",
             "filename":"[custom]bracket x3.stl"
         })
@@ -1258,7 +1258,7 @@ async fn catalog_naming_preview_matches_storage() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_invalid_override_does_not_write() {
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let created = post_source(&server, &cookie, "Guard").await;
     let id = created["id"].as_i64().unwrap();
     let mut good = default_naming_profile();
@@ -1351,7 +1351,7 @@ async fn catalog_invalid_override_does_not_write() {
 #[tokio::test]
 async fn catalog_import_rules_round_trip() {
     use pp_storage::catalog::{Outcome, Request};
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let created = post_source(&server, &cookie, "Rules").await;
     let id = created["id"].as_i64().unwrap();
     let (status, empty) = server
@@ -1441,7 +1441,7 @@ async fn catalog_import_rules_round_trip() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_activity_limit_matches_node() {
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let created = post_source(&server, &cookie, "Activity").await;
     let source_id = created["id"].as_i64().unwrap();
     {
@@ -1545,7 +1545,7 @@ async fn catalog_activity_limit_matches_node() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_categories_round_trip() {
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let defaults = json!([
         "Printer kits",
         "Toolheads",
@@ -1625,7 +1625,7 @@ async fn catalog_categories_round_trip() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_categories_are_tenant_scoped() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     {
         let guard = owner.lock().unwrap();
         assert!(matches!(
@@ -1763,12 +1763,12 @@ async fn catalog_categories_are_tenant_scoped() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn catalog_delete_unreferenced_source_succeeds() {
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let keeper = post_source(&server, &cookie, "Keeper").await;
     let disposable = post_source(&server, &cookie, "Disposable").await;
     let id = disposable["id"].as_i64().unwrap();
     let keeper_id = keeper["id"].as_i64().unwrap();
-    let path = PathBuf::from(disposable["local_path"].as_str().unwrap());
+    let path = std::path::PathBuf::from(disposable["local_path"].as_str().unwrap());
     std::fs::create_dir_all(&path).unwrap();
     std::fs::write(path.join("kept.stl"), b"retained").unwrap();
     let (status, body) = server
@@ -1833,7 +1833,7 @@ async fn catalog_patch_stale_metadata_is_conflict() {
     }
 
     let fixture = node_fixture();
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let (status, created) = server
         .exchange(
             Method::POST,
@@ -1908,7 +1908,7 @@ async fn catalog_patch_non_integer_metadata_version_is_rejected() {
     }
 
     let fixture = node_fixture();
-    let (owner, directory, mut server, cookie) = serve(false).await;
+    let (directory, owner, mut server, cookie) = serve(false).await;
     let (status, created) = server
         .exchange(
             Method::POST,

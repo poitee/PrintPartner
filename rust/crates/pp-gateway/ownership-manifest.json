@@ -39,6 +39,62 @@
         "worker.startSourceWatcher",
         "migration.migrateLegacySourceManifestOverridesForTenant"
       ]
+    },
+    {
+      "operation": "profile.sync",
+      "owner": "node",
+      "participants": [
+        "http.GET /ws/profile-sync",
+        "worker.startManagedProfileSync"
+      ]
+    }
+,
+    {
+      "operation": "export.accepted-plate-3mf",
+      "owner": "node",
+      "participants": [
+        "http.POST /jobs/export-accepted-plate-3mf",
+        "http.POST /api/v1/jobs/export-accepted-plate-3mf",
+        "http.POST /slicer-instances/:id/open-accepted-plates",
+        "http.POST /api/v1/slicer-instances/:id/open-accepted-plates",
+        "job.export-accepted-plate-3mf"
+      ]
+    },
+    {
+      "operation": "export.checklist-html",
+      "owner": "node",
+      "participants": [
+        "http.POST /jobs/export-checklist-html",
+        "http.POST /api/v1/jobs/export-checklist-html",
+        "job.export-checklist-html"
+      ]
+    },
+    {
+      "operation": "export.direct-3mf",
+      "owner": "node",
+      "participants": [
+        "http.POST /jobs/export-direct-3mf",
+        "http.POST /api/v1/jobs/export-direct-3mf",
+        "job.export-direct-3mf"
+      ]
+    },
+    {
+      "operation": "export.kit-bundle",
+      "owner": "node",
+      "participants": [
+        "http.POST /jobs/export-kit-bundle",
+        "http.POST /api/v1/jobs/export-kit-bundle",
+        "job.export-kit-bundle"
+      ]
+    },
+    {
+      "operation": "export.stl-pack",
+      "owner": "node",
+      "participants": [
+        "http.POST /jobs/export-stl-pack",
+        "http.POST /api/v1/jobs/export-stl-pack",
+        "job.export-stl-pack"
+      ]
     }
   ],
   "node_participants": {
@@ -178,11 +234,6 @@
       "update_kit_selections"
     ],
     "job": [
-      "export-stl-pack",
-      "export-checklist-html",
-      "export-kit-bundle",
-      "export-accepted-plate-3mf",
-      "export-direct-3mf",
       "printer-upload"
     ],
     "startup": [
@@ -195,9 +246,7 @@
       "migratePrintOutcomesBlob",
       "prepareSqliteUpgrade"
     ],
-    "worker": [
-      "startManagedProfileSync"
-    ]
+    "worker": []
   },
   "resources": {
     "reviewed": [
@@ -702,6 +751,60 @@
           {"kind": "table", "name": "required_units"},
           {"kind": "table", "name": "source_revisions"},
           {"kind": "file", "name": "source-workspace"}
+        ]
+      },
+      {
+        "operation": "tool.get_plan_review",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "parts"},
+          {"kind": "table", "name": "plan_accepted_input_sets"},
+          {"kind": "table", "name": "plan_revision_input_sets"},
+          {"kind": "table", "name": "plan_revision_inputs"},
+          {"kind": "table", "name": "plan_revision_parts"},
+          {"kind": "table", "name": "plan_revision_required_unit_sets"},
+          {"kind": "table", "name": "plan_revision_required_units"},
+          {"kind": "table", "name": "plan_revisions"},
+          {"kind": "table", "name": "print_progress"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "table", "name": "required_units"},
+          {"kind": "table", "name": "source_revisions"},
+          {"kind": "table", "name": "app_settings"},
+          {"kind": "file", "name": "source-workspace"},
+          {"kind": "file", "name": "accepted-thumbnails"},
+          {"kind": "file", "name": "custom-filaments"},
+          {"kind": "file", "name": "filament-catalog"}
+        ]
+      },
+      {
+        "operation": "tool.find_filament_matches",
+        "resources": [
+          {"kind": "file", "name": "filament-catalog"}
+        ]
+      },
+      {
+        "operation": "tool.search_plan_parts",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "parts"}
+        ]
+      },
+      {
+        "operation": "tool.get_interaction_graph",
+        "resources": [
+          {"kind": "file", "name": "assistant-domain"},
+          {"kind": "file", "name": "kit-catalog"}
+        ]
+      },
+      {
+        "operation": "tool.check_stack_compatibility",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "profile_layers"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "file", "name": "source-workspace"},
+          {"kind": "file", "name": "assistant-domain"},
+          {"kind": "file", "name": "kit-catalog"}
         ]
       },
       {
@@ -1425,6 +1528,11 @@
       "assistant.set_source_git_ref",
       "assistant.start_recompute",
       "assistant.update_kit_selections",
+      "export.accepted-plate-3mf",
+      "export.checklist-html",
+      "export.direct-3mf",
+      "export.kit-bundle",
+      "export.stl-pack",
       "gateway.denied",
       "gateway.owned",
       "http:DELETE /assistant/decisions current",
@@ -1592,7 +1700,6 @@
       "http:GET /sources/stl-search current",
       "http:GET /webhooks current",
       "http:GET /ws/jobs/:param current",
-      "http:GET /ws/profile-sync current",
       "http:PATCH /integrations/:param current",
       "http:PATCH /parts/:param current",
       "http:PATCH /parts/:param/assembled current",
@@ -1622,11 +1729,6 @@
       "http:POST /imports/kit-bundle current",
       "http:POST /integrations current",
       "http:POST /integrations/:param/test current",
-      "http:POST /jobs/export-accepted-plate-3mf current",
-      "http:POST /jobs/export-checklist-html current",
-      "http:POST /jobs/export-direct-3mf current",
-      "http:POST /jobs/export-kit-bundle current",
-      "http:POST /jobs/export-stl-pack current",
       "http:POST /jobs/printer-upload current",
       "http:POST /manifest-registry/export-draft current",
       "http:POST /parts/:param/thumbnail current",
@@ -1690,7 +1792,6 @@
       "http:POST /settings/logging/config current",
       "http:POST /settings/stl-naming/preview current",
       "http:POST /slicer-instances current",
-      "http:POST /slicer-instances/:param/open-accepted-plates current",
       "http:POST /slicer-instances/seed-defaults current",
       "http:POST /sources/:param/knowledge-bundle/import current",
       "http:POST /sources/:param/manifest-draft current",
@@ -1725,11 +1826,6 @@
       "http:PUT /slicer-instances/:param current",
       "http:PUT /sources/:param/import-rules current",
       "http:PUT /sources/:param/naming current",
-      "job.export-accepted-plate-3mf",
-      "job.export-checklist-html",
-      "job.export-direct-3mf",
-      "job.export-kit-bundle",
-      "job.export-stl-pack",
       "job.printer-upload",
       "mcp.confirm_apply",
       "mcp.dismiss_proposed_action",
@@ -1738,6 +1834,7 @@
       "migration.migrateLegacySelfHostExports",
       "migration.migratePrintOutcomesBlob",
       "migration.prepareSqliteUpgrade",
+      "profile.sync",
       "startup.seedStockSlicerInstancesIfEmpty",
       "startup.sweepExpiredTransferArtifacts",
       "tool.add_addon",
@@ -1745,14 +1842,10 @@
       "tool.apply_stack_preset",
       "tool.archive_plan",
       "tool.audit_build_coverage",
-      "tool.check_stack_compatibility",
       "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
       "tool.duplicate_plan",
-      "tool.find_filament_matches",
       "tool.get_farm_status",
-      "tool.get_interaction_graph",
-      "tool.get_plan_review",
       "tool.get_print_stats",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",
@@ -1768,13 +1861,11 @@
       "tool.propose_restore_snapshot",
       "tool.propose_source_mapping",
       "tool.remove_layer",
-      "tool.search_plan_parts",
       "tool.set_base",
       "tool.set_source_git_ref",
       "tool.start_sync",
       "tool.suggest_source_contributions",
-      "tool.update_kit_selections",
-      "worker.startManagedProfileSync"
+      "tool.update_kit_selections"
     ]
   },
   "live_formats": {
@@ -1799,6 +1890,22 @@
       "rust_writes": "none"
     },
     "community-manifests": {
+      "node_reads": 1,
+      "rust_writes": "none"
+    },
+    "accepted-thumbnails": {
+      "node_reads": 3,
+      "rust_writes": "none"
+    },
+    "custom-filaments": {
+      "node_reads": 1,
+      "rust_writes": "none"
+    },
+    "filament-catalog": {
+      "node_reads": 1,
+      "rust_writes": "none"
+    },
+    "assistant-domain": {
       "node_reads": 1,
       "rust_writes": "none"
     }

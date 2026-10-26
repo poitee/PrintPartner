@@ -40,6 +40,9 @@ pub mod review_observations;
 pub mod rebuild_api;
 
 #[cfg(feature = "desktop_rebuild")]
+pub mod source_acquisition;
+
+#[cfg(feature = "desktop_rebuild")]
 pub mod uploads;
 
 #[cfg(test)]
@@ -61,8 +64,10 @@ pub struct DesktopLaunch {
 }
 
 pub use pp_compat::SupervisorConfig;
-pub use pp_compat::recent_diagnostics;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
+/// The shared scrub policy for log files, the Logs view and opt-in Sentry.
+pub use pp_compat::{CoreLog, redact};
+pub use pp_compat::{log_folder, recent_diagnostics, recent_logs};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
 pub struct CoreHandle {
@@ -213,6 +218,7 @@ async fn start_resources(
         .map_err(|error| anyhow::anyhow!("Operation cutover recovery failed: {error:?}"))?;
     if !boot.evidence_saved {
         eprintln!("cutover_evidence_unsaved");
+        tracing::warn!("cutover_evidence_unsaved");
     }
     pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
         .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
@@ -232,29 +238,37 @@ async fn start_resources(
     )?;
     owner.retain_on_drop();
     let mut status = supervisor.handle.status.clone();
+    // Release verification finished above, so this budget covers only child readiness.
     let ready = tokio::time::timeout(Duration::from_secs(32), async {
         loop {
-            match *status.borrow() {
+            let current = status.borrow_and_update().clone();
+            match current {
                 CoreStatus::Ready { .. } => return Ok(()),
                 CoreStatus::Guarded | CoreStatus::Stopped | CoreStatus::Failed => {
-                    bail!("Compatibility startup failed");
+                    bail!("Compatibility child stopped before readiness: {current:?}");
                 }
                 CoreStatus::Starting | CoreStatus::Backoff { .. } | CoreStatus::Stopping => {}
             }
             status
                 .changed()
                 .await
-                .context("Compatibility supervisor unavailable")?;
+                .context("Compatibility supervisor exited before readiness")?;
         }
     })
-    .await;
-    if !matches!(ready, Ok(Ok(()))) {
+    .await
+    .unwrap_or_else(|_| {
+        Err(anyhow::anyhow!(
+            "Compatibility readiness timed out after 32s; last status {:?}",
+            *status.borrow()
+        ))
+    });
+    if let Err(error) = ready {
         if supervisor.shutdown().await.is_ok() {
             owner.allow_drop_cleanup();
         } else {
             owner.retain_until_process_exit();
         }
-        bail!("Compatibility readiness/release verification failed");
+        return Err(error);
     }
     let gateway = match Gateway::start(listener, assets, supervisor.handle.clone(), &owners) {
         Ok(gateway) => gateway,

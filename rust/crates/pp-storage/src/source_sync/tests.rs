@@ -3982,3 +3982,149 @@ fn sync_finish_replay_returns_same_aggregate() {
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn sync_finish_all_failed_marks_the_job_failed_with_joined_recovery() {
+    let sync = Fixture::new();
+    let missing = 9_999_i64;
+    let remote = sync.source("All Failed Remote");
+    sync.connection()
+        .execute(
+            "UPDATE projects SET source_type='github' WHERE id=?1",
+            [remote],
+        )
+        .unwrap();
+    let local_id = sync.source("All Failed Local");
+    let job_id = sync.enqueue(Some(vec![missing as u64, remote as u64, local_id as u64]));
+    let mut lease = sync.open();
+    assert!(matches!(
+        sync.next(&mut lease),
+        NextSyncTarget::OrdinaryFailure(_)
+    ));
+    assert!(matches!(
+        sync.next(&mut lease),
+        NextSyncTarget::OrdinaryFailure(_)
+    ));
+    let target = local(sync.next(&mut lease));
+    sync.worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    let observation = target.observation().clone();
+    sync.worker
+        .acknowledge_source_sync_target(&mut lease, &target, &observation)
+        .unwrap();
+    drop(target);
+    assert!(matches!(sync.next(&mut lease), NextSyncTarget::Complete));
+    let finished = completed_finish(&sync, &lease);
+    let expected = jobs::SourceSyncResult {
+        synced: 0,
+        failed: 3,
+        results: vec![],
+        failures: vec![
+            SourceSyncFailure {
+                project_id: Some(missing as u64),
+                name: None,
+                error: "Source not found".into(),
+            },
+            SourceSyncFailure {
+                project_id: Some(remote as u64),
+                name: Some("All Failed Remote".into()),
+                error: "Source kind is not supported by Local Sync".into(),
+            },
+            SourceSyncFailure {
+                project_id: Some(local_id as u64),
+                name: Some("All Failed Local".into()),
+                error: "disk read failed".into(),
+            },
+        ],
+    };
+    assert_eq!(finished.aggregate, expected);
+    assert_eq!(finished.job.job_id, job_id);
+    assert_eq!(finished.job.state, PersistentState::Failed);
+    assert_eq!(finished.job.public_result, None);
+    assert_eq!(finished.job.progress, Some(100));
+    let recovery = format!(
+        "{missing}: Source not found; {remote}: Source kind is not supported by Local Sync; {local_id}: disk read failed"
+    );
+    assert_eq!(finished.job.recovery.as_deref(), Some(recovery.as_str()));
+    let stored = sync.job(&job_id);
+    assert_eq!(stored.state, PersistentState::Failed);
+    assert_eq!(stored.public_result, None);
+    assert_eq!(stored.recovery.as_deref(), Some(recovery.as_str()));
+    assert_eq!(sync.batch(&job_id), ("failed".into(), None));
+    let aggregate_json: String = sync
+        .connection()
+        .query_row(
+            "SELECT aggregate_json FROM source_sync_batches WHERE job_id=?1",
+            [&job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<jobs::SourceSyncResult>(&aggregate_json).unwrap(),
+        expected
+    );
+    // Exact retry takes the terminal branch: same aggregate, no write.
+    let after = sync.snapshot();
+    let replay = completed_finish(&sync, &lease);
+    assert_eq!(replay.aggregate, expected);
+    assert_eq!(replay.job.state, PersistentState::Failed);
+    assert_eq!(replay.job.public_result, None);
+    assert_eq!(replay.job.state_version, finished.job.state_version);
+    assert_eq!(sync.snapshot(), after);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sync_finish_refuses_unsettled_claims_unacknowledged_failures_and_reconciliation_codes() {
+    let sync = Fixture::new();
+    let id = sync.source("Refused Finish");
+    let job_id = sync.enqueue(Some(vec![id as u64]));
+    let mut lease = sync.open();
+    let target = local(sync.next(&mut lease));
+    assert_eq!(
+        refuse_finish(&sync, &lease),
+        "Sync target is not acknowledged"
+    );
+    assert_eq!(sync.targets(&job_id), vec![(id, "claimed".into(), None)]);
+    sync.worker
+        .fail_source_sync_target(&mut lease, &target, "disk read failed")
+        .unwrap();
+    assert_eq!(
+        refuse_finish(&sync, &lease),
+        "Sync target is not acknowledged"
+    );
+    assert_eq!(
+        sync.targets(&job_id),
+        vec![(id, "failed".into(), Some("local_read".into()))]
+    );
+    let observation = target.observation().clone();
+    sync.worker
+        .acknowledge_source_sync_target(&mut lease, &target, &observation)
+        .unwrap();
+    drop(target);
+    // Reserved codes are valid failed rows, but only a reconciler may close them.
+    tamper(
+        &sync,
+        "UPDATE source_sync_targets SET failure_code='configuration_changed' WHERE job_id=?1 AND failure_code='local_read'",
+        &job_id,
+    );
+    assert_eq!(
+        refuse_finish(&sync, &lease),
+        "Sync terminal failure requires reconciliation"
+    );
+    assert_eq!(sync.batch(&job_id), ("open".into(), None));
+    tamper(
+        &sync,
+        "UPDATE source_sync_targets SET failure_code='local_read' WHERE job_id=?1 AND failure_code='configuration_changed'",
+        &job_id,
+    );
+    let finished = completed_finish(&sync, &lease);
+    assert_eq!(finished.job.state, PersistentState::Failed);
+    assert_eq!(sync.batch(&job_id), ("failed".into(), None));
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

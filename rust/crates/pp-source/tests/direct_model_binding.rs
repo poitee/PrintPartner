@@ -8,39 +8,30 @@ use pp_source::{
     archive::{ArchiveLimits, ZipInput},
 };
 use serde_json::Value;
-use std::{
-    fs,
-    io::Write,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    process::Stdio,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use std::{fs, io::Write, os::unix::fs::PermissionsExt, process::Stdio, sync::atomic::AtomicBool};
 
 #[path = "support/process.rs"]
 mod support;
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
 const MODEL_NAME: &str = "3D/main.model";
 const PART_MODEL: &str = "<model><object name='part'><mesh><vertex x='0' y='0' z='0'/><vertex x='1' y='0' z='0'/><vertex x='0' y='1' z='0'/><triangle v1='0' v2='1' v3='2'/></mesh></object></model>";
 const INJECTED_MODEL: &str = "<model><object name='injected'><mesh><vertex x='0' y='0' z='0'/><vertex x='1' y='0' z='0'/><vertex x='0' y='1' z='0'/><triangle v1='0' v2='1' v3='2'/></mesh></object></model>";
 
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// Removed when the scratch drops, including while a test unwinds from a panic.
+struct Fixture(Scratch);
 impl Fixture {
     fn new() -> Self {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(".media-tests")
-            .join(format!(
-                "bind-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-        fs::create_dir_all(path.join("repos")).unwrap();
+        let path = Scratch::new("pp-source-bind-");
+        fs::create_dir(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
-        for directory in [&path, &path.join("repos"), &path.join("input")] {
+        for directory in [path.to_path_buf(), path.join("repos"), path.join("input")] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        Self(fs::canonicalize(&path).unwrap())
+        Self(path)
     }
     fn command(&self) -> Value {
         serde_json::json!({
@@ -51,11 +42,6 @@ impl Fixture {
             "revisionKey": "review",
             "files": ["model.3mf"],
         })
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 

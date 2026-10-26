@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::scratch::Scratch;
 use http_body_util::BodyExt;
 
 const APP_GZIP: &[u8] = &[
@@ -16,13 +17,15 @@ struct Fixture {
     gateway: Gateway,
     root: PathBuf,
     cookie: String,
+    /// Owns `root` and the symlink targets beside it; drops after the gateway.
+    _scratch: Scratch,
 }
 
 impl Fixture {
     async fn start() -> Self {
-        let root = std::env::temp_dir().join(format!("pp-t11-{}", rand::random::<u64>()));
+        let scratch = Scratch::new("pp-t11-");
+        let root = scratch.join("site");
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        let root = root.canonicalize().unwrap();
         std::fs::write(root.join("index.html"), b"<html>desktop</html>").unwrap();
         std::fs::write(root.join("assets/app.js"), b"export default 1;").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -52,6 +55,7 @@ impl Fixture {
             gateway,
             root,
             cookie,
+            _scratch: scratch,
         }
     }
 
@@ -92,7 +96,6 @@ impl Fixture {
 
     async fn stop(self) {
         self.gateway.stop().await.unwrap();
-        std::fs::remove_dir_all(self.root).unwrap();
     }
 }
 

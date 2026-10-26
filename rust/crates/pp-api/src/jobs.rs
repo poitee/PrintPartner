@@ -1,4 +1,4 @@
-//! Gated HTTP list of retained jobs (`GET`/`HEAD` `/api/v1/jobs`).
+//! Gated HTTP list and read-one for retained jobs (`GET`/`HEAD`).
 use crate::loopback::{
     LoopbackOrigin, PresentedCredential, admit, principal, rebuild_flag_enabled,
     require_api_key_tenant,
@@ -6,7 +6,7 @@ use crate::loopback::{
 use anyhow::Result;
 use axum::{
     Router,
-    extract::State,
+    extract::{Path, State},
     http::{Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -15,8 +15,8 @@ use axum::{
 use pp_storage::{
     auth::{AuthFailure, Secret},
     jobs::{
-        AtomicJobClient, Credential, JobAccessFailure, LegacyListFilter, LegacyProfileFilter,
-        LegacyStatusFilter, RetainedJobs,
+        AtomicJobClient, Credential, JobAccessFailure, JobSnapshot, LegacyListFilter,
+        LegacyProfileFilter, LegacyStatusFilter, RetainedJobs,
     },
 };
 use serde_json::json;
@@ -89,8 +89,9 @@ impl Drop for Cancellation {
     }
 }
 
-/// Mounts `GET`/`HEAD` `/api/v1/jobs` when `PP_DESKTOP_REBUILD` was exactly `1`
-/// or `true`. Otherwise mounts nothing. Read-one aliases and WS stay unregistered.
+/// Mounts `GET`/`HEAD` `/api/v1/jobs` plus read-one aliases `/jobs/{id}` and
+/// `/api/v1/jobs/{id}` when `PP_DESKTOP_REBUILD` was exactly `1` or `true`.
+/// Otherwise mounts nothing. Mutation routes and WS stay unregistered.
 pub fn jobs_router(config: JobsHttpConfig, client: AtomicJobClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -103,6 +104,8 @@ pub fn jobs_router(config: JobsHttpConfig, client: AtomicJobClient) -> Router {
     };
     Router::new()
         .route("/api/v1/jobs", get(list))
+        .route("/jobs/{id}", get(detail))
+        .route("/api/v1/jobs/{id}", get(detail))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -168,8 +171,52 @@ async fn list(State(app): State<App>, request: axum::extract::Request) -> Respon
     }
 }
 
+async fn detail(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+    let head = *request.method() == Method::HEAD;
+    let Ok(permit) = app.serializers.clone().try_acquire_owned() else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Jobs service temporarily unavailable",
+        );
+    };
+    let client = app.client.clone();
+    let wait = app.config.wait;
+    let cancellation = Cancellation::new();
+    let cancelled = cancellation.0.clone();
+    match tokio::task::spawn_blocking(move || {
+        let job = client.read_public(job_credential(presented), id, &cancelled, wait)?;
+        let body = encode_job(&job)?;
+        Ok::<_, anyhow::Error>((body, permit))
+    })
+    .await
+    {
+        Ok(Ok((body, _permit))) => json_bytes(StatusCode::OK, body, head),
+        Ok(Err(error)) => domain_error(error),
+        Err(_) => failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Jobs service unavailable",
+        ),
+    }
+}
+
 fn encode_jobs(jobs: &RetainedJobs) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&json!({ "jobs": &**jobs }))?)
+}
+
+/// Node's read-one returns the stored snapshot; only its list adds `updated_at`.
+fn encode_job(job: &JobSnapshot) -> Result<Vec<u8>> {
+    let mut body = serde_json::to_value(job)?;
+    if let Some(fields) = body.as_object_mut() {
+        fields.remove("updated_at");
+    }
+    Ok(serde_json::to_vec(&body)?)
 }
 
 fn job_credential(presented: PresentedCredential) -> Credential {
