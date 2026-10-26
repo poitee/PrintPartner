@@ -249,7 +249,7 @@ class EventInboxTest(unittest.TestCase):
     def test_retained_removal_through_production_apply_event_and_negative_controls(self):
         for old_body, others, state, comments, writes in (
             ("Refs GRE-1", [], "In Progress",
-             [{"issueId": "1", "body": "[pr-status-sync] PR #1 removed its reference; no other open PR."}],
+             [],
              [("retained", "In Progress")]),
             ("Refs GRE-1", [pr(number=2)], "In Review", [], []),
             ("No past ticket reference.", [], "In Review", [], []),

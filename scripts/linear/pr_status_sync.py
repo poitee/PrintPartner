@@ -7,12 +7,12 @@ Rules (team GRE):
   * PR merged with Fixes/Closes/Resolves GRE-NNN     -> Done
     Closing directives must start the title or a line, with optional Markdown.
   * PR merged with only Refs GRE-NNN (multi-slice)   -> In Progress (if another
-    PR for the ticket is still open: stays In Review), comment "slice #N merged;
-    next slice pending. Final slice must say 'Fixes GRE-NNN'."
+    PR for the ticket is still open: stays In Review)
   * PR closed unmerged                               -> In Progress if it was In
-    Review and no other open PR (comment with reason)
+    Review and no other open PR
   * Cron: In Progress/In Review with no PR activity for STALE_HOURS (48) and no
-    open PR -> Backlog, comment "stalled: no PR/commit activity 48h".
+    open PR -> Backlog.
+Writes ticket state only. Posts no Linear comments: GitHub holds PR state.
 Never touches Done/Canceled/Duplicate issues. Never prints secrets.
 Fork PRs are excluded from both event handling and reconciliation.
 
@@ -119,35 +119,18 @@ def issue(ident):
     return d["issues"]["nodes"][0] if d["issues"]["nodes"] else None
 
 
-def move(iss, target, comment, *, record_unchanged=False):
+def move(iss, target):
     cur = iss["state"]["name"]
-    if (cur == target and not record_unchanged) or iss["state"]["type"] in TERMINAL:
+    if cur == target or iss["state"]["type"] in TERMINAL:
         return False
     if DRY:
-        print(f"{iss['identifier']}: {cur} -> {target} | {comment}")
+        print(f"{iss['identifier']}: {cur} -> {target}")
         return True
-    # Record the event before changing state, so a failed comment remains retryable.
-    body = f"[pr-status-sync] {comment}"
-    cursor = None
-    while True:
-        d = gql('query($id:String!,$after:String){issue(id:$id){comments(first:100,after:$after){nodes{body} pageInfo{hasNextPage endCursor}}}}',
-                {"id": iss["id"], "after": cursor})["issue"]["comments"]
-        if any(c["body"] == body for c in d["nodes"]):
-            break
-        if not d["pageInfo"]["hasNextPage"]:
-            created = gql('mutation($id:String!,$b:String!){commentCreate(input:{issueId:$id,body:$b}){success}}',
-                          {"id": iss["id"], "b": body})
-            if not created["commentCreate"]["success"]:
-                raise RuntimeError("Linear commentCreate failed")
-            break
-        cursor = d["pageInfo"]["endCursor"]
-    if cur == target:
-        return False
     updated = gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
         {"id": iss["id"], "s": state_id(target)})
     if not updated["issueUpdate"]["success"]:
         raise RuntimeError("Linear issueUpdate failed")
-    print(f"{iss['identifier']}: {cur} -> {target} | {comment}")
+    print(f"{iss['identifier']}: {cur} -> {target}")
     return True
 
 
@@ -205,17 +188,16 @@ def apply_pr(pr, errors=None):
             if not iss:
                 continue
             if pr["state"] == "OPEN":
-                move(iss, "In Review", f"PR #{n} open: {pr['title'][:80]}")
+                move(iss, "In Review")
             elif pr["state"] == "MERGED":
-                slice_comment = f"slice PR #{n} merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes {ident}'."
                 if ident in closing:
-                    move(iss, "Done", f"PR #{n} merged with 'Fixes {ident}'.")
+                    move(iss, "Done")
                 elif other_open(ident, n):
-                    move(iss, "In Review", slice_comment, record_unchanged=True)
+                    move(iss, "In Review")
                 elif iss["state"]["name"] in {"In Review", "In Progress"}:  # never pull Todo/Backlog back up
-                    move(iss, "In Progress", slice_comment, record_unchanged=True)
+                    move(iss, "In Progress")
             elif pr["state"] == "CLOSED" and iss["state"]["name"] == "In Review" and not other_open(ident, n):
-                move(iss, "In Progress", f"PR #{n} closed without merge; no other open PR.")
+                move(iss, "In Progress")
         except Exception:
             if errors is None:
                 raise
@@ -234,7 +216,7 @@ def apply_event(pr, event):
         for ident in sorted(removed):
             iss = issue(ident)
             if iss and iss["state"]["name"] == "In Review" and not other_open(ident, pr["number"]):
-                move(iss, "In Progress", f"PR #{pr['number']} removed its reference; no other open PR.")
+                move(iss, "In Progress")
     apply_pr(pr)
 
 
@@ -286,7 +268,7 @@ def _reconcile(hours):
                 continue
             t = max([ts(iss["updatedAt"])] + ([last[ident]] if ident in last else []))
             if t < cutoff:
-                move(iss, "Backlog", f"stalled: no PR/commit activity for {STALE_HOURS}h and no open PR.")
+                move(iss, "Backlog")
         except Exception:
             errors.append(f"stale {ident}")
     if errors:

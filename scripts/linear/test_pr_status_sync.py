@@ -239,7 +239,6 @@ class SyncTest(unittest.TestCase):
         sync._prs = []
         self.issues = {"GRE-1": ticket()}
         self.comments = []
-        self.fail_comment = False
         self.fail_update = False
         self.pages = None
         self.api = patch.object(sync, "gql", side_effect=self.linear).start()
@@ -255,9 +254,8 @@ class SyncTest(unittest.TestCase):
                 {"id": name, "name": name} for name in ("In Review", "In Progress", "Backlog", "Done")
             ]}}]}}
         if "commentCreate(" in query:
-            if not self.fail_comment:
-                self.comments.append({"body": variables["b"], "issueId": variables["id"]})
-            return {"commentCreate": {"success": not self.fail_comment}}
+            self.comments.append({"body": variables["b"], "issueId": variables["id"]})
+            return {"commentCreate": {"success": True}}
         if "issueUpdate(" in query:
             if not self.fail_update:
                 self.issues[f"GRE-{variables['id']}"]["state"] = {
@@ -306,7 +304,7 @@ class SyncTest(unittest.TestCase):
         sync.apply_pr(pr(state="MERGED", body="Fixes GRE-1"))
         sync.apply_pr(pr(state="MERGED", body="Fixes GRE-1"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Done")
-        self.assertEqual(len(self.comments), 2)
+        self.assertEqual(self.comments, [])
 
     def test_refs_slice_with_and_without_other_open_pr(self):
         self.issues["GRE-1"] = ticket(state="In Review")
@@ -316,27 +314,25 @@ class SyncTest(unittest.TestCase):
         sync.apply_pr(pr(state="MERGED"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
 
-    def test_merged_slice_records_comment_when_already_in_review(self):
+    def test_merged_slice_stays_in_review_without_comment(self):
         self.issues["GRE-1"] = ticket(state="In Review")
         sync._prs = [pr(number=2)]
         sync.apply_pr(pr(state="MERGED"))
         sync.apply_pr(pr(state="MERGED"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
-        self.assertEqual(self.comments, [{"issueId": "1", "body": "[pr-status-sync] slice PR #1 merged ('Refs' only); next slice pending. Final slice PR must say 'Fixes GRE-1'."}])
+        self.assertEqual(self.comments, [])
         self.assertEqual([query for query, _ in self.api.call_args_list if "issueUpdate(" in query], [])
 
-    def test_slice_comment_is_stable_when_other_open_prs_change(self):
+    def test_slice_state_follows_other_open_prs_without_comments(self):
         self.issues["GRE-1"] = ticket(state="In Review")
         for others in ([pr(number=2), pr(number=3)], [pr(number=3)], []):
             sync._prs = others
             sync.apply_pr(pr(state="MERGED"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Progress")
-        self.assertEqual(len(self.comments), 1)
         sync.apply_pr(pr(number=4, state="MERGED"))
-        self.assertEqual(len(self.comments), 2)
         sync._prs = [pr(number=5)]
         sync.apply_pr(pr(number=4, state="MERGED"))
-        self.assertEqual(len(self.comments), 2)
+        self.assertEqual(self.comments, [])
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
 
     def test_refs_slice_does_not_revive_todo_or_backlog(self):
@@ -397,8 +393,8 @@ class SyncTest(unittest.TestCase):
         def failing(query, variables):
             if "issues(first:1," in query and variables["n"] == 1:
                 raise RuntimeError("secret-test-key lookup failed")
-            if "commentCreate(" in query and variables["id"] == "4":
-                raise RuntimeError("secret-test-key comment failed")
+            if "issueUpdate(" in query and variables["id"] == "4":
+                raise RuntimeError("secret-test-key update failed")
             return self.linear(query, variables)
         self.api.side_effect = failing
         with self.assertRaises(RuntimeError) as caught:
@@ -448,17 +444,14 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Backlog")
         self.assertEqual(self.issues["GRE-2"]["state"]["name"], "In Review")
 
-    def test_failed_comment_can_be_retried(self):
-        self.fail_comment = True
-        with self.assertRaisesRegex(RuntimeError, "commentCreate failed"):
-            sync.apply_pr(pr())
-        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Progress")
-        self.fail_comment = False
+    def test_status_moves_post_no_linear_comments(self):
         sync.apply_pr(pr())
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
-        self.assertEqual(len(self.comments), 1)
+        sync.apply_pr(pr(state="MERGED", body="Fixes GRE-1"))
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Done")
+        self.assertEqual(self.comments, [])
 
-    def test_failed_update_retries_without_duplicate_comment(self):
+    def test_failed_update_retries_on_the_next_run(self):
         self.fail_update = True
         with self.assertRaisesRegex(RuntimeError, "issueUpdate failed"):
             sync.apply_pr(pr())
@@ -466,7 +459,7 @@ class SyncTest(unittest.TestCase):
         self.fail_update = False
         sync.apply_pr(pr())
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
-        self.assertEqual(len(self.comments), 1)
+        self.assertEqual(self.comments, [])
 
     def test_open_pr_on_later_github_page_prevents_demotion(self):
         sync._prs = None
@@ -485,7 +478,7 @@ class SyncTest(unittest.TestCase):
         self.pages = [rows[:250], rows[250:]]
         sync.reconcile(3)
         self.assertEqual(self.issues["GRE-251"]["state"]["name"], "Backlog")
-        self.assertEqual(len(self.comments), 251)
+        self.assertEqual(self.comments, [])
 
     def test_stall_sweep_preserves_recent_activity_and_open_prs(self):
         self.issues = {f"GRE-{n}": ticket(n) for n in range(1, 5)}
@@ -503,7 +496,7 @@ class SyncTest(unittest.TestCase):
         sync.reconcile(3)
         sync.reconcile(3)
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
-        self.assertEqual(len(self.comments), 1)
+        self.assertEqual(self.comments, [])
 
     def test_edit_returns_removed_ticket_to_in_progress(self):
         for field in ("title", "body"):
