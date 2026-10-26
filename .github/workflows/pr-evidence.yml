@@ -39,7 +39,8 @@ jobs:
       - name: Verify Node version
         run: test "$(node --version)" = "v22.23.3"
       - name: Lint pull request Evidence block
-        if: github.event_name == 'pull_request'
+        # Dependabot bodies are generated and carry no Evidence block. Every other PR is linted.
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: node scripts/lint-pr-evidence.mjs

@@ -572,12 +572,12 @@ fn append_evidence_with_directory_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
     use serde_json::json;
 
     #[test]
     fn ticket_t_3_drain_evidence_directory_sync_failure_preserves_authority() {
-        let dir = std::env::temp_dir().join(format!("pp-evidence-sync-{}", rand::random::<u64>()));
-        fs::create_dir(&dir).unwrap();
+        let dir = Scratch::new("pp-evidence-sync-");
         let index = super::super::manifest::admit_bundled_manifest().unwrap();
         let operation = "http:POST /plans current";
         let parity = json!({
@@ -607,7 +607,7 @@ mod tests {
             expected_log.push(b'\n');
             let error =
                 append_evidence_with_directory_sync(&dir, &Evidence::Cutover(&receipt), |path| {
-                    assert_eq!(path, dir);
+                    assert_eq!(path, &*dir);
                     assert_eq!(fs::read(path.join(EVIDENCE_FILE)).unwrap(), expected_log);
                     Err(std::io::Error::from_raw_os_error(libc::EIO))
                 })
@@ -620,13 +620,11 @@ mod tests {
         assert_eq!(owners.owner_of("http.POST /plans"), Owner::Rust);
         assert_eq!(owners.owner_of("http.POST /api/v1/plans"), Owner::Node);
         assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), authority);
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn ticket_t_3_drain_cutover_directory_fsync_failure_is_unproved_after_rename() {
-        let dir = std::env::temp_dir().join(format!("pp-cutover-sync-{}", rand::random::<u64>()));
-        fs::create_dir(&dir).unwrap();
+        let dir = Scratch::new("pp-cutover-sync-");
         let index = super::super::manifest::admit_bundled_manifest().unwrap();
         let operation = "http:POST /plans current";
         let parity = json!({
@@ -658,7 +656,6 @@ mod tests {
         assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), expected);
         assert_eq!(owners.owner_of("http.POST /plans"), Owner::Rust);
         assert_eq!(owners.owner_of("http.POST /api/v1/plans"), Owner::Node);
-        fs::remove_dir_all(dir).unwrap();
         assert_eq!(
             serde_json::to_value(receipt).unwrap(),
             json!({

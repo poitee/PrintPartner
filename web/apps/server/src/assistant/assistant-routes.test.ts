@@ -105,6 +105,8 @@ describe("assistant routes", () => {
 
   it("status reports enabled=false while still resolving settings source for MCP tooling", async () => {
     await app.close();
+    // afterEach removes only the current dataDir, so drop the one beforeEach made.
+    rmSync(dataDir, { recursive: true, force: true });
 
     dataDir = mkdtempSync(join(tmpdir(), "pp-assistant-settings-"));
     const ports = createSelfHostPorts(dataDir);

@@ -8,10 +8,13 @@ use pp_source::{
 };
 use std::{fs, sync::atomic::AtomicBool};
 
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 #[test]
 fn retained_lifecycle_reopens_transfers_and_preserves_existing_operations() {
-    let root = tempfile::tempdir().unwrap();
-    let root = fs::canonicalize(root.path()).unwrap();
+    let root = Scratch::new("pp-source-retained-");
     let vault = RetainedCaptureVault::open(&root).unwrap();
     let mut candidate = vault.allocate_owned().unwrap();
     let id = candidate.capture_id().clone();

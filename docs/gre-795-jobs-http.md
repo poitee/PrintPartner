@@ -2,9 +2,9 @@
 
 With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 `/api/v1/jobs` mount only when the stored `PP_DESKTOP_REBUILD` value is exactly
-`1` or `true`. Otherwise those routes answer 404. Read-one aliases and
-`/ws/jobs/{id}` stay unregistered (later D25 children). Plan HTTP remains as in
-GRE-791–GRE-794.
+`1` or `true`. Otherwise those routes answer 404. Read-one aliases are GRE-796
+(`docs/gre-796-jobs-http.md`). `/ws/jobs/{id}` stays unregistered (later D25
+children). Plan HTTP remains as in GRE-791–GRE-794.
 
 Admission matches GRE-791 (loopback Host/Origin, session cookie or API key with
 the configured tenant) through the shared `loopback` module. Each admitted

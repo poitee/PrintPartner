@@ -13,6 +13,22 @@ ROOT = Path(__file__).resolve().parents[1]
 EVENT = json.loads((ROOT / "scripts/fixtures/merge_group/checks_requested.json").read_text())
 
 
+def evaluate_if(expression, contexts):
+    """Evaluate an `a.b == 'x' && c != 'y'` step condition; reject any other shape."""
+    result = True
+    for clause in expression.split("&&"):
+        left, op, right = clause.strip().partition(" == ")
+        if not op:
+            left, op, right = clause.strip().partition(" != ")
+        if not op or not (right.startswith("'") and right.endswith("'")):
+            raise ValueError(f"unsupported condition clause: {clause!r}")
+        value = contexts
+        for key in left.split("."):
+            value = value.get(key, "") if isinstance(value, dict) else ""
+        result = result and ((value == right[1:-1]) == (op == " == "))
+    return result
+
+
 class MergeGroupWorkflowTests(unittest.TestCase):
     def test_drafts_skip_every_pr_ci_job_and_ready_events_restart_them(self):
         guard = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
@@ -77,16 +93,39 @@ class MergeGroupWorkflowTests(unittest.TestCase):
             if step.get("uses", "").startswith("actions/setup-node@") or step.get("name") == "Verify Node version":
                 # check-ci-tool-pins requires the Node pin and its assertion to run unconditionally.
                 self.assertNotIn("if", step)
+            elif step.get("name") == "Lint pull request Evidence block":
+                # Dependabot PRs carry generated bodies with no Evidence block, so only they skip the lint.
+                self.assertEqual(
+                    step["if"],
+                    "github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'",
+                )
             else:
                 self.assertEqual(step["if"], "github.event_name == 'pull_request'")
         for event in ("pull_request", "merge_group"):
             self.assertNotIn("paths", workflow["on"][event])
             self.assertNotIn("paths-ignore", workflow["on"][event])
 
+    def test_only_dependabot_pull_requests_skip_the_evidence_lint(self):
+        workflow = yaml.load((ROOT / ".github/workflows/pr-evidence.yml").read_text(),
+                             Loader=yaml.BaseLoader)
+        lint = next(step for step in workflow["jobs"]["lint-pr-body"]["steps"]
+                    if step.get("name") == "Lint pull request Evidence block")
+        for event, login, runs in (("pull_request", "dependabot[bot]", False),
+                                   ("pull_request", "poitee", True),
+                                   ("pull_request", "github-actions[bot]", True),
+                                   ("pull_request", "dependabot", True),
+                                   ("merge_group", "dependabot[bot]", False)):
+            with self.subTest(event=event, login=login):
+                contexts = {"github": {"event_name": event, "event": {
+                    "pull_request": {"user": {"login": login}}}}}
+                self.assertEqual(evaluate_if(lint["if"], contexts), runs)
+
     def test_required_lint_and_rust_jobs_use_the_filter(self):
         for filename, kind, contexts in (
             ("actionlint.yml", "actions", {"actionlint": "actionlint", "zizmor": "zizmor"}),
-            ("rust-cross-os.yml", "rust", {"rust-linux": "rust (linux)",
+            # Path filter runs on rust-linux-build; rust-linux is the required
+            # aggregate check over build + optional rebuild partitions.
+            ("rust-cross-os.yml", "rust", {"rust-linux-build": "rust (linux) build",
                                            "rust-windows": "rust (windows)"}),
         ):
             with self.subTest(workflow=filename):
@@ -115,6 +154,26 @@ class MergeGroupWorkflowTests(unittest.TestCase):
                     checkout = next(step for step in job["steps"]
                                     if step.get("uses", "").startswith("actions/checkout@"))
                     self.assertNotIn("ref", checkout.get("with", {}))
+                if filename == "rust-cross-os.yml":
+                    rebuild = jobs["rust-linux-rebuild"]
+                    self.assertEqual(rebuild["needs"], ["rust-linux-build"])
+                    aggregate = jobs["rust-linux"]
+                    self.assertEqual(aggregate.get("name"), "rust (linux)")
+                    self.assertEqual(aggregate["needs"], ["rust-linux-build", "rust-linux-rebuild"])
+                    self.assertEqual(
+                        aggregate["if"],
+                        "(github.event_name != 'pull_request' || "
+                        "!github.event.pull_request.draft) && (!cancelled() && "
+                        "needs.rust-linux-build.result != 'skipped')",
+                    )
+                    require = next(
+                        step for step in aggregate["steps"]
+                        if step.get("name") == "Require linux build and rebuild partitions"
+                    )
+                    self.assertEqual(require["env"]["EVENT_NAME"], "${{ github.event_name }}")
+                    self.assertIn("push|merge_group|workflow_dispatch)", require["run"])
+                    self.assertIn('test "$REBUILD_RESULT" = success', require["run"])
+                    self.assertIn("success|skipped)", require["run"])
 
     def test_native_macos_plan_respects_paths_and_event(self):
         workflow = yaml.load((ROOT / ".github/workflows/desktop-native-macos.yml").read_text(),

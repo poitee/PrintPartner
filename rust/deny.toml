@@ -60,7 +60,8 @@ allow = [
 # cargo-deny also checks first-party crates; AGPL is allowed only for these
 # crates, not for third-party dependencies. Crates covered: pp-api, pp-api-types,
 # pp-compat, pp-contracts, pp-core, pp-desktop, pp-domain, pp-drivers,
-# pp-gateway, pp-net, pp-server, pp-services, pp-source, pp-storage.
+# pp-gateway, pp-net, pp-server, pp-services, pp-source, pp-storage, and the
+# excluded fuzz crate pp-net-fuzz (rust/fuzz, checked with its own lock).
 exceptions = [
     { crate = "pp-api", allow = ["AGPL-3.0-only"] },
     { crate = "pp-api-types", allow = ["AGPL-3.0-only"] },
@@ -76,6 +77,10 @@ exceptions = [
     { crate = "pp-services", allow = ["AGPL-3.0-only"] },
     { crate = "pp-source", allow = ["AGPL-3.0-only"] },
     { crate = "pp-storage", allow = ["AGPL-3.0-only"] },
+    { crate = "pp-net-fuzz", allow = ["AGPL-3.0-only"] },
+    # libfuzzer-sys bundles LLVM's libFuzzer under NCSA, a permissive OSI license.
+    # Only the never-shipped fuzz crate depends on it; the pin re-opens this on a bump.
+    { crate = "libfuzzer-sys@0.4.10", allow = ["NCSA"] },
     # Mozilla CA data used by lettre's TLS trust roots. Section 2.1 requires the
     # agreement with shared data; its full text ships in THIRD_PARTY_NOTICES.md.
     { crate = "webpki-roots@1.0.10", allow = ["CDLA-Permissive-2.0"] },

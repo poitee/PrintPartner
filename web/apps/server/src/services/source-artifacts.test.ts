@@ -1,12 +1,12 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { scratchDir } from "../test/scratch.js";
 import { scanSourceArtifacts } from "./source-artifacts.js";
 
 describe("Source artifact scanning", () => {
   it("indexes uploaded STL, 3MF, and archive files with durable provenance", () => {
-    const root = mkdtempSync(join(tmpdir(), "source-artifacts-"));
+    const root = scratchDir("source-artifacts-");
     mkdirSync(join(root, "parts"), { recursive: true });
     writeFileSync(join(root, "parts", "frame.stl"), "solid frame");
     writeFileSync(join(root, "plate.3mf"), "3mf bytes");

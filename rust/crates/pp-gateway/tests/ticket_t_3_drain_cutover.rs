@@ -119,25 +119,6 @@ fn sha256(text: &str) -> String {
     hex::encode(Sha256::digest(text.as_bytes()))
 }
 
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pp-t3-cutover-{label}-{}",
-            hex::encode(rand::random::<[u8; 8]>())
-        ));
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 fn listing(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     fs::read_dir(dir)
         .unwrap()
@@ -198,16 +179,16 @@ fn plant_record(dir: &Path, digest: &str, operation: &str, participants: &[&str]
 #[test]
 fn ticket_t_3_drain_cutover_switches_whole_operation() {
     let index = fixture_index();
-    let dir = Scratch::new("whole");
+    let dir = Scratch::new("pp-t3-cutover-whole-");
     assert_eq!(
         index.participants_of(CATALOG),
         BTreeSet::from(CATALOG_PARTICIPANTS)
     );
     assert_json(
-        switch(&index, &dir.0, CATALOG),
+        switch(&index, &dir, CATALOG),
         json!({"outcome": "committed", "operation": CATALOG, "participants": 4, "manifest_sha256": index.digest(), "parity_sha256": sha256(&parity(CATALOG, index.digest(), 3, 3, 0)), "fixtures": 3, "directory_synced": true}),
     );
-    let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let (owners, boot) = cutover::recover(&dir, Some(&index)).unwrap();
     assert_json(
         boot,
         json!({"rust_operations": [CATALOG], "abandoned_temporaries": 0, "evidence_saved": true}),
@@ -359,9 +340,9 @@ fn assert_rust_owner_unavailable(status: StatusCode, headers: &HeaderMap, body: 
 }
 
 async fn assert_gateway_ownership(routes: &[(&str, &str)], node_method: &str) {
-    let dir = Scratch::new("gateway");
-    let node = fake_node(&dir.0);
-    let mut gateway = rust_owned_gateway(&dir.0, &node).await;
+    let dir = Scratch::new("pp-t3-cutover-gateway-");
+    let node = fake_node(&dir);
+    let mut gateway = rust_owned_gateway(&dir, &node).await;
     let (origin, cookie) = session(&mut gateway).await;
     for &(method, path) in routes {
         let (status, headers, body) = exchange(&origin, path, method, Some(&cookie)).await;
@@ -417,16 +398,16 @@ async fn ticket_t_3_drain_cutover_gateway_refuses_unregistered_rust_route() {
         },
         &registry.to_string(),
     );
-    let dir = Scratch::new("unregistered");
+    let dir = Scratch::new("pp-t3-cutover-unregistered-");
     let operation = "http:POST /ticket-t-3-drain/rust-only current";
     assert!(matches!(
-        switch(&index, &dir.0, operation),
+        switch(&index, &dir, operation),
         CutoverReceipt::Committed {
             participants: 1,
             ..
         }
     ));
-    let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let (owners, _) = cutover::recover(&dir, Some(&index)).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let error = Gateway::start(
         listener,
@@ -445,14 +426,14 @@ async fn ticket_t_3_drain_cutover_gateway_refuses_unregistered_rust_route() {
 #[test]
 fn ticket_t_3_drain_cutover_subset_record_fails_closed() {
     let index = fixture_index();
-    let dir = Scratch::new("subset");
+    let dir = Scratch::new("pp-t3-cutover-subset-");
     plant_record(
-        &dir.0,
+        &dir,
         index.digest(),
         CATALOG,
         &["http.GET /filaments/catalog"],
     );
-    let error = cutover::recover(&dir.0, Some(&index)).unwrap_err();
+    let error = cutover::recover(&dir, Some(&index)).unwrap_err();
     assert_json(
         error,
         json!({"reason": "participant_set_mismatch", "operation": CATALOG, "missing": [
@@ -462,7 +443,7 @@ fn ticket_t_3_drain_cutover_subset_record_fails_closed() {
             ], "unexpected": []}),
     );
     assert_eq!(
-        evidence_lines(&dir.0),
+        evidence_lines(&dir),
         vec![json!({
             "event": "boot_failed",
             "reason": "participant_set_mismatch",
@@ -496,7 +477,7 @@ fn ticket_t_3_drain_cutover_refuses_operation_with_worker() {
             json!({"reason": "node_cannot_fence", "participant": participant}),
         );
     }
-    let dir = Scratch::new("worker");
+    let dir = Scratch::new("pp-t3-cutover-worker-");
     let participants: Vec<&str> = index.participants_of(PROFILE_SYNC).into_iter().collect();
     assert_eq!(
         participants,
@@ -506,9 +487,9 @@ fn ticket_t_3_drain_cutover_refuses_operation_with_worker() {
             "worker.startManagedProfileSync",
         ]
     );
-    plant_record(&dir.0, index.digest(), PROFILE_SYNC, &participants);
+    plant_record(&dir, index.digest(), PROFILE_SYNC, &participants);
     assert_json(
-        cutover::recover(&dir.0, Some(&index)).unwrap_err(),
+        cutover::recover(&dir, Some(&index)).unwrap_err(),
         json!({"reason": "node_cannot_fence", "participant": "worker.startManagedProfileSync"}),
     );
 }
@@ -570,9 +551,9 @@ fn ticket_t_3_drain_cutover_flag_off_refuses_and_writes_nothing() {
         .unwrap_err(),
         json!({"reason": "flag_off"}),
     );
-    let empty = Scratch::new("flag-off-empty");
+    let empty = Scratch::new("pp-t3-cutover-flag-off-empty-");
     assert_eq!(
-        cutover::recover(&empty.0, None).unwrap(),
+        cutover::recover(&empty, None).unwrap(),
         (
             OperationOwners::node_only(),
             BootReceipt {
@@ -582,28 +563,28 @@ fn ticket_t_3_drain_cutover_flag_off_refuses_and_writes_nothing() {
             }
         )
     );
-    assert!(listing(&empty.0).is_empty());
-    let recorded = Scratch::new("flag-off-record");
-    switch(&index, &recorded.0, CATALOG);
+    assert!(listing(&empty).is_empty());
+    let recorded = Scratch::new("pp-t3-cutover-flag-off-record-");
+    switch(&index, &recorded, CATALOG);
     assert_json(
-        cutover::recover(&recorded.0, None).unwrap_err(),
+        cutover::recover(&recorded, None).unwrap_err(),
         json!({"reason": "record_without_flag"}),
     );
 }
 
 fn assert_commit_changes_nothing(drained: DrainEvidence, expected: CutoverReceipt) {
     let index = fixture_index();
-    let dir = Scratch::new("unchanged");
-    switch(&index, &dir.0, CATALOG);
-    let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
-    let before = listing(&dir.0);
-    let record = fs::read(dir.0.join(CUTOVER_FILE)).unwrap();
+    let dir = Scratch::new("pp-t3-cutover-unchanged-");
+    switch(&index, &dir, CATALOG);
+    let (owners, _) = cutover::recover(&dir, Some(&index)).unwrap();
+    let before = listing(&dir);
+    let record = fs::read(dir.join(CUTOVER_FILE)).unwrap();
     assert_eq!(
-        plan_for(&index, &owners, PLANS_CREATE).commit(&dir.0, drained),
+        plan_for(&index, &owners, PLANS_CREATE).commit(&dir, drained),
         expected
     );
-    assert_eq!(fs::read(dir.0.join(CUTOVER_FILE)).unwrap(), record);
-    assert_eq!(listing(&dir.0), before);
+    assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), record);
+    assert_eq!(listing(&dir), before);
 }
 
 #[test]
@@ -648,13 +629,13 @@ fn ticket_t_3_drain_cutover_interrupted_compat_changes_nothing() {
     };
     assert_commit_changes_nothing(drained, expected.clone());
     let index = fixture_index();
-    let dir = Scratch::new("interrupted");
-    let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let dir = Scratch::new("pp-t3-cutover-interrupted-");
+    let (owners, _) = cutover::recover(&dir, Some(&index)).unwrap();
     assert_eq!(
-        plan_for(&index, &owners, PLANS_CREATE).commit(&dir.0, drained),
+        plan_for(&index, &owners, PLANS_CREATE).commit(&dir, drained),
         expected
     );
-    assert!(!dir.0.join(CUTOVER_FILE).exists());
+    assert!(!dir.join(CUTOVER_FILE).exists());
 }
 
 #[test]
@@ -673,21 +654,21 @@ fn ticket_t_3_drain_cutover_force_killed_compat_changes_nothing() {
 #[test]
 fn ticket_t_3_drain_cutover_crash_before_rename_recovers_node() {
     let index = fixture_index();
-    let committed = Scratch::new("committed-body");
-    switch(&index, &committed.0, CATALOG);
-    let dir = Scratch::new("before-rename");
-    let temporary = dir.0.join(".operation-cutover.abc.tmp");
-    fs::copy(committed.0.join(CUTOVER_FILE), &temporary).unwrap();
-    let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let committed = Scratch::new("pp-t3-cutover-committed-body-");
+    switch(&index, &committed, CATALOG);
+    let dir = Scratch::new("pp-t3-cutover-before-rename-");
+    let temporary = dir.join(".operation-cutover.abc.tmp");
+    fs::copy(committed.join(CUTOVER_FILE), &temporary).unwrap();
+    let (owners, boot) = cutover::recover(&dir, Some(&index)).unwrap();
     assert_eq!(owners, OperationOwners::node_only());
     assert_json(
         boot,
         json!({"rust_operations": [], "abandoned_temporaries": 1, "evidence_saved": true}),
     );
     assert!(!temporary.exists());
-    assert!(!dir.0.join(CUTOVER_FILE).exists());
+    assert!(!dir.join(CUTOVER_FILE).exists());
     assert_eq!(
-        evidence_lines(&dir.0),
+        evidence_lines(&dir),
         vec![
             json!({"event": "boot", "rust_operations": [], "abandoned_temporaries": 1, "evidence_saved": true})
         ]
@@ -697,11 +678,11 @@ fn ticket_t_3_drain_cutover_crash_before_rename_recovers_node() {
 #[test]
 fn ticket_t_3_drain_cutover_crash_after_rename_recovers_rust() {
     let index = fixture_index();
-    let dir = Scratch::new("after-rename");
-    switch(&index, &dir.0, CATALOG);
-    let temporary = dir.0.join(".operation-cutover.def.tmp");
-    fs::copy(dir.0.join(CUTOVER_FILE), &temporary).unwrap();
-    let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let dir = Scratch::new("pp-t3-cutover-after-rename-");
+    switch(&index, &dir, CATALOG);
+    let temporary = dir.join(".operation-cutover.def.tmp");
+    fs::copy(dir.join(CUTOVER_FILE), &temporary).unwrap();
+    let (owners, boot) = cutover::recover(&dir, Some(&index)).unwrap();
     assert_json(
         boot,
         json!({"rust_operations": [CATALOG], "abandoned_temporaries": 1, "evidence_saved": true}),
@@ -716,11 +697,11 @@ fn ticket_t_3_drain_cutover_crash_after_rename_recovers_rust() {
 #[test]
 fn ticket_t_3_drain_cutover_restart_is_idempotent() {
     let index = fixture_index();
-    let dir = Scratch::new("idempotent");
-    switch(&index, &dir.0, CATALOG);
-    let record = fs::read(dir.0.join(CUTOVER_FILE)).unwrap();
-    let first = cutover::recover(&dir.0, Some(&index)).unwrap();
-    let second = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let dir = Scratch::new("pp-t3-cutover-idempotent-");
+    switch(&index, &dir, CATALOG);
+    let record = fs::read(dir.join(CUTOVER_FILE)).unwrap();
+    let first = cutover::recover(&dir, Some(&index)).unwrap();
+    let second = cutover::recover(&dir, Some(&index)).unwrap();
     assert_eq!(first, second);
     assert_json(
         second.1,
@@ -736,17 +717,17 @@ fn ticket_t_3_drain_cutover_restart_is_idempotent() {
         .unwrap_err(),
         json!({"reason": "already_rust_owned"}),
     );
-    assert_eq!(fs::read(dir.0.join(CUTOVER_FILE)).unwrap(), record);
+    assert_eq!(fs::read(dir.join(CUTOVER_FILE)).unwrap(), record);
 }
 
 #[test]
 fn ticket_t_3_drain_cutover_changed_manifest_on_restart_fails_closed() {
     let bundled = fixture_index();
     let upgraded = index_with_extra_tool();
-    let dir = Scratch::new("manifest-changed");
-    switch(&bundled, &dir.0, CATALOG);
+    let dir = Scratch::new("pp-t3-cutover-manifest-changed-");
+    switch(&bundled, &dir, CATALOG);
     assert_json(
-        cutover::recover(&dir.0, Some(&upgraded)).unwrap_err(),
+        cutover::recover(&dir, Some(&upgraded)).unwrap_err(),
         json!({"reason": "restart_manifest_changed", "recorded": bundled.digest(), "bundled": upgraded.digest()}),
     );
 }
@@ -755,15 +736,15 @@ fn ticket_t_3_drain_cutover_changed_manifest_on_restart_fails_closed() {
 fn ticket_t_11_routing_changed_manifest_refuses_planning_before_shutdown() {
     let original = fixture_index();
     let changed = index_with_extra_tool();
-    let dir = Scratch::new("planning-manifest-changed");
-    switch(&original, &dir.0, CATALOG);
-    let (owners, _) = cutover::recover(&dir.0, Some(&original)).unwrap();
-    let before = listing(&dir.0);
+    let dir = Scratch::new("pp-t3-cutover-planning-manifest-changed-");
+    switch(&original, &dir, CATALOG);
+    let (owners, _) = cutover::recover(&dir, Some(&original)).unwrap();
+    let before = listing(&dir);
 
     // Both a new operation and an already-owned operation must report the
     // authority mismatch, even with passing parity for the new manifest.
     for operation in [PLANS_CREATE, CATALOG] {
-        let before_planning = listing(&dir.0);
+        let before_planning = listing(&dir);
         let refusal = cutover::plan(
             Some(&changed),
             &owners,
@@ -776,9 +757,9 @@ fn ticket_t_11_routing_changed_manifest_refuses_planning_before_shutdown() {
             json!({"reason": "ownership_manifest_mismatch",
                 "recorded": original.digest(), "current": changed.digest()}),
         );
-        assert_eq!(listing(&dir.0), before_planning);
+        assert_eq!(listing(&dir), before_planning);
         cutover::append_evidence(
-            &dir.0,
+            &dir,
             &Evidence::Refused {
                 operation,
                 refusal: &refusal,
@@ -787,19 +768,19 @@ fn ticket_t_11_routing_changed_manifest_refuses_planning_before_shutdown() {
         .unwrap();
     }
     assert_eq!(
-        fs::read(dir.0.join(CUTOVER_FILE)).unwrap(),
+        fs::read(dir.join(CUTOVER_FILE)).unwrap(),
         before[CUTOVER_FILE],
     );
     assert_eq!(owners.owner_of("http.POST /plans"), Owner::Node);
     assert_eq!(owners.owner_of("http.GET /filaments/catalog"), Owner::Rust);
     assert!(matches!(
-        cutover::recover(&dir.0, Some(&changed)),
+        cutover::recover(&dir, Some(&changed)),
         Err(CutoverError::RestartManifestChanged { .. }),
     ));
-    let (recovered, _) = cutover::recover(&dir.0, Some(&original)).unwrap();
+    let (recovered, _) = cutover::recover(&dir, Some(&original)).unwrap();
     assert_eq!(recovered, owners);
     assert_eq!(
-        evidence_lines(&dir.0)[1],
+        evidence_lines(&dir)[1],
         json!({
             "event": "refused", "operation": PLANS_CREATE,
             "reason": "ownership_manifest_mismatch",
@@ -811,12 +792,12 @@ fn ticket_t_11_routing_changed_manifest_refuses_planning_before_shutdown() {
 #[test]
 fn ticket_t_11_routing_matching_manifest_preserves_prior_cutovers() {
     let index = fixture_index();
-    let dir = Scratch::new("planning-manifest-matches");
-    switch(&index, &dir.0, CATALOG);
-    let (owners, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
-    let receipt = plan_for(&index, &owners, PLANS_CREATE).commit(&dir.0, DRAINED);
+    let dir = Scratch::new("pp-t3-cutover-planning-manifest-matches-");
+    switch(&index, &dir, CATALOG);
+    let (owners, _) = cutover::recover(&dir, Some(&index)).unwrap();
+    let receipt = plan_for(&index, &owners, PLANS_CREATE).commit(&dir, DRAINED);
     assert!(matches!(receipt, CutoverReceipt::Committed { .. }));
-    let (recovered, _) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    let (recovered, _) = cutover::recover(&dir, Some(&index)).unwrap();
     assert_eq!(recovered.owner_of("http.POST /plans"), Owner::Rust);
     for participant in CATALOG_PARTICIPANTS {
         assert_eq!(recovered.owner_of(participant), Owner::Rust);
@@ -824,11 +805,11 @@ fn ticket_t_11_routing_matching_manifest_preserves_prior_cutovers() {
     assert_eq!(recovered.rust_operations().count(), 2);
 
     let changed = index_with_extra_tool();
-    let fresh = Scratch::new("planning-new-authority");
+    let fresh = Scratch::new("pp-t3-cutover-planning-new-authority-");
     let receipt =
-        plan_for(&changed, &OperationOwners::node_only(), CATALOG).commit(&fresh.0, DRAINED);
+        plan_for(&changed, &OperationOwners::node_only(), CATALOG).commit(&fresh, DRAINED);
     assert!(matches!(receipt, CutoverReceipt::Committed { .. }));
-    assert!(cutover::recover(&fresh.0, Some(&changed)).is_ok());
+    assert!(cutover::recover(&fresh, Some(&changed)).is_ok());
 }
 
 #[test]
@@ -935,11 +916,11 @@ fn ticket_t_3_drain_cutover_receipts_serialize_exactly() {
 fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
     use std::os::unix::fs::PermissionsExt;
     let index = fixture_index();
-    let dir = Scratch::new("evidence");
+    let dir = Scratch::new("pp-t3-cutover-evidence-");
     let owners = OperationOwners::node_only();
     let refusal = cutover::plan(Some(&index), &owners, PROFILE_SYNC, "{}").unwrap_err();
     cutover::append_evidence(
-        &dir.0,
+        &dir,
         &Evidence::Refused {
             operation: PROFILE_SYNC,
             refusal: &refusal,
@@ -947,17 +928,17 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
     )
     .unwrap();
     let timed_out = plan_for(&index, &owners, CATALOG).commit(
-        &dir.0,
+        &dir,
         DrainEvidence {
             gateway_idle: false,
             ..DRAINED
         },
     );
-    cutover::append_evidence(&dir.0, &Evidence::Cutover(&timed_out)).unwrap();
-    let committed = plan_for(&index, &owners, CATALOG).commit(&dir.0, DRAINED);
-    cutover::append_evidence(&dir.0, &Evidence::Cutover(&committed)).unwrap();
+    cutover::append_evidence(&dir, &Evidence::Cutover(&timed_out)).unwrap();
+    let committed = plan_for(&index, &owners, CATALOG).commit(&dir, DRAINED);
+    cutover::append_evidence(&dir, &Evidence::Cutover(&committed)).unwrap();
     assert_eq!(
-        evidence_lines(&dir.0),
+        evidence_lines(&dir),
         vec![
             json!({"event": "refused", "operation": PROFILE_SYNC, "reason": "node_cannot_fence",
                 "participant": "worker.startManagedProfileSync"}),
@@ -969,7 +950,7 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
                 "fixtures": 3, "directory_synced": true}),
         ]
     );
-    let mode = fs::metadata(dir.0.join(EVIDENCE_FILE))
+    let mode = fs::metadata(dir.join(EVIDENCE_FILE))
         .unwrap()
         .permissions()
         .mode();
@@ -978,8 +959,8 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
 
 #[tokio::test]
 async fn ticket_t_3_drain_cutover_gateway_drain_waits_for_inflight_forward() {
-    let dir = Scratch::new("inflight");
-    let node = fake_node_with_hold(&dir.0, true);
+    let dir = Scratch::new("pp-t3-cutover-inflight-");
+    let node = fake_node_with_hold(&dir, true);
     let owners = OperationOwners::node_only();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut gateway =
@@ -998,7 +979,7 @@ async fn ticket_t_3_drain_cutover_gateway_drain_waits_for_inflight_forward() {
     let index = fixture_index();
     assert_json(
         plan_for(&index, &owners, PLANS_CREATE).commit(
-            &dir.0,
+            &dir,
             DrainEvidence {
                 gateway_idle,
                 ..DRAINED
@@ -1006,14 +987,14 @@ async fn ticket_t_3_drain_cutover_gateway_drain_waits_for_inflight_forward() {
         ),
         json!({"outcome": "drain_timed_out", "operation": PLANS_CREATE, "tracked_idle": true, "gateway_idle": false}),
     );
-    assert!(!dir.0.join(CUTOVER_FILE).exists());
+    assert!(!dir.join(CUTOVER_FILE).exists());
     node.release.notify_one();
     assert_eq!(request.await.unwrap().0, StatusCode::OK);
     let gateway_idle = gateway.wait_idle(std::time::Duration::from_secs(1)).await;
     assert!(gateway_idle);
     assert!(matches!(
         plan_for(&index, &owners, PLANS_CREATE).commit(
-            &dir.0,
+            &dir,
             DrainEvidence {
                 gateway_idle,
                 ..DRAINED
@@ -1028,36 +1009,36 @@ async fn ticket_t_3_drain_cutover_gateway_drain_waits_for_inflight_forward() {
 fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
     use std::os::unix::fs::symlink;
     let index = fixture_index();
-    let blocked = Scratch::new("failed-rename");
-    fs::create_dir(blocked.0.join(CUTOVER_FILE)).unwrap();
+    let blocked = Scratch::new("pp-t3-cutover-failed-rename-");
+    fs::create_dir(blocked.join(CUTOVER_FILE)).unwrap();
     assert!(matches!(
-        plan_for(&index, &OperationOwners::node_only(), CATALOG).commit(&blocked.0, DRAINED),
+        plan_for(&index, &OperationOwners::node_only(), CATALOG).commit(&blocked, DRAINED),
         CutoverReceipt::CommitFailed { .. }
     ));
-    assert!(blocked.0.join(CUTOVER_FILE).is_dir());
-    assert_eq!(fs::read_dir(&blocked.0).unwrap().count(), 1);
-    let dir = Scratch::new("unsafe-record");
-    let path = dir.0.join(CUTOVER_FILE);
+    assert!(blocked.join(CUTOVER_FILE).is_dir());
+    assert_eq!(fs::read_dir(&blocked).unwrap().count(), 1);
+    let dir = Scratch::new("pp-t3-cutover-unsafe-record-");
+    let path = dir.join(CUTOVER_FILE);
     fs::write(&path, vec![b' '; 256 * 1024 + 1]).unwrap();
     assert_eq!(
-        cutover::recover(&dir.0, Some(&index)).unwrap_err(),
+        cutover::recover(&dir, Some(&index)).unwrap_err(),
         CutoverError::Malformed {
             detail: "cutover record exceeds 262144 bytes".into()
         }
     );
     fs::remove_file(&path).unwrap();
-    let target = dir.0.join("target");
+    let target = dir.join("target");
     fs::write(&target, "{}").unwrap();
     symlink(&target, &path).unwrap();
     assert!(matches!(
-        cutover::recover(&dir.0, Some(&index)),
+        cutover::recover(&dir, Some(&index)),
         Err(CutoverError::Malformed { .. })
     ));
     fs::remove_file(&path).unwrap();
-    switch(&index, &dir.0, CATALOG);
-    fs::remove_file(dir.0.join(EVIDENCE_FILE)).unwrap();
-    symlink(&target, dir.0.join(EVIDENCE_FILE)).unwrap();
-    let (owners, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
+    switch(&index, &dir, CATALOG);
+    fs::remove_file(dir.join(EVIDENCE_FILE)).unwrap();
+    symlink(&target, dir.join(EVIDENCE_FILE)).unwrap();
+    let (owners, boot) = cutover::recover(&dir, Some(&index)).unwrap();
     assert!(!boot.evidence_saved);
     assert_eq!(owners.owner_of(CATALOG_PARTICIPANTS[0]), Owner::Rust);
     assert_eq!(fs::read_to_string(target).unwrap(), "{}");
@@ -1065,7 +1046,7 @@ fn ticket_t_3_drain_cutover_record_and_evidence_fail_closed() {
     record["operations"][CATALOG]["fixtures"] = json!(0);
     fs::write(path, record.to_string()).unwrap();
     assert_json(
-        cutover::recover(&dir.0, Some(&index)).unwrap_err(),
+        cutover::recover(&dir, Some(&index)).unwrap_err(),
         json!({"reason": "no_parity_fixtures", "operation": CATALOG}),
     );
 }
@@ -1090,15 +1071,15 @@ fn ticket_t_3_drain_cutover_all_bundled_http_operations_recover() {
         .iter()
         .flat_map(|op| index.participants_of(op))
         .collect();
-    let dir = Scratch::new("all-http");
+    let dir = Scratch::new("pp-t3-cutover-all-http-");
     let mut owners = OperationOwners::node_only();
     for operation in &operations {
-        let receipt = plan_for(&index, &owners, operation).commit(&dir.0, DRAINED);
+        let receipt = plan_for(&index, &owners, operation).commit(&dir, DRAINED);
         assert!(
             matches!(receipt, CutoverReceipt::Committed { .. }),
             "{receipt:?}"
         );
-        let (recovered, boot) = cutover::recover(&dir.0, Some(&index)).unwrap();
+        let (recovered, boot) = cutover::recover(&dir, Some(&index)).unwrap();
         assert!(boot.evidence_saved);
         owners = recovered;
     }
@@ -1121,7 +1102,7 @@ fn ticket_t_3_drain_cutover_all_bundled_http_operations_recover() {
             "{id}"
         );
     }
-    let bytes = fs::read(dir.0.join(CUTOVER_FILE)).unwrap().len();
+    let bytes = fs::read(dir.join(CUTOVER_FILE)).unwrap().len();
     println!(
         "bundled cutover operations={}, participants={}, serialized_bytes={bytes}",
         operations.len(),
@@ -1132,4 +1113,15 @@ fn ticket_t_3_drain_cutover_all_bundled_http_operations_recover() {
 
 fn assert_json(value: impl serde::Serialize, expected: serde_json::Value) {
     assert_eq!(serde_json::to_value(value).unwrap(), expected);
+}
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+#[test]
+fn scratch_root_is_empty_after_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_tests"]);
 }

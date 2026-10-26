@@ -11,10 +11,15 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
-    path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
 
 struct Server {
     origin: String,
@@ -23,7 +28,8 @@ struct Server {
     auth: AuthClient,
     task: tokio::task::JoinHandle<()>,
     shutdown: tokio::sync::oneshot::Sender<()>,
-    directory: PathBuf,
+    /// Last field: removed only after `owner` has dropped, even on panic.
+    directory: Scratch,
 }
 impl Server {
     async fn start(
@@ -32,13 +38,13 @@ impl Server {
         dev: bool,
         public: Option<&str>,
     ) -> Self {
-        let directory = std::env::temp_dir().join(format!("pp-http-test-{}", random()));
+        let directory = Scratch::new("pp-http-test-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         Self::from_owner(owner, directory, registration, single, dev, public).await
     }
     async fn from_owner(
         owner: WriterOwner,
-        directory: PathBuf,
+        directory: Scratch,
         registration: RegistrationPolicy,
         single: bool,
         dev: bool,
@@ -114,20 +120,15 @@ impl Server {
     async fn register(&self, email: &str) -> Response {
         self.request(Method::POST,"/auth/register",Some(json!({"email":email,"password":"password-1234","tenant_id":"forged","is_admin":false})),None).await
     }
-    async fn stop(self) -> PathBuf {
+    async fn stop(self) -> Scratch {
         self.shutdown.send(()).unwrap();
         self.task.await.unwrap();
         self.owner.shutdown().unwrap();
         self.directory
     }
     async fn close(self) {
-        std::fs::remove_dir_all(self.stop().await).unwrap();
+        drop(self.stop().await);
     }
-}
-fn random() -> String {
-    let mut bytes = [0; 12];
-    getrandom::fill(&mut bytes).unwrap();
-    hex::encode(bytes)
 }
 fn cookie(response: &Response) -> String {
     response
@@ -678,7 +679,7 @@ async fn oauth_only_reset_preserves_identity_and_ordinary_no_enumeration() {
             .unwrap();
         assert_eq!(count, if public.is_some() { 1 } else { 0 });
         drop(db);
-        std::fs::remove_dir_all(directory).unwrap();
+        drop(directory);
     }
 }
 
@@ -968,7 +969,7 @@ async fn stopped_writer_is_service_unavailable() {
     );
     shutdown.send(()).unwrap();
     task.await.unwrap();
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 }
 
 fn domain_policy() -> AuthPolicy {
@@ -1028,7 +1029,7 @@ fn domain_key_catalog(
         .unwrap()
 }
 async fn domain_server() -> Server {
-    let directory = std::env::temp_dir().join(format!("pp-domain-test-{}", random()));
+    let directory = Scratch::new("pp-domain-test-");
     std::fs::create_dir_all(directory.join("repos/1/revisions/accepted")).unwrap();
     std::fs::write(
         directory.join("print-partner.db"),
@@ -1337,7 +1338,7 @@ async fn public_cookie_catalog_and_accepted_reads_share_default_tenant() {
             .unwrap();
         assert_eq!(stored, account);
     }
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 }
 #[tokio::test]
 async fn imported_multiple_accounts_close_all_session_domain_clients() {
@@ -1473,4 +1474,9 @@ async fn me_reports_password_presence_independent_of_session_provider() {
         assert!(body["user"].get("password_hash").is_none());
     }
     server.close().await;
+}
+
+#[test]
+fn scratch_root_is_empty_after_auth_http_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_auth_http_tests"]);
 }

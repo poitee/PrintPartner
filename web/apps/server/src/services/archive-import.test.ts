@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import AdmZip from "adm-zip";
 import { ZipFile } from "yazl";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
+import { scratchDir } from "../test/scratch.js";
 import { createSourceUploadStaging, extractZipFile, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
 
 function tempRoot(): string {
-  return mkdtempSync(join(tmpdir(), "pp-archive-"));
+  return scratchDir("pp-archive-");
 }
 
 function stagedFile(content: Buffer | Uint8Array): string {
-  const path = join(mkdtempSync(join(tmpdir(), "pp-archive-staged-")), "upload");
+  const path = join(scratchDir("pp-archive-staged-"), "upload");
   writeFileSync(path, content);
   return path;
 }

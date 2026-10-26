@@ -24,6 +24,7 @@ import {
 } from "../../lib/persistedReviewPartsUi";
 import ReviewPartsSheet from "./ReviewPartsSheet";
 import PartsPage from "../../pages/PartsPage";
+import { BuildSaveFlushProvider } from "../../context/BuildSaveFlushContext";
 
 function reviewPart(over: Partial<ReviewPart> & { id: number; match_key: string }): ReviewPart {
   return {
@@ -199,7 +200,9 @@ function renderPlan() {
       <MemoryRouter>
         <QueryClientProvider client={client}>
           <PlanWorkspaceProvider>
-            <PartsPage />
+            <BuildSaveFlushProvider>
+              <PartsPage />
+            </BuildSaveFlushProvider>
           </PlanWorkspaceProvider>
         </QueryClientProvider>
       </MemoryRouter>

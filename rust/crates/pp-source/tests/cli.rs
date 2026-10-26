@@ -3,29 +3,28 @@ use std::{
     fs,
     io::Write,
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    process::{Command, Output, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    process::{Output, Stdio},
 };
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
+#[path = "support/process.rs"]
+mod support;
 
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// Removed when the scratch drops, including while a test unwinds from a panic.
+struct Fixture(Scratch);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pp-source-cli-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&path).unwrap();
+        let path = Scratch::new("pp-source-cli-");
         fs::create_dir(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
-        for directory in [&path, &path.join("repos"), &path.join("input")] {
+        for directory in [path.to_path_buf(), path.join("repos"), path.join("input")] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
         }
         fs::write(path.join("input/part.stl"), b"solid bytes").unwrap();
-        Self(fs::canonicalize(path).unwrap())
+        Self(path)
     }
 
     fn command(&self) -> Value {
@@ -47,15 +46,10 @@ impl Fixture {
         })
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 // The binary's arguments are fields of its single JSON command on stdin.
 fn invoke(fixture: &Fixture, command: &Value) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source"))
+    let mut child = support::command(support::bin_exe("pp-source"))
         .current_dir(&fixture.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -167,7 +161,7 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
             "zipPath": "upload.zip",
             "revisionKey": revision_key,
         });
-        let mut child = Command::new(env!("CARGO_BIN_EXE_pp-source-archive"))
+        let mut child = support::command(support::bin_exe("pp-source-archive"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -185,7 +179,7 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
             "{}",
             serde_json::json!({
                 "case": "cli_invalid_revision_cleanup",
-                "binary": env!("CARGO_BIN_EXE_pp-source-archive"),
+                "binary": support::bin_exe("pp-source-archive"),
                 "pid": pid,
                 "command": command,
                 "revisionKey": revision_key,
@@ -236,4 +230,12 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
     );
     assert_eq!(revision_names(), revisions);
     assert_eq!(fs::read(fixture.0.join("input/upload.zip")).unwrap(), input);
+}
+
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+#[test]
+fn scratch_root_is_empty_after_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_tests"]);
 }

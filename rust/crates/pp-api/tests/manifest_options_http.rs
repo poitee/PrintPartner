@@ -4,22 +4,22 @@ use serde_json::Value;
 #[cfg(feature = "desktop_rebuild")]
 use serde_json::json;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
-fn open() -> (Arc<Mutex<WriterOwner>>, PathBuf) {
-    let directory = std::env::temp_dir().join(format!("pp-manifest-http-{}", {
-        let mut bytes = [0u8; 8];
-        getrandom::fill(&mut bytes).unwrap();
-        hex::encode(bytes)
-    }));
-    (
-        Arc::new(Mutex::new(
-            WriterOwner::open(&directory, Limits::default()).unwrap().0,
-        )),
-        directory,
-    )
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+/// Returns the directory first so that, on panic, `owner` drops before the
+/// scratch directory is removed.
+fn open() -> (Scratch, Arc<Mutex<WriterOwner>>) {
+    let directory = Scratch::new("pp-manifest-http-");
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    (directory, Arc::new(Mutex::new(owner)))
 }
 
 fn files(dir: &Path) -> Vec<(String, u64)> {
@@ -148,10 +148,10 @@ async fn bind() -> tokio::net::TcpListener {
     tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap()
 }
 
-fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: PathBuf) {
+fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: Scratch) {
     let owner = Arc::try_unwrap(owner).unwrap_or_else(|_| panic!("router still holds storage"));
     owner.into_inner().unwrap().shutdown().unwrap();
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 }
 
 const KIT_PATHS: &[&str] = &[
@@ -170,7 +170,7 @@ const BUILDER_PATHS: &[&str] = &[
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn kit_manifest_read_flag_off_is_404() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -195,38 +195,8 @@ async fn kit_manifest_read_flag_off_is_404() {
 
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
-async fn builder_read_retries_one_changed_observation() {
-    let (owner, directory) = open();
-    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
-    let (status, body) = server
-        .send(Method::GET, "/plans/1/plan-manifest-builder", &[])
-        .await;
-    assert_eq!(status, 404);
-    assert!(body.get("profile_id").is_none());
-    server.stop().await;
-    shutdown(owner, directory);
-}
-
-#[cfg(not(feature = "desktop_rebuild"))]
-#[tokio::test]
-async fn builder_read_zero_variants_honors_cancellation() {
-    let (owner, directory) = open();
-    let snapshot = files(&directory);
-    let mut server = Server::spawn(bind().await, axum::Router::new()).await;
-    let (status, body) = server
-        .send(Method::GET, "/plans/1/plan-manifest-builder", &[])
-        .await;
-    assert_eq!(status, 404);
-    assert!(body.get("profile_id").is_none());
-    server.stop().await;
-    assert_eq!(files(&directory), snapshot);
-    shutdown(owner, directory);
-}
-
-#[cfg(not(feature = "desktop_rebuild"))]
-#[tokio::test]
 async fn kit_manifest_read_matches_storage() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
     let (status, body) = server.send(Method::GET, "/plans/1/kit-manifest", &[]).await;
     assert_eq!(status, 404);
@@ -238,7 +208,7 @@ async fn kit_manifest_read_matches_storage() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn kit_manifest_save_rejects_changed_basis() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
     let (status, body) = server.send(Method::PUT, "/plans/1/kit-manifest", &[]).await;
@@ -252,7 +222,7 @@ async fn kit_manifest_save_rejects_changed_basis() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn kit_manifest_save_rejects_unknown_selection() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
     let (status, body) = server.send(Method::PUT, "/plans/1/kit-manifest", &[]).await;
@@ -340,7 +310,7 @@ fn read_kit_storage(owner: &Mutex<WriterOwner>, token: &str, build: i64) -> Valu
 #[tokio::test]
 async fn kit_manifest_read_flag_off_is_404() {
     use pp_api::builds::{BuildHttpConfig, build_router};
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let before = profiles(&directory);
     let snapshot = files(&directory);
     for flag in [None, Some(""), Some("0"), Some("false"), Some("TRUE")] {
@@ -389,7 +359,7 @@ async fn kit_manifest_read_matches_storage() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -584,7 +554,7 @@ fn attach_checkout(directory: &Path, tenant: &str, build: i64) {
 
 #[cfg(feature = "desktop_rebuild")]
 struct BasisChangeReads {
-    database: PathBuf,
+    database: std::path::PathBuf,
     calls: std::sync::atomic::AtomicUsize,
 }
 
@@ -688,7 +658,7 @@ async fn kit_manifest_save_rejects_unknown_selection() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -800,7 +770,7 @@ async fn kit_manifest_save_rejects_changed_basis() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1024,7 +994,7 @@ async fn builder_read_retries_one_changed_observation() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1146,7 +1116,7 @@ async fn builder_read_zero_variants_honors_cancellation() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1246,4 +1216,331 @@ async fn builder_read_zero_variants_honors_cancellation() {
     assert_eq!(files(&directory), snapshot);
     server.stop().await;
     shutdown(owner, directory);
+}
+
+/// How `ScriptedReads` answers each checkout-manifest read.
+#[cfg(feature = "desktop_rebuild")]
+#[derive(Clone, Copy)]
+enum Script {
+    /// Same bytes every call: observation pairs match.
+    Stable,
+    /// Different bytes every call: every pair differs, so the one retry is exhausted.
+    AlwaysChanged,
+    /// Source cannot be read.
+    Unavailable,
+}
+
+#[cfg(feature = "desktop_rebuild")]
+struct ScriptedReads {
+    script: Script,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(feature = "desktop_rebuild")]
+impl pp_storage::working_drafts::observation::DraftReads for ScriptedReads {
+    fn read_checkout_manifest(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedCheckoutReadRequest,
+        _: pp_storage::working_drafts::observation::CheckoutManifestUse,
+        budget: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        pp_storage::working_drafts::observation::DocumentRead,
+    > {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        budget.check()?;
+        let mut bytes = BUILDER_MANIFEST.to_vec();
+        match self.script {
+            Script::Stable => {}
+            Script::AlwaysChanged => bytes.extend_from_slice(format!("# {call}\n").as_bytes()),
+            Script::Unavailable => {
+                return Err(pp_storage::working_drafts::observation::ReadFailure::Unavailable);
+            }
+        }
+        budget.document(bytes.len(), bytes.len())?;
+        Ok(pp_storage::working_drafts::observation::DocumentRead::Bytes(bytes))
+    }
+
+    fn resolve_stl_root(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedStlReadRequest,
+        budget: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        Box<dyn pp_storage::working_drafts::observation::StlRootRead>,
+    > {
+        budget.check()?;
+        Ok(Box::new(EmptyRoot))
+    }
+
+    fn read_catalog_document(
+        &self,
+        _: &pp_storage::working_drafts::observation::OwnedCatalogReadRequest,
+        _: &mut pp_storage::working_drafts::observation::PreparationBudget<'_>,
+    ) -> pp_storage::working_drafts::observation::ReadResult<
+        pp_storage::working_drafts::observation::DocumentRead,
+    > {
+        panic!("declared groups need no hints")
+    }
+}
+
+/// One owner with a Build (with checkout) and a second account in another
+/// tenant, served by the flag-on Build router merged with auth.
+#[cfg(feature = "desktop_rebuild")]
+struct BuilderFixture {
+    server: Server,
+    owner: Arc<Mutex<WriterOwner>>,
+    reads: Arc<ScriptedReads>,
+    cookie: String,
+    stranger: String,
+    id: i64,
+    tenant: String,
+    /// Last field: removed only after `owner` has dropped, even on panic.
+    directory: Scratch,
+}
+
+#[cfg(feature = "desktop_rebuild")]
+impl BuilderFixture {
+    async fn start(script: Script) -> Self {
+        use pp_api::{
+            auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+            builds::{BuildHttpConfig, build_router},
+        };
+        use pp_storage::{
+            auth::Secret,
+            build_graph::{BuildCommand, BuildName, BuildOutcome},
+            read_model::Credential,
+            working_drafts::observation::PreparationLimits,
+        };
+        use std::{sync::atomic::AtomicBool, time::Duration};
+
+        let (directory, owner) = open();
+        let chosen = policy();
+        let bound = bind().await;
+        let origin = format!("http://{}", bound.local_addr().unwrap());
+        let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+        let mut bootstrap = Server::spawn(
+            bound,
+            auth_router(
+                AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                    .unwrap(),
+                auth,
+                ProviderClient::new(None, None).unwrap(),
+                ResetMailer::disabled(),
+            ),
+        )
+        .await;
+        let cookie = register(&bootstrap, "builder-owner@example.test").await;
+        let stranger = register(&bootstrap, "builder-stranger@example.test").await;
+        let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+        bootstrap.stop().await;
+
+        let id = {
+            let client = owner
+                .lock()
+                .unwrap()
+                .build_graph_with_policy(chosen)
+                .unwrap();
+            match client
+                .execute(
+                    Credential::Session(Secret::new(token)),
+                    BuildCommand::Create {
+                        name: BuildName::parse("Builder Mapping".into()).unwrap(),
+                        base_source: None,
+                    },
+                    Arc::new(AtomicBool::new(false)),
+                    Duration::from_secs(2),
+                )
+                .unwrap()
+            {
+                BuildOutcome::Created { profile, .. } => profile.id,
+                other => panic!("{other:?}"),
+            }
+        };
+        let tenant = profiles(&directory)
+            .into_iter()
+            .find(|row| row.1 == id)
+            .map(|row| row.0)
+            .expect("tenant");
+        attach_checkout(&directory, &tenant, id);
+
+        let reads = Arc::new(ScriptedReads {
+            script,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let bound = bind().await;
+        let origin = format!("http://{}", bound.local_addr().unwrap());
+        let (auth, graph) = {
+            let locked = owner.lock().unwrap();
+            (
+                locked.auth_with_policy(chosen).unwrap(),
+                locked
+                    .build_graph_with_observations(
+                        chosen,
+                        reads.clone(),
+                        PreparationLimits::default(),
+                    )
+                    .unwrap(),
+            )
+        };
+        let server = Server::spawn(
+            bound,
+            build_router(
+                BuildHttpConfig::from_startup(&origin, &tenant, Some("1")).unwrap(),
+                graph,
+            )
+            .merge(auth_router(
+                AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                    .unwrap(),
+                auth,
+                ProviderClient::new(None, None).unwrap(),
+                ResetMailer::disabled(),
+            )),
+        )
+        .await;
+        Self {
+            server,
+            owner,
+            directory,
+            reads,
+            cookie,
+            stranger,
+            id,
+            tenant,
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.reads.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn finish(mut self) {
+        self.server.stop().await;
+        drop(self.server);
+        shutdown(self.owner, self.directory);
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+const PREFIXES: &[&str] = &["", "/api/v1", "/api/v2"];
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn builder_read_exhausted_retry_is_409_stale_observation() {
+    let fixture = BuilderFixture::start(Script::AlwaysChanged).await;
+    let before_kit = kit_setting(&fixture.directory, &fixture.tenant, fixture.id);
+    let before_modified = config_modified(&fixture.directory, &fixture.tenant, fixture.id);
+    for prefix in PREFIXES {
+        let path = format!("{prefix}/plans/{}/plan-manifest-builder", fixture.id);
+        let calls = fixture.calls();
+        let (status, body) = fixture
+            .server
+            .send(Method::GET, &path, &[("Cookie", fixture.cookie.as_str())])
+            .await;
+        assert_eq!(status, 409, "{path}");
+        assert_eq!(
+            body,
+            json!({
+                "detail": "Build inputs changed during manifest observation",
+                "code": "stale_observation",
+            }),
+            "{path}"
+        );
+        // Two attempts of a double observation: exactly one retry.
+        assert_eq!(fixture.calls() - calls, 4, "{path}");
+        let (status, _) = fixture
+            .server
+            .send(Method::HEAD, &path, &[("Cookie", fixture.cookie.as_str())])
+            .await;
+        assert_eq!(status, 409, "HEAD {path}");
+    }
+    assert_eq!(
+        kit_setting(&fixture.directory, &fixture.tenant, fixture.id),
+        before_kit
+    );
+    assert_eq!(
+        config_modified(&fixture.directory, &fixture.tenant, fixture.id),
+        before_modified
+    );
+    fixture.finish().await;
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn builder_read_source_failure_is_503_source_observation_failed() {
+    let fixture = BuilderFixture::start(Script::Unavailable).await;
+    for prefix in PREFIXES {
+        let path = format!("{prefix}/plans/{}/plan-manifest-builder", fixture.id);
+        let (status, body) = fixture
+            .server
+            .send(Method::GET, &path, &[("Cookie", fixture.cookie.as_str())])
+            .await;
+        assert_eq!(status, 503, "{path}");
+        assert_eq!(
+            body,
+            json!({
+                "detail": "Manifest source observation failed",
+                "code": "source_observation_failed",
+                "reason": "Unavailable",
+            }),
+            "{path}"
+        );
+        let (status, _) = fixture
+            .server
+            .send(Method::HEAD, &path, &[("Cookie", fixture.cookie.as_str())])
+            .await;
+        assert_eq!(status, 503, "HEAD {path}");
+    }
+    fixture.finish().await;
+}
+
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn builder_read_refuses_bad_ids_missing_builds_and_anonymous_callers() {
+    let fixture = BuilderFixture::start(Script::Stable).await;
+    let owner = [("Cookie", fixture.cookie.as_str())];
+    let stranger = [("Cookie", fixture.stranger.as_str())];
+    for prefix in PREFIXES {
+        for method in [Method::GET, Method::HEAD] {
+            for bad in ["abc", "0", "-1", "1.5"] {
+                let path = format!("{prefix}/plans/{bad}/plan-manifest-builder");
+                let (status, body) = fixture.server.send(method.clone(), &path, &owner).await;
+                assert_eq!(status, 400, "{method} {path}");
+                if method == Method::GET {
+                    assert_eq!(body, json!({"detail": "Request is invalid"}), "{path}");
+                }
+            }
+
+            let missing = format!("{prefix}/plans/{}/plan-manifest-builder", fixture.id + 1000);
+            let mine = format!("{prefix}/plans/{}/plan-manifest-builder", fixture.id);
+            for (path, headers) in [(&missing, &owner), (&mine, &stranger)] {
+                let (status, body) = fixture.server.send(method.clone(), path, headers).await;
+                assert_eq!(status, 404, "{method} {path}");
+                if method == Method::GET {
+                    assert_eq!(body, json!({"detail": "Profile not found"}), "{path}");
+                }
+            }
+
+            let (status, body) = fixture.server.send(method.clone(), &mine, &[]).await;
+            assert_eq!(status, 401, "{method} {mine}");
+            if method == Method::GET {
+                assert_eq!(body, json!({"detail": "Authentication required"}), "{mine}");
+            }
+
+            let (status, body) = fixture.server.send(method.clone(), &mine, &owner).await;
+            assert_eq!(status, 200, "{method} {mine}");
+            if method == Method::GET {
+                assert_eq!(body["profile_id"], fixture.id, "{mine}");
+            }
+        }
+    }
+    // Only the owner's successful reads observed the source; refusals never did.
+    assert_eq!(fixture.calls(), PREFIXES.len() * 2 * 2);
+    fixture.finish().await;
+}
+
+#[test]
+fn scratch_root_is_empty_after_manifest_options_http_tests() {
+    cleanup::assert_test_run_clean(&[
+        "--skip",
+        "scratch_root_is_empty_after_manifest_options_http_tests",
+    ]);
 }

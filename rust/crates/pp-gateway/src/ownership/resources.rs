@@ -33,6 +33,10 @@ pub enum TableId {
     PlanDraftRequiredUnitReconciliations,
     PlanDraftRequiredUnitDecisions,
     PlanDraftRequiredUnitAssignments,
+    AcceptedPlateHeads,
+    AcceptedPlateRevisions,
+    AcceptedPlates,
+    AcceptedPlateUnits,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -43,6 +47,9 @@ pub enum FileFamily {
     KitCatalog,
     PathHints,
     CommunityManifests,
+    AcceptedThumbnails,
+    CustomFilaments,
+    FilamentCatalog,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -151,8 +158,16 @@ enum ReviewedEntry {
     AnalyzeBuildRequest { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_build_recipe")]
     GetBuildRecipe { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_build_workflow")]
+    GetBuildWorkflow { resources: Vec<ResourceId> },
     #[serde(rename = "tool.compare_plans")]
     ComparePlans { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_plan_review")]
+    GetPlanReview { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.find_filament_matches")]
+    FindFilamentMatches { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.search_plan_parts")]
+    SearchPlanParts { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -200,6 +215,7 @@ impl ReviewedEntry {
     ) -> Result<(&'static str, ResourceSet), AdmissionError> {
         use ResourceId::{File, Table};
         use TableId::{
+            AcceptedPlateHeads, AcceptedPlateRevisions, AcceptedPlateUnits, AcceptedPlates,
             AppSettings, BuildProfiles, Parts, PlanAcceptedInputSets, PlanDecisions,
             PlanDraftInputs, PlanDraftParts, PlanDraftRequiredUnitAssignments,
             PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
@@ -207,6 +223,36 @@ impl ReviewedEntry {
             PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
             PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
             SourceRevisions,
+        };
+        let build_workflow = || {
+            BTreeSet::from([
+                Table(AcceptedPlateHeads),
+                Table(AcceptedPlateRevisions),
+                Table(AcceptedPlateUnits),
+                Table(AcceptedPlates),
+                Table(AppSettings),
+                Table(BuildProfiles),
+                Table(Parts),
+                Table(PlanAcceptedInputSets),
+                Table(PlanDraftInputs),
+                Table(PlanDraftParts),
+                Table(PlanDraftRequiredUnitAssignments),
+                Table(PlanDraftRequiredUnitDecisions),
+                Table(PlanDraftRequiredUnitReconciliations),
+                Table(PlanDrafts),
+                Table(PlanRevisionInputSets),
+                Table(PlanRevisionInputs),
+                Table(PlanRevisionParts),
+                Table(PlanRevisionRequiredUnitSets),
+                Table(PlanRevisionRequiredUnits),
+                Table(PlanRevisions),
+                Table(PrintProgress),
+                Table(ProfileLayers),
+                Table(Projects),
+                Table(RequiredUnits),
+                Table(SourceRevisions),
+                File(FileFamily::SourceWorkspace),
+            ])
         };
         let accepted_plan_operational = || {
             BTreeSet::from([
@@ -377,6 +423,26 @@ impl ReviewedEntry {
             Self::GetRemaining { resources } => {
                 ("tool.get_remaining", resources, accepted_plan_operational())
             }
+            Self::GetPlanReview { resources } => {
+                let mut expected = accepted_plan_operational();
+                expected.extend([
+                    Table(AppSettings),
+                    File(FileFamily::AcceptedThumbnails),
+                    File(FileFamily::CustomFilaments),
+                    File(FileFamily::FilamentCatalog),
+                ]);
+                ("tool.get_plan_review", resources, expected)
+            }
+            Self::FindFilamentMatches { resources } => (
+                "tool.find_filament_matches",
+                resources,
+                BTreeSet::from([File(FileFamily::FilamentCatalog)]),
+            ),
+            Self::SearchPlanParts { resources } => (
+                "tool.search_plan_parts",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(Parts)]),
+            ),
             Self::GetPrinterCheckoff { resources } => (
                 "tool.get_printer_checkoff",
                 resources,
@@ -483,6 +549,9 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::GetBuildWorkflow { resources } => {
+                ("tool.get_build_workflow", resources, build_workflow())
+            }
             Self::ComparePlans { resources } => (
                 "tool.compare_plans",
                 resources,
@@ -726,6 +795,9 @@ impl Declarations {
             "tool.propose_verify_printer_checkoff",
             "tool.get_plan_checkoff",
             "tool.get_remaining",
+            "tool.get_plan_review",
+            "tool.find_filament_matches",
+            "tool.search_plan_parts",
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
             "tool.get_build_planning_state",
@@ -746,6 +818,7 @@ impl Declarations {
             "tool.get_kit_catalog",
             "tool.analyze_build_request",
             "tool.get_build_recipe",
+            "tool.get_build_workflow",
             "tool.compare_plans",
             "tool.get_plan_option_groups",
             "tool.ui_highlight_part",

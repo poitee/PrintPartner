@@ -435,7 +435,8 @@ struct ReadServer {
     client: Client,
     owner: pp_storage::WriterOwner,
     task: tokio::task::JoinHandle<()>,
-    directory: std::path::PathBuf,
+    /// Last field: removed only after `owner` has dropped, even on panic.
+    directory: crate::scratch::Scratch,
 }
 impl ReadServer {
     async fn start(flag: Option<&str>, tenant: &str) -> Self {
@@ -454,11 +455,7 @@ impl ReadServer {
         setup: &str,
         body_limit: usize,
     ) -> Self {
-        let mut random = [0; 12];
-        getrandom::fill(&mut random).unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("pp-drafts-http-{}", hex::encode(random)));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = crate::scratch::Scratch::new("pp-drafts-http-");
         std::fs::write(
             directory.join("print-partner.db"),
             include_bytes!("../../../../pp-storage/tests/fixtures/required-units/unchanged.db"),
@@ -528,7 +525,6 @@ impl ReadServer {
         self.task.abort();
         let _ = self.task.await;
         self.owner.shutdown().unwrap();
-        std::fs::remove_dir_all(self.directory).unwrap();
     }
 }
 

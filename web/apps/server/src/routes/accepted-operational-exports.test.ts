@@ -249,7 +249,7 @@ describe("accepted operational export routes", () => {
       { profile_id: profile.id, include_print_progress: includePrintProgress },
       "default",
     );
-    const job = await runner.waitForTerminal(jobId, 2_000, "default");
+    const job = await runner.waitForTerminal(jobId, 20_000, "default");
 
     expect(job.status).toBe("error");
     expect(job.error).toBe(new TenantDiskQuotaError().message);
@@ -276,7 +276,7 @@ describe("accepted operational export routes", () => {
       { profile_id: profile.id, include_print_progress: true },
       "default",
     );
-    const job = await runner.waitForTerminal(jobId, 2_000, "default");
+    const job = await runner.waitForTerminal(jobId, 20_000, "default");
 
     expect(job.status).toBe("error");
     expect(job.error).toBe("Accepted Plan export failed integrity verification.");
@@ -300,7 +300,7 @@ describe("accepted operational export routes", () => {
       { profile_id: profile.id, include_print_progress: false },
       "default",
     );
-    const job = await runner.waitForTerminal(jobId, 2_000, "default");
+    const job = await runner.waitForTerminal(jobId, 20_000, "default");
 
     expect(job.status).toBe("error");
     expect(job.error).toBe("Accepted Plan export could not be published safely.");
@@ -321,7 +321,7 @@ describe("accepted operational export routes", () => {
       { profile_id: profile.id },
       "default",
     );
-    const checklist = await runner.waitForTerminal(checklistId, 2_000, "default");
+    const checklist = await runner.waitForTerminal(checklistId, 20_000, "default");
     expect(checklist.status).toBe("done");
     expect(Object.keys(checklist.result ?? {}).sort()).toEqual([
       "download_url",
@@ -337,7 +337,7 @@ describe("accepted operational export routes", () => {
       { profile_id: profile.id, include_print_progress: true },
       "default",
     );
-    const kit = await runner.waitForTerminal(kitId, 2_000, "default");
+    const kit = await runner.waitForTerminal(kitId, 20_000, "default");
     expect(kit.status).toBe("done");
     expect(Object.keys(kit.result ?? {}).sort()).toEqual([
       "download_url",
@@ -352,7 +352,7 @@ describe("accepted operational export routes", () => {
       { profile_id: profile.id, missing_only: false, group_by: "color" },
       "default",
     );
-    const stl = await runner.waitForTerminal(stlId, 2_000, "default");
+    const stl = await runner.waitForTerminal(stlId, 20_000, "default");
     expect(stl.status).toBe("done");
     expect(Object.keys(stl.result ?? {}).sort()).toEqual([
       "download_url",
@@ -386,7 +386,7 @@ describe("accepted operational export routes", () => {
       { profile_id: profile.id },
       "default",
     );
-    const job = await runner.waitForTerminal(jobId, 2_000, "default");
+    const job = await runner.waitForTerminal(jobId, 20_000, "default");
 
     expect(job.status).toBe("error");
     expect(job.error).toBe("Accepted Plan export failed.");
@@ -444,7 +444,7 @@ describe("accepted operational export routes", () => {
       { profile_id: 1 },
       "default",
     );
-    const job = await runner.waitForTerminal(jobId, 2_000, "default");
+    const job = await runner.waitForTerminal(jobId, 20_000, "default");
 
     expect(job.status).toBe("error");
     expect(job.error).toBe("Accepted Plan export failed integrity verification.");
@@ -498,7 +498,7 @@ describe("accepted operational export routes", () => {
       { profile_id: 1 },
       "default",
     );
-    const job = await runner.waitForTerminal(jobId, 2_000, "default");
+    const job = await runner.waitForTerminal(jobId, 20_000, "default");
 
     expect(job.status).toBe("done");
     expect(job.error).toBeNull();

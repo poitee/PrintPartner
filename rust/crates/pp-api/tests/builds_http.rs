@@ -4,22 +4,22 @@ use serde_json::Value;
 #[cfg(feature = "desktop_rebuild")]
 use serde_json::json;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
-fn open() -> (Arc<Mutex<WriterOwner>>, PathBuf) {
-    let directory = std::env::temp_dir().join(format!("pp-builds-http-{}", {
-        let mut bytes = [0u8; 8];
-        getrandom::fill(&mut bytes).unwrap();
-        hex::encode(bytes)
-    }));
-    (
-        Arc::new(Mutex::new(
-            WriterOwner::open(&directory, Limits::default()).unwrap().0,
-        )),
-        directory,
-    )
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+/// Returns the directory first so that, on panic, `owner` drops before the
+/// scratch directory is removed.
+fn open() -> (Scratch, Arc<Mutex<WriterOwner>>) {
+    let directory = Scratch::new("pp-builds-http-");
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    (directory, Arc::new(Mutex::new(owner)))
 }
 
 fn files(dir: &Path) -> Vec<(String, u64)> {
@@ -158,10 +158,10 @@ async fn bind() -> tokio::net::TcpListener {
     tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap()
 }
 
-fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: PathBuf) {
+fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: Scratch) {
     let owner = Arc::try_unwrap(owner).unwrap_or_else(|_| panic!("router still holds storage"));
     owner.into_inner().unwrap().shutdown().unwrap();
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 }
 
 const READ_PATHS: &[&str] = &[
@@ -178,7 +178,7 @@ const READ_PATHS: &[&str] = &[
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_reads_flag_off_are_404() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -198,7 +198,7 @@ async fn build_reads_flag_off_are_404() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_reads_are_authenticated_and_tenant_scoped() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -214,7 +214,7 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_create_matches_node_contract() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -237,7 +237,7 @@ async fn build_create_matches_node_contract() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_delete_refusal_preserves_plan() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -253,7 +253,7 @@ async fn build_delete_refusal_preserves_plan() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_layer_read_preserves_stale_reasons() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -269,7 +269,7 @@ async fn build_layer_read_preserves_stale_reasons() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_touch_uses_existing_command() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -285,7 +285,7 @@ async fn build_touch_uses_existing_command() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_layer_mutations_are_atomic() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -310,7 +310,7 @@ async fn build_layer_mutations_are_atomic() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn build_layer_wrong_owner_has_no_effects() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -363,13 +363,29 @@ async fn register(server: &Server, email: &str) -> String {
 }
 
 #[cfg(feature = "desktop_rebuild")]
-fn assert_summary_shape(body: &Value, id: i64, name: &str) {
+fn assert_progress_shape(body: &Value, prefix: &str) {
+    // Node's /api/v1 keeps the legacy unit counts; `/` and /api/v2 send
+    // `accepted_progress`.
+    if prefix == "/api/v1" {
+        assert!(body.get("accepted_progress").is_none(), "{prefix} {body}");
+        assert_eq!(
+            (&body["remaining_units"], &body["total_units"]),
+            (&json!(0), &json!(0))
+        );
+    } else {
+        assert!(body["accepted_progress"].is_object(), "{prefix} {body}");
+        assert!(body.get("remaining_units").is_none(), "{prefix} {body}");
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn assert_summary_shape(body: &Value, prefix: &str, id: i64, name: &str) {
     assert_eq!(body["id"], id);
     assert_eq!(body["name"], name);
     assert!(body.get("order_number").is_some());
     assert!(body.get("special_request").is_some());
     assert_eq!(body["part_count"], 0);
-    assert!(body["accepted_progress"].is_object());
+    assert_progress_shape(body, prefix);
     assert_eq!(body["build_stale"], false);
     assert!(body["freshness"].is_object());
     assert!(body.get("archived_at").is_some());
@@ -382,7 +398,7 @@ fn assert_summary_shape(body: &Value, id: i64, name: &str) {
 #[tokio::test]
 async fn build_reads_flag_off_are_404() {
     use pp_api::builds::{BuildHttpConfig, build_router};
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let before = profiles(&directory);
     let snapshot = files(&directory);
     for flag in [
@@ -433,7 +449,7 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -583,14 +599,14 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
         .await;
     assert_eq!(status, 200);
     assert_eq!(list_a["profiles"].as_array().unwrap().len(), 1);
-    assert_summary_shape(&list_a["profiles"][0], id_a, "Tenant A Plan");
+    assert_summary_shape(&list_a["profiles"][0], "", id_a, "Tenant A Plan");
 
     let (status, list_b) = server
         .send(Method::GET, "/plans", &[("Cookie", cookie_b.as_str())])
         .await;
     assert_eq!(status, 200);
     assert_eq!(list_b["profiles"].as_array().unwrap().len(), 1);
-    assert_summary_shape(&list_b["profiles"][0], id_b, "Tenant B Plan");
+    assert_summary_shape(&list_b["profiles"][0], "", id_b, "Tenant B Plan");
 
     for prefix in ["", "/api/v1", "/api/v2"] {
         let (status, body) = server
@@ -601,7 +617,7 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
             )
             .await;
         assert_eq!(status, 200, "{prefix}");
-        assert_summary_shape(&body, id_a, "Tenant A Plan");
+        assert_summary_shape(&body, prefix, id_a, "Tenant A Plan");
         let (status, body) = server
             .send(
                 Method::GET,
@@ -744,13 +760,13 @@ async fn spawn_builds_with_auth(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-fn assert_created_shape(body: &Value, name: &str) {
+fn assert_created_shape(body: &Value, prefix: &str, name: &str) {
     assert_eq!(body["name"], name);
     assert!(body["id"].as_i64().unwrap() > 0);
     assert!(body.get("order_number").is_some());
     assert!(body.get("special_request").is_some());
     assert_eq!(body["part_count"], 0);
-    assert!(body["accepted_progress"].is_object());
+    assert_progress_shape(body, prefix);
     assert_eq!(body["build_stale"], false);
     assert!(body["freshness"].is_object());
     assert!(body.get("archived_at").is_some());
@@ -762,7 +778,7 @@ fn assert_created_shape(body: &Value, name: &str) {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn build_create_matches_node_contract() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let (mut server, cookie_a, _) = spawn_builds_with_auth(&owner, "default").await;
 
     let (status, created) = server
@@ -774,7 +790,7 @@ async fn build_create_matches_node_contract() {
         )
         .await;
     assert_eq!(status, 200, "{created}");
-    assert_created_shape(&created, "Kit");
+    assert_created_shape(&created, "", "Kit");
     assert_eq!(created["layers"].as_array().unwrap().len(), 0);
 
     for prefix in ["", "/api/v1", "/api/v2"] {
@@ -788,7 +804,7 @@ async fn build_create_matches_node_contract() {
             )
             .await;
         assert_eq!(status, 200, "{prefix}");
-        assert_created_shape(&body, &name);
+        assert_created_shape(&body, prefix, &name);
         assert_eq!(body["layers"].as_array().unwrap().len(), 0);
     }
 
@@ -856,7 +872,7 @@ async fn build_create_matches_node_contract() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn build_delete_refusal_preserves_plan() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
 
     let (status, created) = server
@@ -1000,7 +1016,7 @@ async fn build_layer_read_preserves_stale_reasons() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
 
     let (status, created) = server
@@ -1132,7 +1148,7 @@ async fn build_layer_read_preserves_stale_reasons() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn build_touch_uses_existing_command() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
 
     let (status, created) = server
@@ -1171,7 +1187,7 @@ async fn build_touch_uses_existing_command() {
             )
             .await;
         assert_eq!(status, 200, "{prefix} {body}");
-        assert_summary_shape(&body, id, "TouchPlan");
+        assert_summary_shape(&body, prefix, id, "TouchPlan");
         assert_ne!(body["last_used_at"], "old");
         let (last_used, config) = last_used_and_config(&directory, id);
         assert_ne!(last_used.as_deref(), Some("old"));
@@ -1257,7 +1273,7 @@ fn seed_project(directory: &Path, tenant: &str, name: &str) -> i64 {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn build_layer_mutations_are_atomic() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let (mut server, cookie_a, _) = spawn_builds_with_auth(&owner, "default").await;
     let (status, created) = server
         .send_json(
@@ -1416,7 +1432,7 @@ async fn build_layer_mutations_are_atomic() {
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn build_layer_wrong_owner_has_no_effects() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let (mut server, cookie_a, cookie_b) = spawn_builds_with_auth(&owner, "default").await;
     let (status, created) = server
         .send_json(
@@ -1507,4 +1523,9 @@ async fn build_layer_wrong_owner_has_no_effects() {
     }
     server.stop().await;
     shutdown(owner, directory);
+}
+
+#[test]
+fn scratch_root_is_empty_after_builds_http_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_builds_http_tests"]);
 }

@@ -650,14 +650,77 @@ the user makes a new edit. `BuildSaveFlushContext` allows multiple flush
 producers per Build so special-request and manifest autosave can register
 independently. `retryPlanSave` replays retained ordinary-Save intent from
 GRE-812, then retries auxiliary failures in first-failure order (whichever
-kind failed first runs first when both failed). Web-only; no new Rust
-`desktop_rebuild` surface. Focused proofs:
-`failed_manifest_save_keeps_exact_payload` in `useKitManifestAutosave.test.ts`,
-`failed_special_request_retry_preserves_order` in
-`planAuxiliarySaveIntent.test.ts`.
+kind failed first runs first when both failed). A failed retry does not stop
+the rest: every retained save runs, then the first failure is rethrown. When a
+manifest failure is retained, `retryPlanSave` skips its own Plan prepare,
+because the manifest retry prepares with `applyManifest` once its PUT lands.
+Web-only; no new Rust `desktop_rebuild` surface.
+
+GRE-991 keys the retained kit by Build. `KitManifestOptions` remounts per Build,
+so the editor mounted for a Build adopts its refused kit. It shows those
+selections with the error status, and it owns the retry that `retryPlanSave`
+runs. Since GRE-814, Leave-Build flushes no longer resend it. The hook detects a refused PUT from the PUT
+itself, so a failed Plan refresh on an earlier save does not hide a later PUT
+failure. Focused proofs: `failed_manifest_save_keeps_exact_payload` and
+`remounted_editor_owns_retained_manifest_retry` in
+`useKitManifestAutosave.test.ts`; `failed_special_request_retry_preserves_order`
+in `PlanSpecialRequestField.test.tsx`;
+`retry_with_failed_manifest_prepares_the_plan_once` in
+`PlanWorkspaceContext.test.tsx`.
 
 ```sh
-npm run test -w @print-partner/web -- src/hooks/useKitManifestAutosave.test.ts src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/context/BuildSaveFlushContext.test.tsx
+npm run test -w @print-partner/web -- src/hooks/useKitManifestAutosave.test.ts src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/context/BuildSaveFlushContext.test.tsx src/components/KitManifestOptions.navigation.test.tsx src/context/PlanWorkspaceContext.test.tsx
+```
+
+### D29 flush honors deliberate retry (client)
+
+GRE-814 separates an ordinary flush from a deliberate Retry in
+`BuildSaveFlushContext`. Producers register a flush that takes a mode.
+`useFlushBuildPageSaves` runs `"flush"`. Leave-Build guards, Build switching,
+imports, editor unmounts and hidden-tab flushes all use it. It settles pending
+edits and waits for in-flight saves. When a special-request or manifest save
+was refused, it rejects with that failure and sends nothing. Navigation guards
+therefore keep the Build open, as they do for a definitive ordinary-Save
+rejection in `preparePlan`. `useRetryBuildPageSaves` runs `"retry"`, which
+resends the exact retained payload and then settles pending edits. The
+special-request and kit-manifest Retry buttons, and `retryPlanSave` through
+`retryFailedAuxiliarySaves`, are deliberate retries. GRE-815 wires
+`useRetryBuildPageSaves` into the Parts and command actions. This change is
+web-only and adds no new Rust `desktop_rebuild` surface. Focused proofs:
+`flush_does_not_resend_failed_intent` and
+`explicit_retry_flushes_retained_request` in `BuildSaveFlushContext.test.tsx`.
+
+```sh
+npm run test -w @print-partner/web -- src/context/BuildSaveFlushContext.test.tsx src/hooks/useKitManifestAutosave.test.ts src/components/KitManifestOptions.navigation.test.tsx src/components/PlanSpecialRequestField.test.tsx
+```
+
+### D29 explicit retry actions (client)
+
+GRE-815 wires the deliberate Retry into the Plan page and the command palette
+through one hook, `useFailedSaveRetry`. The Plan page shows its recovery alert
+and "Retry save" when the selected Build has a failed ordinary Save or a
+retained special-request or kit-manifest refusal. The alert shows that
+failure's message. The palette lists "Retry failed save" first under Actions in
+the same cases. It closes the palette, then reports "Saved" or the refusal
+message. Retry calls `retryPlanSave` only when an ordinary Save failed, because
+with nothing retained it prepares a new Plan draft. Otherwise it resends only
+the retained auxiliary saves through `retryFailedAuxiliarySaves`. It then runs
+`useRetryBuildPageSaves` to settle the mounted editors. If the resend is
+refused, Retry still settles the mounted editors, through
+`useFlushBuildPageSaves`, so unsent edits are saved but the refusal is not sent
+a second time. A refused kit-manifest Retry keeps the manifest retained under
+the newest refusal message. Retry never calls `preparePlan`. The Plan page Retry uses `aria-disabled` while a save runs, so
+keyboard focus stays on it and a refused retry keeps the alert. The
+auxiliary-save store is now observable (`useFailedAuxiliarySaveMessage`) and
+records each refusal's message. This change is web-only and adds no new Rust
+`desktop_rebuild` surface. Focused proofs: `parts_retry_uses_retained_save` in
+`PartsPage.recovery.test.tsx` and `command_retry_does_not_create_new_intent` in
+`CommandPalette.retry.test.tsx`, plus
+`plan_retry_resends_retained_manifest_with_failed_ordinary_save` and
+`manifest_retry_refusal_updates_retained_message`.
+
+```sh
+npm run test -w @print-partner/web -- src/pages/PartsPage.recovery.test.tsx src/components/CommandPalette.retry.test.tsx src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/hooks/useKitManifestAutosave.test.ts
 ```
 
 ### D4 media reconciliation
@@ -867,6 +930,8 @@ GRE-786 adds the input-copy stage. `write_retained_inputs` takes a claimed froze
 
 GRE-787 adds publish and activate. `work_frozen` claims an exact admitted frozen capture. `work_operation` claims a job by id, and `work_next` claims the next supplied import. Each runs the claimed attempt through the journal phases and stops after the `Through` phase it is given (`OwnedInput`, `Published`, `Activated` or `Settled`). From `OwnedInputReady` the client re-verifies the owned inventory, prepares media, and materializes an immutable Source revision within the reservation. It then records `Published` with the artifact. `Activate` runs in storage under the claim's generation and fence, and `Cleanup` removes staging and the owned directory before it settles the job. A stopped attempt keeps its job until restart recovery requeues it under a new generation and fence. Until then a retry claims nothing and changes no row or file. After recovery the retry resumes at the journaled phase. It does not recopy input, republish, or record a second activation, and it returns the recorded receipt. A captured import that is still `Admitted` is refused without its frozen capture and is not failed, so `work_frozen` can still run it; once the retained capture is consumed a deterministic failure reaches `Fail` and `Cleanup` instead of requeueing forever. A refused call leaves `repos/.pp-imports` untouched. The snapshot selection takes its byte budgets from the operation's prepared reservation and refuses files it cannot classify instead of silently omitting them. `get` now verifies a published artifact against its stored revision. No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
 
+GRE-788 adds `pp_core::source_acquisition::SourceAcquisitions` behind `desktop_rebuild`. It owns a `SourceImports` client and an ingress gate that starts closed. `admit_captured` refuses while ingress is closed and writes no journal row. `recover_before_accepting` closes ingress, finishes interrupted vault deletions, and runs each frozen retained capture through `work_frozen` to `Settled`. An exact admitted match is published, activated and cleaned up. A capture whose journal row is owned or later, or which has no journal row, is removed. A capture that conflicts with its journal row, and any candidate or malformed capture, stays byte-for-byte unchanged with its journal row; other captures still settle. A malformed slot does not stop the frozen captures beside it from settling. While any capture remains, the call returns `Retained captures require repair (N remaining): <capture id>: <cause>; ...`, naming every remaining capture with its cause (for example a conflicting journal row, a candidate that was never frozen, a malformed slot, or an import job still held by a stopped attempt until restart recovery requeues it), and ingress stays closed. Otherwise it opens ingress and returns the number of captures reconciled. Journal-only work whose retained capture was already consumed is not resumed here. GRE-789 adds bounded acquisition work on top of this gate. `SourceAcquisitions::new` takes a positive `capacity`, and `acquire(CaptureRequest, cancelled)` first reserves the operation key. A key that another acquisition holds, from preflight until its operation is recorded, is refused with `Source acquisition already in progress for this key`. Keys are reserved across tenants, so two tenants using one key at the same moment see the later one refused. Then the request is preflighted: a key whose operation is already recorded replies with that operation as recorded, which may not be settled yet, without reading input or writing anything, even when every slot is held. Otherwise the request takes one capacity slot. With ingress closed it is refused with `Source acquisition ingress is closed`, and with every slot held with `Source acquisition capacity exhausted`. A refused request reads no input and writes no capture, journal row or job. An accepted request writes its files into an owned candidate, binds the capture manifest to the preflighted admission, and freezes it; any failure before the freeze removes the candidate, and a candidate that cannot be removed closes ingress until recovery repairs it. A worker thread then admits the frozen capture and settles it through `work_frozen`; the slot is held until the operation is recorded, and the returned `AcquisitionReply::wait` yields that recorded operation. `recover_before_accepting` refuses with `Source acquisitions are active` while any key is reserved, and leaves ingress as it was. GRE-790 adds `shutdown(budget)`, which returns an `AcquisitionDrain { idle, interrupted, pending }`. Shutdown closes ingress for good. Later acquisitions are refused with `Source acquisition is shutting down` before preflight, including replies for recorded keys, so they read no input and write nothing. Recovery on that instance is refused with `Source acquisitions are shut down`. One budget covers every in-flight acquisition, not one per worker. An acquisition still capturing its input finishes the capture unless its caller cancels it. Every worker is told to stop. A worker that admitted its capture but has not settled it stops without failing the import. It leaves the journal row admitted and the frozen capture retained, records its key in `interrupted`, and its reply is `Source acquisition interrupted by shutdown; retained for recovery`. Shutdown returns when no key is reserved or the budget runs out. Keys still in flight are then listed in `pending` and `idle` is false. Nothing replays interrupted work automatically. A new instance's `recover_before_accepting` settles a retained capture, after a restart when a stopped attempt still holds the import job. A worker stopped after its capture became owned input resumes through import job restart recovery instead. No route, CLI or startup path calls these methods, so they need no `PP_DESKTOP_REBUILD` check yet.
+
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_client
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild --test source_import_files
@@ -994,7 +1059,8 @@ Snapshots now report `public_result` as `result`, never the internal receipt, an
 filters (`LegacyListFilter`: status, `since` in milliseconds against finish time or
 else update time, and profile) and Node's newest-first order. Ties keep enqueue order.
 Quarantined and unreadable rows are skipped. Turning HTTP query strings into
-`LegacyListFilter` is GRE-795 (`docs/gre-795-jobs-http.md`).
+`LegacyListFilter` is GRE-795 (`docs/gre-795-jobs-http.md`). Read-one HTTP at
+`/jobs/{id}` and `/api/v1/jobs/{id}` is GRE-796 (`docs/gre-796-jobs-http.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
@@ -1735,8 +1801,10 @@ The operation ports Node's `savePlanDraftRequiredUnitReconciliation` and the
 queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
-The expansion loop also checks cancellation once per Part. There is no timing
-target. Unexpected transaction failures surface Node's
+The expansion and insert loops also check cancellation once per assignment and
+once per inserted decision and assignment row, so a cancelled selection stops
+inserting and rolls back promptly. There is no timing target. Unexpected
+transaction failures surface Node's
 `Plan draft update failed` on the client, with the source retained through
 `.context`, matching the publication client and Node's reconcile route.
 Authentication failures and admission outcomes (`Cancelled`, `QueueFull`,
@@ -2416,7 +2484,8 @@ See `docs/gre-818-rebuild-clients.md`.
 one `WriterOwner` when the stored rebuild flag is on. It uses the GRE-818 client
 bundle plus `admit_catalog_routes(config, owner)`. Aliases share that owner.
 `RebuildReadOwner::admit` fails closed for unknown names. Flag off returns
-`None` before clients or mounts. Draft HTTP is GRE-820; cutover remains GRE-593.
+`None` before clients or mounts. Draft HTTP is GRE-820 (below); cutover remains
+GRE-593.
 
 ```sh
 cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
@@ -2425,3 +2494,23 @@ cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features deskto
 ```
 
 Focused tests: `rebuild_read_aliases_use_one_owner`, `unknown_read_owner_is_refused_before_execution`.
+
+### D26 runtime wiring (c), GRE-820
+
+`pp_core::rebuild_api::draft_router` mounts completed draft list/read/edit/abandon
+routes from one `WriterOwner` when the stored rebuild flag is on. It uses the
+GRE-818 client bundle's auth and draft handles. Root and `/api/v2` aliases share
+that executor. `RebuildDraftOwner::admit` fails closed for unknown names. Flag
+off returns `None` before clients or mounts. Rust draft failures stay on the
+Rust path with no Node fallback. Cutover remains GRE-593.
+
+```sh
+cargo check --locked --manifest-path rust/Cargo.toml -p pp-core --no-default-features
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-core --features desktop_rebuild \
+  --test rebuild_draft_http -- --exact --test-threads=2
+```
+
+Focused tests: `draft_aliases_and_workers_share_executor`,
+`rust_draft_failure_never_falls_back_to_node`.
+
+See `docs/gre-820-draft-mutations.md`.

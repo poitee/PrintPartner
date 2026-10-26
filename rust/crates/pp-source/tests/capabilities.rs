@@ -2,39 +2,28 @@ use pp_source::{
     ArtifactBudget, FileKind, LocalFiles, Publication, SelectedFile, Selection, SnapshotRequest,
     SourcePath, TenantRepos,
 };
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// Removed when the scratch drops, including while a test unwinds from a panic.
+struct Fixture(Scratch);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pp-source-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&path).unwrap();
+        let path = Scratch::new("pp-source-");
         fs::create_dir(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
         fs::write(path.join("input/part.stl"), b"solid bytes").unwrap();
         // Pin modes so root ancestor checks do not depend on the caller's umask.
-        for dir in [path.clone(), path.join("repos"), path.join("input")] {
+        for dir in [path.to_path_buf(), path.join("repos"), path.join("input")] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        Self(fs::canonicalize(path).unwrap())
+        Self(path)
     }
     fn repos(&self) -> TenantRepos {
         TenantRepos::open("tenant-fixture".into(), &self.0.join("repos")).unwrap()
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
     }
 }
 fn request() -> SnapshotRequest {
@@ -425,7 +414,7 @@ fn published_manifest_also_stops_one_byte_short_of_path_max() {
     // Under revision key "k2", `<root>/42/revisions/k2/<manifest>` is
     // exactly `path_max` bytes, while `part.stl` still fits.
     let root_bytes = path_max - "/42/revisions/k2/".len() - pp_source::MANIFEST.len();
-    let mut root = fixture.0.clone();
+    let mut root = fixture.0.to_path_buf();
     while root_bytes - root.as_os_str().len() > 101 {
         root.push("d".repeat(99));
         fs::create_dir(&root).unwrap();
@@ -478,7 +467,7 @@ fn cli_retry_reuses_revision_after_inputs_are_deleted() {
         "reservedStoredBytes": 1024 * 1024, "snapshot": request(),
     });
     let invoke = || {
-        let mut child = test_process::command(env!("CARGO_BIN_EXE_pp-source"))
+        let mut child = test_process::command(test_process::bin_exe("pp-source"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -867,4 +856,12 @@ fn legacy_ambiguous_revision_still_enforces_the_other_manifest_constraints() {
         source.materialize(retry, &input, budget()),
         Err(pp_source::Error::CorruptSnapshot)
     ));
+}
+
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+#[test]
+fn scratch_root_is_empty_after_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_tests"]);
 }

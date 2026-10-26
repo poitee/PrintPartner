@@ -1,0 +1,169 @@
+"""Exercise the local CI command through its CLI entry point and the real workflows."""
+
+import contextlib
+import importlib.util
+import io
+import os
+from pathlib import Path
+import tempfile
+import unittest
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = Path(__file__).with_name("local-ci.py").resolve()
+spec = importlib.util.spec_from_file_location("local_ci", SCRIPT)
+local_ci = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(local_ci)
+
+TOOLS = {
+    "node": "v24.21.0", "npm": "11.0.0", "cargo": "cargo 1.99.0", "cargo-nextest": "0.9.148",
+    "python3": "Python 3.12.0", "git": "git version 2.50.0", "ast-grep": "ast-grep 0.50.0",
+    "actionlint": "1.7.12", "zizmor": "zizmor 1.31.1",
+}
+
+
+def fake_tools(directory, tools):
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, version in tools.items():
+        tool = directory / name
+        tool.write_text(f"#!/bin/sh\necho '{version}'\n")
+        tool.chmod(0o755)
+    return directory
+
+
+class LocalCi:
+    """Run main() with fake tools on PATH and a runner that records each step's script."""
+
+    def __init__(self, test, tools=TOOLS, node22="v22.23.3", fail=()):
+        scratch = Path(test.enterContext(tempfile.TemporaryDirectory()))
+        self.env = {"PATH": str(fake_tools(scratch / "bin", tools)), "CARGO_TARGET_DIR": str(scratch / "target")}
+        if node22:
+            self.env["PP_SCHEMA_PARITY_NODE"] = str(fake_tools(scratch / "node22", {"node": node22, "npm": "10.0.0"}) / "node")
+        self.fail = set(fail)
+        self.ran = []
+        self.envs = {}
+
+    def runner(self, step_id, script, cwd, env):
+        self.ran.append(step_id)
+        self.envs[step_id] = env
+        return 1 if step_id in self.fail else 0
+
+    def __call__(self, *argv):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = local_ci.main(list(argv), env=self.env, run=self.runner)
+        self.output = out.getvalue()
+        self.summary = {line.split()[1]: line.split()[0]
+                        for line in self.output.split("== local CI summary ==")[-1].splitlines()
+                        if line.split() and line.split()[0] in {"PASS", "FAIL", "SKIP"}}
+        return code
+
+
+class LocalCiTests(unittest.TestCase):
+    def test_full_run_executes_every_local_step_and_reports_host_only_steps_as_skipped(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci(), 0)
+        for step in ["fmt", "clippy-off", "clippy-on", "nextest-off", "nextest-on", "doc-off", "doc-on",
+                     "web-assets", "ast-grep", "boundaries", "selector-tests", "node-fixtures",
+                     "actionlint", "zizmor"]:
+            self.assertEqual(ci.summary[step], "PASS", step)
+        for step in ["rust-windows", "rust-macos", "pr-evidence"]:
+            self.assertEqual(ci.summary[step], "SKIP", step)
+            self.assertNotIn(step, ci.ran)
+        self.assertIn("rust-windows", ci.output.split("== local CI summary ==")[-1])
+        self.assertIn("Windows runner", ci.output)
+
+    def test_historical_schema_commits_are_fetched_before_any_nextest_step(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci(), 0)
+        self.assertEqual(ci.summary["historical-schema"], "PASS")
+        fetched = ci.ran.index("historical-schema")
+        self.assertLess(fetched, ci.ran.index("nextest-off"))
+        self.assertLess(fetched, ci.ran.index("nextest-on"))
+
+    def test_cargo_steps_refuse_to_write_snapshots(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci(), 0)
+        for step in ["clippy-off", "clippy-on", "nextest-off", "nextest-on", "doc-off", "doc-on"]:
+            self.assertEqual(ci.envs[step].get("INSTA_UPDATE"), "no", step)
+        self.assertNotIn("INSTA_UPDATE", ci.envs["node-fixtures"])
+
+    def test_a_failed_step_does_not_stop_later_steps_and_fails_the_run(self):
+        ci = LocalCi(self, fail={"fmt"})
+        self.assertEqual(ci(), 1)
+        self.assertEqual(ci.summary["fmt"], "FAIL")
+        self.assertEqual(ci.summary["doc-on"], "PASS")
+        self.assertIn("1 failed", ci.output)
+
+    def test_a_missing_tool_skips_its_step_with_the_reason_and_runs_nothing_for_it(self):
+        tools = {k: v for k, v in TOOLS.items() if k != "actionlint"}
+        ci = LocalCi(self, tools=tools)
+        self.assertEqual(ci(), 0)
+        self.assertEqual(ci.summary["actionlint"], "SKIP")
+        self.assertNotIn("actionlint", ci.ran)
+        self.assertIn("actionlint not on PATH", ci.output)
+
+    def test_a_wrong_pinned_version_skips_its_step(self):
+        ci = LocalCi(self, tools={**TOOLS, "ast-grep": "ast-grep 0.49.0"})
+        self.assertEqual(ci(), 0)
+        self.assertEqual(ci.summary["ast-grep"], "SKIP")
+        self.assertIn("ast-grep 0.50.0", ci.output)
+
+    def test_node_fixtures_skip_without_the_pinned_node_22(self):
+        for node22 in [None, "v22.22.0"]:
+            with self.subTest(node22=node22):
+                ci = LocalCi(self, node22=node22)
+                self.assertEqual(ci(), 0)
+                self.assertEqual(ci.summary["node-fixtures"], "SKIP")
+                self.assertNotIn("node-fixtures", ci.ran)
+                self.assertIn("PP_SCHEMA_PARITY_NODE", ci.output)
+
+    def test_only_and_skip_select_steps_in_plan_order(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci("--only", "clippy-on,fmt"), 0)
+        self.assertEqual(ci.ran, ["fmt", "clippy-on"])
+        ci = LocalCi(self)
+        self.assertEqual(ci("--skip", "nextest-on,node-fixtures"), 0)
+        self.assertNotIn("nextest-on", ci.ran)
+        self.assertNotIn("node-fixtures", ci.ran)
+        self.assertIn("nextest-off", ci.ran)
+        self.assertNotIn("nextest-on", ci.summary)
+
+    def test_an_unknown_step_id_is_a_usage_error(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci("--only", "fmt,lint"), 2)
+        self.assertEqual(ci.ran, [])
+        self.assertIn("unknown step: lint", ci.output)
+
+    def test_list_prints_every_step_without_running_any(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci("--list"), 0)
+        self.assertEqual(ci.ran, [])
+        for step in ["fmt", "nextest-on", "node-fixtures", "rust-windows"]:
+            self.assertIn(step, ci.output)
+
+    def test_mirrored_commands_match_the_workflow_steps_they_copy(self):
+        checked = 0
+        for step in local_ci.STEPS:
+            if not step.ci:
+                continue
+            lines = set()
+            for source in step.ci:
+                workflow_file, step_name = source.split("#", 1)
+                workflow = yaml.load((ROOT / ".github/workflows" / workflow_file).read_text(), Loader=yaml.BaseLoader)
+                runs = [s["run"] for job in workflow["jobs"].values() for s in job.get("steps", [])
+                        if s.get("name") == step_name and "run" in s]
+                self.assertTrue(runs, f"{source} has no run step")
+                for run in runs:
+                    run = run.replace("${{ env.CARGO_SCOPE }}", "--workspace")
+                    lines.update(line.strip() for line in run.splitlines())
+            for command in step.commands:
+                with self.subTest(step=step.id, command=command):
+                    self.assertIn(command, lines)
+                    checked += 1
+        self.assertGreater(checked, 20)
+
+
+if __name__ == "__main__":
+    unittest.main()

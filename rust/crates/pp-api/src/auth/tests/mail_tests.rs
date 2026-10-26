@@ -137,10 +137,8 @@ impl SmtpFake {
         let _ = self.task.await;
     }
 }
-fn directory() -> std::path::PathBuf {
-    let mut bytes = [0; 12];
-    getrandom::fill(&mut bytes).unwrap();
-    std::env::temp_dir().join(format!("pp-mail-{}", hex::encode(bytes)))
+fn directory() -> crate::scratch::Scratch {
+    crate::scratch::Scratch::new("pp-mail-")
 }
 
 #[tokio::test]
@@ -301,7 +299,7 @@ async fn accepted_reset_delivery_drains_after_http_shutdown() {
     assert_eq!(fake.connections.load(Ordering::Relaxed), 1);
     mail.drain_deliveries().await;
     owner.shutdown().unwrap();
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
     fake.close().await;
 }
 
@@ -516,7 +514,7 @@ async fn smtp_http_failure_keeps_committed_token_without_enumeration_or_retry() 
         stop.send(()).unwrap();
         task.await.unwrap();
         owner.shutdown().unwrap();
-        std::fs::remove_dir_all(directory).unwrap();
+        drop(directory);
         fake.close().await;
     }
 }
@@ -578,7 +576,7 @@ async fn smtp_without_canonical_origin_does_not_mint_or_send_even_in_dev() {
         0
     );
     drop(db);
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
     fake.close().await;
 }
 

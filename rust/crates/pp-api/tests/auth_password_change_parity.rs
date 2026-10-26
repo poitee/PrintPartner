@@ -8,7 +8,11 @@ use pp_storage::{
 use reqwest::{Client, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -69,33 +73,19 @@ fn fixture() -> Fixture {
     fixture
 }
 
-struct Directory(PathBuf);
-
-impl Drop for Directory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 struct Server {
     origin: String,
     client: Client,
     owner: WriterOwner,
     task: tokio::task::JoinHandle<()>,
     shutdown: tokio::sync::oneshot::Sender<()>,
-    directory: Directory,
+    directory: Scratch,
 }
 
 impl Server {
     async fn start() -> Self {
-        let mut random = [0; 16];
-        getrandom::fill(&mut random).unwrap();
-        let directory = Directory(
-            std::env::temp_dir().join(format!("pp-password-parity-{}", hex::encode(random))),
-        );
-        let owner = WriterOwner::open(&directory.0, Limits::default())
-            .unwrap()
-            .0;
+        let directory = Scratch::new("pp-password-parity-");
+        let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let auth = owner
             .auth_with_policy(AuthPolicy {
                 registration: RegistrationPolicy::Open,

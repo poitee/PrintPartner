@@ -506,6 +506,7 @@ pub(super) fn reconcile_checked(
         };
         let reused = units.len();
         for (unit_index, u) in units.drain(..).enumerate() {
+            check()?;
             selected.insert(u.token.clone());
             assignments.push(Assignment::Reuse {
                 draft_part_id: target.id,
@@ -514,6 +515,7 @@ pub(super) fn reconcile_checked(
             });
         }
         for unit_index in reused..count {
+            check()?;
             assignments.push(Assignment::Create {
                 draft_part_id: target.id,
                 unit_index,
@@ -1209,6 +1211,26 @@ mod tests {
         .err()
         .unwrap();
         assert_eq!(checks, 2);
+        assert!(matches!(
+            error.downcast_ref(),
+            Some(super::super::Failure::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn expansion_checks_cancellation_once_per_assignment() {
+        let mut checks = 0;
+        let result = reconcile_checked(&[part(1, None, 3)], &[input()], &[], &[], &mut || {
+            checks += 1;
+            if checks == 3 {
+                return Err(anyhow::anyhow!(super::super::Failure::Cancelled));
+            }
+            Ok(())
+        });
+        let error = result
+            .err()
+            .expect("cancellation must interrupt assignment expansion");
+        assert_eq!(checks, 3);
         assert!(matches!(
             error.downcast_ref(),
             Some(super::super::Failure::Cancelled)

@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { useUpdateProfileMutation } from "../queries/profiles";
 import { cn } from "@/lib/utils";
-import { useBuildSaveFlushRegistry } from "../context/BuildSaveFlushContext";
+import { useBuildSaveFlushRegistry, type BuildSaveFlushMode } from "../context/BuildSaveFlushContext";
 import {
   clearFailedAuxiliarySave,
   retainFailedAuxiliarySave,
@@ -22,7 +22,7 @@ type RequestDraft =
 type SpecialRequestBody = Readonly<{ id: number; special_request: string | null }>;
 
 const drafts = new Map<number, RequestDraft>();
-const failedBodies = new Map<number, SpecialRequestBody>();
+const failedBodies = new Map<number, Readonly<{ body: SpecialRequestBody; error: unknown }>>();
 const inFlightByProfile = new Map<number, Promise<void>>();
 const listeners = new Set<() => void>();
 
@@ -66,14 +66,15 @@ async function persistBody(
       failedBodies.delete(profileId);
       clearFailedAuxiliarySave(profileId, "special_request");
     } catch (error) {
-      failedBodies.set(profileId, body);
-      retainFailedAuxiliarySave(profileId, "special_request", async () => {
+      const message = error instanceof Error ? error.message : "Could not save the special request";
+      failedBodies.set(profileId, { body, error });
+      retainFailedAuxiliarySave(profileId, "special_request", message, async () => {
         await persistBody(profileId, body, mutateAsync);
       });
       setRequestDraft(profileId, {
         kind: "failed",
         text: body.special_request ?? "",
-        error: error instanceof Error ? error.message : "Could not save the special request",
+        error: message,
       });
       throw error;
     }
@@ -90,11 +91,16 @@ export function flushSpecialRequestSave(
   profileId: number,
   mutateAsync: (body: SpecialRequestBody) => Promise<unknown>,
   value: string | null | undefined,
+  mode: BuildSaveFlushMode = "flush",
 ): Promise<void> {
   const inFlight = inFlightByProfile.get(profileId);
   if (inFlight) return inFlight;
   const retained = failedBodies.get(profileId);
-  if (retained) return persistBody(profileId, retained, mutateAsync);
+  if (retained) {
+    // Only a deliberate Retry resends a refused request; navigation keeps it for that Retry.
+    if (mode === "retry") return persistBody(profileId, retained.body, mutateAsync);
+    return Promise.reject(retained.error);
+  }
   const draft = drafts.get(profileId);
   if (draft?.kind === "failed" || draft?.kind === "dirty") {
     const next = draft.text.trim();
@@ -140,7 +146,7 @@ export default function PlanSpecialRequestField({
   }, [pending, profileId, value]);
 
   useEffect(() => {
-    return registerFlush(profileId, () => flushSpecialRequestSave(profileId, mutateBody, value));
+    return registerFlush(profileId, (mode) => flushSpecialRequestSave(profileId, mutateBody, value, mode));
   }, [mutateBody, profileId, registerFlush, value]);
 
   const persist = async () => {
@@ -152,7 +158,7 @@ export default function PlanSpecialRequestField({
     if (pending?.kind === "saving") return;
     const retained = failedBodies.get(profileId);
     if (retained) {
-      await persistBody(profileId, retained, mutateBody);
+      await persistBody(profileId, retained.body, mutateBody);
       return;
     }
     const next = draft.trim();

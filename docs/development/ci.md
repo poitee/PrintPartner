@@ -22,9 +22,11 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 
 | Check name | Runner | Packages | Tests |
 |------------|--------|----------|-------|
-| `rust (linux)` | `ubuntu-latest` | The whole workspace | All |
+| `rust (linux)` | Aggregate over `rust (linux) build` plus rebuild partitions when selected | The whole workspace | All |
 | `rust (macos)` | `macos-26` | The whole workspace | All except [macOS exclusions](#macos-exclusions) |
 | `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
+
+`rust (linux) build` uses `[self-hosted, linux, x64, pp-local]` for same-repository PRs, pushes to `main`, merge groups, and manual dispatch. The nightly schedule keeps `ubuntu-latest`.
 
 Each job runs these steps in order:
 
@@ -39,7 +41,9 @@ Each job runs these steps in order:
 9. `cargo test --doc`, with `desktop_rebuild` off. nextest does not run doctests.
 10. `cargo test --doc`, with `desktop_rebuild` on.
 
-On self-hosted Linux pull requests, step 8 (`nextest` with `desktop_rebuild` on) is skipped so the long rebuild-on suite does not saturate `pp-local` runners. Windows PRs (including self-hosted `pp-local-win`) and hosted Linux PRs still run step 8. Steps 6 and 10 still run on Linux and Windows PRs; macOS PRs skip steps 6, 8 and 10 as before. Non-PR runs keep both feature states on every OS. Same-repo Linux PRs therefore first execute rebuild-on behavior tests (including `pp-api` suites excluded from the Windows job) on `push` to `main`; this repo has no merge queue.
+On self-hosted Linux pull requests, step 8 (`nextest` with `desktop_rebuild` on) is skipped so the long rebuild-on suite does not saturate `pp-local` runners. Windows PRs (including self-hosted `pp-local-win`) and hosted Linux PRs still run step 8. Steps 6 and 10 still run on Linux and Windows PRs; macOS PRs skip steps 6, 8 and 10 as before.
+
+On `push` to `main`, `merge_group`, and `workflow_dispatch`, Linux replaces the in-job step 8 with a nextest archive built once on `pp-local` (`--zstd-level 11`), then three `rust (linux) rebuild m/3` jobs that run `cargo nextest run --archive-file … --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:m/3` on the three fleet Linux slots. The build job also uploads a zstd-compressed pack of the measured desktop trees (`rust/bundle-manifest.json` and the web `dist` outputs). Artifact uploads set `compression-level: 0` so GitHub does not re-gzip already-compressed archives. Atomic package builds publish `dist/current` as a symlink to `dist/releases/<id>`; the dependency inventory records that link and the files under the release path. The pack step therefore archives each package's full `dist/` tree **without** `tar -h`, asserts the `current` symlink and a release-path file (for example `desktop-resolution.js`) are in the archive, and each partition restores those trees so the symlink topology still matches. Packing only `dist/current` with `-h` flattens the link and fails dependency inventory checks. Each partition runs `npm ci` only — it must not rebuild web assets or regenerate the manifest, because the archived binaries embed those digests at compile time. The required check `rust (linux)` is an aggregate that needs the Linux build and those partitions: on push / merge_group / workflow_dispatch it requires rebuild `success`; on PRs and schedule rebuild may be `skipped`. The schedule keeps the monolithic in-job step 8 on `ubuntu-latest`. PRs never enable rebuild-on nextest on `pp-local`. Each such non-PR Linux path uses four `pp-local` slot-runs (one build plus three partitions) instead of a single hosted runner.
 
 The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
 
@@ -48,6 +52,44 @@ Steps 4 to 10 run even when an earlier one of them fails, so one run reports eve
 Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, and its test filter in `NEXTEST_FILTER`. The three jobs share the same anchored steps. They have no matrix, so GitHub reports their exact required names both when running and when skipped. To use a self-hosted runner, change `runs-on`.
 
 `rust (linux)` and `rust (windows)` are required checks on `main`; `rust (macos)` is advisory. [Settings for Chad](ci-controls.md#settings-for-chad) lists the full ruleset.
+
+## Run the required checks with one command
+
+Run this command from the repository root before you push:
+
+```sh
+PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 python3 scripts/local-ci.py
+```
+
+It runs each step below in order and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `--list`. To select steps, use `--only fmt,clippy-off` or `--skip nextest-on`.
+
+| Step | What it runs | CI source |
+|------|--------------|-----------|
+| `local-ci-self-test` | `scripts/test_local_ci.py` | None. This test fails when a copied command no longer matches its workflow step. |
+| `selector-tests` | The path-filter and macOS-alert unit tests | `rust-cross-os.yml` `changes` |
+| `actionlint` | `actionlint -color` | `actionlint` (required) |
+| `zizmor` | `zizmor --min-severity informational --config .github/zizmor.yml .` | `zizmor` (required) |
+| `ast-grep` | `ast-grep test`, `test_ast_grep.py` and `check-ast-grep.py` against `origin/main` | `ast-grep ratchet` |
+| `boundaries` | `check-boundaries.py --self-test` and `check-domain-deps.py --self-test` | `chain-tip-gate.yml` |
+| `historical-schema` | `rust/scripts/fetch-historical-schema-commits.sh`, which fetches the pinned commits that the pp-storage tests archive. It runs before nextest. | `rust (linux)` (required) |
+| `fmt`, `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 4 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
+| `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
+| `node-fixtures` | The `--check` mode of each Node parity fixture generator, and the HTTP route inventory diff, on Node 22.23.3 | `desktop-contracts.yml` and `auth-admission-freshness.yml` |
+
+Except where noted below, each step runs the command lines of its workflow step without changes. The script sets the same environment that CI sets: `NEXTEST_FILTER`, `PP_TEST_NODE`, `VITE_PRINT_PARTNER_DESKTOP`, and `RUNNER_TEMP`. The cargo steps also get `INSTA_UPDATE=no`, so a snapshot mismatch fails the step instead of writing a `.snap.new` file. `RUNNER_TEMP` is under `$CARGO_TARGET_DIR/local-ci`, or under `rust/target/local-ci` if `CARGO_TARGET_DIR` is not set. The local command differs from CI in these ways:
+
+- It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `node-fixtures` step is also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
+- `ast-grep` fetches `origin/main` without `--depth=1`, because a shallow fetch would make a full clone shallow.
+- `nextest-on` always runs. CI skips it on self-hosted Linux PRs, but the merge queue runs it. Use `--skip nextest-on` for a shorter run.
+- The nextest profile is `default` unless you set `NEXTEST_PROFILE`. Pull requests on `pp-local` use `pp-local-linux`.
+- `node-fixtures` runs `npm ci` with Node 22, so `web/node_modules` ends with Node 22 native modules. The next run's `web-assets` step installs them again with Node 24.
+
+The command does not cover these checks:
+
+- `rust (windows)` and `rust (macos)`. They need Windows and macOS runners. The command reports both as `SKIP`.
+- `Lint Evidence block`. It reads the pull request body. The command reports it as `SKIP`.
+- `cargo deny check` (`desktop-deny.yml`). It runs on changes to `rust/**`. To run it locally, use `cargo deny --manifest-path rust/Cargo.toml --all-features check`. CI also runs `cargo deny --manifest-path rust/fuzz/Cargo.toml --all-features --locked check`.
+- The Linux rebuild partitions, the Desktop runtime, Native macOS bundle, web and Docker workflows, and the `contracts:verify` and `test:desktop-parity` steps of `desktop-contracts.yml`.
 
 ## Run a job locally
 
@@ -179,8 +221,10 @@ because that action's post-job cleanup deletes registry source directories that
 another container may still be compiling. Hosted runners, macOS and Windows keep
 the action cache. Each job's target directory remains in its own workspace.
 
-Fork PRs use each job's existing GitHub-hosted label. Pushes, schedules, releases,
-manual dispatches and merge groups also keep their existing hosted runners.
+Fork PRs use each job's existing GitHub-hosted label. Schedules and releases keep
+their existing hosted runners. Linux Rust on pushes to `main`, merge groups, and
+manual dispatches uses the `pp-local` fleet so desktop_rebuild nextest can archive
+once and partition across the three slots; other non-PR workflows stay hosted.
 Docker image jobs, service-container jobs and cargo-deny stay hosted because the
 Linux runner containers have no Docker socket. Selector and result-only jobs stay
 hosted. WebKit STL smoke uses the Linux fleet after a fresh-image proof rendered
