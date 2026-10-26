@@ -659,7 +659,7 @@ Web-only; no new Rust `desktop_rebuild` surface.
 GRE-991 keys the retained kit by Build. `KitManifestOptions` remounts per Build,
 so the editor mounted for a Build adopts its refused kit. It shows those
 selections with the error status, and it owns the retry that `retryPlanSave`
-and Leave-Build flushes run. The hook detects a refused PUT from the PUT
+runs. Since GRE-814, Leave-Build flushes no longer resend it. The hook detects a refused PUT from the PUT
 itself, so a failed Plan refresh on an earlier save does not hide a later PUT
 failure. Focused proofs: `failed_manifest_save_keeps_exact_payload` and
 `remounted_editor_owns_retained_manifest_retry` in
@@ -670,6 +670,28 @@ in `PlanSpecialRequestField.test.tsx`;
 
 ```sh
 npm run test -w @print-partner/web -- src/hooks/useKitManifestAutosave.test.ts src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/context/BuildSaveFlushContext.test.tsx src/components/KitManifestOptions.navigation.test.tsx src/context/PlanWorkspaceContext.test.tsx
+```
+
+### D29 flush honors deliberate retry (client)
+
+GRE-814 separates an ordinary flush from a deliberate Retry in
+`BuildSaveFlushContext`. Producers register a flush that takes a mode.
+`useFlushBuildPageSaves` runs `"flush"`. Leave-Build guards, Build switching,
+imports, editor unmounts and hidden-tab flushes all use it. It settles pending
+edits and waits for in-flight saves. When a special-request or manifest save
+was refused, it rejects with that failure and sends nothing. Navigation guards
+therefore keep the Build open, as they do for a definitive ordinary-Save
+rejection in `preparePlan`. `useRetryBuildPageSaves` runs `"retry"`, which
+resends the exact retained payload and then settles pending edits. The
+special-request and kit-manifest Retry buttons, and `retryPlanSave` through
+`retryFailedAuxiliarySaves`, are deliberate retries. GRE-815 wires
+`useRetryBuildPageSaves` into the Parts and command actions. This change is
+web-only and adds no new Rust `desktop_rebuild` surface. Focused proofs:
+`flush_does_not_resend_failed_intent` and
+`explicit_retry_flushes_retained_request` in `BuildSaveFlushContext.test.tsx`.
+
+```sh
+npm run test -w @print-partner/web -- src/context/BuildSaveFlushContext.test.tsx src/hooks/useKitManifestAutosave.test.ts src/components/KitManifestOptions.navigation.test.tsx src/components/PlanSpecialRequestField.test.tsx
 ```
 
 ### D4 media reconciliation

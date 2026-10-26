@@ -7,12 +7,18 @@ import {
   type ReactNode,
 } from "react";
 
-type FlushFn = () => Promise<void>;
+/**
+ * "flush" settles pending edits and refuses with a retained failed save without resending it.
+ * "retry" is a deliberate Retry: it also resends the retained failed save.
+ */
+export type BuildSaveFlushMode = "flush" | "retry";
+type FlushFn = (mode: BuildSaveFlushMode) => Promise<void>;
 type UnregisterFlush = () => void;
 
 type BuildSaveFlushContextValue = {
   registerFlush: (profileId: number, flush: FlushFn) => UnregisterFlush;
   flushAll: () => Promise<void>;
+  retryAll: () => Promise<void>;
 };
 
 const BuildSaveFlushContext = createContext<BuildSaveFlushContextValue | null>(null);
@@ -33,18 +39,20 @@ export function BuildSaveFlushProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const flushAll = useCallback(async () => {
+  const runAll = useCallback(async (mode: BuildSaveFlushMode) => {
     const flushes = [...flushByProfile.current.values()].flatMap((registrations) =>
       [...registrations.values()],
     );
-    const results = await Promise.allSettled(flushes.map((flush) => flush()));
+    const results = await Promise.allSettled(flushes.map((flush) => flush(mode)));
     const failed = results.find((result) => result.status === "rejected");
     if (failed?.status === "rejected") throw failed.reason;
   }, []);
+  const flushAll = useCallback(() => runAll("flush"), [runAll]);
+  const retryAll = useCallback(() => runAll("retry"), [runAll]);
 
   const value = useMemo(
-    () => ({ registerFlush, flushAll }),
-    [registerFlush, flushAll],
+    () => ({ registerFlush, flushAll, retryAll }),
+    [registerFlush, flushAll, retryAll],
   );
 
   return (
@@ -65,7 +73,12 @@ export function useBuildSaveFlushRegistry() {
   return useBuildSaveFlushContext().registerFlush;
 }
 
-/** Await pending kit-manifest writes before leaving Build. */
+/** Await pending kit-manifest writes before leaving Build. Never resends a failed save. */
 export function useFlushBuildPageSaves(): () => Promise<void> {
   return useBuildSaveFlushContext().flushAll;
+}
+
+/** Deliberate Retry: resend every retained failed save, then settle pending edits. */
+export function useRetryBuildPageSaves(): () => Promise<void> {
+  return useBuildSaveFlushContext().retryAll;
 }
