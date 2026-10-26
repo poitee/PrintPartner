@@ -10,29 +10,28 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// Removed when the scratch drops, including while a test unwinds from a panic.
+struct Fixture(Scratch);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "pp-source-archive-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).unwrap();
+        let root = Scratch::new("pp-source-archive-");
         fs::create_dir(root.join("repos")).unwrap();
         fs::create_dir(root.join("input")).unwrap();
-        for dir in [root.clone(), root.join("repos"), root.join("input")] {
+        for dir in [root.to_path_buf(), root.join("repos"), root.join("input")] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        Self(fs::canonicalize(root).unwrap())
+        Self(root)
     }
     fn zip(&self, size: usize) {
         let mut zip = ZipWriter::new(File::create(self.0.join("input/upload.zip")).unwrap());
@@ -94,11 +93,6 @@ fn zip64_disk_sentinels(path: &Path) {
     bytes.extend_from_slice(&(central_offset as u32).to_le_bytes());
     bytes.extend_from_slice(&0u16.to_le_bytes());
     fs::write(path, bytes).unwrap();
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
 }
 
 #[test]
@@ -1694,4 +1688,12 @@ fn discarding_readiness_keeps_the_lock_for_a_running_owner_materialization() {
     let snapshot = worker.join().unwrap().unwrap();
     assert_eq!(snapshot.files[0].size_bytes, 256 * 1024 * 1024);
     peer.try_lock_exclusive().unwrap();
+}
+
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+#[test]
+fn scratch_root_is_empty_after_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_tests"]);
 }

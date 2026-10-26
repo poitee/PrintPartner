@@ -948,15 +948,12 @@ fn write_or_reuse_receipt(
 #[cfg(test)]
 mod receipt_publication_tests {
     use super::*;
+    use crate::scratch::Scratch;
 
     #[test]
     fn reads_the_validated_descriptor_after_path_replacement()
     -> Result<(), Box<dyn std::error::Error>> {
-        let dir = std::env::temp_dir().join(format!(
-            "pp-receipt-read-{}",
-            hex::encode(rand::random::<[u8; 16]>())
-        ));
-        fs::create_dir_all(&dir)?;
+        let dir = Scratch::new("pp-receipt-read-");
         let winner = boot_source_sync(&dir, BUNDLED_SOURCE_SYNC_MANIFEST)?;
         let admitted = admit_observed(BUNDLED_SOURCE_SYNC_MANIFEST, SOURCE_SYNC_PARTICIPANTS)?;
         let path = dir.join(RECEIPT_FILE);
@@ -965,18 +962,13 @@ mod receipt_publication_tests {
         fs::write(&path, "{replacement")?;
         assert_eq!(read_opened_receipt(file, &admitted)?, winner);
         assert_eq!(fs::read_to_string(&path)?, "{replacement");
-        fs::remove_dir_all(&dir)?;
         Ok(())
     }
 
     #[test]
     fn preserves_and_validates_a_concurrent_winner() -> Result<(), Box<dyn std::error::Error>> {
         for scenario in ["same", "different", "malformed", "nonregular"] {
-            let dir = std::env::temp_dir().join(format!(
-                "pp-receipt-race-{scenario}-{}",
-                hex::encode(rand::random::<[u8; 16]>())
-            ));
-            fs::create_dir_all(&dir)?;
+            let dir = Scratch::new(&format!("pp-receipt-race-{scenario}-"));
             let winner = boot_source_sync(&dir, BUNDLED_SOURCE_SYNC_MANIFEST)?;
             let manifest = if scenario == "different" {
                 format!("{BUNDLED_SOURCE_SYNC_MANIFEST}\n")
@@ -1015,7 +1007,6 @@ mod receipt_publication_tests {
             } else {
                 assert!(fs::symlink_metadata(&receipt_path)?.is_dir());
             }
-            fs::remove_dir_all(&dir)?;
         }
         Ok(())
     }

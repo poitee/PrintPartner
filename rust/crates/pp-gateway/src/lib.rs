@@ -2009,3 +2009,17 @@ mod tests {
 
 #[cfg(test)]
 mod ticket_t_11;
+
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+/// Auto-removing test scratch, shared with pp-storage's tests.
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+
+#[cfg(test)]
+#[test]
+fn scratch_root_is_empty_after_lib_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_lib_tests"]);
+}

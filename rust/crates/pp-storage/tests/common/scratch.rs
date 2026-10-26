@@ -8,12 +8,15 @@ use std::path::Path;
 /// sticky). tempfile defaults to `0o777` minus umask, so a permissive umask
 /// like `0o002` would produce a group-writable directory that `WriterOwner`
 /// refuses. Pin `0o700` so the helper works under any umask.
+///
+/// The directory is created under the canonical temp root, so its path has no
+/// symlink ancestors (such as `/var` on macOS), which source roots reject.
 fn temp_dir(prefix: &str) -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt;
     tempfile::Builder::new()
         .prefix(prefix)
         .permissions(std::fs::Permissions::from_mode(0o700))
-        .tempdir()
+        .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
         .unwrap()
 }
 
