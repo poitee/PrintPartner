@@ -220,6 +220,7 @@ impl Scope<'_> {
         )?;
         let reconciliation = self.tx.last_insert_rowid();
         for decision in &command.request.decisions {
+            check()?;
             let (kind, predecessor) = match decision {
                 Decision::Replace { .. } => ("replace", None),
                 Decision::SelectExactPredecessor {
@@ -250,6 +251,7 @@ impl Scope<'_> {
         }
         if let Some(assignments) = result.result["assignments"].as_array() {
             for a in assignments {
+                check()?;
                 self.tx.execute(
                     "INSERT INTO plan_draft_required_unit_assignments (tenant_id,reconciliation_id,target_draft_part_id,unit_index,kind,required_unit_token) VALUES (?,?,?,?,?,?)",
                     params![

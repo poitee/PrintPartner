@@ -1883,4 +1883,160 @@ mod tests {
         tx.rollback().unwrap();
         assert_eq!(connection.total_changes(), before);
     }
+
+    /// Draft 2 trimmed to Part 4 at `quantity`, with a matching snapshot digest.
+    fn single_part_draft(quantity: i64) -> (Database, Connection, String) {
+        let (database, mut connection) = Database::new();
+        let mut draft = {
+            let tx = connection.transaction().unwrap();
+            storage::draft(&tx, "default", 1, 2).unwrap().unwrap()
+        };
+        draft.parts.retain(|part| part["id"] == 4);
+        draft.parts[0]["quantityOverride"] = json!(quantity);
+        draft.parts[0]["quantityEffective"] = json!(quantity);
+        let planning = model::planning(&draft.header, &draft.inputs, &draft.parts).unwrap();
+        connection
+            .execute(
+                "DELETE FROM plan_draft_parts WHERE draft_id=2 AND id<>4",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE plan_draft_parts SET quantity_override=?1,quantity_effective=?1 WHERE id=4",
+                [quantity],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE plan_drafts SET snapshot_digest=? WHERE id=2",
+                [&planning],
+            )
+            .unwrap();
+        (database, connection, planning)
+    }
+
+    fn select(
+        connection: &mut Connection,
+        planning: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<WorkspaceOutcome> {
+        auto_select(
+            connection,
+            Credential::Session(auth::Secret::new("required-unit-fixture-secret".into())),
+            auth::AuthPolicy {
+                registration: auth::RegistrationPolicy::Open,
+                session_tenant: auth::SessionTenantPolicy::AccountTenant,
+                first_user: auth::FirstUserTenant::NewUser,
+            },
+            PositiveId::new(1).unwrap(),
+            PositiveId::new(2).unwrap(),
+            &serde_json::from_value(json!(planning)).unwrap(),
+            cancelled,
+        )
+    }
+
+    fn count(connection: &Connection, sql: &str) -> i64 {
+        connection.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    /// Part 4's quantity, the draft digest, and its selection pointer.
+    fn part_state(connection: &Connection) -> (i64, String, Option<i64>) {
+        connection
+            .query_row(
+                "SELECT quantity_override,snapshot_digest,current_required_unit_reconciliation_id
+                 FROM plan_draft_parts p JOIN plan_drafts d ON d.id=p.draft_id WHERE p.id=4",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    /// Cancellation is checked per assignment insert, so a cancelled selection
+    /// stops inserting and rolls back instead of finishing every row.
+    #[test]
+    fn cancellation_during_assignment_insertion_rolls_back_selection() {
+        let cap = storage::ASSIGNMENT_CAP;
+        let (_database, mut connection, planning) = single_part_draft(cap);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let inserted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = inserted.clone();
+        connection
+            .update_hook(Some(move |action, _: &str, table: &str, _: i64| {
+                if action == rusqlite::hooks::Action::SQLITE_INSERT
+                    && table == "plan_draft_required_unit_assignments"
+                    && seen.fetch_add(1, Ordering::Relaxed) + 1 == 64
+                {
+                    flag.store(true, Ordering::Release);
+                }
+            }))
+            .unwrap();
+        let error = select(&mut connection, &planning, &cancelled)
+            .expect_err("cancelled selection must fail");
+        assert!(
+            matches!(error.downcast_ref(), Some(Failure::Cancelled)),
+            "{error:?}"
+        );
+        // A hook counts attempted writes even when the transaction rolls back.
+        assert_eq!(inserted.load(Ordering::Relaxed), 64);
+        assert_eq!(part_state(&connection), (cap, planning, None));
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT count(*) FROM plan_draft_required_unit_reconciliations WHERE draft_id=2"
+            ),
+            0
+        );
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT count(*) FROM plan_draft_required_unit_assignments WHERE target_draft_part_id=4"
+            ),
+            0
+        );
+    }
+
+    /// A draft whose quantities sum past the assignment cap is refused before
+    /// any reconciliation or assignment row is written.
+    #[test]
+    fn over_cap_selection_fails_before_any_row_is_inserted() {
+        let cap = storage::ASSIGNMENT_CAP;
+        let (_database, mut connection, planning) = single_part_draft(cap + 1);
+        let inserted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = inserted.clone();
+        connection
+            .update_hook(Some(move |action, _: &str, table: &str, _: i64| {
+                if action == rusqlite::hooks::Action::SQLITE_INSERT
+                    && table.starts_with("plan_draft_required_unit_")
+                {
+                    seen.fetch_add(1, Ordering::Relaxed);
+                }
+            }))
+            .unwrap();
+        let error = select(&mut connection, &planning, &AtomicBool::new(false))
+            .expect_err("over-cap selection must fail");
+        assert_eq!(error.to_string(), "Reconciliation row limit exceeded");
+        assert_eq!(inserted.load(Ordering::Relaxed), 0);
+        assert_eq!(part_state(&connection), (cap + 1, planning, None));
+    }
+
+    /// At exactly the cap, the selection still succeeds and inserts every row.
+    #[test]
+    fn selection_at_the_assignment_cap_inserts_every_assignment() {
+        let cap = storage::ASSIGNMENT_CAP;
+        let (_database, mut connection, planning) = single_part_draft(cap);
+        let outcome = select(&mut connection, &planning, &AtomicBool::new(false)).unwrap();
+        assert!(
+            matches!(outcome, WorkspaceOutcome::Ready { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT count(*) FROM plan_draft_required_unit_assignments WHERE target_draft_part_id=4"
+            ),
+            cap
+        );
+    }
 }
