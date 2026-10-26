@@ -16,7 +16,7 @@ use pp_storage::{
     },
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::Read,
     path::PathBuf,
     sync::{
@@ -68,17 +68,44 @@ struct Gate {
     open: bool,
     active: usize,
     capacity: usize,
+    /// Operation keys of every acquisition between preflight and its recorded
+    /// result. Keys are held across tenants, so two tenants acquiring one key
+    /// at the same moment see the later one refused.
+    in_flight: HashSet<String>,
 }
 
-/// One held capacity slot; dropping it returns the slot.
+/// One reserved operation key and, once taken, one capacity slot; dropping it
+/// returns both.
 struct Permit {
     gate: Arc<Mutex<Gate>>,
+    key: String,
+    slot: bool,
+}
+
+impl Permit {
+    fn take_slot(&mut self) -> Result<()> {
+        let mut gate = self
+            .gate
+            .lock()
+            .map_err(|_| anyhow!("Source acquisition gate poisoned"))?;
+        ensure!(gate.open, "Source acquisition ingress is closed");
+        ensure!(
+            gate.active < gate.capacity,
+            "Source acquisition capacity exhausted"
+        );
+        gate.active += 1;
+        self.slot = true;
+        Ok(())
+    }
 }
 
 impl Drop for Permit {
     fn drop(&mut self) {
         if let Ok(mut gate) = self.gate.lock() {
-            gate.active = gate.active.saturating_sub(1);
+            gate.in_flight.remove(&self.key);
+            if self.slot {
+                gate.active -= 1;
+            }
         }
     }
 }
@@ -130,6 +157,7 @@ impl SourceAcquisitions {
                 open: false,
                 active: 0,
                 capacity,
+                in_flight: HashSet::new(),
             })),
         })
     }
@@ -140,13 +168,13 @@ impl SourceAcquisitions {
     /// absent, are removed. Conflicting, candidate, and malformed captures are
     /// left byte-for-byte unchanged; while any remain, ingress stays closed and
     /// this returns an error naming each remaining capture and its cause.
-    /// Refuses while an acquisition still holds a slot. Returns the number of
-    /// captures reconciled.
+    /// Refuses while an acquisition still holds a slot, leaving ingress as it
+    /// was. Returns the number of captures reconciled.
     pub fn recover_before_accepting(&self) -> Result<usize> {
         {
             let mut gate = self.gate()?;
+            ensure!(gate.in_flight.is_empty(), "Source acquisitions are active");
             gate.open = false;
-            ensure!(gate.active == 0, "Source acquisitions are active");
         }
         let vault = RetainedCaptureVault::open(&self.data_dir)?;
         // A malformed slot stops vault deletion cleanup; it is reported below
@@ -217,12 +245,16 @@ impl SourceAcquisitions {
     }
 
     /// Acquires a captured import. A key whose operation is already recorded
-    /// replies with that operation and writes nothing. Otherwise the request
-    /// takes a capacity slot, its files are written and frozen as a retained
-    /// capture, and a worker admits and settles it; the slot is held until the
-    /// operation is recorded. A request refused for closed ingress, exhausted
-    /// capacity or preflight writes no capture and no journal row; one that
-    /// fails before freezing removes its candidate.
+    /// replies with that operation as recorded, which may not be settled yet,
+    /// and writes nothing. The key is reserved before preflight, so a retry of
+    /// a key still in flight is refused rather than freezing a second capture.
+    /// Otherwise the request takes a capacity slot and
+    /// keeps its key reserved, its files are written and frozen as a retained
+    /// capture, and a worker admits and settles it; slot and key are held until
+    /// the operation is recorded. A request refused for closed ingress,
+    /// exhausted capacity, a key already in flight, or preflight reads no input
+    /// and writes no capture and no journal row; one that fails before freezing
+    /// removes its candidate.
     pub fn acquire(
         &self,
         request: CaptureRequest,
@@ -236,6 +268,7 @@ impl SourceAcquisitions {
             limits,
             files,
         } = request;
+        let mut permit = self.reserve(operation_key.clone())?;
         let authority = self
             .imports
             .preflight_capture(
@@ -249,7 +282,7 @@ impl SourceAcquisitions {
         if let Some(operation) = authority.replay() {
             return Ok(AcquisitionReply::ready(Ok(operation.clone())));
         }
-        let permit = self.reserve()?;
+        permit.take_slot()?;
         let accepted = self.freeze(
             authority,
             permit,
@@ -407,16 +440,16 @@ impl SourceAcquisitions {
         Ok(AcquisitionReply { result })
     }
 
-    fn reserve(&self) -> Result<Permit> {
+    fn reserve(&self, key: String) -> Result<Permit> {
         let mut gate = self.gate()?;
-        ensure!(gate.open, "Source acquisition ingress is closed");
         ensure!(
-            gate.active < gate.capacity,
-            "Source acquisition capacity exhausted"
+            gate.in_flight.insert(key.clone()),
+            "Source acquisition already in progress for this key"
         );
-        gate.active += 1;
         Ok(Permit {
             gate: self.gate.clone(),
+            key,
+            slot: false,
         })
     }
 

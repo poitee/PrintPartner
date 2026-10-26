@@ -59,11 +59,13 @@ impl Fixture {
         }
     }
 
+    fn new_acquisitions(&self, capacity: usize) -> anyhow::Result<SourceAcquisitions> {
+        SourceAcquisitions::new(self.owner.as_ref().unwrap(), policy(), QUOTA, capacity)
+    }
+
     /// Acquisitions with ingress opened by recovery over an empty vault.
     fn acquisitions(&self, capacity: usize) -> SourceAcquisitions {
-        let acquisitions =
-            SourceAcquisitions::new(self.owner.as_ref().unwrap(), policy(), QUOTA, capacity)
-                .unwrap();
+        let acquisitions = self.new_acquisitions(capacity).unwrap();
         assert_eq!(acquisitions.recover_before_accepting().unwrap(), 0);
         acquisitions
     }
@@ -177,6 +179,15 @@ impl Read for Watched {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.read.store(true, Ordering::SeqCst);
         self.bytes.read(buf)
+    }
+}
+
+/// Input whose every read fails.
+struct Broken;
+
+impl Read for Broken {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("input device gone"))
     }
 }
 
@@ -317,4 +328,155 @@ fn source_acquisition_reply_matches_recorded_operation() {
         release.send(()).unwrap();
         assert_eq!(other.join().unwrap().state, State::Activated);
     });
+}
+
+#[test]
+fn source_acquisition_in_flight_key_is_refused_without_effects() {
+    let fixture = Fixture::open();
+    let acquisitions = fixture.acquisitions(2);
+    std::thread::scope(|scope| {
+        let (release, first) = hold(scope, &fixture, &acquisitions, "dup-key");
+
+        // A retry of the same key while the first is in flight is refused before
+        // it reads input or freezes a second capture, even with a slot free.
+        let rows = fixture.rows();
+        let captures = fixture.captures();
+        let (input, read) = Watched::new();
+        assert_eq!(
+            refusal(
+                acquisitions.acquire(fixture.request("dup-key", input), &AtomicBool::new(false))
+            ),
+            "Source acquisition already in progress for this key"
+        );
+        assert!(!read.load(Ordering::SeqCst));
+        assert_eq!(fixture.rows(), rows);
+        assert_eq!(fixture.captures(), captures);
+
+        release.send(()).unwrap();
+        assert_eq!(first.join().unwrap().state, State::Activated);
+    });
+
+    // Once recorded, the retry replies with the recorded operation, and no
+    // capture is left behind for recovery to repair.
+    let (input, _) = Watched::new();
+    let replayed = acquisitions
+        .acquire(fixture.request("dup-key", input), &AtomicBool::new(false))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(replayed, fixture.get("dup-key").unwrap());
+    assert_eq!(fixture.captures(), BTreeMap::new());
+    assert_eq!(acquisitions.recover_before_accepting().unwrap(), 0);
+}
+
+#[test]
+fn source_acquisition_recovery_refused_while_active_keeps_ingress() {
+    let fixture = Fixture::open();
+    let acquisitions = fixture.acquisitions(2);
+    std::thread::scope(|scope| {
+        let (release, first) = hold(scope, &fixture, &acquisitions, "active-first");
+        assert_eq!(
+            format!("{:#}", acquisitions.recover_before_accepting().unwrap_err()),
+            "Source acquisitions are active"
+        );
+
+        // The refused recovery left ingress open for the free slot.
+        let (input, _) = Watched::new();
+        let second = acquisitions
+            .acquire(
+                fixture.request("active-second", input),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert_eq!(second.state, State::Activated);
+
+        release.send(()).unwrap();
+        assert_eq!(first.join().unwrap().state, State::Activated);
+    });
+    assert_eq!(acquisitions.recover_before_accepting().unwrap(), 0);
+}
+
+#[test]
+fn source_acquisition_closed_ingress_has_no_effects() {
+    let fixture = Fixture::open();
+    let acquisitions = fixture.new_acquisitions(1).unwrap();
+    let rows = fixture.rows();
+    let (input, read) = Watched::new();
+    assert_eq!(
+        refusal(acquisitions.acquire(
+            fixture.request("closed-key", input),
+            &AtomicBool::new(false)
+        )),
+        "Source acquisition ingress is closed"
+    );
+    assert!(!read.load(Ordering::SeqCst));
+    assert_eq!(fixture.rows(), rows);
+    assert_eq!(fixture.captures(), BTreeMap::new());
+
+    // The refused key was released: once recovery opens ingress it is admitted.
+    assert_eq!(acquisitions.recover_before_accepting().unwrap(), 0);
+    let (input, _) = Watched::new();
+    let op = acquisitions
+        .acquire(
+            fixture.request("closed-key", input),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(op.state, State::Activated);
+}
+
+#[test]
+fn source_acquisition_failure_before_freeze_removes_candidate() {
+    let fixture = Fixture::open();
+    let acquisitions = fixture.acquisitions(1);
+    let rows = fixture.rows();
+
+    let (input, read) = Watched::new();
+    assert_eq!(
+        refusal(acquisitions.acquire(
+            fixture.request("fail-cancelled", input),
+            &AtomicBool::new(true)
+        )),
+        "Owned capture candidate removed: Source acquisition cancelled"
+    );
+    assert!(!read.load(Ordering::SeqCst));
+    assert_eq!(fixture.rows(), rows);
+    assert_eq!(fixture.captures(), BTreeMap::new());
+
+    let error = refusal(acquisitions.acquire(
+        fixture.request("fail-broken", Broken),
+        &AtomicBool::new(false),
+    ));
+    assert!(
+        error.starts_with("Owned capture candidate removed: "),
+        "{error}"
+    );
+    assert_eq!(fixture.rows(), rows);
+    assert_eq!(fixture.captures(), BTreeMap::new());
+
+    // Each failure returned its slot and key, and left nothing to repair.
+    let (input, _) = Watched::new();
+    let op = acquisitions
+        .acquire(
+            fixture.request("fail-broken", input),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(op.state, State::Activated);
+    assert_eq!(acquisitions.recover_before_accepting().unwrap(), 0);
+}
+
+#[test]
+fn source_acquisition_zero_capacity_is_refused() {
+    let fixture = Fixture::open();
+    assert_eq!(
+        format!("{:#}", fixture.new_acquisitions(0).err().unwrap()),
+        "Source acquisition capacity must be positive"
+    );
 }
