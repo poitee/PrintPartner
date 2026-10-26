@@ -55,7 +55,7 @@ fn fixture() -> Fixture {
     assert_eq!(fixture.source, "web/apps/server/src/routes/auth.ts");
     assert_eq!(
         fixture.configuration,
-        json!({"deployMode":"self-host", "singleUserAuth":true, "multiUser":false, "sessionCookieSecure":false})
+        json!({"deployMode":"self-host", "singleUserAuth":true, "multiUser":false, "sessionCookieSecure":false, "sameOriginRequests":true})
     );
     assert_eq!(
         fixture

@@ -122,7 +122,8 @@ impl Served {
 }
 
 /// Every row of every table in each SQLite database under a data directory,
-/// plus the SHA-256 of every other file. Rows are JSON arrays in column order,
+/// plus the SHA-256 of every other file. Rows are JSON arrays in column order
+/// (blobs, and text that is not valid UTF-8, hex-encoded),
 /// sorted, so equal graphs compare equal regardless of physical row order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateGraph {
@@ -183,9 +184,10 @@ impl StateGraph {
                                 ValueRef::Null => Value::Null,
                                 ValueRef::Integer(value) => json!(value),
                                 ValueRef::Real(value) => json!(value),
-                                ValueRef::Text(value) => {
-                                    json!(String::from_utf8_lossy(value))
-                                }
+                                ValueRef::Text(value) => match std::str::from_utf8(value) {
+                                    Ok(text) => json!(text),
+                                    Err(_) => json!({ "text": hex::encode(value) }),
+                                },
                                 ValueRef::Blob(value) => json!({ "blob": hex::encode(value) }),
                             })
                         })

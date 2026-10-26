@@ -88,6 +88,8 @@ mod ticket_t_10_fixtures {
         assert!(fixture.generated.contains("auth-login/generate.mjs"));
         assert_eq!(fixture.source, "web/apps/server/src/routes/auth.ts");
         assert_eq!(fixture.configuration["singleUserAuth"], json!(true));
+        // Node and Rust both send a same-origin `Origin` header.
+        assert_eq!(fixture.configuration["sameOriginRequests"], json!(true));
         assert_eq!(fixture.cases.len(), 14);
         fixture
     }
@@ -154,6 +156,37 @@ mod ticket_t_10_fixtures {
             cleared("logout"),
             cleared("repeated_logout"),
         ]
+    }
+
+    /// Decodes a recorded Node `Set-Cookie` header into the fields that
+    /// `clearing_cookies` records; any other attribute fails the test.
+    fn clearing_cookie(header: &str) -> Value {
+        let mut parts = header.split(';').map(str::trim);
+        let (name, value) = parts.next().unwrap().split_once('=').unwrap();
+        let mut cookie = json!({
+            "name": name,
+            "value": value,
+            "path": null,
+            "domain": null,
+            "same_site": null,
+            "secure": false,
+            "expires_immediately": false,
+        });
+        for attribute in parts {
+            let (key, value) = attribute.split_once('=').unwrap_or((attribute, ""));
+            match key.to_ascii_lowercase().as_str() {
+                "path" => cookie["path"] = json!(value),
+                "domain" => cookie["domain"] = json!(value),
+                "samesite" => cookie["same_site"] = json!(value.to_ascii_lowercase()),
+                "secure" => cookie["secure"] = json!(true),
+                "max-age" if value == "0" => cookie["expires_immediately"] = json!(true),
+                "expires" if value == "Thu, 01 Jan 1970 00:00:00 GMT" => {
+                    cookie["expires_immediately"] = json!(true)
+                }
+                _ => panic!("{header}: unexpected attribute {attribute}"),
+            }
+        }
+        cookie
     }
 
     fn print_report(corpus: &str, report: &Report) {
@@ -349,8 +382,14 @@ mod ticket_t_10_fixtures {
             let after = StateGraph::capture(sandbox.path()).unwrap();
             let expected = &transition.expected;
             assert_eq!(
-                expected.clearing_cookies.len(),
-                transition.node_set_cookie.len()
+                expected.clearing_cookies,
+                transition
+                    .node_set_cookie
+                    .iter()
+                    .map(|header| clearing_cookie(header))
+                    .collect::<Vec<_>>(),
+                "{} clearing cookies",
+                transition.name
             );
             let node = Exchange {
                 status: expected.status,
@@ -479,6 +518,18 @@ mod ticket_t_10_fixtures {
         let updated = StateGraph::capture(&path).unwrap();
         assert_eq!(updated.rows("print-partner.db/t"), Some(2));
         assert_eq!(initial.changed(&updated), ["print-partner.db/t"]);
+
+        // Distinct invalid UTF-8 text must not collapse to the same cell.
+        db.execute("UPDATE t SET b=CAST(x'ff' AS TEXT) WHERE a=1", [])
+            .unwrap();
+        let invalid = StateGraph::capture(&path).unwrap();
+        db.execute("UPDATE t SET b=CAST(x'fe' AS TEXT) WHERE a=1", [])
+            .unwrap();
+        assert_eq!(
+            invalid.changed(&StateGraph::capture(&path).unwrap()),
+            ["print-partner.db/t"]
+        );
+        db.execute("UPDATE t SET b='y' WHERE a=1", []).unwrap();
 
         std::fs::write(path.join("nested/file.txt"), "two").unwrap();
         std::fs::write(path.join("added.json"), "{}").unwrap();
