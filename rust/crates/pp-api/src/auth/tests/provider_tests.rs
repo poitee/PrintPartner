@@ -11,7 +11,7 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy},
 };
-use std::{net::SocketAddr, path::PathBuf, sync::atomic::AtomicBool};
+use std::{net::SocketAddr, sync::atomic::AtomicBool};
 
 type ProviderCall = (String, Method, HeaderMap, Value);
 
@@ -107,14 +107,15 @@ struct TestServer {
     providers: ProviderClient,
     fake: Fake,
     owner: WriterOwner,
-    directory: PathBuf,
     app_task: tokio::task::JoinHandle<()>,
     app_stop: tokio::sync::oneshot::Sender<()>,
     fake_task: tokio::task::JoinHandle<()>,
+    /// Last field: removed only after `owner` has dropped, even on panic.
+    directory: crate::scratch::Scratch,
 }
 impl TestServer {
     async fn start(registration: RegistrationPolicy, seed: bool) -> Self {
-        let directory = std::env::temp_dir().join(format!("pp-provider-{}", random().unwrap()));
+        let directory = crate::scratch::Scratch::new("pp-provider-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         if seed {
             let auth = owner.auth(FirstUserTenant::NewUser);
@@ -337,7 +338,6 @@ impl TestServer {
             );
         }
         drop(db);
-        std::fs::remove_dir_all(self.directory).unwrap();
     }
 }
 
