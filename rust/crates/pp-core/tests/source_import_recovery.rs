@@ -710,3 +710,120 @@ fn source_import_resumes_after_interrupted_publication() {
     assert_eq!(again.receipt, activated.receipt);
     assert_eq!(fixture.observations(&owned.key), activated_rows);
 }
+
+#[test]
+fn source_import_cancelled_after_owned_input_requeues() {
+    let fixture = Fixture::open();
+    let id = stage_frozen(&fixture, "cancel-after-owned");
+    let owned = fixture
+        .imports
+        .work_frozen(
+            open_frozen(&fixture, &id),
+            Through::OwnedInput,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(owned.state, State::OwnedInputReady);
+
+    // A graceful shutdown stops `prepare_media` after the frozen capture is
+    // consumed. That is not a deterministic failure, so the import stays
+    // resumable instead of failing.
+    let fixture = fixture.reopen();
+    fixture
+        .imports
+        .work_operation(
+            &owned.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(true),
+        )
+        .unwrap_err();
+    let stopped = fixture
+        .imports
+        .get(fixture.credential(), owned.key.clone())
+        .unwrap();
+    assert_eq!(stopped.state, State::OwnedInputReady);
+    assert!(!stopped.cleanup_settled);
+    assert_eq!(
+        fixture
+            .observations(&owned.key)
+            .iter()
+            .map(|row| row.3.as_str())
+            .collect::<Vec<_>>(),
+        ["owned"]
+    );
+    assert_eq!(owned_bytes(&fixture.repos(), &owned.job_id), BYTES);
+
+    let fixture = fixture.reopen();
+    let resumed = fixture
+        .imports
+        .work_operation(
+            &owned.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(resumed.cleanup_settled);
+    assert!(resumed.receipt.as_ref().unwrap().activated);
+}
+
+#[test]
+fn source_import_fails_when_published_artifact_does_not_verify() {
+    let fixture = Fixture::open();
+    let id = stage_frozen(&fixture, "tampered-revision");
+    let published = fixture
+        .imports
+        .work_frozen(
+            open_frozen(&fixture, &id),
+            Through::Published,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(published.state, State::Published);
+    let revision = fixture
+        .repos()
+        .join(published.source_id.to_string())
+        .join("revisions")
+        .join(&published.artifact.as_ref().unwrap().upstream_key);
+    std::fs::remove_dir_all(&revision).unwrap();
+
+    // A revision that no longer verifies will not verify on a retry either,
+    // so activation fails the import instead of spending the attempt budget.
+    let fixture = fixture.reopen();
+    let error = fixture
+        .imports
+        .work_operation(
+            &published.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+    assert!(!error.to_string().is_empty());
+    assert_eq!(
+        fixture
+            .observations(&published.key)
+            .iter()
+            .map(|row| row.3.as_str())
+            .collect::<Vec<_>>(),
+        ["owned", "published", "failed", "cleanup"]
+    );
+
+    let fixture = fixture.reopen();
+    assert!(
+        fixture
+            .imports
+            .work_operation(
+                &published.job_id,
+                None,
+                Through::Settled,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .is_none()
+    );
+}

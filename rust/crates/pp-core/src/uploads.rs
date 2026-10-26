@@ -320,6 +320,7 @@ impl SourceImports {
         let live =
             source_work.ok_or_else(|| anyhow!("Supplied import claim missing Source authority"))?;
         let mut op = self.worker.import_phase(&lease, &live, Phase::Read)?;
+        let mut unverified = false;
         let result = (|| -> Result<()> {
             if job.cancel_requested && op.receipt.is_none() {
                 op = self.worker.import_phase(&lease, &live, Phase::Fail)?;
@@ -462,7 +463,10 @@ impl SourceImports {
                 return Ok(());
             }
             if op.state == State::Published {
-                self.verify_artifact(&op)?;
+                if let Err(error) = self.verify_artifact(&op) {
+                    unverified = true;
+                    return Err(error);
+                }
                 op = self.worker.import_phase(&lease, &live, Phase::Activate)?;
             }
             if through == Through::Activated {
@@ -476,11 +480,14 @@ impl SourceImports {
         // as the only copy, so a failed attempt leaves it for `work_frozen`.
         // Once the retained capture is consumed, a deterministic failure is
         // terminal: it must reach `Fail` and cleanup instead of requeueing
-        // forever.
+        // forever. A stop requested through `cancelled` is not deterministic,
+        // so it leaves the import for restart recovery to resume. A published
+        // import retries activation, unless its artifact no longer verifies.
         if result.is_err()
+            && !cancelled.load(Ordering::Acquire)
             && !(op.state == State::Admitted && matches!(op.input, Input::Captured(_)))
             && op.receipt.is_none()
-            && op.state != State::Published
+            && (op.state != State::Published || unverified)
             && self.worker.import_phase(&lease, &live, Phase::Fail).is_ok()
             && self.cleanup(&op).is_ok()
         {
