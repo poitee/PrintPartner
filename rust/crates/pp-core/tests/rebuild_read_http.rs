@@ -263,8 +263,18 @@ mod with_feature {
             assert_eq!(body["profiles"][0]["name"], "Alias Plan", "{path}");
             plans.push(body);
         }
-        assert_eq!(plans[0], plans[1]);
-        assert_eq!(plans[1], plans[2]);
+        assert_eq!(plans[0], plans[2]);
+        // `/api/v1` keeps Node's legacy summary: unit counts instead of
+        // `accepted_progress`, otherwise the same Plan from the same owner.
+        let mut legacy = plans[0].clone();
+        let summary = legacy["profiles"][0].as_object_mut().unwrap();
+        assert_eq!(
+            summary.remove("accepted_progress"),
+            Some(json!({"kind": "empty"}))
+        );
+        summary.insert("remaining_units".into(), json!(0));
+        summary.insert("total_units".into(), json!(0));
+        assert_eq!(plans[1], legacy);
 
         let (status, created) = server
             .json(
