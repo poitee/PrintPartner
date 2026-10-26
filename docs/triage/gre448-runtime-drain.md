@@ -764,3 +764,53 @@ also exceeds the committed four-second cleanup allowance. Production
 
 Atomic route and worker cutover, and actual Mac logout, stay outside this slice.
 GRE-448 stays open.
+
+## Worker operations switch with their route aliases
+
+Before this slice, `cutover::plan` refused any operation with a non-HTTP
+participant (`node_cannot_fence`). Node never read the cutover record, so a
+Rust-owned worker would still start in Node and both runtimes would write.
+
+`web/apps/server/src/data/node-fenced-participants.json` lists the participants
+Node can fence. pp-gateway embeds the same file. An operation can switch only
+when every participant is an HTTP route the gateway fences or is on that list.
+At startup Node reads `operation-cutover.json` from its data directory through a
+non-blocking, no-follow, 256 KiB bounded read. If Rust owns
+`worker.startManagedProfileSync`, Node starts neither that worker nor the
+`/ws/profile-sync` WebSocket route. A record that assigns Node a participant it
+cannot fence, or a malformed, oversized, wrong-schema or symlinked record, stops
+Node startup before the worker runs.
+
+The bundled ownership manifest now groups `profile.sync` as
+`http.GET /ws/profile-sync`, its HEAD twin and `worker.startManagedProfileSync`.
+Before, the worker was its own operation, so allowing workers to switch would
+have let the worker move without its route. The unresolved resource partition
+drops from 387 to 386 entries because two entries became one.
+
+Tests:
+
+- `ticket_t_3_drain_cutover_switches_fenced_worker_with_aliases` commits all
+  three participants, recovers them as Rust-owned, and refuses a planted
+  record that leaves out the worker (`participant_set_mismatch`).
+- `ticket_t_3_drain_cutover_gateway_routes_worker_operation` starts the gateway
+  with that record. GET and HEAD `/ws/profile-sync` return
+  `rust_owner_unavailable`, Node sees no forwarded request, and an unrelated
+  route still forwards.
+- `ticket_t_3_drain_cutover_refuses_participant_node_cannot_fence` keeps
+  `source.sync` refused for `assistant.propose_import_source_files`, both at
+  plan time and at recovery.
+- `cutover::tests::ticket_t_3_drain_node_fence_list_names_bundled_workers`
+  pins the shared list to the one worker Node fences.
+- `src/ownership/operation-cutover.test.ts` builds the real Fastify app. Without
+  a record, the worker starts and the route exists. With the `profile.sync`
+  record, neither does, and unrelated routes still answer. Records for
+  unrelated HTTP operations leave the worker running. The startup refusals
+  above each stop `buildApp` before the worker starts.
+
+Rust has no profile-sync handler, so after this cutover nothing writes profile
+sync state. That is the intended no-dual-write, no-failover result: the route
+returns `rust_owner_unavailable` and nothing falls back to Node. Fences for
+other workers, jobs, startup hooks and assistant dispatch, and a live
+`CoreRuntime` cutover of `profile.sync`, are outside this slice (GRE-593 owns
+the complete inventory). Actual Mac logout stays a parent gate. GRE-448 stays
+open.

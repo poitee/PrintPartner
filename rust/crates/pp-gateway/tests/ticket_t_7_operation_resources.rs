@@ -818,7 +818,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.analyze_stl_mesh",
     ]);
     assert_eq!(reviewed.len(), 59);
-    assert_eq!(unresolved.len(), 384);
+    assert_eq!(unresolved.len(), 383);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
