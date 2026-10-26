@@ -1748,8 +1748,10 @@ The operation ports Node's `savePlanDraftRequiredUnitReconciliation` and the
 queues one command on the single writer, as `build_graph` does. The writer runs
 it in one immediate transaction. It checks cancellation before the transaction
 starts and again before it commits, so a cancelled request writes nothing.
-The expansion loop also checks cancellation once per Part. There is no timing
-target. Unexpected transaction failures surface Node's
+The expansion and insert loops also check cancellation once per assignment and
+once per inserted decision and assignment row, so a cancelled selection stops
+inserting and rolls back promptly. There is no timing target. Unexpected
+transaction failures surface Node's
 `Plan draft update failed` on the client, with the source retained through
 `.context`, matching the publication client and Node's reconcile route.
 Authentication failures and admission outcomes (`Cancelled`, `QueueFull`,
