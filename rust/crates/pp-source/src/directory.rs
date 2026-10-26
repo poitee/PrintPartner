@@ -293,24 +293,25 @@ mod tests {
         fs::{self, Permissions},
         os::unix::fs::{MetadataExt, PermissionsExt},
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
     };
 
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    struct Tree(PathBuf);
+    /// The canonical root, and the scratch guard that removes it after
+    /// `Drop` below has stripped ACLs.
+    struct Tree {
+        root: PathBuf,
+        _scratch: crate::scratch::Scratch,
+    }
     impl Tree {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "pp-source-root-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&path).unwrap();
-            let tree = Self(fs::canonicalize(path).unwrap());
+            let scratch = crate::scratch::Scratch::new("pp-source-root-");
+            let tree = Self {
+                root: fs::canonicalize(&scratch).unwrap(),
+                _scratch: scratch,
+            };
             tree.dir("", 0o755)
         }
         fn dir(self, name: &str, mode: u32) -> Self {
-            let path = self.0.join(name);
+            let path = self.root.join(name);
             if !path.exists() {
                 fs::create_dir(&path).unwrap();
             }
@@ -318,15 +319,14 @@ mod tests {
             self
         }
         fn open(&self, name: &str) -> Result<Directory> {
-            Directory::open_root(&self.0.join(name))
+            Directory::open_root(&self.root.join(name))
         }
     }
     impl Drop for Tree {
         fn drop(&mut self) {
             // Deny entries can block cleanup, so strip every ACL first.
             #[cfg(target_os = "macos")]
-            chmod(&["-R", "-N"], &self.0);
-            fs::remove_dir_all(&self.0).unwrap();
+            chmod(&["-R", "-N"], &self.root);
         }
     }
 
@@ -366,7 +366,7 @@ mod tests {
         assert!(ancestor_is_trusted(0, 0o755, 1000, false));
 
         let tree = Tree::new().dir("repos", 0o700);
-        let root = tree.0.join("repos");
+        let root = tree.root.join("repos");
         // Unprivileged tests cannot chown, so open as a different user: the
         // fixture directories then belong to someone else. Root-owned
         // fixtures stay trusted, so only the pure policy runs as root.
@@ -381,7 +381,7 @@ mod tests {
         ));
         // When every directory above the fixture is root-owned (Linux /tmp),
         // pin the rejection to the selected root's own owner.
-        let temp = tree.0.parent().unwrap();
+        let temp = tree.root.parent().unwrap();
         if temp
             .ancestors()
             .all(|path| fs::metadata(path).unwrap().uid() == 0)
@@ -391,7 +391,7 @@ mod tests {
             let temp_handle = Directory(File::open(temp).unwrap());
             assert!(temp_handle.check_ancestor(other, true).is_ok());
             assert!(matches!(
-                Directory::open_root_as(&tree.0, other),
+                Directory::open_root_as(&tree.root, other),
                 Err(Error::UnsafeAncestor)
             ));
         }
@@ -442,7 +442,7 @@ mod tests {
         impl Tree {
             /// Appends `entry` (chmod +a syntax) to the ACL of `name`.
             fn acl(self, name: &str, entry: &str) -> Self {
-                chmod(&["+a", entry], &self.0.join(name));
+                chmod(&["+a", entry], &self.root.join(name));
                 self
             }
         }
@@ -511,7 +511,7 @@ mod tests {
             // Stricter than the kernel: inherit-only grants still count.
             assert!(unsafe_acl(tree.open("parent")));
             let tree = tree.dir("parent/repos", 0o700);
-            chmod(&["-N"], &tree.0.join("parent"));
+            chmod(&["-N"], &tree.root.join("parent"));
             assert!(tree.open("parent").is_ok());
             // The child received an effective, inherited copy of the grant.
             assert!(unsafe_acl(tree.open("parent/repos")));

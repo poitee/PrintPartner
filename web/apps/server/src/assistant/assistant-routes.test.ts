@@ -16,6 +16,7 @@ vi.mock("./create-assistant.js", () => ({
 }));
 
 import { createAssistantPort } from "./create-assistant.js";
+import { scratchDir } from "../test/scratch.js";
 
 const mockedCreate = vi.mocked(createAssistantPort);
 
@@ -106,8 +107,8 @@ describe("assistant routes", () => {
   it("status reports enabled=false while still resolving settings source for MCP tooling", async () => {
     await app.close();
 
-    dataDir = mkdtempSync(join(tmpdir(), "pp-assistant-settings-"));
-    const ports = createSelfHostPorts(dataDir);
+    // Its own directory: reassigning dataDir would leak the one beforeEach made.
+    const ports = createSelfHostPorts(scratchDir("pp-assistant-settings-"));
     await ports.db.connect();
     const repo = ports.repository!;
     const { createIntegrationPort } = await import("../integrations/store.js");

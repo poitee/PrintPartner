@@ -5,32 +5,44 @@ use pp_source::{
 use std::{
     fs::{self, File, OpenOptions},
     io::{Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    os::unix::fs::DirBuilderExt,
+    path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 use zip::{ZipWriter, write::SimpleFileOptions};
-static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// The canonical fixture root, and the scratch guard that removes it.
+struct Fixture {
+    root: PathBuf,
+    _scratch: Scratch,
+}
 impl Fixture {
     fn new() -> Self {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(".media-tests")
-            .join(format!(
-                "{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-        fs::create_dir_all(root.join("repos")).unwrap();
-        fs::create_dir(root.join("input")).unwrap();
-        Self(root)
+        let scratch = Scratch::new("pp-source-media-");
+        // Source roots reject symlink ancestors (including /var on macOS).
+        let root = fs::canonicalize(&scratch).unwrap();
+        // Pin modes: Source refuses group-writable ancestors, whatever the umask.
+        for dir in ["repos", "input"] {
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .create(root.join(dir))
+                .unwrap();
+        }
+        Self {
+            root,
+            _scratch: scratch,
+        }
     }
     fn model(&self, triangles: usize) {
-        let mut zip = ZipWriter::new(File::create(self.0.join("input/model.3mf")).unwrap());
+        let mut zip = ZipWriter::new(File::create(self.root.join("input/model.3mf")).unwrap());
         zip.start_file("3D/main.model", SimpleFileOptions::default())
             .unwrap();
         zip.write_all(b"<model><object name='part'><mesh><vertex x='0' y='0' z='0'/><vertex x='1' y='0' z='0'/><vertex x='0' y='1' z='0'/>").unwrap();
@@ -42,7 +54,7 @@ impl Fixture {
     }
     fn model_with_large_padding(&self) {
         self.model(1);
-        let path = self.0.join("input/model.3mf");
+        let path = self.root.join("input/model.3mf");
         let bytes = fs::read(&path).unwrap();
         let end = bytes.len() - 22;
         let central_offset =
@@ -93,19 +105,14 @@ impl Fixture {
         file.write_all(&0u16.to_le_bytes()).unwrap();
     }
     fn local(&self) -> LocalFiles {
-        LocalFiles::open(&self.0.join("input")).unwrap()
+        LocalFiles::open(&self.root.join("input")).unwrap()
     }
     fn tenant(&self) -> TenantRepos {
-        TenantRepos::open("tenant".into(), &self.0.join("repos")).unwrap()
+        TenantRepos::open("tenant".into(), &self.root.join("repos")).unwrap()
     }
     fn candidate(&self) -> PathBuf {
-        self.0
+        self.root
             .join("repos/42/revisions/.pp-source-media/.candidate")
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
     }
 }
 fn path(value: &str) -> SourcePath {
@@ -115,7 +122,7 @@ fn path(value: &str) -> SourcePath {
 fn conversion_owns_candidate_and_published_original_and_derived_bytes_survive_reuse() {
     let f = Fixture::new();
     f.model(1);
-    let original = fs::read(f.0.join("input/model.3mf")).unwrap();
+    let original = fs::read(f.root.join("input/model.3mf")).unwrap();
     let tenant = f.tenant();
     let mut source = tenant.source(42).unwrap();
     let prepared = source
@@ -157,7 +164,8 @@ fn conversion_owns_candidate_and_published_original_and_derived_bytes_survive_re
         )
         .unwrap();
     let derived = fs::read(
-        f.0.join("repos")
+        f.root
+            .join("repos")
             .join(&snapshot.snapshot_locator)
             .join("_3mf/model/part.stl"),
     )
@@ -185,7 +193,8 @@ fn conversion_owns_candidate_and_published_original_and_derived_bytes_survive_re
     assert_eq!(reused.publication, pp_source::Publication::Reused);
     assert_eq!(
         fs::read(
-            f.0.join("repos")
+            f.root
+                .join("repos")
                 .join(&snapshot.snapshot_locator)
                 .join("model.3mf")
         )
@@ -194,7 +203,8 @@ fn conversion_owns_candidate_and_published_original_and_derived_bytes_survive_re
     );
     assert_eq!(
         fs::read(
-            f.0.join("repos")
+            f.root
+                .join("repos")
                 .join(&snapshot.snapshot_locator)
                 .join("_3mf/model/part.stl")
         )
@@ -245,7 +255,7 @@ fn failure_after_writing_a_facet_cleans_all_private_files_and_retry_succeeds() {
         ))
     ));
     assert!(!f.candidate().exists());
-    assert!(f.0.join("input/model.3mf").exists());
+    assert!(f.root.join("input/model.3mf").exists());
     source
         .prepare_media(
             &f.local(),
@@ -310,8 +320,8 @@ fn original_capability_survives_path_replacement_and_output_symlinks_are_confine
     let f = Fixture::new();
     f.model(1);
     let local = f.local();
-    fs::rename(f.0.join("input"), f.0.join("moved")).unwrap();
-    std::os::unix::fs::symlink(f.0.join("repos"), f.0.join("input")).unwrap();
+    fs::rename(f.root.join("input"), f.root.join("moved")).unwrap();
+    std::os::unix::fs::symlink(f.root.join("repos"), f.root.join("input")).unwrap();
     let mut source = f.tenant().source(42).unwrap();
     let prepared = source
         .prepare_media(
@@ -324,10 +334,10 @@ fn original_capability_survives_path_replacement_and_output_symlinks_are_confine
         .unwrap();
     assert_eq!(prepared.receipt().conversions[0].result.object_count, 1);
     prepared.discard().unwrap();
-    fs::remove_dir(f.0.join("repos/42/revisions/.pp-source-media")).unwrap();
+    fs::remove_dir(f.root.join("repos/42/revisions/.pp-source-media")).unwrap();
     std::os::unix::fs::symlink(
-        f.0.join("moved"),
-        f.0.join("repos/42/revisions/.pp-source-media"),
+        f.root.join("moved"),
+        f.root.join("repos/42/revisions/.pp-source-media"),
     )
     .unwrap();
     assert!(
@@ -341,19 +351,19 @@ fn original_capability_survives_path_replacement_and_output_symlinks_are_confine
             )
             .is_err()
     );
-    assert!(f.0.join("moved/model.3mf").is_file());
+    assert!(f.root.join("moved/model.3mf").is_file());
 }
 #[test]
 fn discovery_keeps_empty_directories_and_uses_filesystem_name_order_with_printables_after_directories()
  {
     let f = Fixture::new();
-    fs::create_dir(f.0.join("input/wrapper")).unwrap();
+    fs::create_dir(f.root.join("input/wrapper")).unwrap();
     assert_eq!(discover_import_rules(&f.local()).unwrap(), vec!["wrapper/"]);
-    fs::create_dir(f.0.join("input/𐀀")).unwrap();
-    fs::create_dir(f.0.join("input/\u{e000}")).unwrap();
-    fs::write(f.0.join("input/a.STL"), b"stl").unwrap();
-    fs::write(f.0.join("input/B.3MF"), b"opaque").unwrap();
-    fs::write(f.0.join("input/ignored.zip"), b"zip").unwrap();
+    fs::create_dir(f.root.join("input/𐀀")).unwrap();
+    fs::create_dir(f.root.join("input/\u{e000}")).unwrap();
+    fs::write(f.root.join("input/a.STL"), b"stl").unwrap();
+    fs::write(f.root.join("input/B.3MF"), b"opaque").unwrap();
+    fs::write(f.root.join("input/ignored.zip"), b"zip").unwrap();
     assert_eq!(
         discover_import_rules(&f.local()).unwrap(),
         vec!["wrapper/", "\u{e000}/", "𐀀/", "B.3MF", "a.STL"]
@@ -363,8 +373,12 @@ fn discovery_keeps_empty_directories_and_uses_filesystem_name_order_with_printab
 fn original_derived_collisions_refuse_without_overwrite() {
     let f = Fixture::new();
     f.model(1);
-    fs::create_dir_all(f.0.join("input/_3mf/model")).unwrap();
-    fs::write(f.0.join("input/_3mf/model/part.stl"), b"immutable original").unwrap();
+    fs::create_dir_all(f.root.join("input/_3mf/model")).unwrap();
+    fs::write(
+        f.root.join("input/_3mf/model/part.stl"),
+        b"immutable original",
+    )
+    .unwrap();
     let mut source = f.tenant().source(42).unwrap();
     assert!(
         source
@@ -378,7 +392,7 @@ fn original_derived_collisions_refuse_without_overwrite() {
             .is_err()
     );
     assert_eq!(
-        fs::read(f.0.join("input/_3mf/model/part.stl")).unwrap(),
+        fs::read(f.root.join("input/_3mf/model/part.stl")).unwrap(),
         b"immutable original"
     );
     assert!(!f.candidate().exists());

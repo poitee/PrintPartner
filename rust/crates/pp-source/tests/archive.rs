@@ -10,32 +10,38 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// The canonical fixture root, and the scratch guard that removes it.
+struct Fixture {
+    root: PathBuf,
+    _scratch: Scratch,
+}
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "pp-source-archive-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).unwrap();
+        let scratch = Scratch::new("pp-source-archive-");
+        let root = scratch.to_path_buf();
         fs::create_dir(root.join("repos")).unwrap();
         fs::create_dir(root.join("input")).unwrap();
         for dir in [root.clone(), root.join("repos"), root.join("input")] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        Self(fs::canonicalize(root).unwrap())
+        Self {
+            root: fs::canonicalize(root).unwrap(),
+            _scratch: scratch,
+        }
     }
     fn zip(&self, size: usize) {
-        let mut zip = ZipWriter::new(File::create(self.0.join("input/upload.zip")).unwrap());
+        let mut zip = ZipWriter::new(File::create(self.root.join("input/upload.zip")).unwrap());
         zip.start_file(
             "part.stl",
             SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
@@ -48,16 +54,16 @@ impl Fixture {
     }
     fn input(&self) -> ZipInput {
         ZipInput::open(
-            &LocalFiles::open(&self.0.join("input")).unwrap(),
+            &LocalFiles::open(&self.root.join("input")).unwrap(),
             &SourcePath::try_from("upload.zip".to_owned()).unwrap(),
         )
         .unwrap()
     }
     fn tenant(&self) -> TenantRepos {
-        TenantRepos::open("fixture-tenant".into(), &self.0.join("repos")).unwrap()
+        TenantRepos::open("fixture-tenant".into(), &self.root.join("repos")).unwrap()
     }
     fn candidate(&self) -> PathBuf {
-        self.0
+        self.root
             .join("repos/42/revisions/.pp-source-archives/.candidate")
     }
 }
@@ -94,11 +100,6 @@ fn zip64_disk_sentinels(path: &Path) {
     bytes.extend_from_slice(&(central_offset as u32).to_le_bytes());
     bytes.extend_from_slice(&0u16.to_le_bytes());
     fs::write(path, bytes).unwrap();
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
-    }
 }
 
 #[test]
@@ -144,7 +145,7 @@ fn owned_extraction_feeds_snapshot_and_cleanup_preserves_published_bytes() {
     assert_eq!(
         fs::read(
             fixture
-                .0
+                .root
                 .join("repos")
                 .join(snapshot.snapshot_locator)
                 .join("part.stl")
@@ -158,7 +159,7 @@ fn owned_extraction_feeds_snapshot_and_cleanup_preserves_published_bytes() {
 fn zip64_disk_sentinels_resolve_to_single_disk() {
     let fixture = Fixture::new();
     fixture.zip(1);
-    zip64_disk_sentinels(&fixture.0.join("input/upload.zip"));
+    zip64_disk_sentinels(&fixture.root.join("input/upload.zip"));
     fixture
         .tenant()
         .source(42)
@@ -177,7 +178,7 @@ fn zip64_disk_sentinels_resolve_to_single_disk() {
 fn disk_sentinels_without_zip64_metadata_are_rejected() {
     let fixture = Fixture::new();
     fixture.zip(1);
-    let path = fixture.0.join("input/upload.zip");
+    let path = fixture.root.join("input/upload.zip");
     let mut bytes = fs::read(&path).unwrap();
     let end = bytes.len() - 22;
     bytes[end + 4..end + 8].fill(0xff);
@@ -199,19 +200,23 @@ fn input_file_and_source_roots_remain_pinned_after_path_replacement() {
     let input = fixture.input();
     let mut source = fixture.tenant().source(42).unwrap();
     fs::rename(
-        fixture.0.join("input/upload.zip"),
-        fixture.0.join("input/original.zip"),
+        fixture.root.join("input/upload.zip"),
+        fixture.root.join("input/original.zip"),
     )
     .unwrap();
-    fs::write(fixture.0.join("input/upload.zip"), b"not a zip").unwrap();
-    fs::rename(fixture.0.join("repos"), fixture.0.join("original-repos")).unwrap();
-    fs::create_dir(fixture.0.join("repos")).unwrap();
+    fs::write(fixture.root.join("input/upload.zip"), b"not a zip").unwrap();
+    fs::rename(
+        fixture.root.join("repos"),
+        fixture.root.join("original-repos"),
+    )
+    .unwrap();
+    fs::create_dir(fixture.root.join("repos")).unwrap();
     let extracted = source
         .extract_zip(input, ArchiveLimits::default(), &AtomicBool::new(false))
         .unwrap();
     assert_eq!(extracted.receipt().inflated_bytes, 65536);
     assert!(
-        fs::read_dir(fixture.0.join("repos"))
+        fs::read_dir(fixture.root.join("repos"))
             .unwrap()
             .next()
             .is_none()
@@ -219,7 +224,7 @@ fn input_file_and_source_roots_remain_pinned_after_path_replacement() {
     extracted.discard().unwrap();
     assert!(
         !fixture
-            .0
+            .root
             .join("original-repos/42/revisions/.pp-source-archives/.candidate")
             .exists()
     );
@@ -230,12 +235,12 @@ fn symlinked_archive_parent_cannot_redirect_output() {
     let fixture = Fixture::new();
     fixture.zip(1);
     let mut source = fixture.tenant().source(42).unwrap();
-    let outside = fixture.0.join("outside");
+    let outside = fixture.root.join("outside");
     fs::create_dir(&outside).unwrap();
     fs::write(outside.join("sentinel"), b"keep").unwrap();
     std::os::unix::fs::symlink(
         &outside,
-        fixture.0.join("repos/42/revisions/.pp-source-archives"),
+        fixture.root.join("repos/42/revisions/.pp-source-archives"),
     )
     .unwrap();
     assert!(
@@ -257,7 +262,7 @@ fn abandoned_candidate_symlink_is_unlinked_without_following_it() {
     fixture.zip(1);
     let mut source = fixture.tenant().source(42).unwrap();
     fs::create_dir(fixture.candidate().parent().unwrap()).unwrap();
-    let outside = fixture.0.join("outside");
+    let outside = fixture.root.join("outside");
     fs::create_dir(&outside).unwrap();
     fs::write(outside.join("sentinel"), b"keep").unwrap();
     std::os::unix::fs::symlink(&outside, fixture.candidate()).unwrap();
@@ -299,7 +304,7 @@ fn cancellation_during_input_copy_cleans_private_stage() {
     assert!(watcher.join().unwrap());
     assert!(matches!(result, Err(ArchiveError::Cancelled)));
     assert!(!fixture.candidate().exists());
-    assert!(!fixture.0.join("repos/42/revisions/accepted").exists());
+    assert!(!fixture.root.join("repos/42/revisions/accepted").exists());
 }
 
 #[test]
@@ -332,11 +337,11 @@ fn input_symlink_is_rejected_before_extraction() {
     let fixture = Fixture::new();
     fixture.zip(1);
     std::os::unix::fs::symlink(
-        fixture.0.join("input/upload.zip"),
-        fixture.0.join("input/alias.zip"),
+        fixture.root.join("input/upload.zip"),
+        fixture.root.join("input/alias.zip"),
     )
     .unwrap();
-    let files = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let files = LocalFiles::open(&fixture.root.join("input")).unwrap();
     assert!(
         ZipInput::open(
             &files,
@@ -391,7 +396,7 @@ fn archive_and_snapshot_reject_the_same_unicode_tree_collisions() {
         ["Straße", "STRASSE/part.stl"],
     ] {
         let fixture = Fixture::new();
-        let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+        let mut zip = ZipWriter::new(File::create(fixture.root.join("input/upload.zip")).unwrap());
         for name in names {
             zip.start_file(name, SimpleFileOptions::default()).unwrap();
             zip.write_all(b"x").unwrap();
@@ -430,7 +435,7 @@ fn archive_and_snapshot_reject_the_same_unicode_tree_collisions() {
             matches!(
                 source.materialize(
                     request,
-                    &LocalFiles::open(&fixture.0.join("input")).unwrap(),
+                    &LocalFiles::open(&fixture.root.join("input")).unwrap(),
                     ArtifactBudget::new(10000, 10000).unwrap()
                 ),
                 Err(pp_source::Error::DuplicatePath)
@@ -439,7 +444,7 @@ fn archive_and_snapshot_reject_the_same_unicode_tree_collisions() {
         );
         assert!(
             !fixture
-                .0
+                .root
                 .join("repos/42/revisions/unicode-conflict")
                 .exists()
         );
@@ -449,7 +454,7 @@ fn archive_and_snapshot_reject_the_same_unicode_tree_collisions() {
 #[test]
 fn decomposed_archive_names_reject_without_normalizing_published_paths() {
     let fixture = Fixture::new();
-    let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+    let mut zip = ZipWriter::new(File::create(fixture.root.join("input/upload.zip")).unwrap());
     for name in ["café.stl", "cafe\u{301}.stl"] {
         zip.start_file(name, SimpleFileOptions::default()).unwrap();
         zip.write_all(b"x").unwrap();
@@ -507,7 +512,7 @@ mod acquisition_labels {
         for (index, &(name, _)) in members.iter().enumerate() {
             assert_eq!(reader.by_index(index).unwrap().name_raw(), name.as_bytes());
         }
-        fs::write(fixture.0.join("input/upload.zip"), data).unwrap();
+        fs::write(fixture.root.join("input/upload.zip"), data).unwrap();
     }
 
     #[test]
@@ -663,7 +668,7 @@ mod acquisition_labels {
                 ("cafe\u{301}/vide\u{301}/", b""),
             ],
         );
-        let path = fixture.0.join("input/upload.zip");
+        let path = fixture.root.join("input/upload.zip");
         let mut original = fs::read(&path).unwrap();
         set_archive_comment(&mut original, b"acquisition fixture note");
         fs::write(&path, &original).unwrap();
@@ -739,7 +744,7 @@ mod acquisition_labels {
             assert_eq!(
                 fs::read(
                     fixture
-                        .0
+                        .root
                         .join("repos")
                         .join(&snapshot.snapshot_locator)
                         .join(name)
@@ -856,7 +861,7 @@ mod acquisition_labels {
             &fixture,
             &[("cafe\u{301}.stl", b"xy"), ("autre.stl", b"xy")],
         );
-        let compressed = fs::metadata(fixture.0.join("input/upload.zip"))
+        let compressed = fs::metadata(fixture.root.join("input/upload.zip"))
             .unwrap()
             .len();
         let mut source = fixture.tenant().source(42).unwrap();
@@ -921,7 +926,7 @@ mod acquisition_labels {
         cancel.store(false, Ordering::Relaxed);
         let signal = cancel.clone();
         let path = fixture.candidate().join("archive.zip");
-        let input_len = fs::metadata(fixture.0.join("input/upload.zip"))
+        let input_len = fs::metadata(fixture.root.join("input/upload.zip"))
             .unwrap()
             .len();
         let watcher = thread::spawn(move || {
@@ -983,7 +988,7 @@ mod acquisition_labels {
             .unwrap()
             .discard()
             .unwrap();
-        let path = fixture.0.join("input/upload.zip");
+        let path = fixture.root.join("input/upload.zip");
         let mut data = fs::read(&path).unwrap();
         data[30..30 + local.len()].copy_from_slice(local.as_bytes());
         fs::write(path, data).unwrap();
@@ -1020,7 +1025,7 @@ fn local_request(key: &str) -> SnapshotRequest {
 fn peer_materialize_waits_until_live_archive_readiness_is_discarded() {
     let fixture = Fixture::new();
     fixture.zip(1);
-    fs::write(fixture.0.join("input/part.stl"), b"peer bytes").unwrap();
+    fs::write(fixture.root.join("input/part.stl"), b"peer bytes").unwrap();
     let mut owner = fixture.tenant().source(42).unwrap();
     let extracted = owner
         .extract_zip(
@@ -1029,11 +1034,11 @@ fn peer_materialize_waits_until_live_archive_readiness_is_discarded() {
             &AtomicBool::new(false),
         )
         .unwrap();
-    let revisions = fixture.0.join("repos/42/revisions");
+    let revisions = fixture.root.join("repos/42/revisions");
     let finished = Arc::new(AtomicBool::new(false));
     let peer = {
         let mut peer = fixture.tenant().source(42).unwrap();
-        let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+        let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
         let finished = finished.clone();
         thread::spawn(move || {
             let result = peer.materialize(
@@ -1078,7 +1083,7 @@ fn extraction_is_busy_while_a_peer_holds_the_source_revisions_lock() {
     fixture.zip(1);
     let mut source = fixture.tenant().source(42).unwrap();
     // A peer process mid-materialize holds this lock on its own descriptor.
-    let peer = File::open(fixture.0.join("repos/42/revisions")).unwrap();
+    let peer = File::open(fixture.root.join("repos/42/revisions")).unwrap();
     peer.lock_exclusive().unwrap();
     assert!(matches!(
         source.extract_zip(
@@ -1104,7 +1109,7 @@ fn extraction_is_busy_while_a_peer_holds_the_source_revisions_lock() {
 }
 
 fn deflated_zip(fixture: &Fixture, data: &[u8]) {
-    let mut zip = ZipWriter::new(File::create(fixture.0.join("input/upload.zip")).unwrap());
+    let mut zip = ZipWriter::new(File::create(fixture.root.join("input/upload.zip")).unwrap());
     zip.start_file(
         "part.stl",
         SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
@@ -1133,7 +1138,7 @@ fn high_compression_ratio_entry_is_rejected_before_inflating() {
     let fixture = Fixture::new();
     // 8 MiB of zeros deflates to roughly 1000:1, far above the 100:1 cap.
     deflated_zip(&fixture, &vec![0; 8 * 1024 * 1024]);
-    let compressed = fs::metadata(fixture.0.join("input/upload.zip"))
+    let compressed = fs::metadata(fixture.root.join("input/upload.zip"))
         .unwrap()
         .len();
     assert!(8 * 1024 * 1024 > compressed * MAX_COMPRESSION_RATIO);
@@ -1148,7 +1153,7 @@ fn high_compression_ratio_entry_is_rejected_before_inflating() {
     assert!(!fixture.candidate().exists());
     assert!(
         !fixture
-            .0
+            .root
             .join("repos/42/revisions/archive-revision")
             .exists()
     );
@@ -1163,7 +1168,7 @@ fn understated_sizes_cannot_smuggle_a_high_ratio_entry_past_the_cap() {
     // Advertise exactly the floor so the central-directory check passes. The
     // ZIP reader fails the real 8 MiB payload once it passes the advertised
     // size, before the streaming ratio cap is reached.
-    let path = fixture.0.join("input/upload.zip");
+    let path = fixture.root.join("input/upload.zip");
     let mut data = fs::read(&path).unwrap();
     let central = data.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
     let floor = (COMPRESSION_RATIO_FLOOR_BYTES as u32).to_le_bytes();
@@ -1244,7 +1249,7 @@ fn zip_with_central_directory(fixture: &Fixture, central_bytes: usize) {
     data.extend_from_slice(&(central_bytes as u32).to_le_bytes());
     data.extend_from_slice(&central_offset);
     data.extend_from_slice(&0u16.to_le_bytes());
-    fs::write(fixture.0.join("input/upload.zip"), data).unwrap();
+    fs::write(fixture.root.join("input/upload.zip"), data).unwrap();
 }
 
 #[test]
@@ -1264,7 +1269,7 @@ fn zip64_extra_sizes_cannot_override_the_checked_central_sizes() {
     let fixture = Fixture::new();
     // Take a real ~1000:1 deflate stream for 8 MiB of zeros.
     deflated_zip(&fixture, &vec![0; 8 * 1024 * 1024]);
-    let original = fs::read(fixture.0.join("input/upload.zip")).unwrap();
+    let original = fs::read(fixture.root.join("input/upload.zip")).unwrap();
     let u16_at = |at: usize| u16::from_le_bytes([original[at], original[at + 1]]) as usize;
     let central = original
         .windows(4)
@@ -1323,7 +1328,7 @@ fn zip64_extra_sizes_cannot_override_the_checked_central_sizes() {
     data.extend_from_slice(&central_size.to_le_bytes());
     data.extend_from_slice(&central_offset.to_le_bytes());
     data.extend_from_slice(&0u16.to_le_bytes());
-    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+    fs::write(fixture.root.join("input/upload.zip"), &data).unwrap();
     let mut reader = open_unchecked(data);
     let member = reader.by_index(0).unwrap();
     assert_eq!(
@@ -1387,7 +1392,7 @@ fn fake_eocd_comment(decoy_offset: u32, decoy_size: u32, entries: u16) -> Vec<u8
 fn archive_comment_cannot_embed_a_second_end_record() {
     let fixture = Fixture::new();
     fixture.zip(1);
-    let path = fixture.0.join("input/upload.zip");
+    let path = fixture.root.join("input/upload.zip");
     let mut data = fs::read(&path).unwrap();
     // A decoy central directory large enough that the ZIP crate would over-allocate
     // if it indexed the fake EOCD placed at the end of the archive comment.
@@ -1408,7 +1413,7 @@ fn archive_comment_cannot_embed_a_second_end_record() {
 fn ordinary_archive_comment_is_accepted() {
     let fixture = Fixture::new();
     fixture.zip(1);
-    let path = fixture.0.join("input/upload.zip");
+    let path = fixture.root.join("input/upload.zip");
     let mut data = fs::read(&path).unwrap();
     set_archive_comment(&mut data, b"fixture note");
     fs::write(&path, data).unwrap();
@@ -1503,7 +1508,7 @@ fn zip64_extra_cannot_redirect_the_reader_to_an_unvalidated_local_header() {
     data.extend(stored_central_header(crc, size, 0, &zip64));
     let central_size = data.len() - central_offset;
     data.extend(end_record(central_offset, central_size));
-    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+    fs::write(fixture.root.join("input/upload.zip"), &data).unwrap();
 
     // The reader stays on the validated header, so it streams the payload and
     // the CRC forged for the decoy view rejects it.
@@ -1549,7 +1554,7 @@ fn malformed_extra_field_cannot_divert_the_reader_to_an_earlier_directory() {
     data.extend(stored_central_header(crc, size, 0, &[1, 0]));
     let central_size = data.len() - central_offset;
     data.extend(end_record(central_offset, central_size));
-    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+    fs::write(fixture.root.join("input/upload.zip"), &data).unwrap();
 
     // Pre-fix preflight treated extra fields as opaque and accepted this
     // directory; the opened reader then passed the old count/name/size checks
@@ -1594,7 +1599,7 @@ fn well_formed_extra_fields_are_accepted() {
     data.extend(stored_central_header(crc, size, 0, &extra));
     let central_size = data.len() - central_offset;
     data.extend(end_record(central_offset, central_size));
-    fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+    fs::write(fixture.root.join("input/upload.zip"), &data).unwrap();
     extract(&fixture).unwrap();
     assert!(!fixture.candidate().exists());
 }
@@ -1635,7 +1640,7 @@ fn truncated_or_overrunning_extra_records_are_rejected() {
         data.extend(central);
         let central_size = data.len() - central_offset;
         data.extend(end_record(central_offset, central_size));
-        fs::write(fixture.0.join("input/upload.zip"), &data).unwrap();
+        fs::write(fixture.root.join("input/upload.zip"), &data).unwrap();
         let error = extract(&fixture).unwrap_err();
         assert!(
             matches!(error, ArchiveError::MalformedExtraField),
@@ -1652,7 +1657,7 @@ fn discarding_readiness_keeps_the_lock_for_a_running_owner_materialization() {
     let fixture = Fixture::new();
     fixture.zip(1);
     // Large enough that copying and syncing outlasts the discard below.
-    let mut big = File::create(fixture.0.join("input/part.stl")).unwrap();
+    let mut big = File::create(fixture.root.join("input/part.stl")).unwrap();
     for _ in 0..256 {
         big.write_all(&[3; 1024 * 1024]).unwrap();
     }
@@ -1665,10 +1670,10 @@ fn discarding_readiness_keeps_the_lock_for_a_running_owner_materialization() {
             &AtomicBool::new(false),
         )
         .unwrap();
-    let revisions = fixture.0.join("repos/42/revisions");
+    let revisions = fixture.root.join("repos/42/revisions");
     let finished = Arc::new(AtomicBool::new(false));
     let worker = {
-        let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+        let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
         let finished = finished.clone();
         thread::spawn(move || {
             let result = owner.materialize(

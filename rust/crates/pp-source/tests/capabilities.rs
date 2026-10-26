@@ -2,23 +2,21 @@ use pp_source::{
     ArtifactBudget, FileKind, LocalFiles, Publication, SelectedFile, Selection, SnapshotRequest,
     SourcePath, TenantRepos,
 };
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
-struct Fixture(PathBuf);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+/// The canonical fixture root, and the scratch guard that removes it.
+struct Fixture {
+    root: PathBuf,
+    _scratch: Scratch,
+}
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pp-source-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&path).unwrap();
+        let scratch = Scratch::new("pp-source-");
+        let path = scratch.to_path_buf();
         fs::create_dir(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
         fs::write(path.join("input/part.stl"), b"solid bytes").unwrap();
@@ -26,15 +24,13 @@ impl Fixture {
         for dir in [path.clone(), path.join("repos"), path.join("input")] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        Self(fs::canonicalize(path).unwrap())
+        Self {
+            root: fs::canonicalize(path).unwrap(),
+            _scratch: scratch,
+        }
     }
     fn repos(&self) -> TenantRepos {
-        TenantRepos::open("tenant-fixture".into(), &self.0.join("repos")).unwrap()
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
+        TenantRepos::open("tenant-fixture".into(), &self.root.join("repos")).unwrap()
     }
 }
 fn request() -> SnapshotRequest {
@@ -60,12 +56,12 @@ fn budget() -> ArtifactBudget {
 fn configured_repository_roots_reject_non_normalized_spellings() {
     let fixture = Fixture::new();
     for spelling in [
-        format!("{}/./repos", fixture.0.display()),
-        format!("{}//repos", fixture.0.display()),
-        format!("{}/repos/", fixture.0.display()),
-        format!("{}/repos/.", fixture.0.display()),
-        format!("/{}/repos", fixture.0.display()),
-        format!("{}/missing/./repos", fixture.0.display()),
+        format!("{}/./repos", fixture.root.display()),
+        format!("{}//repos", fixture.root.display()),
+        format!("{}/repos/", fixture.root.display()),
+        format!("{}/repos/.", fixture.root.display()),
+        format!("/{}/repos", fixture.root.display()),
+        format!("{}/missing/./repos", fixture.root.display()),
     ] {
         let result = TenantRepos::open("tenant-fixture".into(), std::path::Path::new(&spelling));
         assert!(
@@ -79,9 +75,9 @@ fn configured_repository_roots_reject_non_normalized_spellings() {
 fn configured_repository_roots_accept_normalized_utf8_and_filesystem_root() {
     TenantRepos::open("tenant-fixture".into(), std::path::Path::new("/")).unwrap();
     let fixture = Fixture::new();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     for name in ["repos", "répos"] {
-        let root = fixture.0.join(name);
+        let root = fixture.root.join(name);
         if name != "repos" {
             fs::create_dir(&root).unwrap();
             fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
@@ -111,18 +107,21 @@ fn searchable_ancestor_without_read_access_allows_publication_and_reuse() {
             fs::set_permissions(self.0, self.1.clone()).unwrap();
         }
     }
-    let _restore = RestorePermissions(&fixture.0, fs::metadata(&fixture.0).unwrap().permissions());
-    fs::set_permissions(&fixture.0, fs::Permissions::from_mode(0o111)).unwrap();
+    let _restore = RestorePermissions(
+        &fixture.root,
+        fs::metadata(&fixture.root).unwrap().permissions(),
+    );
+    fs::set_permissions(&fixture.root, fs::Permissions::from_mode(0o111)).unwrap();
     // Root and processes with DAC overrides cannot exercise this restriction.
-    if fs::read_dir(&fixture.0).is_ok() {
+    if fs::read_dir(&fixture.root).is_ok() {
         eprintln!("Skipping permission restriction with privileged filesystem access");
         return;
     }
     assert_eq!(
-        fs::read_dir(&fixture.0).unwrap_err().kind(),
+        fs::read_dir(&fixture.root).unwrap_err().kind(),
         std::io::ErrorKind::PermissionDenied
     );
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     assert_eq!(
         source
@@ -139,7 +138,7 @@ fn searchable_ancestor_without_read_access_allows_publication_and_reuse() {
         Publication::Reused
     );
     assert_eq!(
-        fs::read(fixture.0.join("repos/42/revisions/caller-uuid/part.stl")).unwrap(),
+        fs::read(fixture.root.join("repos/42/revisions/caller-uuid/part.stl")).unwrap(),
         b"solid bytes"
     );
 }
@@ -149,37 +148,37 @@ fn root_walk_rejects_symlink_ancestors_and_selected_roots() {
     use std::os::unix::fs::symlink;
 
     let fixture = Fixture::new();
-    let alias = fixture.0.with_extension("alias");
-    symlink(&fixture.0, &alias).unwrap();
+    let alias = fixture.root.with_extension("alias");
+    symlink(&fixture.root, &alias).unwrap();
     let repos = TenantRepos::open("tenant-fixture".into(), &alias.join("repos"));
     let input = LocalFiles::open(&alias.join("input"));
     fs::remove_file(&alias).unwrap();
     assert!(repos.is_err());
     assert!(input.is_err());
 
-    symlink(fixture.0.join("repos"), fixture.0.join("repos-alias")).unwrap();
-    symlink(fixture.0.join("input"), fixture.0.join("input-alias")).unwrap();
-    assert!(TenantRepos::open("tenant-fixture".into(), &fixture.0.join("repos-alias")).is_err());
-    assert!(LocalFiles::open(&fixture.0.join("input-alias")).is_err());
+    symlink(fixture.root.join("repos"), fixture.root.join("repos-alias")).unwrap();
+    symlink(fixture.root.join("input"), fixture.root.join("input-alias")).unwrap();
+    assert!(TenantRepos::open("tenant-fixture".into(), &fixture.root.join("repos-alias")).is_err());
+    assert!(LocalFiles::open(&fixture.root.join("input-alias")).is_err());
 }
 
 #[test]
 fn source_handle_survives_repos_path_replacement_without_following_it() {
     let fixture = Fixture::new();
     let mut source = fixture.repos().source(42).unwrap();
-    fs::rename(fixture.0.join("repos"), fixture.0.join("original")).unwrap();
-    fs::create_dir(fixture.0.join("repos")).unwrap();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    fs::rename(fixture.root.join("repos"), fixture.root.join("original")).unwrap();
+    fs::create_dir(fixture.root.join("repos")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let receipt = source.materialize(request(), &input, budget()).unwrap();
     assert_eq!(receipt.publication, Publication::Created);
     assert!(
         fixture
-            .0
+            .root
             .join("original/42/revisions/caller-uuid/part.stl")
             .is_file()
     );
     assert!(
-        fs::read_dir(fixture.0.join("repos"))
+        fs::read_dir(fixture.root.join("repos"))
             .unwrap()
             .next()
             .is_none()
@@ -189,10 +188,10 @@ fn source_handle_survives_repos_path_replacement_without_following_it() {
 #[test]
 fn input_handle_survives_input_path_replacement() {
     let fixture = Fixture::new();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
-    fs::rename(fixture.0.join("input"), fixture.0.join("old-input")).unwrap();
-    fs::create_dir(fixture.0.join("input")).unwrap();
-    fs::write(fixture.0.join("input/part.stl"), b"replacement bytes").unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
+    fs::rename(fixture.root.join("input"), fixture.root.join("old-input")).unwrap();
+    fs::create_dir(fixture.root.join("input")).unwrap();
+    fs::write(fixture.root.join("input/part.stl"), b"replacement bytes").unwrap();
     fixture
         .repos()
         .source(42)
@@ -200,7 +199,7 @@ fn input_handle_survives_input_path_replacement() {
         .materialize(request(), &input, budget())
         .unwrap();
     assert_eq!(
-        fs::read(fixture.0.join("repos/42/revisions/caller-uuid/part.stl")).unwrap(),
+        fs::read(fixture.root.join("repos/42/revisions/caller-uuid/part.stl")).unwrap(),
         b"solid bytes"
     );
 }
@@ -210,7 +209,7 @@ fn zero_source_and_unsafe_revision_do_not_publish() {
     let fixture = Fixture::new();
     assert!(fixture.repos().source(0).is_err());
     assert!(fixture.repos().source(9_007_199_254_740_992).is_err());
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut invalid = request();
     invalid.upstream_revision_key = "../other".into();
     assert!(
@@ -222,7 +221,7 @@ fn zero_source_and_unsafe_revision_do_not_publish() {
             .is_err()
     );
     assert!(
-        fs::read_dir(fixture.0.join("repos/42/revisions"))
+        fs::read_dir(fixture.root.join("repos/42/revisions"))
             .unwrap()
             .next()
             .is_none()
@@ -233,9 +232,9 @@ fn zero_source_and_unsafe_revision_do_not_publish() {
 fn changed_policy_and_bytes_reuse_original_publication() {
     let fixture = Fixture::new();
     let mut source = fixture.repos().source(42).unwrap();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let first = source.materialize(request(), &input, budget()).unwrap();
-    fs::write(fixture.0.join("input/part.stl"), b"changed").unwrap();
+    fs::write(fixture.root.join("input/part.stl"), b"changed").unwrap();
     let mut next = request();
     next.selection.max_stl_files = 0;
     let second = source
@@ -269,7 +268,7 @@ fn filename_case_collisions_are_rejected_before_copying_in_either_order() {
     for paths in [["Part.stl", "part.stl"], ["CAFÉ.stl", "café.stl"]] {
         for reverse in [false, true] {
             let fixture = Fixture::new();
-            let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+            let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
             let mut selected = request();
             selected.files = paths
                 .into_iter()
@@ -290,7 +289,7 @@ fn filename_case_collisions_are_rejected_before_copying_in_either_order() {
                 .unwrap_err();
             assert_eq!(error.category(), "duplicate-path");
             assert_eq!(
-                fs::read_dir(fixture.0.join("repos/42/revisions"))
+                fs::read_dir(fixture.root.join("repos/42/revisions"))
                     .unwrap()
                     .count(),
                 0
@@ -302,7 +301,7 @@ fn filename_case_collisions_are_rejected_before_copying_in_either_order() {
 #[test]
 fn conflicting_directory_case_is_rejected_before_copying() {
     let fixture = Fixture::new();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut selected = request();
     selected.files = ["Part.stl", "part.stl/child.stl"]
         .into_iter()
@@ -320,7 +319,7 @@ fn conflicting_directory_case_is_rejected_before_copying() {
         .unwrap_err();
     assert_eq!(error.category(), "duplicate-path");
     assert!(
-        fs::read_dir(fixture.0.join("repos/42/revisions"))
+        fs::read_dir(fixture.root.join("repos/42/revisions"))
             .unwrap()
             .next()
             .is_none()
@@ -330,7 +329,7 @@ fn conflicting_directory_case_is_rejected_before_copying() {
 #[test]
 fn max_flat_snapshot_publishes_and_retries_cleanly() {
     let fixture = Fixture::new();
-    let input_dir = fixture.0.join("input");
+    let input_dir = fixture.root.join("input");
     let mut files = Vec::new();
     for i in 0..pp_source::MAX_ENTRIES {
         let name = format!("f{i:05}.stl");
@@ -351,7 +350,7 @@ fn max_flat_snapshot_publishes_and_retries_cleanly() {
     assert_eq!(first.publication, Publication::Created);
     assert!(
         !fixture
-            .0
+            .root
             .join("repos/42/revisions/.pp-source-candidate")
             .exists()
     );
@@ -367,8 +366,8 @@ fn published_paths_stop_one_byte_short_of_path_max() {
         4096
     };
     let fixture = Fixture::new();
-    let root = fixture.0.join("répos");
-    fs::rename(fixture.0.join("repos"), &root).unwrap();
+    let root = fixture.root.join("répos");
+    fs::rename(fixture.root.join("repos"), &root).unwrap();
     // Revision keys "fits" and "fits2" give the same file stored paths one
     // byte apart.
     let prefix = root.join("42/revisions/fits/");
@@ -380,12 +379,12 @@ fn published_paths_stop_one_byte_short_of_path_max() {
     let file = path_max - 1 - prefix.as_os_str().len() - label.len();
     label.push_str(&format!("{}.stl", "f".repeat(file - 4)));
     assert_eq!(prefix.as_os_str().len() + label.len(), path_max - 1);
-    let input = fixture.0.join("input").join(&label);
+    let input = fixture.root.join("input").join(&label);
     fs::create_dir_all(input.parent().unwrap()).unwrap();
     fs::write(&input, b"solid long").unwrap();
     let mut req = request();
     req.files[0].path = SourcePath::try_from(label.clone()).unwrap();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
     let mut source = repos.source(42).unwrap();
 
@@ -425,7 +424,7 @@ fn published_manifest_also_stops_one_byte_short_of_path_max() {
     // Under revision key "k2", `<root>/42/revisions/k2/<manifest>` is
     // exactly `path_max` bytes, while `part.stl` still fits.
     let root_bytes = path_max - "/42/revisions/k2/".len() - pp_source::MANIFEST.len();
-    let mut root = fixture.0.clone();
+    let mut root = fixture.root.clone();
     while root_bytes - root.as_os_str().len() > 101 {
         root.push("d".repeat(99));
         fs::create_dir(&root).unwrap();
@@ -436,7 +435,7 @@ fn published_manifest_also_stops_one_byte_short_of_path_max() {
     fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(root.as_os_str().len(), root_bytes);
     let repos = TenantRepos::open("tenant-fixture".into(), &root).unwrap();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = repos.source(42).unwrap();
     let mut req = request();
 
@@ -474,7 +473,7 @@ fn cli_retry_reuses_revision_after_inputs_are_deleted() {
     let fixture = Fixture::new();
     let command = serde_json::json!({
         "tenantId": "tenant-fixture", "sourceId": 42,
-        "reposDir": fixture.0.join("repos"), "inputDir": fixture.0.join("input"),
+        "reposDir": fixture.root.join("repos"), "inputDir": fixture.root.join("input"),
         "reservedStoredBytes": 1024 * 1024, "snapshot": request(),
     });
     let invoke = || {
@@ -499,7 +498,7 @@ fn cli_retry_reuses_revision_after_inputs_are_deleted() {
     };
     let first = invoke();
     assert_eq!(first["publication"], "created");
-    fs::remove_dir_all(fixture.0.join("input")).unwrap();
+    fs::remove_dir_all(fixture.root.join("input")).unwrap();
     let reused = invoke();
     assert_eq!(reused["publication"], "reused");
     for key in [
@@ -521,7 +520,7 @@ fn shared_directory_case_publishes_with_one_spelling_and_reuses() {
         .iter()
         .zip([b"first".as_slice(), b"second".as_slice()])
     {
-        let full = fixture.0.join("input").join(path);
+        let full = fixture.root.join("input").join(path);
         fs::create_dir_all(full.parent().unwrap()).unwrap();
         fs::write(full, bytes).unwrap();
     }
@@ -535,7 +534,7 @@ fn shared_directory_case_publishes_with_one_spelling_and_reuses() {
             size_hint_bytes: None,
         })
         .collect();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     let first = source
         .materialize(selected.clone(), &input, budget())
@@ -549,7 +548,7 @@ fn shared_directory_case_publishes_with_one_spelling_and_reuses() {
             .collect::<Vec<_>>(),
         ["Parts/Nested/a.stl", "Parts/Nested/b.stl"]
     );
-    let published = fixture.0.join("repos/42/revisions/caller-uuid");
+    let published = fixture.root.join("repos/42/revisions/caller-uuid");
     assert_eq!(
         fs::read(published.join("Parts/Nested/a.stl")).unwrap(),
         b"first"
@@ -574,7 +573,7 @@ fn accented_shared_folder_case_publishes_and_reuses_with_stable_manifest() {
         "PIÈCES/NESTED/c.stl",
     ];
     for (path, bytes) in paths.iter().zip([b"first".as_slice(), b"second", b"third"]) {
-        let full = fixture.0.join("input").join(path);
+        let full = fixture.root.join("input").join(path);
         fs::create_dir_all(full.parent().unwrap()).unwrap();
         fs::write(full, bytes).unwrap();
     }
@@ -588,7 +587,7 @@ fn accented_shared_folder_case_publishes_and_reuses_with_stable_manifest() {
             size_hint_bytes: None,
         })
         .collect();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     let first = source
         .materialize(selected.clone(), &input, budget())
@@ -606,7 +605,7 @@ fn accented_shared_folder_case_publishes_and_reuses_with_stable_manifest() {
             "PIÈCES/NESTED/c.stl",
         ]
     );
-    let published = fixture.0.join("repos/42/revisions/caller-uuid");
+    let published = fixture.root.join("repos/42/revisions/caller-uuid");
     assert_eq!(fs::read_dir(&published).unwrap().count(), 2); // folder + manifest
     for (name, bytes) in
         ["a.stl", "b.stl", "c.stl"]
@@ -627,8 +626,8 @@ fn accented_shared_folder_case_publishes_and_reuses_with_stable_manifest() {
 #[test]
 fn selected_omitted_case_pair_publishes_while_exact_and_omitted_collisions_reject() {
     let fixture = Fixture::new();
-    fs::write(fixture.0.join("input/README.md"), b"# Notes\n").unwrap();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    fs::write(fixture.root.join("input/README.md"), b"# Notes\n").unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     let mut selected = request();
     selected.files.push(SelectedFile {
@@ -680,7 +679,7 @@ fn canonical_folder_overlap_is_rejected_without_publishing_and_retry_can_recover
     let fixture = Fixture::new();
     let paths = ["Parts/a.stl", "parts/notes.md"];
     for path in paths {
-        let full = fixture.0.join("input").join(path);
+        let full = fixture.root.join("input").join(path);
         fs::create_dir_all(full.parent().unwrap()).unwrap();
         fs::write(full, b"content").unwrap();
     }
@@ -703,13 +702,13 @@ fn canonical_folder_overlap_is_rejected_without_publishing_and_retry_can_recover
         size_hint_bytes: None,
         reason: pp_source::OmissionReason::UnknownDocumentSize,
     }];
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     assert!(matches!(
         source.materialize(selected.clone(), &input, budget()),
         Err(pp_source::Error::DuplicatePath)
     ));
-    let revisions = fixture.0.join("repos/42/revisions");
+    let revisions = fixture.root.join("repos/42/revisions");
     assert!(!revisions.join("caller-uuid").exists());
     assert!(!revisions.join(".pp-source-candidate").exists());
     selected.selection.omitted_files[0].path =
@@ -736,7 +735,7 @@ fn write_legacy_revision_with_omissions(
 ) -> PathBuf {
     use sha2::{Digest, Sha256};
 
-    let revision = fixture.0.join("repos/42/revisions").join(key);
+    let revision = fixture.root.join("repos/42/revisions").join(key);
     let mut files: Vec<_> = names
         .iter()
         .map(|name| {
@@ -775,7 +774,7 @@ fn write_legacy_revision_with_omissions(
 #[test]
 fn legacy_ambiguous_revision_reports_permanent_migration_error_and_is_retained() {
     let fixture = Fixture::new();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     for names in [
         &["Straße.stl", "STRASSE.stl"][..],
@@ -823,7 +822,7 @@ fn legacy_ambiguous_revision_reports_permanent_migration_error_and_is_retained()
 #[test]
 fn ambiguous_names_keep_generic_errors_unless_the_revision_is_an_intact_legacy_publication() {
     let fixture = Fixture::new();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     let mut retry = request();
     retry.upstream_revision_key = "legacy-ambiguous".into();
@@ -847,7 +846,7 @@ fn ambiguous_names_keep_generic_errors_unless_the_revision_is_an_intact_legacy_p
 #[test]
 fn legacy_ambiguous_revision_still_enforces_the_other_manifest_constraints() {
     let fixture = Fixture::new();
-    let input = LocalFiles::open(&fixture.0.join("input")).unwrap();
+    let input = LocalFiles::open(&fixture.root.join("input")).unwrap();
     let mut source = fixture.repos().source(42).unwrap();
     // Omitted STL entries are corrupt regardless of the path collision.
     write_legacy_revision_with_omissions(

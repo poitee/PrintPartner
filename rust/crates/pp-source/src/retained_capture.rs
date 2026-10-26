@@ -974,12 +974,13 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    fn temporary_root(name: &str) -> std::path::PathBuf {
-        let mut builder = tempfile::Builder::new();
-        builder.prefix(name).tempdir().unwrap().keep()
+    use crate::scratch::Scratch;
+
+    fn temporary_root(name: &str) -> Scratch {
+        Scratch::new(name)
     }
 
-    fn traced_vault(name: &str) -> (PathBuf, RetainedCaptureVault, Arc<Mutex<TraceState>>) {
+    fn traced_vault(name: &str) -> (Scratch, RetainedCaptureVault, Arc<Mutex<TraceState>>) {
         let root = temporary_root(name);
         let state = Arc::new(Mutex::new(TraceState::default()));
         let mut vault = RetainedCaptureVault::open(&root).unwrap();
@@ -1016,7 +1017,6 @@ mod tests {
         let mut ids = vec![collision.clone(), collision, success.clone()].into_iter();
         let candidate = vault.allocate_with(|| Ok(ids.next().unwrap())).unwrap();
         assert_eq!(candidate.capture_id(), &success);
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1032,7 +1032,7 @@ mod tests {
             "slot_sync",
         ];
         for fail_at in 0..=expected.len() {
-            let (root, vault, state) = traced_vault("fault-order");
+            let (_root, vault, state) = traced_vault("fault-order");
             let candidate = candidate_with(&vault, "a/b/part.stl", b"mesh");
             {
                 let mut state = state.lock().unwrap();
@@ -1066,13 +1066,12 @@ mod tests {
             };
             assert_eq!(state.events, observed);
             drop(state);
-            fs::remove_dir_all(root).unwrap();
         }
     }
 
     #[test]
     fn retained_capture_post_rename_error_returns_frozen_ownership() {
-        let (root, vault, state) = traced_vault("post-rename-ownership");
+        let (_root, vault, state) = traced_vault("post-rename-ownership");
         let candidate = candidate_with(&vault, "input/part.stl", b"part");
         state.lock().unwrap().events.clear();
         state.lock().unwrap().fail_at = Some(6);
@@ -1085,7 +1084,6 @@ mod tests {
             vault.scan().unwrap()[0].phase(),
             RetainedCapturePhase::Frozen
         );
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1099,7 +1097,7 @@ mod tests {
             (5, Some(10), None),
             (1, Some(2), Some(Malformed)),
         ]) {
-            let (root, vault, state) = traced_vault("allocation-cleanup");
+            let (_root, vault, state) = traced_vault("allocation-cleanup");
             *state.lock().unwrap() = TraceState {
                 fail_at: Some(fail_at),
                 second_fail_at: second,
@@ -1113,13 +1111,12 @@ mod tests {
                 assert_eq!(entries[0].capture_id(), receipt.capture_id());
                 assert_eq!(entries[0].phase(), receipt.phase());
             }
-            fs::remove_dir_all(root).unwrap();
         }
     }
 
     #[test]
     fn retained_cleanup_empty_slot_remains_repair_evidence() {
-        let (root, vault, state) = traced_vault("empty-slot");
+        let (_root, vault, state) = traced_vault("empty-slot");
         let candidate = candidate_with(&vault, "part.stl", b"mesh");
         let frozen = freeze(candidate, b"manifest");
         {
@@ -1139,7 +1136,6 @@ mod tests {
             Err(Error::CorruptSnapshot)
         ));
         assert_eq!(vault.scan().unwrap(), entries);
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1157,7 +1153,6 @@ mod tests {
         let slot = root.join(VAULT).join(id);
         assert_eq!(fs::read(slot.join("late-evidence")).unwrap(), b"preserve");
         assert!(!slot.join(DELETING).exists());
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1177,7 +1172,6 @@ mod tests {
         assert!(matches!(vault.finish_deleting(), Err(Error::Io(_))));
         assert_eq!(fs::read(slot.join("late-evidence")).unwrap(), b"preserve");
         assert!(!slot.join(DELETING).exists());
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1200,7 +1194,6 @@ mod tests {
                 .join("original-deleting")
                 .is_dir()
         );
-        fs::remove_dir_all(root).unwrap();
     }
 
     fn replace_slot_on_cleanup(
@@ -1237,7 +1230,6 @@ mod tests {
         let result = candidate.abort();
         assert_replacement_slot_survives(&path);
         assert!(matches!(result.unwrap_err().source, Error::CorruptSnapshot));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1248,7 +1240,6 @@ mod tests {
         let result = frozen.remove(&[SourcePath::try_from("part.stl".to_owned()).unwrap()]);
         assert_replacement_slot_survives(&path);
         assert!(matches!(result, Err(Error::CorruptSnapshot)));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1261,7 +1252,6 @@ mod tests {
         let result = vault.finish_deleting();
         assert_replacement_slot_survives(&path);
         assert!(matches!(result, Err(Error::CorruptSnapshot)));
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1279,6 +1269,5 @@ mod tests {
             error.retained().unwrap().phase(),
             RetainedCapturePhase::Malformed
         );
-        fs::remove_dir_all(root).unwrap();
     }
 }

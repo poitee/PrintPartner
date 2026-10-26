@@ -11,6 +11,7 @@ import {
   inspectReferenceShare,
 } from "./reference-share-import.js";
 import { exportCollectionReferenceShare } from "./reference-sharing.js";
+import { scratchDir } from "../test/scratch.js";
 
 const COMMIT = "a".repeat(40);
 const cleanups: Array<() => Promise<void>> = [];
@@ -73,7 +74,7 @@ describe("reference share import", () => {
   });
 
   it("keeps a local file with an unverified revision out of a printable import", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pp-share-local-"));
+    const root = scratchDir("pp-share-local-");
     writeStl(root);
     const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-local-db-")));
     const source = repo.createSource({ name: "Desk copy", source_kind: "local", local_path: root });
@@ -86,7 +87,7 @@ describe("reference share import", () => {
   });
 
   it("creates one Build from an explicit ready mapping and repeats without a duplicate", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pp-share-ready-"));
+    const root = scratchDir("pp-share-ready-");
     writeStl(root);
     const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-ready-db-")));
     const decoy = repo.createSource({ name: "Shared Build source", source_kind: "local", local_path: "/tmp/decoy-models" });
@@ -127,7 +128,7 @@ describe("reference share import", () => {
   });
 
   it("rolls back a Build when publication of the import receipt fails", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pp-share-rollback-"));
+    const root = scratchDir("pp-share-rollback-");
     writeStl(root);
     const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-rollback-db-")));
     const source = repo.createSource({ name: "Acquired widget", source_kind: "github", local_path: root });
@@ -142,7 +143,7 @@ describe("reference share import", () => {
   });
 
   it("refuses part choices that a Working Plan cannot represent", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pp-share-invalid-"));
+    const root = scratchDir("pp-share-invalid-");
     writeStl(root);
     const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-invalid-db-")));
     const source = repo.createSource({ name: "Acquired widget", source_kind: "github", local_path: root });
@@ -159,7 +160,7 @@ describe("reference share import", () => {
   });
 
   it("does not scan unselected parts from another attached Source", async () => {
-    const root = mkdtempSync(join(tmpdir(), "pp-share-scoped-"));
+    const root = scratchDir("pp-share-scoped-");
     writeStl(root);
     const repo = await portsFor(mkdtempSync(join(tmpdir(), "pp-share-scoped-db-")));
     const selected = repo.createSource({ name: "Selected", source_kind: "github", local_path: root });

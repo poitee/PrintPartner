@@ -5,38 +5,42 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::{Output, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 #[path = "support/process.rs"]
 mod support;
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
-struct Fixture(PathBuf);
+/// The canonical fixture root, and the scratch guard that removes it.
+struct Fixture {
+    root: PathBuf,
+    _scratch: Scratch,
+}
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pp-source-cli-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&path).unwrap();
+        let scratch = Scratch::new("pp-source-cli-");
+        let path = scratch.to_path_buf();
         fs::create_dir(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
         for directory in [&path, &path.join("repos"), &path.join("input")] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
         }
         fs::write(path.join("input/part.stl"), b"solid bytes").unwrap();
-        Self(fs::canonicalize(path).unwrap())
+        Self {
+            root: fs::canonicalize(path).unwrap(),
+            _scratch: scratch,
+        }
     }
 
     fn command(&self) -> Value {
         json!({
             "tenantId": "tenant-fixture",
             "sourceId": 42,
-            "reposDir": self.0.join("repos"),
-            "inputDir": self.0.join("input"),
+            "reposDir": self.root.join("repos"),
+            "inputDir": self.root.join("input"),
             "reservedStoredBytes": 1024 * 1024,
             "snapshot": {
                 "upstreamRevisionKey": "caller-uuid",
@@ -50,16 +54,11 @@ impl Fixture {
         })
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 // The binary's arguments are fields of its single JSON command on stdin.
 fn invoke(fixture: &Fixture, command: &Value) -> Output {
     let mut child = support::command(support::bin_exe("pp-source"))
-        .current_dir(&fixture.0)
+        .current_dir(&fixture.root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -96,7 +95,7 @@ fn unknown_argument_exits_nonzero_with_invalid_json_category() {
     command["unknownArgument"] = json!(true);
     assert_error(invoke(&fixture, &command), "invalid-json");
     assert!(
-        fs::read_dir(fixture.0.join("repos"))
+        fs::read_dir(fixture.root.join("repos"))
             .unwrap()
             .next()
             .is_none()
@@ -110,7 +109,7 @@ fn missing_value_exits_nonzero_with_invalid_json_category() {
     command.as_object_mut().unwrap().remove("inputDir");
     assert_error(invoke(&fixture, &command), "invalid-json");
     assert!(
-        fs::read_dir(fixture.0.join("repos"))
+        fs::read_dir(fixture.root.join("repos"))
             .unwrap()
             .next()
             .is_none()
@@ -123,9 +122,9 @@ fn bad_path_exits_nonzero_with_unsafe_path_category() {
     let mut command = fixture.command();
     command["reposDir"] = json!("relative/repos");
     assert_error(invoke(&fixture, &command), "unsafe-path");
-    assert!(!fixture.0.join("relative").exists());
+    assert!(!fixture.root.join("relative").exists());
     assert!(
-        fs::read_dir(fixture.0.join("repos"))
+        fs::read_dir(fixture.root.join("repos"))
             .unwrap()
             .next()
             .is_none()
@@ -142,7 +141,7 @@ fn success_emits_json_matching_committed_example() {
     let expected: Value = serde_json::from_str(include_str!("examples/created.json")).unwrap();
     assert_eq!(actual, expected);
     assert_eq!(
-        fs::read(fixture.0.join("repos/42/revisions/caller-uuid/part.stl")).unwrap(),
+        fs::read(fixture.root.join("repos/42/revisions/caller-uuid/part.stl")).unwrap(),
         b"solid bytes"
     );
 }
@@ -153,7 +152,7 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
 
     let fixture = Fixture::new();
     let mut zip =
-        zip::ZipWriter::new(fs::File::create(fixture.0.join("input/upload.zip")).unwrap());
+        zip::ZipWriter::new(fs::File::create(fixture.root.join("input/upload.zip")).unwrap());
     zip.start_file(
         "part.stl",
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
@@ -165,8 +164,8 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
         let command = serde_json::json!({
             "tenantId": "fixture-tenant",
             "sourceId": 42,
-            "reposDir": fixture.0.join("repos"),
-            "inputDir": fixture.0.join("input"),
+            "reposDir": fixture.root.join("repos"),
+            "inputDir": fixture.root.join("input"),
             "zipPath": "upload.zip",
             "revisionKey": revision_key,
         });
@@ -201,7 +200,7 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
     };
     let accepted = run("accepted");
     assert!(accepted.status.success(), "{accepted:?}");
-    let published = fixture.0.join("repos/42/revisions/accepted");
+    let published = fixture.root.join("repos/42/revisions/accepted");
     let published_files = ["part.stl", pp_source::MANIFEST];
     let retained = published_files.map(|name| fs::read(published.join(name)).unwrap());
     assert_eq!(retained[0].as_slice(), b"solid tiny\nendsolid tiny\n");
@@ -214,7 +213,7 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
         names
     };
     let revisions = revision_names();
-    let input = fs::read(fixture.0.join("input/upload.zip")).unwrap();
+    let input = fs::read(fixture.root.join("input/upload.zip")).unwrap();
     let rejected = run("");
     assert_eq!(rejected.status.code(), Some(1), "{rejected:?}");
     assert_eq!(
@@ -223,11 +222,11 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
     );
     assert!(
         !fixture
-            .0
+            .root
             .join("repos/42/revisions/.pp-source-archives/.candidate")
             .exists()
     );
-    let source_lock = fs::File::open(fixture.0.join("repos/42/revisions")).unwrap();
+    let source_lock = fs::File::open(fixture.root.join("repos/42/revisions")).unwrap();
     source_lock.try_lock_exclusive().unwrap();
     assert_eq!(
         published_files.map(|name| fs::read(published.join(name)).unwrap()),
@@ -238,5 +237,8 @@ fn cli_invalid_revision_cleans_extraction_and_preserves_published_snapshot() {
         published_files.len()
     );
     assert_eq!(revision_names(), revisions);
-    assert_eq!(fs::read(fixture.0.join("input/upload.zip")).unwrap(), input);
+    assert_eq!(
+        fs::read(fixture.root.join("input/upload.zip")).unwrap(),
+        input
+    );
 }

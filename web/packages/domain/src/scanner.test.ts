@@ -1,11 +1,18 @@
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { listStlRelativePaths, scanRepo } from "./scanner.js";
 
+/** A temp directory removed when the current test finishes, pass or fail. */
+function scratchDir(prefix: string): string {
+  const path = mkdtempSync(join(tmpdir(), prefix));
+  onTestFinished(() => rmSync(path, { recursive: true, force: true }));
+  return path;
+}
+
 function makeRepo(files: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), "pp-scan-"));
+  const root = scratchDir("pp-scan-");
   for (const [rel, content] of Object.entries(files)) {
     const full = join(root, rel);
     mkdirSync(join(full, ".."), { recursive: true });
@@ -41,7 +48,7 @@ describe("scanRepo", () => {
 
   it("does not follow directory symlinks outside or back into the source", () => {
     const root = makeRepo({ "inside.stl": "solid" });
-    const outside = mkdtempSync(join(tmpdir(), "pp-scan-outside-"));
+    const outside = scratchDir("pp-scan-outside-");
     writeFileSync(join(outside, "outside.stl"), "solid");
     symlinkSync(outside, join(root, "linked-outside"), "dir");
     symlinkSync(root, join(root, "loop"), "dir");
@@ -51,7 +58,7 @@ describe("scanRepo", () => {
 
   it("does not follow a symbolic link used as the Source root", () => {
     const target = makeRepo({ "outside.stl": "solid" });
-    const parent = mkdtempSync(join(tmpdir(), "pp-scan-root-link-"));
+    const parent = scratchDir("pp-scan-root-link-");
     const rootLink = join(parent, "source");
     symlinkSync(target, rootLink, "dir");
 

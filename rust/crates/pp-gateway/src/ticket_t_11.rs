@@ -14,13 +14,17 @@ const INDEX_GZIP: &[u8] = &[
 
 struct Fixture {
     gateway: Gateway,
+    /// The served site, one level inside `scratch` so that sibling files the
+    /// tests plant next to it (`root.with_extension(..)`) are removed with it.
     root: PathBuf,
     cookie: String,
+    scratch: crate::scratch::Scratch,
 }
 
 impl Fixture {
     async fn start() -> Self {
-        let root = std::env::temp_dir().join(format!("pp-t11-{}", rand::random::<u64>()));
+        let scratch = crate::scratch::Scratch::new("pp-t11-");
+        let root = scratch.join("site");
         std::fs::create_dir_all(root.join("assets")).unwrap();
         let root = root.canonicalize().unwrap();
         std::fs::write(root.join("index.html"), b"<html>desktop</html>").unwrap();
@@ -52,6 +56,7 @@ impl Fixture {
             gateway,
             root,
             cookie,
+            scratch,
         }
     }
 
@@ -92,7 +97,7 @@ impl Fixture {
 
     async fn stop(self) {
         self.gateway.stop().await.unwrap();
-        std::fs::remove_dir_all(self.root).unwrap();
+        drop(self.scratch);
     }
 }
 
@@ -618,7 +623,6 @@ async fn ticket_t_11_slow_asset_client_does_not_block_requests_or_shutdown() {
     );
     drop(sender);
     connection.await.unwrap().unwrap();
-    let root = fixture.root;
     fixture.gateway.drain_for(Duration::from_millis(20)).await;
     tokio::time::timeout(Duration::from_secs(3), fixture.gateway.stop())
         .await
@@ -634,5 +638,4 @@ async fn ticket_t_11_slow_asset_client_does_not_block_requests_or_shutdown() {
         "shutdown did not cancel the stream"
     );
     assert!(received.iter().all(|byte| *byte == 0));
-    std::fs::remove_dir_all(root).unwrap();
 }

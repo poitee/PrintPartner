@@ -309,16 +309,16 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn open_local(files: &[(&str, &[u8])]) -> (tempfile::TempDir, LocalFiles) {
-        let dir = tempfile::tempdir().unwrap();
+    fn open_local(files: &[(&str, &[u8])]) -> (crate::scratch::Scratch, LocalFiles) {
+        let dir = crate::scratch::Scratch::new("pp-local-selection-");
         for (path, bytes) in files {
-            let path = dir.path().join(path);
+            let path = dir.join(path);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap();
             }
             fs::write(path, bytes).unwrap();
         }
-        let local = LocalFiles::open(dir.path()).unwrap();
+        let local = LocalFiles::open(&dir).unwrap();
         (dir, local)
     }
 

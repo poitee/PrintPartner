@@ -9,59 +9,55 @@ use pp_source::{
 };
 use serde_json::Value;
 use std::{
-    fs,
-    io::Write,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    process::Stdio,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    fs, io::Write, os::unix::fs::PermissionsExt, path::PathBuf, process::Stdio,
+    sync::atomic::AtomicBool,
 };
 
 #[path = "support/process.rs"]
 mod support;
 
-static NEXT: AtomicU64 = AtomicU64::new(0);
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 const MODEL_NAME: &str = "3D/main.model";
 const PART_MODEL: &str = "<model><object name='part'><mesh><vertex x='0' y='0' z='0'/><vertex x='1' y='0' z='0'/><vertex x='0' y='1' z='0'/><triangle v1='0' v2='1' v3='2'/></mesh></object></model>";
 const INJECTED_MODEL: &str = "<model><object name='injected'><mesh><vertex x='0' y='0' z='0'/><vertex x='1' y='0' z='0'/><vertex x='0' y='1' z='0'/><triangle v1='0' v2='1' v3='2'/></mesh></object></model>";
 
-struct Fixture(PathBuf);
+/// The canonical fixture root, and the scratch guard that removes it.
+struct Fixture {
+    root: PathBuf,
+    _scratch: Scratch,
+}
 impl Fixture {
     fn new() -> Self {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(".media-tests")
-            .join(format!(
-                "bind-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        let scratch = Scratch::new("pp-source-bind-");
+        let path = scratch.to_path_buf();
         fs::create_dir_all(path.join("repos")).unwrap();
         fs::create_dir(path.join("input")).unwrap();
         for directory in [&path, &path.join("repos"), &path.join("input")] {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
         }
-        Self(fs::canonicalize(&path).unwrap())
+        Self {
+            root: fs::canonicalize(&path).unwrap(),
+            _scratch: scratch,
+        }
     }
     fn command(&self) -> Value {
         serde_json::json!({
             "tenantId": "review",
             "sourceId": 1,
-            "reposDir": self.0.join("repos"),
-            "inputDir": self.0.join("input"),
+            "reposDir": self.root.join("repos"),
+            "inputDir": self.root.join("input"),
             "revisionKey": "review",
             "files": ["model.3mf"],
         })
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 fn invoke(fixture: &Fixture) -> std::process::Output {
     let mut child = support::command(support::bin_exe("pp-source-media"))
-        .current_dir(&fixture.0)
+        .current_dir(&fixture.root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -271,10 +267,10 @@ fn assert_published_part(output: &std::process::Output) {
 fn direct_model_redirect_is_rejected_before_publish_and_valid_models_still_convert() {
     let malicious = Fixture::new();
     let bytes = redirected_model();
-    let model = malicious.0.join("input/model.3mf");
+    let model = malicious.root.join("input/model.3mf");
     fs::write(&model, &bytes).unwrap();
-    let local = LocalFiles::open(&malicious.0.join("input")).unwrap();
-    let mut source = TenantRepos::open("review".into(), &malicious.0.join("repos"))
+    let local = LocalFiles::open(&malicious.root.join("input")).unwrap();
+    let mut source = TenantRepos::open("review".into(), &malicious.root.join("repos"))
         .unwrap()
         .source(2)
         .unwrap();
@@ -297,15 +293,15 @@ fn direct_model_redirect_is_rejected_before_publish_and_valid_models_still_conve
     let parsed: Value = serde_json::from_slice(&media.stdout).unwrap();
     assert_eq!(parsed["error"], "io: Invalid checksum");
     assert_eq!(fs::read(&model).unwrap(), bytes);
-    assert!(!malicious.0.join("repos/1/revisions/review").exists());
+    assert!(!malicious.root.join("repos/1/revisions/review").exists());
     assert!(
         !malicious
-            .0
+            .root
             .join("repos")
             .join("_3mf/model/injected.stl")
             .exists()
     );
-    for entry in fs::read_dir(malicious.0.join("repos")).unwrap() {
+    for entry in fs::read_dir(malicious.root.join("repos")).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {
             for nested in fs::read_dir(&path).unwrap().flatten() {
@@ -321,7 +317,7 @@ fn direct_model_redirect_is_rejected_before_publish_and_valid_models_still_conve
 
     let direct = Fixture::new();
     fs::write(
-        direct.0.join("input/model.3mf"),
+        direct.root.join("input/model.3mf"),
         stored_model(PART_MODEL, false),
     )
     .unwrap();
@@ -329,7 +325,7 @@ fn direct_model_redirect_is_rejected_before_publish_and_valid_models_still_conve
 
     let zip64 = Fixture::new();
     fs::write(
-        zip64.0.join("input/model.3mf"),
+        zip64.root.join("input/model.3mf"),
         stored_model(PART_MODEL, true),
     )
     .unwrap();
@@ -338,7 +334,7 @@ fn direct_model_redirect_is_rejected_before_publish_and_valid_models_still_conve
     let sibling = Fixture::new();
     let package =
         stored_model_with_sibling(PART_MODEL, "Metadata/trailing.bin", &[0; 2 * 1024 * 1024]);
-    let sibling_model = sibling.0.join("input/model.3mf");
+    let sibling_model = sibling.root.join("input/model.3mf");
     fs::write(&sibling_model, &package).unwrap();
     let published = invoke(&sibling);
     assert_published_part(&published);

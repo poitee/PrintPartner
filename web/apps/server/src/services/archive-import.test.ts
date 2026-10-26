@@ -8,13 +8,14 @@ import { ZipFile } from "yazl";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import { runWithTenantDiskQuota } from "../lib/tenant-disk-quota.js";
 import { createSourceUploadStaging, extractZipFile, writeUploadedFiles, writeUploadedZip, discoverImportRules } from "./archive-import.js";
+import { scratchDir } from "../test/scratch.js";
 
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), "pp-archive-"));
 }
 
 function stagedFile(content: Buffer | Uint8Array): string {
-  const path = join(mkdtempSync(join(tmpdir(), "pp-archive-staged-")), "upload");
+  const path = join(scratchDir("pp-archive-staged-"), "upload");
   writeFileSync(path, content);
   return path;
 }

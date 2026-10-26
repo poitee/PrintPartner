@@ -983,30 +983,27 @@ impl SourceRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        os::unix::fs::PermissionsExt,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::{fs, os::unix::fs::PermissionsExt};
 
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    struct Tree(std::path::PathBuf);
+    /// The canonical root, and the scratch guard that removes it.
+    struct Tree {
+        root: std::path::PathBuf,
+        _scratch: crate::scratch::Scratch,
+    }
     impl Tree {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "pp-source-tree-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&path).unwrap();
+            let scratch = crate::scratch::Scratch::new("pp-source-tree-");
             // Pin the root mode so the ancestor check does not depend on umask.
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            Self(fs::canonicalize(path).unwrap())
+            fs::set_permissions(&scratch, fs::Permissions::from_mode(0o755)).unwrap();
+            Self {
+                root: fs::canonicalize(&scratch).unwrap(),
+                _scratch: scratch,
+            }
         }
         fn paths(&self) -> Result<BTreeSet<String>> {
             let mut paths = BTreeSet::new();
             tree_paths(
-                &Directory::open_root(&self.0)?,
+                &Directory::open_root(&self.root)?,
                 "",
                 &mut paths,
                 0,
@@ -1015,22 +1012,17 @@ mod tests {
             Ok(paths)
         }
     }
-    impl Drop for Tree {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).unwrap();
-        }
-    }
 
     #[test]
     fn handle_holders_share_one_flock_until_the_last_releases() {
         use std::fs::File;
 
         let tree = Tree::new();
-        let source = TenantRepos::open("tenant".into(), &tree.0)
+        let source = TenantRepos::open("tenant".into(), &tree.root)
             .unwrap()
             .source(1)
             .unwrap();
-        let peer = File::open(tree.0.join("1/revisions")).unwrap();
+        let peer = File::open(tree.root.join("1/revisions")).unwrap();
         // Archive readiness, then a materialization joining from this handle.
         let archive = source.lock.try_acquire_alone().unwrap().unwrap();
         assert!(source.lock.try_acquire_alone().unwrap().is_none());
@@ -1051,9 +1043,9 @@ mod tests {
         let tree = Tree::new();
         // Real NFD names exercise HFS+ listings on Linux too. Opening their
         // NFC replacements would fail on Linux, proving raw-name I/O here.
-        fs::create_dir(tree.0.join("pie\u{300}ces")).unwrap();
-        fs::write(tree.0.join("pie\u{300}ces/cafe\u{301}.stl"), b"solid").unwrap();
-        fs::write(tree.0.join("re\u{301}sume\u{301}.md"), b"notes").unwrap();
+        fs::create_dir(tree.root.join("pie\u{300}ces")).unwrap();
+        fs::write(tree.root.join("pie\u{300}ces/cafe\u{301}.stl"), b"solid").unwrap();
+        fs::write(tree.root.join("re\u{301}sume\u{301}.md"), b"notes").unwrap();
         assert_eq!(
             tree.paths().unwrap(),
             BTreeSet::from([
@@ -1069,11 +1061,11 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let tree = Tree::new();
-        fs::write(tree.0.join("target.stl"), b"solid").unwrap();
-        symlink("target.stl", tree.0.join("cafe\u{301}.stl")).unwrap();
+        fs::write(tree.root.join("target.stl"), b"solid").unwrap();
+        symlink("target.stl", tree.root.join("cafe\u{301}.stl")).unwrap();
         assert!(tree.paths().is_err());
-        fs::remove_file(tree.0.join("cafe\u{301}.stl")).unwrap();
-        symlink("..", tree.0.join("pie\u{300}ces")).unwrap();
+        fs::remove_file(tree.root.join("cafe\u{301}.stl")).unwrap();
+        symlink("..", tree.root.join("pie\u{300}ces")).unwrap();
         assert!(tree.paths().is_err());
     }
 
@@ -1082,13 +1074,13 @@ mod tests {
         use std::io::ErrorKind;
 
         let tree = Tree::new();
-        fs::write(tree.0.join("café.stl"), b"first").unwrap();
+        fs::write(tree.root.join("café.stl"), b"first").unwrap();
         // On normalization-insensitive volumes the second spelling cannot be
         // created separately; the NFD regression above still runs there.
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(tree.0.join("cafe\u{301}.stl"))
+            .open(tree.root.join("cafe\u{301}.stl"))
         {
             Ok(_) => assert!(matches!(tree.paths(), Err(Error::CorruptSnapshot))),
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
@@ -1143,20 +1135,8 @@ mod tests {
         assert_eq!(decoded.files[0].path.as_str(), legacy);
         assert_eq!(decoded.selection.omitted_files[0].path.as_str(), omitted);
 
-        let root = std::env::temp_dir().join(format!(
-            "pp-source-unicode16-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).unwrap();
-        let cleanup = root.clone();
-        struct Remove(std::path::PathBuf);
-        impl Drop for Remove {
-            fn drop(&mut self) {
-                fs::remove_dir_all(&self.0).unwrap();
-            }
-        }
-        let _remove = Remove(cleanup);
+        let scratch = crate::scratch::Scratch::new("pp-source-unicode16-");
+        let root = scratch.to_path_buf();
         for dir in ["repos", "input"] {
             let path = root.join(dir);
             fs::create_dir(&path).unwrap();
@@ -1280,19 +1260,8 @@ mod tests {
         let mut encoded = serde_json::to_vec_pretty(&manifest).unwrap();
         encoded.push(b'\n');
 
-        let root = std::env::temp_dir().join(format!(
-            "pp-source-unicode16-pair-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).unwrap();
-        struct Remove(std::path::PathBuf);
-        impl Drop for Remove {
-            fn drop(&mut self) {
-                fs::remove_dir_all(&self.0).unwrap();
-            }
-        }
-        let _remove = Remove(root.clone());
+        let scratch = crate::scratch::Scratch::new("pp-source-unicode16-pair-");
+        let root = scratch.to_path_buf();
         for dir in ["repos", "input"] {
             let path = root.join(dir);
             fs::create_dir(&path).unwrap();
@@ -1381,4 +1350,18 @@ mod tests {
             Err(Error::CorruptSnapshot)
         ));
     }
+}
+
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+/// Auto-removing test scratch, shared with pp-storage's tests.
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+
+#[cfg(test)]
+#[test]
+fn scratch_root_is_empty_after_lib_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_lib_tests"]);
 }

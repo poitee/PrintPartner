@@ -7,12 +7,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn scratch(name: &str) -> PathBuf {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let dir = base.join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+fn scratch(name: &str) -> Scratch {
+    Scratch::new(&format!("{name}-"))
 }
 
 fn repo_root() -> PathBuf {
@@ -337,16 +337,8 @@ fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
         "socket",
         "fifo",
     ] {
-        let dir = if kind == "socket" {
-            let dir = PathBuf::from("/tmp").join(format!(
-                "pp-receipt-{}",
-                hex::encode(rand::random::<[u8; 8]>())
-            ));
-            fs::create_dir(&dir).unwrap();
-            dir
-        } else {
-            scratch(&format!("ticket_t_7_ownership_receipt_{kind}"))
-        };
+        // A short prefix keeps the socket path under the Unix socket length limit.
+        let dir = scratch(&format!("pp-receipt-{kind}"));
         let outside = scratch(&format!("ticket_t_7_ownership_outside_{kind}"));
         boot_source_sync(&outside, bundled_text()).unwrap();
         let target = outside.join("source-sync-admission.json");
@@ -380,10 +372,6 @@ fn ticket_t_7_ownership_non_regular_receipts_are_preserved() {
         assert_eq!(after.mode(), entry.mode());
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
         assert_eq!(fs::read(&target).unwrap(), target_bytes);
-        if kind == "socket" {
-            drop(_socket);
-            fs::remove_dir_all(&dir).unwrap();
-        }
     }
 }
 

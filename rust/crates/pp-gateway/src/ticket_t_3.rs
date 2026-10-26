@@ -3,8 +3,8 @@ use ownership::cutover::{self, CutoverReceipt, DrainEvidence};
 
 #[tokio::test]
 async fn ticket_t_3_drain_legal_body_retains_admission_until_consumed_or_dropped() {
-    let root = std::env::temp_dir().join(format!("pp-t3-legal-body-{}", rand::random::<u64>()));
-    std::fs::create_dir(&root).unwrap();
+    let scratch = crate::scratch::Scratch::new("pp-t3-legal-body-");
+    let root = scratch.to_path_buf();
     let index = ownership::manifest::admit_bundled_manifest().unwrap();
     let operation = "http:GET /legal/summary current";
     let parity = serde_json::json!({
@@ -91,5 +91,4 @@ async fn ticket_t_3_drain_legal_body_retains_admission_until_consumed_or_dropped
             );
         }
     }
-    std::fs::remove_dir_all(root).unwrap();
 }
