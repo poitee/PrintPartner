@@ -95,6 +95,29 @@
         "http.POST /api/v1/jobs/export-stl-pack",
         "job.export-stl-pack"
       ]
+    },
+    {
+      "operation": "printer.send-queue",
+      "owner": "node",
+      "participants": [
+        "http.GET /printer-send-queue",
+        "http.GET /api/v1/printer-send-queue",
+        "http.POST /printer-send-queue",
+        "http.POST /api/v1/printer-send-queue",
+        "http.POST /printer-send-queue/:id/dispatch",
+        "http.POST /api/v1/printer-send-queue/:id/dispatch",
+        "http.POST /printer-send-queue/drain",
+        "http.POST /api/v1/printer-send-queue/drain",
+        "http.DELETE /printer-send-queue/:id",
+        "http.DELETE /api/v1/printer-send-queue/:id",
+        "http.POST /jobs/printer-upload",
+        "http.POST /api/v1/jobs/printer-upload",
+        "job.printer-upload",
+        "reconcile.reconcilePrinterSendsAfterProcessStart",
+        "reconcile.reconcileMissingPrinterUploadJob",
+        "shutdown.interruptPrinterUploadsOnShutdown",
+        "migration.migrateLegacySelfHostExports"
+      ]
     }
   ],
   "node_participants": {
@@ -233,16 +256,13 @@
       "start_recompute",
       "update_kit_selections"
     ],
-    "job": [
-      "printer-upload"
-    ],
+    "job": [],
     "startup": [
       "seedStockSlicerInstancesIfEmpty",
       "sweepExpiredTransferArtifacts"
     ],
     "migration": [
       "backfillAdvisorNotesFromDomainPack",
-      "migrateLegacySelfHostExports",
       "migratePrintOutcomesBlob",
       "prepareSqliteUpgrade"
     ],
@@ -1545,7 +1565,6 @@
       "http:DELETE /plans/:param legacy-v1",
       "http:DELETE /plans/:param/layers/:param current",
       "http:DELETE /plans/:param/layers/:param legacy-v1",
-      "http:DELETE /printer-send-queue/:param current",
       "http:DELETE /printers/:param current",
       "http:DELETE /settings/api-keys/:param current",
       "http:DELETE /settings/logging/logs current",
@@ -1651,7 +1670,6 @@
       "http:GET /printer-checkoff/unattributed current",
       "http:GET /printer-outcomes/summary current",
       "http:GET /printer-presets current",
-      "http:GET /printer-send-queue current",
       "http:GET /printer-send-queue/suggestions current",
       "http:GET /printers current",
       "http:GET /printers/:param/cameras current",
@@ -1729,7 +1747,6 @@
       "http:POST /imports/kit-bundle current",
       "http:POST /integrations current",
       "http:POST /integrations/:param/test current",
-      "http:POST /jobs/printer-upload current",
       "http:POST /manifest-registry/export-draft current",
       "http:POST /parts/:param/thumbnail current",
       "http:POST /plans current",
@@ -1777,9 +1794,6 @@
       "http:POST /printer-checkoff/unattributed/:param/claim current",
       "http:POST /printer-checkoff/unattributed/:param/dismiss current",
       "http:POST /printer-checkoff/verify current",
-      "http:POST /printer-send-queue current",
-      "http:POST /printer-send-queue/:param/dispatch current",
-      "http:POST /printer-send-queue/drain current",
       "http:POST /printers current",
       "http:POST /reference-shares/collections current",
       "http:POST /reference-shares/dependencies current",
@@ -1826,14 +1840,13 @@
       "http:PUT /slicer-instances/:param current",
       "http:PUT /sources/:param/import-rules current",
       "http:PUT /sources/:param/naming current",
-      "job.printer-upload",
       "mcp.confirm_apply",
       "mcp.dismiss_proposed_action",
       "mcp.list_pending_actions",
       "migration.backfillAdvisorNotesFromDomainPack",
-      "migration.migrateLegacySelfHostExports",
       "migration.migratePrintOutcomesBlob",
       "migration.prepareSqliteUpgrade",
+      "printer.send-queue",
       "profile.sync",
       "startup.seedStockSlicerInstancesIfEmpty",
       "startup.sweepExpiredTransferArtifacts",

@@ -76,8 +76,31 @@ const EXPORT_OPERATIONS: [(&str, &[&str]); 5] = [
         ],
     ),
 ];
-// Its own operation: Node cannot fence the printer-upload job yet.
-const PRINTER_UPLOAD: &str = "job.printer-upload";
+// Every writer of the printer send queue, with the upload job they start.
+const PRINTER_SEND_QUEUE: &str = "printer.send-queue";
+const PRINTER_SEND_QUEUE_PARTICIPANTS: [&str; 19] = [
+    "http.DELETE /api/v1/printer-send-queue/:id",
+    "http.DELETE /printer-send-queue/:id",
+    "http.GET /api/v1/printer-send-queue",
+    "http.GET /printer-send-queue",
+    "http.HEAD /api/v1/printer-send-queue",
+    "http.HEAD /printer-send-queue",
+    "http.POST /api/v1/jobs/printer-upload",
+    "http.POST /api/v1/printer-send-queue",
+    "http.POST /api/v1/printer-send-queue/:id/dispatch",
+    "http.POST /api/v1/printer-send-queue/drain",
+    "http.POST /jobs/printer-upload",
+    "http.POST /printer-send-queue",
+    "http.POST /printer-send-queue/:id/dispatch",
+    "http.POST /printer-send-queue/drain",
+    "job.printer-upload",
+    "migration.migrateLegacySelfHostExports",
+    "reconcile.reconcileMissingPrinterUploadJob",
+    "reconcile.reconcilePrinterSendsAfterProcessStart",
+    "shutdown.interruptPrinterUploadsOnShutdown",
+];
+// Its own operation: Node cannot fence this startup hook yet.
+const UNFENCED: &str = "startup.seedStockSlicerInstancesIfEmpty";
 const PLANS_CREATE: &str = "http:POST /plans current";
 const CATALOG_PARTICIPANTS: [&str; 4] = [
     "http.GET /api/v1/filaments/catalog",
@@ -357,6 +380,7 @@ async fn rust_owned_gateway(dir: &Path, node: &FakeNode) -> Gateway {
         PROFILE_SYNC,
         EXPORT_STL_PACK,
         EXPORT_ACCEPTED_PLATE,
+        PRINTER_SEND_QUEUE,
     ] {
         switch(&index, dir, operation);
     }
@@ -435,6 +459,43 @@ async fn ticket_t_3_drain_cutover_gateway_routes_export_operation() {
         "POST",
     )
     .await;
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_cutover_gateway_routes_printer_send_queue_operation() {
+    assert_gateway_ownership(
+        &[
+            ("GET", "/printer-send-queue"),
+            ("HEAD", "/api/v1/printer-send-queue"),
+            ("POST", "/printer-send-queue"),
+            ("POST", "/api/v1/printer-send-queue/item-1/dispatch"),
+            ("POST", "/printer-send-queue/drain"),
+            ("DELETE", "/printer-send-queue/item-1"),
+            ("DELETE", "/api/v1/printer-send-queue/item-1"),
+            ("POST", "/jobs/printer-upload"),
+            ("POST", "/api/v1/jobs/printer-upload"),
+        ],
+        "GET",
+    )
+    .await;
+    // Suggestions only read the queue, so they stay with Node.
+    let dir = Scratch::new("pp-t3-cutover-gateway-reader-");
+    let node = fake_node(&dir);
+    let mut gateway = rust_owned_gateway(&dir, &node).await;
+    let (origin, cookie) = session(&mut gateway).await;
+    let (status, _, _) = exchange(
+        &origin,
+        "/printer-send-queue/suggestions",
+        "GET",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        *node.forwards.lock().unwrap(),
+        vec!["GET /printer-send-queue/suggestions".to_owned()]
+    );
+    gateway.stop().await.unwrap();
 }
 
 #[tokio::test]
@@ -530,17 +591,17 @@ fn ticket_t_3_drain_cutover_refuses_participant_node_cannot_fence() {
         cutover::plan(
             Some(&index),
             &owners,
-            PRINTER_UPLOAD,
-            &parity(PRINTER_UPLOAD, index.digest(), 3, 3, 0),
+            UNFENCED,
+            &parity(UNFENCED, index.digest(), 3, 3, 0),
         )
         .unwrap_err(),
-        json!({"reason": "node_cannot_fence", "participant": "job.printer-upload"}),
+        json!({"reason": "node_cannot_fence", "participant": UNFENCED}),
     );
     let dir = Scratch::new("pp-t3-cutover-unfenced-");
-    plant_record(&dir, index.digest(), PRINTER_UPLOAD, &[PRINTER_UPLOAD]);
+    plant_record(&dir, index.digest(), UNFENCED, &[UNFENCED]);
     assert_json(
         cutover::recover(&dir, Some(&index)).unwrap_err(),
-        json!({"reason": "node_cannot_fence", "participant": "job.printer-upload"}),
+        json!({"reason": "node_cannot_fence", "participant": UNFENCED}),
     );
 }
 
@@ -695,6 +756,54 @@ fn ticket_t_3_drain_cutover_switches_export_jobs_with_their_routes() {
                 "missing": [job], "unexpected": []}),
         );
     }
+}
+
+#[test]
+fn ticket_t_3_drain_cutover_switches_printer_send_queue_with_every_writer() {
+    let index = fixture_index();
+    assert_eq!(
+        index.participants_of(PRINTER_SEND_QUEUE),
+        PRINTER_SEND_QUEUE_PARTICIPANTS.into_iter().collect()
+    );
+    let dir = Scratch::new("pp-t3-cutover-printer-");
+    assert_json(
+        switch(&index, &dir, PRINTER_SEND_QUEUE),
+        json!({"outcome": "committed", "operation": PRINTER_SEND_QUEUE,
+            "participants": PRINTER_SEND_QUEUE_PARTICIPANTS.len(),
+            "manifest_sha256": index.digest(),
+            "parity_sha256": sha256(&parity(PRINTER_SEND_QUEUE, index.digest(), 3, 3, 0)),
+            "fixtures": 3, "directory_synced": true}),
+    );
+    let (owners, _) = cutover::recover(&dir, Some(&index)).unwrap();
+    let rust_owned: BTreeSet<&str> = index
+        .claims()
+        .keys()
+        .map(String::as_str)
+        .filter(|id| owners.owner_of(id) == Owner::Rust)
+        .collect();
+    assert_eq!(
+        rust_owned,
+        PRINTER_SEND_QUEUE_PARTICIPANTS.into_iter().collect()
+    );
+    // The read-only suggestions route and the shared job lookup stay with Node.
+    for node_owned in [
+        "http.GET /printer-send-queue/suggestions",
+        "http.GET /jobs/:id",
+    ] {
+        assert_eq!(owners.owner_of(node_owned), Owner::Node, "{node_owned}");
+    }
+
+    // Leaving the shutdown hook with Node would let it rewrite Rust's rows.
+    let shutdown = "shutdown.interruptPrinterUploadsOnShutdown";
+    let mut partial = PRINTER_SEND_QUEUE_PARTICIPANTS.to_vec();
+    partial.retain(|id| *id != shutdown);
+    let split = Scratch::new("pp-t3-cutover-printer-split-");
+    plant_record(&split, index.digest(), PRINTER_SEND_QUEUE, &partial);
+    assert_json(
+        cutover::recover(&split, Some(&index)).unwrap_err(),
+        json!({"reason": "participant_set_mismatch", "operation": PRINTER_SEND_QUEUE,
+            "missing": [shutdown], "unexpected": []}),
+    );
 }
 
 #[test]
@@ -1121,11 +1230,11 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
     let index = fixture_index();
     let dir = Scratch::new("pp-t3-cutover-evidence-");
     let owners = OperationOwners::node_only();
-    let refusal = cutover::plan(Some(&index), &owners, PRINTER_UPLOAD, "{}").unwrap_err();
+    let refusal = cutover::plan(Some(&index), &owners, UNFENCED, "{}").unwrap_err();
     cutover::append_evidence(
         &dir,
         &Evidence::Refused {
-            operation: PRINTER_UPLOAD,
+            operation: UNFENCED,
             refusal: &refusal,
         },
     )
@@ -1143,8 +1252,8 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
     assert_eq!(
         evidence_lines(&dir),
         vec![
-            json!({"event": "refused", "operation": PRINTER_UPLOAD, "reason": "node_cannot_fence",
-                "participant": "job.printer-upload"}),
+            json!({"event": "refused", "operation": UNFENCED, "reason": "node_cannot_fence",
+                "participant": UNFENCED}),
             json!({"event": "cutover", "outcome": "drain_timed_out", "operation": CATALOG,
                 "tracked_idle": true, "gateway_idle": false}),
             json!({"event": "cutover", "outcome": "committed", "operation": CATALOG,
