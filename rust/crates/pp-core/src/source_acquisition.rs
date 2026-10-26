@@ -71,10 +71,12 @@ pub struct AcquisitionDrain {
     /// Whether every acquisition finished within the budget.
     pub idle: bool,
     /// Operation keys whose workers stopped for shutdown after admission,
-    /// sorted. Each keeps its journal row. One still admitted keeps its
-    /// retained capture for [`SourceAcquisitions::recover_before_accepting`];
-    /// one whose capture already became owned input resumes through import
-    /// job restart recovery.
+    /// sorted. Each keeps its journal row and reserved bytes; nothing resumes
+    /// it in this instance. A key stopped while still admitted keeps its
+    /// retained capture, which a later instance's
+    /// [`SourceAcquisitions::recover_before_accepting`] settles; a key stopped
+    /// after its capture became owned input is resumed by import job restart
+    /// recovery when storage is next opened.
     pub interrupted: Vec<String>,
     /// Operation keys still in flight when the budget ran out, sorted.
     pub pending: Vec<String>,

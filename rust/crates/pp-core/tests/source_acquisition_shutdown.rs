@@ -185,11 +185,13 @@ impl Read for Watched {
     }
 }
 
-/// Input that reports its first read, then blocks until released.
+/// Input that reports its first read, then blocks until released; a failing
+/// one errors once released.
 struct Held {
     started: Option<mpsc::Sender<()>>,
     release: mpsc::Receiver<()>,
     bytes: &'static [u8],
+    fails: bool,
 }
 
 impl Read for Held {
@@ -197,6 +199,9 @@ impl Read for Held {
         if let Some(started) = self.started.take() {
             started.send(()).unwrap();
             self.release.recv().unwrap();
+        }
+        if self.fails {
+            return Err(std::io::Error::other("input device gone"));
         }
         self.bytes.read(buf)
     }
@@ -214,12 +219,27 @@ fn hold<'scope>(
     mpsc::Sender<()>,
     std::thread::ScopedJoinHandle<'scope, anyhow::Result<Operation>>,
 ) {
+    hold_input(scope, fixture, acquisitions, key, false)
+}
+
+/// Like [`hold`], with input that fails once released when `fails` is set.
+fn hold_input<'scope>(
+    scope: &'scope std::thread::Scope<'scope, '_>,
+    fixture: &'scope Fixture,
+    acquisitions: &'scope SourceAcquisitions,
+    key: &'static str,
+    fails: bool,
+) -> (
+    mpsc::Sender<()>,
+    std::thread::ScopedJoinHandle<'scope, anyhow::Result<Operation>>,
+) {
     let (started, held) = mpsc::channel();
     let (release, released) = mpsc::channel();
     let input = Held {
         started: Some(started),
         release: released,
         bytes: BYTES,
+        fails,
     };
     let worker = scope.spawn(move || {
         acquisitions
@@ -414,4 +434,88 @@ fn source_acquisition_shutdown_budget_is_shared() {
     assert_eq!(fixture.get("slow-a").unwrap().state, State::Activated);
     assert_eq!(fixture.get("slow-b").unwrap().state, State::Activated);
     assert_eq!(fixture.captures(), BTreeMap::new());
+}
+
+#[test]
+fn source_acquisition_shutdown_is_scoped_to_its_instance() {
+    let fixture = Fixture::open();
+    let (running, _) = fixture.acquisitions(1);
+    let (other, _) = fixture.acquisitions(1);
+    let settled = std::thread::scope(|scope| {
+        let (release, held) = hold(scope, &fixture, &running, "own-key");
+
+        // Shutting down another instance on the same storage neither refuses
+        // this instance's work nor stops its worker.
+        assert_eq!(
+            other.shutdown(BUDGET).unwrap(),
+            AcquisitionDrain {
+                idle: true,
+                interrupted: vec![],
+                pending: vec![],
+            }
+        );
+        release.send(()).unwrap();
+        held.join().unwrap().unwrap()
+    });
+    assert_eq!(settled.state, State::Activated);
+    assert!(settled.cleanup_settled);
+    assert_eq!(fixture.get("own-key").unwrap(), settled);
+    assert_eq!(fixture.captures(), BTreeMap::new());
+
+    let (input, _) = Watched::new();
+    let second = running
+        .acquire(
+            fixture.request("own-second", input),
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(second.state, State::Activated);
+    assert_eq!(
+        running.shutdown(BUDGET).unwrap(),
+        AcquisitionDrain {
+            idle: true,
+            interrupted: vec![],
+            pending: vec![],
+        }
+    );
+}
+
+#[test]
+fn source_acquisition_shutdown_pending_failure_is_not_interrupted() {
+    let fixture = Fixture::open();
+    let (acquisitions, _) = fixture.acquisitions(1);
+    let rows = fixture.rows();
+    std::thread::scope(|scope| {
+        let (release, held) = hold_input(scope, &fixture, &acquisitions, "failed-key", true);
+        assert_eq!(
+            acquisitions.shutdown(Duration::from_millis(200)).unwrap(),
+            AcquisitionDrain {
+                idle: false,
+                interrupted: vec![],
+                pending: vec!["failed-key".into()],
+            }
+        );
+
+        // Its input fails after the budget ran out: the failure is reported as
+        // it is, the candidate is removed, and nothing is admitted.
+        release.send(()).unwrap();
+        let error = format!("{:#}", held.join().unwrap().unwrap_err());
+        assert!(
+            error.starts_with("Owned capture candidate removed: "),
+            "{error}"
+        );
+    });
+    assert_eq!(
+        acquisitions.shutdown(BUDGET).unwrap(),
+        AcquisitionDrain {
+            idle: true,
+            interrupted: vec![],
+            pending: vec![],
+        }
+    );
+    assert_eq!(fixture.rows(), rows);
+    assert_eq!(fixture.captures(), BTreeMap::new());
+    assert!(format!("{:#}", fixture.get("failed-key").unwrap_err()).contains("not found"));
 }
