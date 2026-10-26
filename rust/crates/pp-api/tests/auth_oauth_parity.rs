@@ -30,6 +30,10 @@ use std::{
     time::Duration,
 };
 
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 #[path = "../../pp-storage/tests/common/process.rs"]
 mod child_process;
 
@@ -302,16 +306,15 @@ struct Server {
     client: reqwest::Client,
     fake: Fake,
     owner: WriterOwner,
-    directory: PathBuf,
     app_task: tokio::task::JoinHandle<()>,
     app_stop: tokio::sync::oneshot::Sender<()>,
     fake_task: tokio::task::JoinHandle<()>,
+    /// Last field: removed only after the storage owner has dropped, even on panic.
+    directory: Scratch,
 }
 impl Server {
     async fn start() -> Self {
-        let mut suffix = [0; 12];
-        getrandom::fill(&mut suffix).unwrap();
-        let directory = std::env::temp_dir().join(format!("pp-auth-oauth-{}", hex::encode(suffix)));
+        let directory = Scratch::new("pp-auth-oauth-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let auth = owner
             .rebuild_auth_with_policy(
@@ -389,7 +392,6 @@ impl Server {
         self.fake_task.abort();
         let _ = self.fake_task.await;
         self.owner.shutdown().unwrap();
-        std::fs::remove_dir_all(self.directory).unwrap();
     }
 
     fn count(&self, sql: &str) -> i64 {

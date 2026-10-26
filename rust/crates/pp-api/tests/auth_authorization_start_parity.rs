@@ -15,6 +15,10 @@ use std::{
     time::Duration,
 };
 
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 #[path = "../../pp-storage/tests/common/process.rs"]
 mod child_process;
 
@@ -202,14 +206,12 @@ struct Server {
     owner: WriterOwner,
     task: tokio::task::JoinHandle<()>,
     shutdown: tokio::sync::oneshot::Sender<()>,
-    directory: PathBuf,
+    /// Last field: removed only after the storage owner has dropped, even on panic.
+    _directory: Scratch,
 }
 impl Server {
     async fn start(case: &Case) -> Self {
-        let mut suffix = [0; 12];
-        getrandom::fill(&mut suffix).unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("pp-auth-start-rust-{}", hex::encode(suffix)));
+        let directory = Scratch::new("pp-auth-start-rust-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let credentials = || {
             OAuthCredentials::new(case.client_id.clone(), Secret::new("fixture-secret".into()))
@@ -263,7 +265,7 @@ impl Server {
             owner,
             task,
             shutdown,
-            directory,
+            _directory: directory,
         }
     }
     async fn request(&self, case: &Case) -> Response {
@@ -279,7 +281,6 @@ impl Server {
         self.shutdown.send(()).unwrap();
         self.task.await.unwrap();
         self.owner.shutdown().unwrap();
-        std::fs::remove_dir_all(self.directory).unwrap();
     }
 }
 

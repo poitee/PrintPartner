@@ -29,6 +29,10 @@ use tokio::{
     time::{Instant, timeout, timeout_at},
 };
 
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 #[path = "../../pp-storage/tests/common/process.rs"]
 mod child_process;
 const FIXTURE: &str = include_str!("../../../../fixtures/parity/auth-admission/node.json");
@@ -713,16 +717,9 @@ impl Snapshot {
         }
     }
 }
-struct Scratch(Option<PathBuf>);
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        if let Some(path) = self.0.take() {
-            let _ = std::fs::remove_dir_all(path);
-        }
-    }
-}
 struct Server {
-    directory: PathBuf,
+    /// Removed by its own drop, after `Drop for Server` shuts the owner down.
+    directory: Scratch,
     owner: Option<WriterOwner>,
     db: Option<Connection>,
     origin: String,
@@ -746,16 +743,11 @@ impl Drop for Server {
         if let Some(owner) = self.owner.take() {
             let _ = owner.shutdown();
         }
-        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 impl Server {
     async fn start() -> Result<Self> {
-        let mut random = [0; 12];
-        getrandom::fill(&mut random)?;
-        let directory =
-            std::env::temp_dir().join(format!("pp-auth-admission-{}", hex::encode(random)));
-        let mut scratch = Scratch(Some(directory.clone()));
+        let directory = Scratch::new("pp-auth-admission-");
         let owner = WriterOwner::open(&directory, Limits::default())?.0;
         let policy = AuthPolicy {
             registration: RegistrationPolicy::Open,
@@ -835,7 +827,6 @@ impl Server {
             while clients.join_next().await.is_some() {}
             Ok(())
         });
-        scratch.0.take();
         Ok(Self {
             directory,
             owner: Some(owner),

@@ -16,6 +16,10 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
 use tokio::process::Command;
 
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 #[tokio::test]
 async fn node_session_fixture_is_current() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -108,23 +112,13 @@ struct Expected {
     session_rows: i64,
 }
 
-struct Directory(PathBuf);
+struct Directory(Scratch);
 impl Directory {
     fn new() -> Self {
-        let mut random = [0; 12];
-        getrandom::fill(&mut random).unwrap();
-        let path =
-            std::env::temp_dir().join(format!("pp-auth-session-rust-{}", hex::encode(random)));
-        std::fs::create_dir(&path).unwrap();
-        Self(path)
+        Self(Scratch::new("pp-auth-session-rust-"))
     }
     fn db(&self) -> Connection {
         Connection::open(self.0.join("print-partner.db")).unwrap()
-    }
-}
-impl Drop for Directory {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).unwrap();
     }
 }
 

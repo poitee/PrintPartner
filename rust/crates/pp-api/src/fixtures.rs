@@ -28,7 +28,14 @@ impl Sandbox {
         let mut random = [0; 12];
         getrandom::fill(&mut random).map_err(|error| anyhow::anyhow!("{error}"))?;
         let path = std::env::temp_dir().join(format!("pp-parity-{label}-{}", hex::encode(random)));
-        std::fs::create_dir(&path).with_context(|| format!("create {}", path.display()))?;
+        // WriterOwner refuses group/world-writable data directories, so do not
+        // let a permissive umask decide the mode.
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&path)
+            .with_context(|| format!("create {}", path.display()))?;
         Ok(Self(path))
     }
 

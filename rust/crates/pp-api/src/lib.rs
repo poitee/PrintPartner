@@ -13,13 +13,13 @@ pub mod jobs;
 #[cfg(feature = "desktop_rebuild")]
 mod loopback;
 
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
 /// Auto-removing test scratch, shared with pp-storage's tests.
 #[cfg(test)]
 #[path = "../../pp-storage/tests/common/scratch.rs"]
 mod scratch;
-#[cfg(test)]
-#[path = "../../pp-storage/tests/common/cleanup.rs"]
-mod cleanup;
 
 #[cfg(test)]
 #[test]

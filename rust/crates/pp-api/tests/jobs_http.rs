@@ -5,22 +5,22 @@ use reqwest::{Client, Method};
 use reqwest::Response;
 use serde_json::Value;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
-fn open() -> (Arc<Mutex<WriterOwner>>, PathBuf) {
-    let directory = std::env::temp_dir().join(format!("pp-jobs-http-{}", {
-        let mut bytes = [0u8; 8];
-        getrandom::fill(&mut bytes).unwrap();
-        hex::encode(bytes)
-    }));
-    (
-        Arc::new(Mutex::new(
-            WriterOwner::open(&directory, Limits::default()).unwrap().0,
-        )),
-        directory,
-    )
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+/// Returns the directory first so that, on panic, `owner` drops before the
+/// scratch directory is removed.
+fn open() -> (Scratch, Arc<Mutex<WriterOwner>>) {
+    let directory = Scratch::new("pp-jobs-http-");
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    (directory, Arc::new(Mutex::new(owner)))
 }
 
 fn files(dir: &Path) -> Vec<(String, u64)> {
@@ -162,16 +162,16 @@ async fn bind() -> tokio::net::TcpListener {
     tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap()
 }
 
-fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: PathBuf) {
+fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: Scratch) {
     let owner = Arc::try_unwrap(owner).unwrap_or_else(|_| panic!("router still holds storage"));
     owner.into_inner().unwrap().shutdown().unwrap();
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 }
 
 /// Without `desktop_rebuild`, jobs HTTP is not linked into pp-api.
 #[cfg(not(feature = "desktop_rebuild"))]
 async fn feature_off_404() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = job_rows(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -303,7 +303,7 @@ async fn jobs_list_matches_node_filters() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -465,7 +465,7 @@ async fn jobs_list_flag_off_and_wrong_tenant_are_refused() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = job_rows(&directory);
     for flag in [None, Some(""), Some("0"), Some("false"), Some("TRUE")] {
@@ -593,7 +593,7 @@ async fn jobs_list_refuses_wrong_tenant_api_key() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -717,7 +717,7 @@ async fn jobs_list_refuses_foreign_host_and_origin() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -902,7 +902,7 @@ async fn job_detail_aliases_match() {
         jobs::{JobsHttpConfig, jobs_router},
     };
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1000,7 +1000,7 @@ async fn job_detail_api_key_matches_cookie() {
         jobs::{JobsHttpConfig, jobs_router},
     };
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1084,7 +1084,7 @@ async fn job_detail_mutations_and_ws_unregistered() {
         jobs::{JobsHttpConfig, jobs_router},
     };
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1163,7 +1163,7 @@ async fn job_detail_head_has_no_body_and_keeps_status() {
         jobs::{JobsHttpConfig, jobs_router},
     };
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1251,4 +1251,9 @@ async fn job_detail_head_has_no_body_and_keeps_status() {
     );
     server.stop().await;
     shutdown(owner, directory);
+}
+
+#[test]
+fn scratch_root_is_empty_after_jobs_http_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_jobs_http_tests"]);
 }
