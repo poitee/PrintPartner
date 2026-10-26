@@ -63,9 +63,87 @@ struct Record {
 }
 
 pub fn recent_diagnostics(data: &Path) -> std::io::Result<String> {
-    const TAIL_BYTES: u64 = 64 * 1024;
     const ROW_BYTES: usize = 2048;
     const RECORDS: usize = 100;
+    let directory = view_directory(data)?;
+    let (records, incomplete) = tail_rows(&directory, DESKTOP, RECORDS, ROW_BYTES, |row| {
+        serde_json::from_slice::<Record>(row)
+            .ok()
+            .filter(|record| [10, 20, 30, 40, 50, 60].contains(&record.level))
+    })?;
+    let mut text = String::new();
+    if incomplete {
+        text.push_str(OMITTED);
+    }
+    if records.is_empty() {
+        text.push_str("No diagnostic events recorded.\n");
+    }
+    for record in records {
+        text.push_str(&serde_json::to_string(&record)?);
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// The Logs view: supervisor events, then the newest compat.log and core.log
+/// rows. Rows are scrubbed again here, so rows written before a scrub rule
+/// existed do not reach the UI either.
+pub fn recent_logs(data: &Path) -> std::io::Result<String> {
+    const RECORDS: usize = 40;
+    let mut text = String::from("Service events (desktop.jsonl)\n\n");
+    text.push_str(&recent_diagnostics(data)?);
+    let directory = view_directory(data)?;
+    let scrubber = redact::Scrubber::default();
+    for (title, stream) in [
+        ("Compat backend (compat.log)", COMPAT),
+        ("Core (core.log)", CORE),
+    ] {
+        let (rows, incomplete) = tail_rows(&directory, stream, RECORDS, LINE_BYTES, |row| {
+            let mut value = serde_json::from_slice::<serde_json::Value>(row).ok()?;
+            let level = value.as_object()?.get("level")?.as_u64()?;
+            if ![10, 20, 30, 40, 50, 60].contains(&level) {
+                return None;
+            }
+            scrubber.json(&mut value);
+            Some(value.to_string())
+        })?;
+        text.push_str(&format!("\n{title}\n\n"));
+        if incomplete {
+            text.push_str(OMITTED);
+        }
+        if rows.is_empty() {
+            text.push_str("No records yet.\n");
+        }
+        for row in rows {
+            text.push_str(&row);
+            text.push('\n');
+        }
+    }
+    Ok(text)
+}
+
+/// The admitted `<data>/logs` directory, for the Reveal log folder command.
+/// Refuses a relative path, which an opener could read as an option, a
+/// symlink, anything other than a directory owned by this user, and group or
+/// world access.
+pub fn log_folder(data: &Path) -> std::io::Result<PathBuf> {
+    let directory = data.join("logs");
+    if !directory.is_absolute() {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    Ok(directory)
+}
+
+const OMITTED: &str = "Showing recent safe records. Older or invalid records were omitted.\n\n";
+
+fn view_directory(data: &Path) -> std::io::Result<PathBuf> {
     let directory = data.join("logs");
     if std::fs::symlink_metadata(&directory)?
         .file_type()
@@ -73,13 +151,27 @@ pub fn recent_diagnostics(data: &Path) -> std::io::Result<String> {
     {
         return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
     }
-    let mut records = std::collections::VecDeque::new();
+    Ok(directory)
+}
+
+/// The newest complete rows of `stream` that `admit` accepts, oldest archive
+/// first, reading at most 64 KiB from the end of each file. The flag is set
+/// when a file, row or record was skipped.
+fn tail_rows<T>(
+    directory: &Path,
+    stream: Stream,
+    records: usize,
+    row_bytes: usize,
+    mut admit: impl FnMut(&[u8]) -> Option<T>,
+) -> std::io::Result<(std::collections::VecDeque<T>, bool)> {
+    const TAIL_BYTES: u64 = 64 * 1024;
+    let mut rows = std::collections::VecDeque::new();
     let mut incomplete = false;
-    for index in (0..=6).rev() {
+    for index in (0..=ARCHIVES).rev() {
         let name = if index == 0 {
-            "desktop.jsonl".to_owned()
+            format!("{}.{}", stream.stem, stream.ext)
         } else {
-            format!("desktop.{index}.jsonl")
+            format!("{}.{index}.{}", stream.stem, stream.ext)
         };
         let mut file = match OpenOptions::new()
             .read(true)
@@ -109,37 +201,22 @@ pub fn recent_diagnostics(data: &Path) -> std::io::Result<String> {
                 start = true;
                 continue;
             }
-            if row.len() > ROW_BYTES || row.last() != Some(&b'\n') {
+            if row.len() > row_bytes || row.last() != Some(&b'\n') {
                 incomplete = true;
                 continue;
             }
-            let Ok(record) = serde_json::from_slice::<Record>(row) else {
+            let Some(row) = admit(row) else {
                 incomplete = true;
                 continue;
             };
-            if ![10, 20, 30, 40, 50, 60].contains(&record.level) {
-                incomplete = true;
-                continue;
-            }
-            if records.len() == RECORDS {
-                records.pop_front();
+            if rows.len() == records {
+                rows.pop_front();
                 incomplete = true;
             }
-            records.push_back(record);
+            rows.push_back(row);
         }
     }
-    let mut text = String::new();
-    if incomplete {
-        text.push_str("Showing recent safe records. Older or invalid records were omitted.\n\n");
-    }
-    if records.is_empty() {
-        text.push_str("No diagnostic events recorded.\n");
-    }
-    for record in records {
-        text.push_str(&serde_json::to_string(&record)?);
-        text.push('\n');
-    }
-    Ok(text)
+    Ok((rows, incomplete))
 }
 
 /// One rotated log: `<stem>.<ext>` plus archives `<stem>.1.<ext>` through
@@ -1652,5 +1729,115 @@ mod tests {
         log.attach(&data).unwrap();
         tracing::info!("before crash");
         panic!("renderer bridge lost token={}", "PLANTED_PANIC_TOKEN");
+    }
+
+    #[tokio::test]
+    async fn ticket_t_13_log_view_shows_compat_and_core_sources_scrubbed() {
+        let scratch = Scratch::new();
+        let logs = Logs::open(scratch.0.join("logs")).unwrap();
+        // A row written before slice 1 scrubbed compat.log: the view scrubs again.
+        std::fs::write(
+            scratch.0.join("logs/compat.1.log"),
+            "{\"level\":30,\"time\":1000,\"msg\":\"legacy Authorization: Bearer PLANTED_BEARER_1f9c\"}\n",
+        )
+        .unwrap();
+        logs.capture(&b"{\"level\":40,\"time\":2000,\"msg\":\"sync slow\",\"cookie\":\"PLANTED_COOKIE_77aa\"}\n"[..])
+            .await;
+        let core = CoreLog::open(&scratch.0).unwrap();
+        tracing::subscriber::with_default(core, || {
+            tracing::error!(api_key = "PLANTED_API_KEY_beef", "printer bridge lost");
+        });
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(scratch.0.join("logs/core.log"))
+            .unwrap()
+            .write_all(b"{\"level\":99,\"message\":\"bad level\"}\nnot json\n")
+            .unwrap();
+
+        let text = recent_logs(&scratch.0).unwrap();
+        assert_clean(&text);
+        let events = text.find("Service events (desktop.jsonl)").unwrap();
+        let compat = text.find("Compat backend (compat.log)").unwrap();
+        let core = text.find("Core (core.log)").unwrap();
+        assert!(events < compat && compat < core, "{text}");
+        let section = |start: usize, end: usize| -> Vec<serde_json::Value> {
+            text[start..end]
+                .lines()
+                .filter(|row| row.starts_with('{'))
+                .map(|row| serde_json::from_str(row).unwrap())
+                .collect()
+        };
+        let compat_rows = section(compat, core);
+        assert_eq!(compat_rows.len(), 2);
+        assert_eq!(compat_rows[0]["msg"], "legacy Authorization: [REDACTED]");
+        assert_eq!(compat_rows[1]["msg"], "sync slow");
+        assert_eq!(compat_rows[1]["cookie"], redact::REDACTED);
+        let core_rows = section(core, text.len());
+        assert_eq!(core_rows.len(), 1);
+        assert_eq!(core_rows[0]["message"], "printer bridge lost");
+        assert_eq!(core_rows[0]["api_key"], redact::REDACTED);
+        assert!(text[core..].contains("Older or invalid records were omitted."));
+        assert_eq!(section(events, compat).len(), 1);
+    }
+
+    #[test]
+    fn ticket_t_13_log_view_skips_symlinked_sources_and_reports_empty_ones() {
+        let scratch = Scratch::new();
+        let outside = scratch.0.join("outside.log");
+        std::fs::write(&outside, "{\"level\":30,\"msg\":\"SECRET_SYMLINK\"}\n").unwrap();
+        std::os::unix::fs::symlink(&outside, scratch.0.join("logs/compat.log")).unwrap();
+        let text = recent_logs(&scratch.0).unwrap();
+        assert!(!text.contains("SECRET_SYMLINK"), "{text}");
+        let compat = text.find("Compat backend (compat.log)").unwrap();
+        let core = text.find("Core (core.log)").unwrap();
+        assert!(text[compat..core].contains("Older or invalid records were omitted."));
+        assert!(text[core..].contains("No records yet."));
+        let linked = scratch.0.join("linked-data");
+        std::fs::create_dir(&linked).unwrap();
+        std::os::unix::fs::symlink(scratch.0.join("logs"), linked.join("logs")).unwrap();
+        assert_eq!(
+            recent_logs(&linked).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn ticket_t_13_log_folder_admits_only_the_owned_logs_directory() {
+        let scratch = Scratch::new();
+        chmod(&scratch.0.join("logs"), 0o700);
+        assert_eq!(log_folder(&scratch.0).unwrap(), scratch.0.join("logs"));
+
+        let linked = scratch.0.join("linked-data");
+        std::fs::create_dir(&linked).unwrap();
+        std::os::unix::fs::symlink(scratch.0.join("logs"), linked.join("logs")).unwrap();
+        assert_eq!(
+            log_folder(&linked).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+
+        let file = scratch.0.join("file-data");
+        std::fs::create_dir(&file).unwrap();
+        std::fs::write(file.join("logs"), "").unwrap();
+        assert_eq!(
+            log_folder(&file).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+
+        let missing = scratch.0.join("missing-data");
+        assert_eq!(
+            log_folder(&missing).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        // A relative path could reach the opener as an option such as `-R`.
+        assert_eq!(
+            log_folder(Path::new("-data")).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        // Group or world access means another account could plant files.
+        chmod(&scratch.0.join("logs"), 0o750);
+        assert_eq!(
+            log_folder(&scratch.0).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
     }
 }
