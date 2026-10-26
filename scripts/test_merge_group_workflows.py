@@ -77,6 +77,12 @@ class MergeGroupWorkflowTests(unittest.TestCase):
             if step.get("uses", "").startswith("actions/setup-node@") or step.get("name") == "Verify Node version":
                 # check-ci-tool-pins requires the Node pin and its assertion to run unconditionally.
                 self.assertNotIn("if", step)
+            elif step.get("name") == "Lint pull request Evidence block":
+                # Dependabot PRs carry generated bodies with no Evidence block, so only they skip the lint.
+                self.assertEqual(
+                    step["if"],
+                    "github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'",
+                )
             else:
                 self.assertEqual(step["if"], "github.event_name == 'pull_request'")
         for event in ("pull_request", "merge_group"):
