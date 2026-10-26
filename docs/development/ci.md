@@ -28,6 +28,13 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 
 `rust (linux) build` uses `[self-hosted, linux, x64, pp-local]` for same-repository PRs, pushes to `main`, merge groups, and manual dispatch. The nightly schedule keeps `ubuntu-latest`.
 
+Build caching and linking differ by OS:
+
+- Linux does not use the GitHub Actions cache for Rust builds. On `pp-local`, sccache caches compiler output on the runner fleet. The hosted nightly run builds without a cache.
+- macOS and Windows restore and save `Swatinem/rust-cache`. Only `main` saves.
+- Linux installs `mold` and links with it through `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold`. macOS and Windows keep their default linkers.
+- All jobs set `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to `line-tables-only`. Panic locations keep their file and line, and the build output is smaller.
+
 Each job runs these steps in order:
 
 1. Install the toolchain, nextest 0.9.148, Node 22.23.3 for the storage fixtures, and Node 24.21.0.
@@ -80,6 +87,7 @@ Except where noted below, each step runs the command lines of its workflow step 
 
 - It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `node-fixtures` step is also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
 - `ast-grep` fetches `origin/main` without `--depth=1`, because a shallow fetch would make a full clone shallow.
+- It does not set the CI-only `CARGO_PROFILE_*_DEBUG` and mold `RUSTFLAGS` values. They change debug info and the linker, not test results, and setting them would invalidate your local build cache.
 - `nextest-on` always runs. CI skips it on self-hosted Linux PRs, but the merge queue runs it. Use `--skip nextest-on` for a shorter run.
 - The nextest profile is `default` unless you set `NEXTEST_PROFILE`. Pull requests on `pp-local` use `pp-local-linux`.
 - `node-fixtures` runs `npm ci` with Node 22, so `web/node_modules` ends with Node 22 native modules. The next run's `web-assets` step installs them again with Node 24.
