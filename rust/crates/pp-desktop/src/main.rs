@@ -25,7 +25,9 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(code) => std::process::ExitCode::from(code),
         Err(error) => {
-            eprintln!("{}", startup_diagnostic(&error));
+            let diagnostic = startup_diagnostic(&error);
+            tracing::error!("{diagnostic}");
+            eprintln!("{diagnostic}");
             if cfg!(debug_assertions)
                 && std::env::args().any(|argument| argument == "--test-exit-seconds")
             {
@@ -167,6 +169,17 @@ fn run() -> Result<u8> {
     let mut core = runtime
         .block_on(CoreRuntime::start(launch))
         .context("Desktop core startup failed")?;
+    // Core startup admitted the data directory; record tracing and panics in
+    // its logs folder from here on, whether or not telemetry is enabled.
+    match pp_core::CoreLog::open(&data) {
+        Ok(log) => {
+            log.install();
+        }
+        Err(error) => eprintln!(
+            "core_log_unavailable: os_error={}",
+            error.raw_os_error().unwrap_or_default()
+        ),
+    }
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
         let launch_url = core.take_launch_target()?.into_url();

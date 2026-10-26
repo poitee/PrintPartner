@@ -21,6 +21,7 @@ hex.workspace = true
 fs2.workspace = true
 libc.workspace = true
 tokio-util.workspace = true
+tracing.workspace = true
 pp-compat = { path = "../pp-compat" }
 pp-gateway = { path = "../pp-gateway" }
 ryu-js = { version = "=1.0.2", optional = true }
