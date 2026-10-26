@@ -18,6 +18,7 @@ impl Fixture {
         let repos = root.join("repos");
         let source = repos.join("tenant/source/revision");
         fs::create_dir_all(&source).unwrap();
+        // ast-grep-ignore: no-writer-family-literal -- Test fixture stands in for Node-rendered thumbnails.
         fs::create_dir_all(root.join("thumbs")).unwrap();
         fs::write(source.join("part.stl"), b"solid test").unwrap();
         let snapshot = Snapshot {
@@ -87,6 +88,7 @@ impl Fixture {
                 units: vec![],
             }],
         };
+        // ast-grep-ignore: no-writer-family-literal -- Test fixture stands in for Node-rendered thumbnails.
         let observer = SnapshotReviewObserver::new(repos, Some(root.join("thumbs"))).unwrap();
         Self {
             root,
@@ -133,6 +135,7 @@ fn review_reports_artifacts_thumbnails_and_included_parts() {
         "accepted-thumbnail-v3\0thumbnail\0{digest}\0body\0"
     )));
     fs::write(
+        // ast-grep-ignore: no-writer-family-literal -- Test fixture stands in for Node-rendered thumbnails.
         f.root.join("thumbs").join(format!("{name}.png")),
         [137, 80, 78, 71, 13, 10, 26, 10],
     )
@@ -148,6 +151,7 @@ fn review_reports_artifacts_thumbnails_and_included_parts() {
         "accepted-thumbnail-v3\0thumbnail\0{digest}\0üpper\0"
     )));
     fs::write(
+        // ast-grep-ignore: no-writer-family-literal -- Test fixture stands in for Node-rendered thumbnails.
         f.root.join("thumbs").join(format!("{name}.png")),
         [137, 80, 78, 71, 13, 10, 26, 10],
     )

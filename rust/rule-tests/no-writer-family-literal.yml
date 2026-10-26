@@ -2,6 +2,7 @@ id: no-writer-family-literal
 valid:
   - 'fn unrelated() { let _ = "discovers"; let _ = "kit-catalogue.yaml"; let _ = "my-manifests/file"; }'
   - 'fn unrelated() { /* "covers" */ let _ = "source-covers"; }'
+  - 'fn unrelated() { let _ = "accepted-thumbnails"; let _ = "custom-filaments"; let _ = "filament-catalog"; let _ = "thumbsDir"; }'
 invalid:
   - '#[cfg(test)] mod fixtures { fn helper() { let _ = "covers"; } }'
   - '#[test] fn fixture() { let _ = "kit-catalog.yaml"; }'
@@ -19,6 +20,10 @@ invalid:
   - 'fn helper() { let _ = b"Kit-Catalog.json"; }'
   - 'fn helper() { let _ = br#"PATH-HINTS.yaml"#; }'
   - 'fn helper() { let _ = "root\\manifests\\file.yaml"; }'
+  - 'fn helper() { let _ = "thumbs"; }'
+  - 'fn helper() { let _ = format!("{}/thumbs/{}.png", root, basis); }'
+  - 'fn helper() { let _ = "custom_filaments.json"; }'
+  - 'fn helper() { let _ = "data/ambrosia_fallback.json"; }'
   - '#[cfg(any(test, unix))] fn production() { let _ = "covers"; }'
   - '#[cfg(not(test))] fn production() { let _ = "covers"; }'
   - '#[cfg(test)] fn fixture() {} fn production() { let _ = "covers"; }'

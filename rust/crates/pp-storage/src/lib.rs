@@ -503,6 +503,7 @@ impl WriterOwner {
             "repos",
             "sources",
             "exports",
+            // ast-grep-ignore: no-writer-family-literal -- Creates the empty directory, not thumbnail files; Node renders accepted thumbnails.
             "thumbs",
             // ast-grep-ignore: no-writer-family-literal -- Creates the empty directory, not cover files; see GRE-675.
             "covers",
