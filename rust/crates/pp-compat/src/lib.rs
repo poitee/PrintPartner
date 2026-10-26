@@ -2,7 +2,7 @@ mod account_pin;
 pub use account_pin::DesktopAccountPin;
 pub mod drain;
 mod logs;
-pub use logs::{CoreLog, recent_diagnostics};
+pub use logs::{CoreLog, log_folder, recent_diagnostics, recent_logs};
 mod parent_death;
 pub mod redact;
 use parent_death::{ParentDeathGuard, configure_child};

@@ -7,6 +7,12 @@ use std::{
     },
 };
 use tauri::AppHandle;
+use tokio::process::Command;
+
+#[cfg(target_os = "macos")]
+const OPENER: &str = "/usr/bin/open";
+#[cfg(not(target_os = "macos"))]
+const OPENER: &str = "xdg-open";
 
 #[derive(Default)]
 pub(crate) struct RecoveryGate(AtomicBool);
@@ -53,12 +59,11 @@ impl RecoveryUi {
         let app = app.clone();
         let dialog = self.dialog.clone();
         tauri::async_runtime::spawn(async move {
-            let text =
-                tauri::async_runtime::spawn_blocking(move || pp_core::recent_diagnostics(&data))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .unwrap_or_else(|| "Service logs are unavailable.".to_owned());
+            let text = tauri::async_runtime::spawn_blocking(move || pp_core::recent_logs(&data))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_else(|| "Service logs are unavailable.".to_owned());
             let released = dialog.clone();
             if app
                 .run_on_main_thread(move || {
@@ -74,26 +79,11 @@ impl RecoveryUi {
     }
 
     pub(crate) fn open_data(&self, app: &AppHandle) {
-        let data = self.data.clone();
+        let mut command = Command::new(OPENER);
+        command.arg(&self.data);
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            #[cfg(target_os = "macos")]
-            let opener = "/usr/bin/open";
-            #[cfg(not(target_os = "macos"))]
-            let opener = "xdg-open";
-            let opened = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                tokio::process::Command::new(opener)
-                    .arg(data)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .kill_on_drop(true)
-                    .status(),
-            )
-            .await
-            .is_ok_and(|result| result.is_ok_and(|status| status.success()));
-            if !opened {
+            if !open(command).await {
                 let _ = app.run_on_main_thread(|| {
                     show_message(
                         "Open data folder",
@@ -104,6 +94,51 @@ impl RecoveryUi {
             }
         });
     }
+
+    pub(crate) fn reveal_logs(&self, app: &AppHandle) {
+        let data = self.data.clone();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if !reveal_logs(Command::new(OPENER), data).await {
+                let _ = app.run_on_main_thread(|| {
+                    show_message(
+                        "Reveal log folder",
+                        "The log folder could not be opened.",
+                        || {},
+                    )
+                });
+            }
+        });
+    }
+}
+
+/// Show `<data>/logs` only once it passes the log directory checks. On macOS
+/// `open -R` selects it in Finder; elsewhere the opener shows its contents.
+async fn reveal_logs(mut opener: Command, data: PathBuf) -> bool {
+    let Ok(Ok(folder)) =
+        tauri::async_runtime::spawn_blocking(move || pp_core::log_folder(&data)).await
+    else {
+        return false;
+    };
+    if cfg!(target_os = "macos") {
+        opener.arg("-R");
+    }
+    opener.arg(folder);
+    open(opener).await
+}
+
+async fn open(mut command: Command) -> bool {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .status(),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok_and(|status| status.success()))
 }
 
 pub(crate) fn restart(app: &AppHandle, handle: CoreHandle, gate: Arc<RecoveryGate>) {
@@ -184,5 +219,51 @@ mod tests {
         gate.refused();
         assert!(gate.admit(&CoreStatus::Guarded));
         assert!(!gate.admit(&CoreStatus::Stopping));
+    }
+
+    /// An opener that records its arguments, one per line, in `record`.
+    fn recorder(record: &std::path::Path) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "printf '%s\\n' \"$@\" > \"$0\""])
+            .arg(record);
+        command
+    }
+
+    #[tokio::test]
+    async fn ticket_t_13_reveal_log_folder_opens_only_the_validated_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = std::env::temp_dir().join(format!(
+            "pp-reveal-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let data = scratch.join("data");
+        std::fs::create_dir_all(data.join("logs")).unwrap();
+        std::fs::set_permissions(data.join("logs"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        let record = scratch.join("args");
+        assert!(reveal_logs(recorder(&record), data.clone()).await);
+        let folder = data.join("logs").display().to_string();
+        let expected = if cfg!(target_os = "macos") {
+            format!("-R\n{folder}\n")
+        } else {
+            format!("{folder}\n")
+        };
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), expected);
+
+        std::fs::remove_file(&record).unwrap();
+        let linked = scratch.join("linked");
+        std::fs::create_dir(&linked).unwrap();
+        std::os::unix::fs::symlink(data.join("logs"), linked.join("logs")).unwrap();
+        assert!(!reveal_logs(recorder(&record), linked).await);
+        assert!(!reveal_logs(recorder(&record), scratch.join("missing")).await);
+        assert!(!record.exists(), "the opener ran for a refused folder");
+
+        assert!(!reveal_logs(Command::new("/usr/bin/false"), data).await);
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }
