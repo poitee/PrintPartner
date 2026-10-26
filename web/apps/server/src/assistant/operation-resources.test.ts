@@ -3071,6 +3071,10 @@ function recipeSelect(statement: unknown, tenantId: string, planId?: number): st
   return tableForObservedSelect(sql, tenantId);
 }
 
+// Classifies each observed file call and nothing else: a `readFileSync` of a catalog candidate is
+// file:kit-catalog, a realpath/lstat/stat inside a workspace root is file:source-workspace, and any
+// other call fails the test. With no observed calls it returns [], so adding its result to a union
+// after every call never contributes a resource that call did not observe.
 function recipeFileResources(candidates: string[], workspaceRoots: string[]): string[] {
   const resources = new Set<string>();
   for (const { api, args } of observer.state.files) {
@@ -3085,6 +3089,11 @@ function recipeFileResources(candidates: string[], workspaceRoots: string[]): st
     resources.add("file:source-workspace");
   }
   return [...resources];
+}
+
+// One isolated-policy resolution of a source workspace, in the order the repository probes it.
+function isolatedWorkspaceProbe(repos: string, workspace: string): [string, ...unknown[]][] {
+  return [["realpathSync", repos], ["lstatSync", workspace], ["realpathSync", workspace], ["realpathSync", workspace], ["statSync", workspace]];
 }
 
 it("traces get_build_recipe layers, kit, decisions, catalog and tenant isolation", async () => {
@@ -3280,9 +3289,9 @@ it("traces get_build_recipe isolated workspace probes against its operation-wide
     const observed = [...new Set(statements.map((sql) => recipeSelect(sql, "default", plan.id)))].sort();
     expect(observed).toEqual(BUILD_RECIPE_TABLES);
     for (const resource of observed) union.add(resource);
+    const probe = isolatedWorkspaceProbe(repos, workspace);
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([...probe, ["readFileSync", candidates[0]!, "utf8"], ...probe]);
     for (const resource of recipeFileResources([...candidates, ...shipped], [repos, workspace])) union.add(resource);
-    expect(observer.state.files.some(({ api }) => api === "readFileSync")).toBe(true);
-    expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
     expect([...union].sort()).toEqual(BUILD_RECIPE_UNION);
   } finally {
     vi.unstubAllEnvs();
@@ -3703,9 +3712,9 @@ it("traces compare_plans isolated workspace probes against its operation-wide un
     const observed = [...new Set(statements.map((sql) => comparePlansSelect(sql, "default", [planA.id, planB.id])))].sort();
     expect(observed).toEqual(BUILD_RECIPE_TABLES);
     for (const resource of observed) union.add(resource);
+    const recipe = [...isolatedWorkspaceProbe(repos, workspace), ["readFileSync", candidates[0]!, "utf8"], ...isolatedWorkspaceProbe(repos, workspace)];
+    expect(observer.state.files.map(({ api, args }) => [api, ...args])).toEqual([...recipe, ...recipe]);
     for (const resource of recipeFileResources([...candidates, ...shipped], [repos, workspace])) union.add(resource);
-    expect(observer.state.files.some(({ api }) => api === "readFileSync")).toBe(true);
-    expect(observer.state.files.some(({ api }) => ["realpathSync", "lstatSync", "statSync"].includes(api))).toBe(true);
     expect([...union].sort()).toEqual(BUILD_RECIPE_UNION);
   } finally {
     vi.unstubAllEnvs();
