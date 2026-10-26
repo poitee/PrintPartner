@@ -169,6 +169,8 @@ impl Gateway {
             );
             route.owner = owners.owner_of(&format!("http.{} {}", route.method, route.path));
         }
+        ownership::cutover::admit_bundled_node_fences()
+            .map_err(|error| anyhow::anyhow!("Node fence admission failed: {error}"))?;
         for participant in owners.rust_participants() {
             anyhow::ensure!(
                 seen.contains(participant)

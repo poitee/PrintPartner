@@ -38,20 +38,33 @@ struct NodeFenced {
     participants: Vec<String>,
 }
 
-static NODE_FENCED: std::sync::LazyLock<BTreeSet<String>> = std::sync::LazyLock::new(|| {
-    let fenced: NodeFenced =
-        serde_json::from_str(BUNDLED_NODE_FENCED).expect("bundled Node fence list parses");
-    assert_eq!(
-        fenced.schema, NODE_FENCED_SCHEMA,
-        "bundled Node fence schema"
-    );
-    fenced.participants.into_iter().collect()
-});
+static NODE_FENCED: std::sync::LazyLock<Result<BTreeSet<String>, String>> =
+    std::sync::LazyLock::new(|| {
+        let fenced: NodeFenced = serde_json::from_str(BUNDLED_NODE_FENCED)
+            .map_err(|error| format!("bundled Node fence list does not parse: {error}"))?;
+        if fenced.schema != NODE_FENCED_SCHEMA {
+            return Err(format!(
+                "bundled Node fence list has schema {}, expected {NODE_FENCED_SCHEMA}",
+                fenced.schema
+            ));
+        }
+        Ok(fenced.participants.into_iter().collect())
+    });
+
+/// Checks the bundled Node fence list before routes are served, so a broken
+/// list stops startup instead of refusing every cutover.
+pub fn admit_bundled_node_fences() -> Result<(), String> {
+    NODE_FENCED.as_ref().map(|_| ()).map_err(Clone::clone)
+}
 
 /// Whether a Rust-owned `participant` cannot also run in Node. The gateway
-/// fences HTTP routes; Node fences the listed participants at startup.
+/// fences HTTP routes; Node fences the listed participants at startup. A
+/// broken bundled list fences nothing, so cutover stays refused.
 pub fn node_fences(participant: &str) -> bool {
-    participant.starts_with("http.") || NODE_FENCED.contains(participant)
+    participant.starts_with("http.")
+        || NODE_FENCED
+            .as_ref()
+            .is_ok_and(|fenced| fenced.contains(participant))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -605,11 +618,13 @@ mod tests {
     #[test]
     fn ticket_t_3_drain_node_fence_list_names_bundled_workers() {
         let index = super::super::manifest::admit_bundled_manifest().unwrap();
+        let fenced = NODE_FENCED.as_ref().unwrap();
         assert_eq!(
-            NODE_FENCED.iter().collect::<Vec<_>>(),
+            fenced.iter().collect::<Vec<_>>(),
             ["worker.startManagedProfileSync"]
         );
-        for participant in NODE_FENCED.iter() {
+        assert_eq!(admit_bundled_node_fences(), Ok(()));
+        for participant in fenced {
             assert!(participant.starts_with("worker."), "{participant}");
             assert!(index.lookup(participant).is_ok(), "{participant}");
             assert!(node_fences(participant));
