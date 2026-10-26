@@ -13,6 +13,8 @@ use std::{
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::redact;
+
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum FailureReason {
@@ -140,9 +142,53 @@ pub fn recent_diagnostics(data: &Path) -> std::io::Result<String> {
     Ok(text)
 }
 
+/// One rotated log: `<stem>.<ext>` plus archives `<stem>.1.<ext>` through
+/// `<stem>.6.<ext>`. Each file rotates daily or before it would pass 10 MiB.
+#[derive(Clone, Copy)]
+pub(crate) struct Stream {
+    stem: &'static str,
+    ext: &'static str,
+}
+
+/// Supervisor lifecycle events read back by the Logs view.
+pub(crate) const DESKTOP: Stream = Stream {
+    stem: "desktop",
+    ext: "jsonl",
+};
+/// Scrubbed pino JSON and stdout/stderr text from the compat backend.
+pub(crate) const COMPAT: Stream = Stream {
+    stem: "compat",
+    ext: "log",
+};
+/// Scrubbed Rust tracing events and panics from the core process.
+pub(crate) const CORE: Stream = Stream {
+    stem: "core",
+    ext: "log",
+};
+
+const ARCHIVES: usize = 6;
+const FILE_BYTES: u64 = 10 * 1024 * 1024;
+/// Longest captured line; longer output is cut so one child write cannot
+/// grow memory or a log row without bound.
+const LINE_BYTES: usize = 8192;
+
+impl Stream {
+    fn active(self) -> std::io::Result<CString> {
+        Ok(CString::new(format!("{}.{}", self.stem, self.ext))?)
+    }
+    fn archive(self, index: usize) -> std::io::Result<CString> {
+        Ok(CString::new(format!("{}.{index}.{}", self.stem, self.ext))?)
+    }
+}
+
 #[derive(Clone)]
-pub(crate) struct Logs(Arc<Mutex<LogFile>>);
+pub(crate) struct Logs {
+    events: Arc<Mutex<LogFile>>,
+    compat: Arc<Mutex<LogFile>>,
+    scrubber: redact::Scrubber,
+}
 struct LogFile {
+    stream: Stream,
     directory: File,
     file: File,
     day: u64,
@@ -173,9 +219,9 @@ fn secure_directory(directory: &File) -> std::io::Result<()> {
     set_mode(directory, 0o700)
 }
 
-fn secure_archives(directory: &File) -> std::io::Result<()> {
-    for index in 1..=6 {
-        let name = CString::new(format!("desktop.{index}.jsonl"))?;
+fn secure_archives(directory: &File, stream: Stream) -> std::io::Result<()> {
+    for index in 1..=ARCHIVES {
+        let name = stream.archive(index)?;
         let fd = unsafe {
             libc::openat(
                 directory.as_raw_fd(),
@@ -230,8 +276,8 @@ fn secure_archives(directory: &File) -> std::io::Result<()> {
 /// is intended: the storage lease admits one owner per data directory and
 /// rotation holds the log mutex through its reopen, so only a writer outside
 /// that owner can reach either window.
-fn open_log(directory: &File) -> std::io::Result<File> {
-    open_log_observed(directory, |_| {})
+fn open_log(directory: &File, stream: Stream) -> std::io::Result<File> {
+    open_log_observed(directory, stream, |_| {})
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -244,15 +290,17 @@ enum OpenWindow {
 
 fn open_log_observed(
     directory: &File,
+    stream: Stream,
     mut window: impl FnMut(OpenWindow),
 ) -> std::io::Result<File> {
     let flags =
         libc::O_WRONLY | libc::O_APPEND | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+    let name = stream.active()?;
     let open = |flags| {
         let fd = unsafe {
             libc::openat(
                 directory.as_raw_fd(),
-                c"desktop.jsonl".as_ptr(),
+                name.as_ptr(),
                 flags,
                 0o600 as libc::c_uint,
             )
@@ -274,76 +322,64 @@ fn open_log_observed(
     Ok(file)
 }
 
-impl Logs {
-    pub(crate) fn open(directory: PathBuf) -> std::io::Result<Self> {
-        std::fs::create_dir_all(&directory)?;
+impl LogFile {
+    fn open(directory: &Path, stream: Stream) -> std::io::Result<Self> {
+        std::fs::create_dir_all(directory)?;
         let directory = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
             .open(directory)?;
         secure_directory(&directory)?;
-        secure_archives(&directory)?;
-        let file = open_log(&directory)?;
+        secure_archives(&directory, stream)?;
+        let file = open_log(&directory, stream)?;
         let bytes = file.metadata()?.len();
-        let day = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            / 86400;
-        Ok(Self(Arc::new(Mutex::new(LogFile {
+        Ok(Self {
+            stream,
             directory,
             file,
-            day,
+            day: now_secs() / 86400,
             bytes,
-        }))))
+        })
     }
-    pub(crate) fn event(&self, event: Event, level: u64) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let Ok(mut log) = self.0.lock() else { return };
-        if secure_directory(&log.directory).is_err() {
+
+    /// Append one complete row, rotating first when the day changed or the
+    /// row would pass the size cap. Failures drop the row; logging never
+    /// stops the caller.
+    fn append(&mut self, row: &[u8], now: u64) {
+        let stream = self.stream;
+        if secure_directory(&self.directory).is_err() {
             return;
         }
-        if log
+        if self
             .file
             .metadata()
             .is_ok_and(|metadata| metadata.nlink() == 0)
         {
-            let Ok(file) = open_log(&log.directory) else {
+            let Ok(file) = open_log(&self.directory, stream) else {
                 return;
             };
             let Ok(metadata) = file.metadata() else {
                 return;
             };
-            log.bytes = metadata.len();
-            log.day = now / 86400;
-            log.file = file;
+            self.bytes = metadata.len();
+            self.day = now / 86400;
+            self.file = file;
         }
-        if secure_log(&log.file).is_err() {
+        if secure_log(&self.file).is_err() {
             return;
         }
-        let Ok(mut row) = serde_json::to_string(&Record {
-            time: now,
-            event,
-            level,
-        }) else {
-            return;
-        };
-        row.push('\n');
-        if log.day != now / 86400 || log.bytes + row.len() as u64 > 10 * 1024 * 1024 {
+        if self.day != now / 86400 || self.bytes + row.len() as u64 > FILE_BYTES {
             let rotate = (|| -> std::io::Result<()> {
-                open_log(&log.directory)?;
-                secure_archives(&log.directory)?;
-                let directory = log.directory.as_raw_fd();
-                for index in (1..=6).rev() {
-                    let source = CString::new(if index == 1 {
-                        "desktop.jsonl".to_owned()
+                open_log(&self.directory, stream)?;
+                secure_archives(&self.directory, stream)?;
+                let directory = self.directory.as_raw_fd();
+                for index in (1..=ARCHIVES).rev() {
+                    let source = if index == 1 {
+                        stream.active()?
                     } else {
-                        format!("desktop.{}.jsonl", index - 1)
-                    })?;
-                    let target = CString::new(format!("desktop.{index}.jsonl"))?;
+                        stream.archive(index - 1)?
+                    };
+                    let target = stream.archive(index)?;
                     if unsafe {
                         libc::renameat(directory, source.as_ptr(), directory, target.as_ptr())
                     } != 0
@@ -354,19 +390,61 @@ impl Logs {
                         }
                     }
                 }
-                log.file = open_log(&log.directory)?;
-                log.bytes = 0;
-                log.day = now / 86400;
+                self.file = open_log(&self.directory, stream)?;
+                self.bytes = 0;
+                self.day = now / 86400;
                 Ok(())
             })();
             if rotate.is_err() {
                 return;
             }
         }
-        if log.file.write_all(row.as_bytes()).is_ok() {
-            log.bytes += row.len() as u64;
+        if self.file.write_all(row).is_ok() {
+            self.bytes += row.len() as u64;
         }
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+impl Logs {
+    pub(crate) fn open(directory: PathBuf) -> std::io::Result<Self> {
+        Ok(Self {
+            events: Arc::new(Mutex::new(LogFile::open(&directory, DESKTOP)?)),
+            compat: Arc::new(Mutex::new(LogFile::open(&directory, COMPAT)?)),
+            scrubber: redact::Scrubber::default(),
+        })
+    }
+
+    /// A capture handle that also scrubs a secret handed to this child.
+    pub(crate) fn with_secret(&self, secret: impl Into<String>) -> Self {
+        Self {
+            scrubber: self.scrubber.clone().with_secret(secret),
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn event(&self, event: Event, level: u64) {
+        let now = now_secs();
+        let Ok(mut row) = serde_json::to_string(&Record {
+            time: now,
+            event,
+            level,
+        }) else {
+            return;
+        };
+        row.push('\n');
+        let Ok(mut log) = self.events.lock() else {
+            return;
+        };
+        log.append(row.as_bytes(), now);
+    }
+
     pub(crate) async fn capture(&self, reader: impl tokio::io::AsyncRead + Unpin) {
         let mut reader = BufReader::with_capacity(4096, reader);
         let mut line = Vec::new();
@@ -384,7 +462,7 @@ impl Logs {
                 if *byte == b'\n' {
                     self.capture_line(&line);
                     line.clear();
-                } else if line.len() < 8192 {
+                } else if line.len() < LINE_BYTES {
                     line.push(*byte);
                 }
             }
@@ -394,8 +472,15 @@ impl Logs {
     }
 
     fn capture_line(&self, line: &[u8]) {
-        let value: serde_json::Value =
-            serde_json::from_slice(line).unwrap_or(serde_json::Value::Null);
+        let now = now_secs();
+        let mut value = match serde_json::from_slice(line) {
+            Ok(serde_json::Value::Object(record)) => serde_json::Value::Object(record),
+            _ => serde_json::json!({
+                "time": now * 1000,
+                "level": 30,
+                "msg": String::from_utf8_lossy(line),
+            }),
+        };
         let level = value["level"]
             .as_u64()
             .filter(|n| [10, 20, 30, 40, 50, 60].contains(n))
@@ -405,7 +490,223 @@ impl Logs {
             _ => Event::Output,
         };
         self.event(event, level);
+        self.scrubber.json(&mut value);
+        let mut row = value.to_string();
+        row.push('\n');
+        if let Ok(mut log) = self.compat.lock() {
+            log.append(row.as_bytes(), now);
+        }
     }
+}
+
+/// Rust `tracing` subscriber that writes scrubbed JSON rows to `core.log`
+/// beside the compat logs, with the same rotation. Levels use pino numbers so
+/// both sources read alike. Spans are accepted and not recorded.
+/// `time` is epoch seconds here, while compat.log keeps pino's epoch
+/// milliseconds; a combined view must normalize.
+#[derive(Clone)]
+pub struct CoreLog {
+    sink: Arc<Mutex<Sink>>,
+    scrubber: redact::Scrubber,
+}
+
+/// Rows emitted before the data directory is admitted wait in memory, at
+/// most [`PENDING_ROWS`] of them, and reach `core.log` on [`CoreLog::attach`].
+enum Sink {
+    Pending {
+        rows: std::collections::VecDeque<String>,
+        dropped: u64,
+    },
+    File(LogFile),
+}
+
+const PENDING_ROWS: usize = 256;
+
+impl CoreLog {
+    /// A subscriber that holds rows until [`CoreLog::attach`]. Install it
+    /// first thing so startup events are not lost.
+    pub fn buffered() -> Self {
+        Self {
+            sink: Arc::new(Mutex::new(Sink::Pending {
+                rows: std::collections::VecDeque::new(),
+                dropped: 0,
+            })),
+            scrubber: redact::Scrubber::default(),
+        }
+    }
+
+    /// Open `<data>/logs/core.log` with the log directory checks used for
+    /// every other stream.
+    pub fn open(data: &Path) -> std::io::Result<Self> {
+        let log = Self::buffered();
+        log.attach(data)?;
+        Ok(log)
+    }
+
+    /// Start writing to `<data>/logs/core.log`, first flushing the rows held
+    /// since [`CoreLog::buffered`]. Call once the data directory is admitted.
+    pub fn attach(&self, data: &Path) -> std::io::Result<()> {
+        let mut file = LogFile::open(&data.join("logs"), CORE)?;
+        let Ok(mut sink) = self.sink.lock() else {
+            return Err(std::io::Error::other("core log poisoned"));
+        };
+        if let Sink::Pending { rows, dropped } = &mut *sink {
+            let now = now_secs();
+            if *dropped > 0 {
+                let notice = serde_json::json!({
+                    "time": now, "level": 40, "target": module_path!(),
+                    "message": format!("core log dropped {dropped} early rows"),
+                });
+                file.append(format!("{notice}\n").as_bytes(), now);
+            }
+            for row in rows.drain(..) {
+                file.append(row.as_bytes(), now);
+            }
+        }
+        *sink = Sink::File(file);
+        Ok(())
+    }
+
+    /// Record panics before the previous hook runs, then make this the
+    /// process-wide subscriber. Local crash records do not depend on
+    /// telemetry. The panic hook is armed even when another subscriber was
+    /// already installed; that case returns false.
+    pub fn install(&self) -> bool {
+        let log = self.clone();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            log.panic(info);
+            previous(info);
+        }));
+        tracing::subscriber::set_global_default(self.clone()).is_ok()
+    }
+
+    fn panic(&self, info: &std::panic::PanicHookInfo<'_>) {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".to_owned());
+        let mut fields = serde_json::Map::new();
+        fields.insert("message".into(), message.into());
+        if let Some(location) = info.location() {
+            fields.insert(
+                "location".into(),
+                format!("{}:{}", location.file(), location.line()).into(),
+            );
+        }
+        if let Some(thread) = std::thread::current().name() {
+            fields.insert("thread".into(), thread.into());
+        }
+        self.write(60, "panic", fields);
+    }
+
+    fn write(&self, level: u64, target: &str, fields: serde_json::Map<String, serde_json::Value>) {
+        let now = now_secs();
+        let mut fields = serde_json::Value::Object(fields);
+        self.scrubber.json(&mut fields);
+        let mut record = match fields {
+            serde_json::Value::Object(fields) => fields,
+            _ => serde_json::Map::new(),
+        };
+        record.insert("time".into(), now.into());
+        record.insert("level".into(), level.into());
+        record.insert("target".into(), target.into());
+        let record = serde_json::Value::Object(record);
+        let mut row = record.to_string();
+        if row.len() > LINE_BYTES {
+            let mut message = record["message"].as_str().unwrap_or_default().to_owned();
+            let mut end = LINE_BYTES / 2;
+            while !message.is_char_boundary(end.min(message.len())) {
+                end -= 1;
+            }
+            message.truncate(end);
+            row = serde_json::json!({
+                "time": now, "level": level, "target": target,
+                "message": message, "truncated": true,
+            })
+            .to_string();
+        }
+        row.push('\n');
+        let Ok(mut sink) = self.sink.lock() else {
+            return;
+        };
+        match &mut *sink {
+            Sink::File(log) => log.append(row.as_bytes(), now),
+            Sink::Pending { rows, dropped } => {
+                if rows.len() == PENDING_ROWS {
+                    rows.pop_front();
+                    *dropped += 1;
+                }
+                rows.push_back(row);
+            }
+        }
+    }
+}
+
+struct Fields<'a> {
+    map: &'a mut serde_json::Map<String, serde_json::Value>,
+    scrubber: &'a redact::Scrubber,
+}
+
+impl tracing::field::Visit for Fields<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.map
+            .insert(field.name().into(), format!("{value:?}").into());
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.map.insert(field.name().into(), value.into());
+    }
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.map.insert(field.name().into(), value.into());
+    }
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.map.insert(field.name().into(), value.into());
+    }
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.map.insert(field.name().into(), value.into());
+    }
+    fn record_error(
+        &mut self,
+        field: &tracing::field::Field,
+        value: &(dyn std::error::Error + 'static),
+    ) {
+        self.map
+            .insert(field.name().into(), self.scrubber.error(value).into());
+    }
+}
+
+impl tracing::Subscriber for CoreLog {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() <= tracing::Level::INFO
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::INFO)
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let metadata = event.metadata();
+        let level = match *metadata.level() {
+            tracing::Level::ERROR => 50,
+            tracing::Level::WARN => 40,
+            tracing::Level::INFO => 30,
+            tracing::Level::DEBUG => 20,
+            tracing::Level::TRACE => 10,
+        };
+        let mut fields = serde_json::Map::new();
+        event.record(&mut Fields {
+            map: &mut fields,
+            scrubber: &self.scrubber,
+        });
+        self.write(level, metadata.target(), fields);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
 }
 
 #[cfg(test)]
@@ -441,7 +742,7 @@ mod tests {
     }
 
     fn force_rotation(logs: &Logs, size: bool) {
-        let mut log = logs.0.lock().unwrap();
+        let mut log = logs.events.lock().unwrap();
         if size {
             log.bytes = 10 * 1024 * 1024;
         } else {
@@ -680,7 +981,8 @@ mod tests {
             assert_eq!(mode(&directory.join(name)), 0o600);
             assert_eq!(std::fs::read(directory.join(name)).unwrap(), b"history\n");
         }
-        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 3);
+        assert_eq!(mode(&directory.join("compat.log")), 0o600);
+        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 4);
     }
 
     #[test]
@@ -821,7 +1123,7 @@ mod tests {
         let target = scratch.0.join("outside");
         std::fs::create_dir(&target).unwrap();
         std::os::unix::fs::symlink(&target, &directory).unwrap();
-        logs.0.lock().unwrap().day = 0;
+        logs.events.lock().unwrap().day = 0;
         logs.event(Event::Ready, 30);
         assert_eq!(std::fs::read_dir(target).unwrap().count(), 0);
         let row = |name: &str| -> serde_json::Value {
@@ -842,7 +1144,7 @@ mod tests {
         std::fs::rename(&path, &original).unwrap();
         let target = scratch.0.join("outside");
         std::os::unix::fs::symlink(&target, &path).unwrap();
-        logs.0.lock().unwrap().day = 0;
+        logs.events.lock().unwrap().day = 0;
         logs.event(Event::Ready, 30);
         assert!(!target.exists(), "rotation created the symlink target");
         assert_eq!(std::fs::read(original).unwrap(), before);
@@ -871,7 +1173,7 @@ mod tests {
                 .unwrap();
             }
             {
-                let mut log = logs.0.lock().unwrap();
+                let mut log = logs.events.lock().unwrap();
                 if size_rollover {
                     log.bytes = 10 * 1024 * 1024;
                 } else {
@@ -910,7 +1212,7 @@ mod tests {
         assert_eq!(row["event"], "compat_output");
         assert_eq!(row["level"], 50);
         assert_eq!(row.as_object().unwrap().len(), 3);
-        logs.0.lock().unwrap().day = 0;
+        logs.events.lock().unwrap().day = 0;
         logs.event(Event::Ready, 30);
         assert_eq!(
             std::fs::read(scratch.0.join("logs/desktop.1.jsonl")).unwrap(),
@@ -1032,7 +1334,7 @@ mod tests {
                     .map(|_| {
                         scope.spawn(|| {
                             barrier.wait();
-                            open_log(&directory)
+                            open_log(&directory, DESKTOP)
                                 .map(|file| file.metadata().unwrap().ino())
                                 .map_err(|error| error.to_string())
                         })
@@ -1056,7 +1358,7 @@ mod tests {
         let directory = File::open(scratch.0.join("logs")).unwrap();
         std::fs::write(&path, "").unwrap();
         let mut windows = Vec::new();
-        let error = open_log_observed(&directory, |window| {
+        let error = open_log_observed(&directory, DESKTOP, |window| {
             windows.push(window);
             if window == OpenWindow::Reopen {
                 std::fs::remove_file(&path).unwrap();
@@ -1078,7 +1380,7 @@ mod tests {
                 std::fs::write(&path, "").unwrap();
             }
             let mut windows = Vec::new();
-            let error = open_log_observed(&directory, |window| {
+            let error = open_log_observed(&directory, DESKTOP, |window| {
                 windows.push(window);
                 if window == OpenWindow::Secure {
                     std::fs::remove_file(&path).unwrap();
@@ -1094,5 +1396,261 @@ mod tests {
             assert_eq!(windows, expected, "existing {existing}");
             assert!(std::fs::symlink_metadata(&path).is_err());
         }
+    }
+
+    const T13_SECRETS: [&str; 8] = [
+        "PLANTED_BEARER_1f9c",
+        "PLANTED_COOKIE_77aa",
+        "PLANTED_BOOTSTRAP_e1",
+        "PLANTED_PRINCIPAL_5d",
+        "PLANTED_API_KEY_beef",
+        "PLANTED_RUNTIME_KEY_ab12cd34",
+        "PLANTED_PANIC_TOKEN",
+        "PLANTED_SESSION_ID_77",
+    ];
+
+    fn assert_clean(text: &str) {
+        for secret in T13_SECRETS {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
+        }
+    }
+
+    fn rows(path: &Path) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|row| serde_json::from_str(row).unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn ticket_t_13_compat_capture_writes_scrubbed_pino_and_text_to_compat_log() {
+        let scratch = Scratch::new();
+        let logs = Logs::open(scratch.0.join("logs"))
+            .unwrap()
+            .with_secret("PLANTED_RUNTIME_KEY_ab12cd34");
+        let output = concat!(
+            "{\"level\":30,\"time\":1,\"msg\":\"request completed\",\"req\":{\"url\":\"/desktop?bootstrap=PLANTED_BOOTSTRAP_e1\",",
+            "\"headers\":{\"authorization\":\"Bearer PLANTED_BEARER_1f9c\",\"cookie\":\"pp_session=PLANTED_COOKIE_77aa\",",
+            "\"x-pp-principal\":\"PLANTED_PRINCIPAL_5d\",\"accept\":\"text/html\"}}}\n",
+            "{\"level\":50,\"time\":2,\"msg\":\"spoolman sync failed\",\"err\":{\"type\":\"Error\",",
+            "\"message\":\"GET http://spoolman.local/api?api_key=PLANTED_API_KEY_beef\",",
+            "\"stack\":\"Error: key PLANTED_RUNTIME_KEY_ab12cd34\\n    at sync.js:4\"}}\n",
+            "plain stderr Authorization: Bearer PLANTED_BEARER_1f9c\n",
+            "{\"level\":40,\"time\":3,\"msg\":\"unterminated cookie: PLANTED_COOKIE_77aa\"}",
+        );
+        logs.capture(output.as_bytes()).await;
+        let compat = std::fs::read_to_string(scratch.0.join("logs/compat.log")).unwrap();
+        assert_clean(&compat);
+        let rows = rows(&scratch.0.join("logs/compat.log"));
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0]["msg"], "request completed");
+        assert_eq!(rows[0]["req"]["url"], "/desktop?bootstrap=[REDACTED]");
+        assert_eq!(rows[0]["req"]["headers"]["authorization"], redact::REDACTED);
+        assert_eq!(rows[0]["req"]["headers"]["accept"], "text/html");
+        assert_eq!(rows[1]["level"], 50);
+        assert_eq!(
+            rows[1]["err"]["message"],
+            "GET http://spoolman.local/api?api_key=[REDACTED]"
+        );
+        assert_eq!(rows[2]["level"], 30);
+        assert_eq!(rows[2]["msg"], "plain stderr Authorization: [REDACTED]");
+        assert_eq!(rows[3]["level"], 40);
+        assert_eq!(mode(&scratch.0.join("logs/compat.log")), 0o600);
+        let events = std::fs::read_to_string(scratch.0.join("logs/desktop.jsonl")).unwrap();
+        assert_eq!(events.lines().count(), 4);
+        assert_clean(&events);
+        assert_clean(&recent_diagnostics(&scratch.0).unwrap());
+    }
+
+    #[tokio::test]
+    async fn ticket_t_13_capture_bounds_oversized_lines() {
+        let scratch = Scratch::new();
+        let logs = Logs::open(scratch.0.join("logs")).unwrap();
+        let mut output = vec![b'a'; 1024 * 1024];
+        output.extend_from_slice(b"\n{\"level\":30,\"msg\":\"after\"}\n");
+        logs.capture(&output[..]).await;
+        let rows = rows(&scratch.0.join("logs/compat.log"));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["msg"].as_str().unwrap().len(), LINE_BYTES);
+        assert_eq!(rows[1]["msg"], "after");
+    }
+
+    #[test]
+    fn ticket_t_13_core_log_records_scrubbed_tracing_events_and_error_chains() {
+        let scratch = Scratch::new();
+        let core = CoreLog::open(&scratch.0).unwrap();
+        let error = anyhow::anyhow!("cookie: pp_session=PLANTED_COOKIE_77aa")
+            .context("GET /desktop?bootstrap=PLANTED_BOOTSTRAP_e1")
+            .context("Compatibility request failed");
+        tracing::subscriber::with_default(core, || {
+            tracing::debug!("not recorded below info");
+            tracing::error!(
+                error = AsRef::<dyn std::error::Error + 'static>::as_ref(&error),
+                api_key = "PLANTED_API_KEY_beef",
+                attempt = 3u64,
+                "proxy rejected Authorization: Bearer PLANTED_BEARER_1f9c"
+            );
+            tracing::info!(target: "pp_core::startup", "core ready");
+        });
+        let text = std::fs::read_to_string(scratch.0.join("logs/core.log")).unwrap();
+        assert_clean(&text);
+        let rows = rows(&scratch.0.join("logs/core.log"));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["level"], 50);
+        assert_eq!(rows[0]["target"], module_path!());
+        assert_eq!(
+            rows[0]["message"],
+            "proxy rejected Authorization: [REDACTED]"
+        );
+        assert_eq!(
+            rows[0]["error"],
+            "Compatibility request failed: GET /desktop?bootstrap=[REDACTED]: cookie: [REDACTED]"
+        );
+        assert_eq!(rows[0]["api_key"], redact::REDACTED);
+        assert_eq!(rows[0]["attempt"], 3);
+        assert_eq!(rows[1]["level"], 30);
+        assert_eq!(rows[1]["target"], "pp_core::startup");
+        assert_eq!(mode(&scratch.0.join("logs/core.log")), 0o600);
+    }
+
+    #[test]
+    fn ticket_t_13_core_log_truncates_oversized_rows() {
+        let scratch = Scratch::new();
+        let core = CoreLog::open(&scratch.0).unwrap();
+        let huge = "x".repeat(1024 * 1024);
+        tracing::subscriber::with_default(core, || tracing::warn!("{huge}"));
+        let rows = rows(&scratch.0.join("logs/core.log"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["truncated"], true);
+        assert_eq!(rows[0]["message"].as_str().unwrap().len(), LINE_BYTES / 2);
+        let scratch = Scratch::new();
+        let core = CoreLog::open(&scratch.0).unwrap();
+        let wide = "\u{20ac}".repeat(1024 * 1024);
+        tracing::subscriber::with_default(core, || tracing::warn!("{wide}"));
+        let text = std::fs::read_to_string(scratch.0.join("logs/core.log")).unwrap();
+        assert!(text.len() <= LINE_BYTES);
+        let row: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(row["truncated"], true);
+    }
+
+    fn stream_files(directory: &Path, stream: Stream) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with(&format!("{}.", stream.stem)))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn ticket_t_13_forced_rotation_keeps_seven_files_for_each_source() {
+        let scratch = Scratch::new();
+        let directory = scratch.0.join("logs");
+        let logs = Logs::open(directory.clone()).unwrap();
+        let core = CoreLog::open(&scratch.0).unwrap();
+        for round in 0..10u64 {
+            let size = round % 2 == 0;
+            {
+                let mut compat = logs.compat.lock().unwrap();
+                let mut sink = core.sink.lock().unwrap();
+                let Sink::File(core_file) = &mut *sink else {
+                    panic!("core log not attached")
+                };
+                for log in [&mut *compat, core_file] {
+                    if size {
+                        log.bytes = FILE_BYTES;
+                    } else {
+                        log.day = 0;
+                    }
+                }
+            }
+            logs.capture(format!("{{\"level\":30,\"msg\":\"round {round}\"}}\n").as_bytes())
+                .await;
+            tracing::subscriber::with_default(core.clone(), || tracing::info!("round {round}"));
+        }
+        for (stream, field) in [(COMPAT, "msg"), (CORE, "message")] {
+            let expected: Vec<String> = std::iter::once(format!("{}.log", stream.stem))
+                .chain((1..=ARCHIVES).map(|index| format!("{}.{index}.log", stream.stem)))
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            assert_eq!(stream_files(&directory, stream), expected);
+            assert_eq!(
+                rows(&directory.join(format!("{}.log", stream.stem)))[0][field],
+                "round 9"
+            );
+            for index in 1..=ARCHIVES {
+                let archive = directory.join(format!("{}.{index}.log", stream.stem));
+                assert_eq!(rows(&archive)[0][field], format!("round {}", 9 - index));
+                assert_eq!(mode(&archive), 0o600);
+            }
+        }
+    }
+
+    #[test]
+    fn ticket_t_13_panic_writes_local_crash_record_without_telemetry() {
+        let scratch = Scratch::new();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "logs::tests::core_log_panic_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("PP_T13_PANIC_DATA", &scratch.0)
+            .env_remove("SENTRY_DSN")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let text = std::fs::read_to_string(scratch.0.join("logs/core.log")).unwrap();
+        assert_clean(&text);
+        let rows = rows(&scratch.0.join("logs/core.log"));
+        let panic = rows.iter().find(|row| row["target"] == "panic").unwrap();
+        assert_eq!(panic["level"], 60);
+        assert_eq!(panic["message"], "renderer bridge lost token=[REDACTED]");
+        assert!(panic["location"].as_str().unwrap().contains("logs.rs:"));
+        assert_eq!(rows[0]["message"], "before admission session_id=[REDACTED]");
+        assert_eq!(rows[0]["level"], 40);
+        assert_eq!(rows[1]["message"], "before crash");
+    }
+
+    #[test]
+    fn ticket_t_13_core_log_holds_early_rows_until_attach_and_bounds_them() {
+        let scratch = Scratch::new();
+        let core = CoreLog::buffered();
+        tracing::subscriber::with_default(core.clone(), || {
+            tracing::warn!("cutover_evidence_unsaved");
+            for index in 0..PENDING_ROWS + 10 {
+                tracing::info!("early {index}");
+            }
+        });
+        assert!(!scratch.0.join("logs/core.log").exists());
+        core.attach(&scratch.0).unwrap();
+        tracing::subscriber::with_default(core, || tracing::info!("attached"));
+        let rows = rows(&scratch.0.join("logs/core.log"));
+        assert_eq!(rows.len(), PENDING_ROWS + 2);
+        assert_eq!(rows[0]["message"], "core log dropped 11 early rows");
+        assert_eq!(rows[0]["level"], 40);
+        assert_eq!(rows[1]["message"], "early 10");
+        assert_eq!(
+            rows[PENDING_ROWS]["message"],
+            format!("early {}", PENDING_ROWS + 9)
+        );
+        assert_eq!(rows[PENDING_ROWS + 1]["message"], "attached");
+    }
+
+    #[test]
+    #[ignore = "runs in an isolated subprocess and panics on purpose"]
+    fn core_log_panic_child() {
+        let data = PathBuf::from(std::env::var_os("PP_T13_PANIC_DATA").unwrap());
+        let log = CoreLog::buffered();
+        assert!(log.install());
+        tracing::warn!("before admission session_id={}", "PLANTED_SESSION_ID_77");
+        log.attach(&data).unwrap();
+        tracing::info!("before crash");
+        panic!("renderer bridge lost token={}", "PLANTED_PANIC_TOKEN");
     }
 }

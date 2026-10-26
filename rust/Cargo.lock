@@ -3322,11 +3322,13 @@ dependencies = [
  "hyper-util",
  "libc",
  "rand 0.9.5",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -3367,6 +3369,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -3383,6 +3386,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-wdio-webdriver",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

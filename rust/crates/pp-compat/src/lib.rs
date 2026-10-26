@@ -2,8 +2,9 @@ mod account_pin;
 pub use account_pin::DesktopAccountPin;
 pub mod drain;
 mod logs;
-pub use logs::recent_diagnostics;
+pub use logs::{CoreLog, recent_diagnostics};
 mod parent_death;
+pub mod redact;
 use parent_death::{ParentDeathGuard, configure_child};
 mod release;
 use anyhow::{Context, Result, bail, ensure};
@@ -551,6 +552,8 @@ impl Process {
             let _ = child.wait().await;
             bail!("Compatibility setup failed");
         }
+        // The child receives its HMAC key on stdin; never let it echo back.
+        let capture = &capture.with_secret(hex::encode(key));
         let mut logs = Vec::new();
         if let Some(stdout) = child.stdout.take() {
             let capture = capture.clone();
@@ -625,6 +628,7 @@ impl Process {
             let _ = child.wait().await;
             bail!("Compatibility setup failed");
         }
+        let capture = &capture.with_secret(hex::encode(key));
         let mut logs = Vec::new();
         if let Some(stdout) = child.stdout.take() {
             let capture = capture.clone();

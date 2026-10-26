@@ -22,10 +22,19 @@ fn automation_marker() -> &'static str {
 }
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    // Hold tracing rows and arm the crash hook before anything can log; rows
+    // reach core.log once core startup admits the data directory. A failure
+    // before that point is reported on stderr only.
+    let core_log = pp_core::CoreLog::buffered();
+    if !core_log.install() {
+        eprintln!("core_log_unavailable: subscriber_already_installed");
+    }
+    match run(&core_log) {
         Ok(code) => std::process::ExitCode::from(code),
         Err(error) => {
-            eprintln!("{}", startup_diagnostic(&error));
+            let diagnostic = startup_diagnostic(&error);
+            tracing::error!("{diagnostic}");
+            eprintln!("{diagnostic}");
             if cfg!(debug_assertions)
                 && std::env::args().any(|argument| argument == "--test-exit-seconds")
             {
@@ -92,7 +101,7 @@ fn show_startup_error() {
         .show();
 }
 
-fn run() -> Result<u8> {
+fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -167,6 +176,14 @@ fn run() -> Result<u8> {
     let mut core = runtime
         .block_on(CoreRuntime::start(launch))
         .context("Desktop core startup failed")?;
+    // Core startup admitted the data directory; flush the held rows and
+    // record tracing and panics in its logs folder, telemetry or not.
+    if let Err(error) = core_log.attach(&data) {
+        eprintln!(
+            "core_log_unavailable: os_error={}",
+            error.raw_os_error().unwrap_or_default()
+        );
+    }
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
         let launch_url = core.take_launch_target()?.into_url();

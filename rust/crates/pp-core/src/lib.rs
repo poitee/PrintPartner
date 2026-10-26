@@ -63,6 +63,8 @@ pub struct DesktopLaunch {
 pub use pp_compat::SupervisorConfig;
 pub use pp_compat::recent_diagnostics;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
+/// The shared scrub policy for log files, the Logs view and opt-in Sentry.
+pub use pp_compat::{CoreLog, redact};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
 pub struct CoreHandle {
@@ -213,6 +215,7 @@ async fn start_resources(
         .map_err(|error| anyhow::anyhow!("Operation cutover recovery failed: {error:?}"))?;
     if !boot.evidence_saved {
         eprintln!("cutover_evidence_unsaved");
+        tracing::warn!("cutover_evidence_unsaved");
     }
     pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
         .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
