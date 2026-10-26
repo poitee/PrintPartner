@@ -13,9 +13,12 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     net::SocketAddr,
-    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 const COOKIE_SUFFIX: &str = "; Max-Age=1209600; Path=/; HttpOnly; SameSite=Lax";
 const DAY_MS: i64 = 86_400_000;
@@ -99,22 +102,6 @@ struct RegistrationFacts {
     start: i64,
     end: i64,
 }
-struct Directory(PathBuf);
-impl Directory {
-    fn new() -> Self {
-        let mut entropy = [0; 12];
-        getrandom::fill(&mut entropy).unwrap();
-        let path =
-            std::env::temp_dir().join(format!("pp-registration-rust-{}", hex::encode(entropy)));
-        Self(path)
-    }
-}
-impl Drop for Directory {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).unwrap();
-    }
-}
-
 fn fixture() -> Fixture {
     let fixture: Fixture = serde_json::from_str(include_str!(
         "../../../../fixtures/parity/auth-registration/node.json"
@@ -376,10 +363,8 @@ fn now_ms() -> i64 {
 }
 
 async fn replay(fixture: &Fixture) -> (Vec<Observation>, RawObservation, RegistrationFacts) {
-    let directory = Directory::new();
-    let owner = WriterOwner::open(&directory.0, Limits::default())
-        .unwrap()
-        .0;
+    let directory = Scratch::new("pp-registration-rust-");
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
     let policy = AuthPolicy {
         registration: RegistrationPolicy::FirstAccountOnly,
         first_user: FirstUserTenant::NewUser,
@@ -417,7 +402,7 @@ async fn replay(fixture: &Fixture) -> (Vec<Observation>, RawObservation, Registr
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
-    let db = Connection::open(directory.0.join("print-partner.db")).unwrap();
+    let db = Connection::open(directory.join("print-partner.db")).unwrap();
     let mut facts: Option<RegistrationFacts> = None;
     let mut registered = None;
     let mut observations = Vec::new();

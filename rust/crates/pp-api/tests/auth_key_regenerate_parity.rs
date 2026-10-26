@@ -16,27 +16,28 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     net::SocketAddr,
-    path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 struct Server {
     origin: String,
     http: Client,
     auth: RebuildAuthClient,
     owner: WriterOwner,
-    directory: PathBuf,
     task: tokio::task::JoinHandle<()>,
     shutdown: tokio::sync::oneshot::Sender<()>,
+    /// Last field: removed only after the storage owner has dropped, even on panic.
+    directory: Scratch,
 }
 
 impl Server {
     async fn start() -> Self {
-        let mut random = [0; 12];
-        getrandom::fill(&mut random).unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("pp-key-regenerate-parity-{}", hex::encode(random)));
+        let directory = Scratch::new("pp-key-regenerate-parity-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let auth = owner
             .rebuild_auth_with_policy(
@@ -99,7 +100,6 @@ impl Server {
         self.shutdown.send(()).unwrap();
         self.task.await.unwrap();
         self.owner.shutdown().unwrap();
-        std::fs::remove_dir_all(self.directory).unwrap();
     }
 }
 

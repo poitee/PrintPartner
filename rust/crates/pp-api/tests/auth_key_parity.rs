@@ -22,10 +22,14 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 const GOLDEN: &str = include_str!("../../../../fixtures/parity/auth-key/node.json");
 
@@ -292,7 +296,7 @@ struct Replay {
     steps: Vec<Value>,
     raw: Vec<Value>,
     issued: Vec<String>,
-    directory: PathBuf,
+    directory: Scratch,
     tenant: String,
 }
 
@@ -301,9 +305,7 @@ async fn replay() -> Replay {
         .as_array()
         .unwrap()
         .clone();
-    let mut bytes = [0; 12];
-    getrandom::fill(&mut bytes).unwrap();
-    let directory = std::env::temp_dir().join(format!("pp-auth-key-parity-{}", hex::encode(bytes)));
+    let directory = Scratch::new("pp-auth-key-parity-");
     let mut server = Server::open(&directory).await;
     let (owner_cookie, tenant) = server.register("owner@example.com").await;
     let foreign = server.register("foreign@example.com").await;
@@ -434,13 +436,11 @@ async fn rust_key_routes_match_node_contract_and_redact_secrets() {
         [false, false, true, true],
         "revocation survives reopen"
     );
-    std::fs::remove_dir_all(&replay.directory).unwrap();
 }
 
 #[tokio::test]
 async fn comparison_rejects_leaked_secret_and_accepted_revoked_key() {
     let replay = replay().await;
-    std::fs::remove_dir_all(&replay.directory).unwrap();
     assert!(mismatches(&replay.steps, &replay.raw).is_empty());
     let step = |op: &str, after: usize| {
         (after..replay.steps.len())

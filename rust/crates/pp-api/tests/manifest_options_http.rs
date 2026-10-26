@@ -4,22 +4,22 @@ use serde_json::Value;
 #[cfg(feature = "desktop_rebuild")]
 use serde_json::json;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex},
 };
 
-fn open() -> (Arc<Mutex<WriterOwner>>, PathBuf) {
-    let directory = std::env::temp_dir().join(format!("pp-manifest-http-{}", {
-        let mut bytes = [0u8; 8];
-        getrandom::fill(&mut bytes).unwrap();
-        hex::encode(bytes)
-    }));
-    (
-        Arc::new(Mutex::new(
-            WriterOwner::open(&directory, Limits::default()).unwrap().0,
-        )),
-        directory,
-    )
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+
+/// Returns the directory first so that, on panic, `owner` drops before the
+/// scratch directory is removed.
+fn open() -> (Scratch, Arc<Mutex<WriterOwner>>) {
+    let directory = Scratch::new("pp-manifest-http-");
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+    (directory, Arc::new(Mutex::new(owner)))
 }
 
 fn files(dir: &Path) -> Vec<(String, u64)> {
@@ -148,10 +148,10 @@ async fn bind() -> tokio::net::TcpListener {
     tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap()
 }
 
-fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: PathBuf) {
+fn shutdown(owner: Arc<Mutex<WriterOwner>>, directory: Scratch) {
     let owner = Arc::try_unwrap(owner).unwrap_or_else(|_| panic!("router still holds storage"));
     owner.into_inner().unwrap().shutdown().unwrap();
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 }
 
 const KIT_PATHS: &[&str] = &[
@@ -170,7 +170,7 @@ const BUILDER_PATHS: &[&str] = &[
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn kit_manifest_read_flag_off_is_404() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let before = profiles(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
@@ -196,7 +196,7 @@ async fn kit_manifest_read_flag_off_is_404() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn kit_manifest_read_matches_storage() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
     let (status, body) = server.send(Method::GET, "/plans/1/kit-manifest", &[]).await;
     assert_eq!(status, 404);
@@ -208,7 +208,7 @@ async fn kit_manifest_read_matches_storage() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn kit_manifest_save_rejects_changed_basis() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
     let (status, body) = server.send(Method::PUT, "/plans/1/kit-manifest", &[]).await;
@@ -222,7 +222,7 @@ async fn kit_manifest_save_rejects_changed_basis() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn kit_manifest_save_rejects_unknown_selection() {
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let snapshot = files(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
     let (status, body) = server.send(Method::PUT, "/plans/1/kit-manifest", &[]).await;
@@ -310,7 +310,7 @@ fn read_kit_storage(owner: &Mutex<WriterOwner>, token: &str, build: i64) -> Valu
 #[tokio::test]
 async fn kit_manifest_read_flag_off_is_404() {
     use pp_api::builds::{BuildHttpConfig, build_router};
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let before = profiles(&directory);
     let snapshot = files(&directory);
     for flag in [None, Some(""), Some("0"), Some("false"), Some("TRUE")] {
@@ -359,7 +359,7 @@ async fn kit_manifest_read_matches_storage() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -554,7 +554,7 @@ fn attach_checkout(directory: &Path, tenant: &str, build: i64) {
 
 #[cfg(feature = "desktop_rebuild")]
 struct BasisChangeReads {
-    database: PathBuf,
+    database: std::path::PathBuf,
     calls: std::sync::atomic::AtomicUsize,
 }
 
@@ -658,7 +658,7 @@ async fn kit_manifest_save_rejects_unknown_selection() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -770,7 +770,7 @@ async fn kit_manifest_save_rejects_changed_basis() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -994,7 +994,7 @@ async fn builder_read_retries_one_changed_observation() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1116,7 +1116,7 @@ async fn builder_read_zero_variants_honors_cancellation() {
     };
     use std::{sync::atomic::AtomicBool, time::Duration};
 
-    let (owner, directory) = open();
+    let (directory, owner) = open();
     let chosen = policy();
     let bound = bind().await;
     let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1288,12 +1288,13 @@ impl pp_storage::working_drafts::observation::DraftReads for ScriptedReads {
 struct BuilderFixture {
     server: Server,
     owner: Arc<Mutex<WriterOwner>>,
-    directory: PathBuf,
     reads: Arc<ScriptedReads>,
     cookie: String,
     stranger: String,
     id: i64,
     tenant: String,
+    /// Last field: removed only after `owner` has dropped, even on panic.
+    directory: Scratch,
 }
 
 #[cfg(feature = "desktop_rebuild")]
@@ -1311,7 +1312,7 @@ impl BuilderFixture {
         };
         use std::{sync::atomic::AtomicBool, time::Duration};
 
-        let (owner, directory) = open();
+        let (directory, owner) = open();
         let chosen = policy();
         let bound = bind().await;
         let origin = format!("http://{}", bound.local_addr().unwrap());
@@ -1534,4 +1535,12 @@ async fn builder_read_refuses_bad_ids_missing_builds_and_anonymous_callers() {
     // Only the owner's successful reads observed the source; refusals never did.
     assert_eq!(fixture.calls(), PREFIXES.len() * 2 * 2);
     fixture.finish().await;
+}
+
+#[test]
+fn scratch_root_is_empty_after_manifest_options_http_tests() {
+    cleanup::assert_test_run_clean(&[
+        "--skip",
+        "scratch_root_is_empty_after_manifest_options_http_tests",
+    ]);
 }

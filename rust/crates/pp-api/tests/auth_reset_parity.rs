@@ -13,7 +13,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
-    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -21,6 +20,10 @@ use std::{
     time::Duration,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 const FIXTURE: &str = include_str!("../../../../fixtures/parity/auth-reset/node.json");
 const KNOWN: &str = "known@reset.example.test";
@@ -193,14 +196,13 @@ struct Server {
     mail: ResetMailer,
     task: tokio::task::JoinHandle<()>,
     shutdown: tokio::sync::oneshot::Sender<()>,
-    directory: PathBuf,
     smtp: SmtpFake,
+    /// Last field: removed only after the storage owner has dropped, even on panic.
+    _directory: Scratch,
 }
 impl Server {
     async fn start(mode: Mode) -> Self {
-        let mut bytes = [0; 12];
-        getrandom::fill(&mut bytes).unwrap();
-        let directory = std::env::temp_dir().join(format!("pp-auth-reset-{}", hex::encode(bytes)));
+        let directory = Scratch::new("pp-auth-reset-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let policy = AuthPolicy {
             registration: RegistrationPolicy::Open,
@@ -252,7 +254,7 @@ impl Server {
             mail,
             task,
             shutdown,
-            directory,
+            _directory: directory,
             smtp,
         }
     }
@@ -261,7 +263,6 @@ impl Server {
         self.task.await.unwrap();
         drop(self.db);
         self.owner.shutdown().unwrap();
-        std::fs::remove_dir_all(self.directory).unwrap();
         self.smtp.close();
     }
     async fn post(&self, path: &str, body: Value) -> (u16, Value) {

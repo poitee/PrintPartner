@@ -6,7 +6,11 @@ use pp_storage::{
 use reqwest::{Client, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, time::Duration};
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,62 +119,9 @@ async fn observe(response: Response) -> PublicResponse {
     }
 }
 
-struct Directory(PathBuf);
-impl Directory {
-    fn new() -> Self {
-        let mut bytes = [0; 12];
-        getrandom::fill(&mut bytes).unwrap();
-        let path = std::env::temp_dir().join(format!("pp-auth-login-rust-{}", hex::encode(bytes)));
-        std::fs::create_dir(&path).unwrap();
-        Self(path)
-    }
-}
-impl Drop for Directory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-#[test]
-fn directory_cleanup_removes_only_its_own_directory() {
-    let directory = Directory::new();
-    let path = directory.0.clone();
-    std::fs::write(path.join("disposable.txt"), "owned data").unwrap();
-    let sibling = Directory::new();
-    let sibling_file = sibling.0.join("keep.txt");
-    std::fs::write(&sibling_file, "sibling data").unwrap();
-
-    drop(directory);
-
-    assert!(!path.exists());
-    assert_eq!(
-        std::fs::read_to_string(sibling_file).unwrap(),
-        "sibling data"
-    );
-}
-
-#[test]
-fn directory_cleanup_failure_preserves_original_panic() {
-    let directory = Directory::new();
-    std::fs::remove_dir(&directory.0).unwrap();
-
-    let result = std::panic::catch_unwind(move || {
-        let _directory = directory;
-        panic!("original auth parity assertion");
-    });
-
-    let panic = result.unwrap_err();
-    assert_eq!(
-        panic.downcast_ref::<&str>(),
-        Some(&"original auth parity assertion")
-    );
-}
-
 async fn run_case(case: &Case, account: &Value) -> PublicResponse {
-    let directory = Directory::new();
-    let owner = WriterOwner::open(&directory.0, Limits::default())
-        .unwrap()
-        .0;
+    let directory = Scratch::new("pp-auth-login-rust-");
+    let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
     let auth = owner
         .auth_with_policy(AuthPolicy {
             registration: if case.registration_open {

@@ -9,7 +9,11 @@ use pp_storage::{
 use reqwest::{Client, Method};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, net::SocketAddr};
+
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
 
 const FIXTURE: &str = include_str!("../../../../fixtures/parity/auth-reset-complete/node.json");
 
@@ -23,12 +27,6 @@ fn password(label: &str) -> String {
         format!("pp-fixture-{label}-password")
     }
 }
-fn random() -> String {
-    let mut bytes = [0; 12];
-    getrandom::fill(&mut bytes).unwrap();
-    hex::encode(bytes)
-}
-
 struct Server {
     origin: String,
     client: Client,
@@ -36,11 +34,12 @@ struct Server {
     db: Connection,
     task: tokio::task::JoinHandle<()>,
     shutdown: tokio::sync::oneshot::Sender<()>,
-    directory: PathBuf,
+    /// Last field: removed only after the storage owner has dropped, even on panic.
+    _directory: Scratch,
 }
 impl Server {
     async fn start() -> Self {
-        let directory = std::env::temp_dir().join(format!("pp-reset-complete-{}", random()));
+        let directory = Scratch::new("pp-reset-complete-");
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let policy = AuthPolicy {
             registration: RegistrationPolicy::Open,
@@ -82,7 +81,7 @@ impl Server {
             db,
             task,
             shutdown,
-            directory,
+            _directory: directory,
         }
     }
     async fn close(self) {
@@ -90,7 +89,6 @@ impl Server {
         self.task.await.unwrap();
         drop(self.db);
         self.owner.shutdown().unwrap();
-        std::fs::remove_dir_all(self.directory).unwrap();
     }
     /// (password hash, session count, reset-token count) for the fixture user.
     fn state(&self, email: &str) -> (Option<String>, i64, i64) {

@@ -18,15 +18,12 @@ use std::{
     time::Duration,
 };
 
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
 #[path = "../../pp-storage/tests/common/process.rs"]
 mod child_process;
-
-struct Scratch(PathBuf);
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,10 +152,7 @@ async fn compare(name: &str) {
         .into_iter()
         .find(|case| case.name == name)
         .unwrap();
-    let mut random = [0; 12];
-    getrandom::fill(&mut random).unwrap();
-    let directory = std::env::temp_dir().join(format!("pp-auth-health-{}", hex::encode(random)));
-    let _cleanup = Scratch(directory.clone());
+    let directory = Scratch::new("pp-auth-health-");
     let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
     let seed = owner.auth(FirstUserTenant::NewUser);
     let cookie = register(&seed, "health@example.test").await;
@@ -218,7 +212,7 @@ async fn compare(name: &str) {
     if let Some(owner) = owner {
         owner.shutdown().unwrap();
     }
-    std::fs::remove_dir_all(directory).unwrap();
+    drop(directory);
 
     let (expected, declared_differences) = expected(name);
     assert_eq!(actual.status, expected.status, "{name}");
