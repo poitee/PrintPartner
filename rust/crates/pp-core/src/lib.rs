@@ -64,10 +64,10 @@ pub struct DesktopLaunch {
 }
 
 pub use pp_compat::SupervisorConfig;
-pub use pp_compat::recent_diagnostics;
 pub use pp_compat::{Bundle as VerifiedBundle, Status as CoreStatus};
 /// The shared scrub policy for log files, the Logs view and opt-in Sentry.
 pub use pp_compat::{CoreLog, redact};
+pub use pp_compat::{log_folder, recent_diagnostics, recent_logs};
 pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 
 pub struct CoreHandle {
