@@ -169,9 +169,13 @@ impl Gateway {
             );
             route.owner = owners.owner_of(&format!("http.{} {}", route.method, route.path));
         }
+        ownership::cutover::admit_bundled_node_fences()
+            .map_err(|error| anyhow::anyhow!("Node fence admission failed: {error}"))?;
         for participant in owners.rust_participants() {
             anyhow::ensure!(
-                seen.contains(participant),
+                seen.contains(participant)
+                    || (!participant.starts_with("http.")
+                        && ownership::cutover::node_fences(participant)),
                 "Rust-owned participant {participant} is not a registered route"
             );
         }

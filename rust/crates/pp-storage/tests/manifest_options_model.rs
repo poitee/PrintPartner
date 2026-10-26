@@ -102,19 +102,19 @@ fn request_validation_emits_exact_error_bodies() {
         ),
         (
             r#"{"kit":{"selections":{"\ufeff\u2029":"a"}}}"#,
-            "kit.selections group id is required",
+            "kit.selections group ids must not be empty",
         ),
         (
             r#"{"kit":{"selections":{"g":true}}}"#,
-            "kit.selections.g must contain unique nonempty variant ids",
+            "kit.selections.g must be a non-empty string",
         ),
         (
-            r#"{"kit":{"selections":{"g":["a",1]}}}"#,
-            "kit.selections.g must contain unique nonempty variant ids",
+            r#"{"kit":{"selections":{"g":["a","a",1]}}}"#,
+            "kit.selections.g[2] must be a non-empty string",
         ),
         (
             r#"{"kit":{"selections":{"g":"\u00a0"}}}"#,
-            "kit.selections.g must contain unique nonempty variant ids",
+            "kit.selections.g must be a non-empty string",
         ),
         (
             r#"{"kit":{"replacements":[]}}"#,
@@ -122,7 +122,7 @@ fn request_validation_emits_exact_error_bodies() {
         ),
         (
             r#"{"kit":{"replacements":{"x":1}}}"#,
-            "kit.replacements must map strings to strings",
+            "kit.replacements.x must be a string",
         ),
         (
             r#"{"kit":{"choice_tree":null}}"#,
@@ -151,7 +151,7 @@ fn duplicate_variant_ids_are_rejected_after_ecmascript_trim() {
         let input = format!(r#"{{"kit":{{"selections":{{"g":{variants}}}}}}}"#);
         assert_eq!(
             request_error(input.as_bytes()),
-            br#"{"detail":"kit.selections.g must contain unique nonempty variant ids"}"#
+            br#"{"detail":"kit.selections.g must not contain duplicate variant ids"}"#
         );
     }
     let kit =
@@ -218,7 +218,7 @@ fn surrogate_text_keys_and_errors_remain_lossless() {
     assert_eq!(projection[0].1[0].0.units(), &[0xdc00]);
     assert_eq!(
         request_error(br#"{"kit":{"selections":{"\ud800":["x"," x "]}}}"#),
-        br#"{"detail":"kit.selections.\ud800 must contain unique nonempty variant ids"}"#
+        br#"{"detail":"kit.selections.\ud800 must not contain duplicate variant ids"}"#
     );
     assert_eq!(
         KitManifest::from_stored(std::str::from_utf8(expected).unwrap()).unwrap(),

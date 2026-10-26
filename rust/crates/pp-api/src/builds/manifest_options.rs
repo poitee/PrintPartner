@@ -1,4 +1,4 @@
-use super::http::{App, bytes_response, execute, failure, run};
+use super::http::{App, bytes_response, execute, failure, parse_build_id, run, unknown_build};
 use crate::loopback::PresentedCredential;
 use axum::{
     body::to_bytes,
@@ -6,9 +6,7 @@ use axum::{
     http::{Method, StatusCode},
     response::Response,
 };
-use pp_storage::build_graph::{
-    BuildCommand, ManifestOptionsCommand, ManifestOptionsOutcome, PositiveId,
-};
+use pp_storage::build_graph::{BuildCommand, ManifestOptionsCommand, ManifestOptionsOutcome};
 use serde_json::json;
 
 /// Node / docs allow 8 MiB for kit-manifest PUT; Build create stays at the
@@ -21,12 +19,8 @@ pub(super) async fn read_kit(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Response {
-    let Some(build) = id
-        .parse::<u64>()
-        .ok()
-        .and_then(|value| PositiveId::new(value).ok())
-    else {
-        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    let Some(build) = parse_build_id(&id) else {
+        return unknown_build(app, request).await;
     };
     execute(
         app,
@@ -42,12 +36,8 @@ pub(super) async fn save_kit(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Response {
-    let Some(build) = id
-        .parse::<u64>()
-        .ok()
-        .and_then(|value| PositiveId::new(value).ok())
-    else {
-        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    let Some(build) = parse_build_id(&id) else {
+        return unknown_build(app, request).await;
     };
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
@@ -77,12 +67,8 @@ pub(super) async fn read_builder(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Response {
-    let Some(build) = id
-        .parse::<u64>()
-        .ok()
-        .and_then(|value| PositiveId::new(value).ok())
-    else {
-        return failure(StatusCode::BAD_REQUEST, "Request is invalid");
+    let Some(build) = parse_build_id(&id) else {
+        return unknown_build(app, request).await;
     };
     execute(
         app,

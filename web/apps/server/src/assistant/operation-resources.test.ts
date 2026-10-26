@@ -82,7 +82,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -4792,6 +4792,217 @@ it("rejects reads outside the get_plan_review declaration", () => {
 
 it("pins accepted thumbnails to Node's renderer version", () => {
   expect(THUMBNAIL_RENDERER_VERSION).toBe(String(manifest.live_formats["accepted-thumbnails"].node_reads));
+});
+
+const SHIPPED_DOMAIN_ROOT = fileURLToPath(new URL("../data/assistant-domain", import.meta.url));
+const STACK_TABLES = ["table:build_profiles", "table:profile_layers", "table:projects"];
+const STACK_UNION = ["file:assistant-domain", "file:kit-catalog", "file:source-workspace", ...STACK_TABLES].sort();
+type InteractionTool = "get_interaction_graph" | "check_stack_compatibility";
+
+function interactionFileResources(files: { api: string; args: unknown[] }[], roots: { domain: string[]; catalog: string[]; workspace: string[] }): string[] {
+  const resources = new Set<string>();
+  for (const { api, args } of files) {
+    const path = args[0];
+    if (typeof path !== "string") throw new Error(`Unclassified filesystem call ${api}`);
+    const domainRead = (api === "existsSync" && args.length === 1)
+      || (api === "readdirSync" && args.length === 2 && JSON.stringify(args[1]) === '{"withFileTypes":true}')
+      || (api === "readFileSync" && args.length === 2 && args[1] === "utf8");
+    if (domainRead && roots.domain.some((root) => under(root, path))) resources.add("file:assistant-domain");
+    else if (api === "readFileSync" && args[1] === "utf8" && roots.catalog.includes(path)) resources.add("file:kit-catalog");
+    else if (["realpathSync", "lstatSync", "statSync"].includes(api) && args.length === 1 && roots.workspace.some((root) => under(root, path))) resources.add("file:source-workspace");
+    else throw new Error(`Unclassified filesystem call ${api} ${path}`);
+  }
+  return [...resources].sort();
+}
+
+function stackSelect(statement: unknown, tenantId: string): string {
+  const sql = z.string().parse(statement);
+  const id = "-?(?:0|[1-9][0-9]*)(?:\\.0)?";
+  const tenant = (table: string) => `"${table}"\\."tenant_id" = '${tenantId}'`;
+  const shapes: [string, RegExp][] = [
+    ["build_profiles", new RegExp(`^select "id", "name", "order_number", "archived_at" from "build_profiles" where \\(${tenant("build_profiles")} and "build_profiles"\\."id" = ${id}\\)$`)],
+    ["build_profiles", new RegExp(`^select "id" from "build_profiles" where \\(${tenant("build_profiles")} and "build_profiles"\\."id" = ${id}\\)$`)],
+    ["profile_layers", new RegExp(`^select (?:"[a-z_]+", )*"[a-z_]+" from "profile_layers" where "profile_layers"\\."profile_id" = ${id} order by "profile_layers"\\."layer_order" asc$`)],
+    ["projects", new RegExp(`^select (?:"[a-z_]+", )*"[a-z_]+" from "projects" where \\(${tenant("projects")} and "projects"\\."id" = ${id}\\)$`)],
+  ];
+  const match = shapes.find(([, pattern]) => pattern.test(sql));
+  if (!match) throw new Error(`Unsupported SQL: ${sql}`);
+  return `table:${match[0]}`;
+}
+
+function interactionDomainFixture() {
+  const domain = join(dataDir, "assistant-domain");
+  const write = (path: string, text: string) => { fs.mkdirSync(dirname(join(domain, path)), { recursive: true }); fs.writeFileSync(join(domain, path), text); };
+  write("sources/Toolhead-A/compatibility.yaml", ["source_name: Toolhead-A", "kind: toolhead", "conflicts_with: [Toolhead-B]", "not_for: [Fixture]", "replaces_parts:", "  - from_slug_or_path: stock/hotend_mount.stl", "    to_slug_or_path: a/mount.stl"].join("\n"));
+  write("sources/Toolhead-B/compatibility.yaml", ["source_name: Toolhead-B", "kind: toolhead"].join("\n"));
+  write("sources/Broken/compatibility.yaml", "[invalid");
+  write("sources/notes.md", "not a source directory");
+  write("_global/merge_conflicts.yaml", ["conflicts:", "  - slug_or_path: frame/skirt.stl", "    sources: [Fixture, Toolhead-A]", "    resolution: Prefer the Toolhead-A copy."].join("\n"));
+  const catalog = deploymentCatalogCandidates(dataDir)[0]!;
+  fs.writeFileSync(catalog, JSON.stringify({ version: 1, bases: {}, addon_categories: { probe: { rule: "pick_one", replaces_slot: "z_probe", sources: [{ name: "Probe-X" }, { name: "Probe-Y" }] }, accent: { rule: "pick_any", sources: [{ name: "Accent" }] } }, stack_presets: {} }));
+  return { domain, roots: { domain: [domain, SHIPPED_DOMAIN_ROOT], catalog: [...deploymentCatalogCandidates(dataDir), ...SHIPPED_CATALOG_CANDIDATES], workspace: [join(dataDir, "repos")] } };
+}
+
+async function traceInteraction(tool: InteractionTool, input: Record<string, unknown>, options: { repository?: AppRepository; tenantId?: string; activePlanId?: number; roots: { domain: string[]; catalog: string[]; workspace: string[] } }) {
+  const { repository = repo, tenantId = "default", activePlanId, roots } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, dataDir, activePlanId })); }
+  finally { observer.state.active = false; }
+  const tables = [...new Set(statements.map((sql) => stackSelect(sql, tenantId)))].sort();
+  const files = interactionFileResources(observer.state.files, roots);
+  return { body: z.record(z.string(), z.unknown()).parse(JSON.parse(output.content)), tables, files, calls: observer.state.files.map(({ api, args }) => [api, ...args]) };
+}
+
+function graphReads(domain: string, catalog: string | null): [string, ...unknown[]][] {
+  const shipped = join(SHIPPED_DOMAIN_ROOT, "sources");
+  return [
+    ["existsSync", join(domain, "sources")],
+    ["readdirSync", join(domain, "sources"), { withFileTypes: true }],
+    ...["Broken", "Toolhead-A", "Toolhead-B"].map((name): [string, ...unknown[]] => ["readFileSync", join(domain, "sources", name, "compatibility.yaml"), "utf8"]),
+    // The module and source data roots are the same directory when tests run from src.
+    ["existsSync", shipped], ["readdirSync", shipped, { withFileTypes: true }],
+    ["existsSync", shipped], ["readdirSync", shipped, { withFileTypes: true }],
+    ...(catalog ? [["readFileSync", catalog, "utf8"] as [string, ...unknown[]]] : []),
+    ["existsSync", join(domain, "_global", "merge_conflicts.yaml")],
+    ["readFileSync", join(domain, "_global", "merge_conflicts.yaml"), "utf8"],
+  ];
+}
+
+const TOOLHEAD_A = {
+  source_name: "Toolhead-A", kind: "toolhead", attaches_to_bases: [], conflicts_with: ["Toolhead-B"], not_for: ["Fixture"], replaces_slots: ["toolhead"],
+  replaces_parts: [{ from_source: null, from_slug_or_path: "stock/hotend_mount.stl", to_slug_or_path: "a/mount.stl" }], replaces: [],
+  catalog_category: null, catalog_slot: null, merge_conflict_ids: ["frame/skirt.stl"],
+};
+
+it("traces get_interaction_graph domain packs, catalog slots and tenants with zero SQL", async () => {
+  const { domain, roots } = interactionDomainFixture();
+  const catalog = deploymentCatalogCandidates(dataDir)[0]!;
+  const union = new Set<string>();
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    async function trace(input: Record<string, unknown>, tenantId = "default") {
+      const traced = await traceInteraction("get_interaction_graph", input, { roots, tenantId });
+      expect(traced.tables).toEqual([]);
+      for (const resource of traced.files) union.add(resource);
+      return traced;
+    }
+    for (const input of [{}, { source_name: "  " }, { source_name: 7 }]) {
+      expect(await trace(input)).toEqual({ body: { error: "source_name required" }, tables: [], files: [], calls: [] });
+    }
+    const exact = await trace({ source_name: " Toolhead-A " });
+    expect(exact.body).toEqual(TOOLHEAD_A);
+    expect(exact.calls).toEqual(graphReads(domain, catalog));
+    expect((await trace({ source_name: "toolhead-a" })).body).toEqual(TOOLHEAD_A);
+    expect((await trace({ source_name: "Toolhead-A" }, "other")).body).toEqual(TOOLHEAD_A);
+    const probe = await trace({ source_name: "Probe-X" });
+    expect(probe.body).toEqual({
+      source_name: "Probe-X", kind: null, attaches_to_bases: [], conflicts_with: ["Probe-Y"], not_for: [], replaces_slots: ["z_probe"],
+      replaces_parts: [], replaces: [], catalog_category: "probe", catalog_slot: "z_probe", merge_conflict_ids: [],
+    });
+    // A catalog slot hit reloads the catalog for its replaces_slot.
+    expect(probe.calls).toEqual([...graphReads(domain, catalog), ["readFileSync", catalog, "utf8"]]);
+    for (const source_name of ["Nope", "Broken", "Accent"]) {
+      const missing = await trace({ source_name });
+      expect(missing.body).toEqual({ error: `No interaction data for "${source_name}"`, hint: "Use an exact catalog/domain source_name." });
+      expect(missing.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+    }
+    fs.rmSync(domain, { recursive: true });
+    fs.rmSync(catalog);
+    const shipped = await trace({ source_name: "Toolhead-A" });
+    expect(shipped.body).toEqual({ error: 'No interaction data for "Toolhead-A"', hint: "Use an exact catalog/domain source_name." });
+    expect(shipped.calls.filter(([api]) => api === "readFileSync").map(([, path]) => path)).toEqual([...deploymentCatalogCandidates(dataDir), ...SHIPPED_CATALOG_CANDIDATES.slice(0, 2), join(SHIPPED_DOMAIN_ROOT, "_global", "merge_conflicts.yaml")]);
+    expect(shipped.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+  } finally { vi.unstubAllEnvs(); }
+  expect([...union].sort()).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+  const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === "tool.get_interaction_graph");
+  if (!entry || entry.operation === "source.sync") throw new Error("Missing get_interaction_graph declaration");
+  expect(entry.resources).toEqual([{ kind: "file", name: "assistant-domain" }, { kind: "file", name: "kit-catalog" }]);
+});
+
+for (const isolated of [false, true]) {
+  it(`traces check_stack_compatibility layers, additions, plan fallback and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { roots } = interactionDomainFixture();
+    const repos = join(dataDir, "repos");
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const toolheadB = repo.createSource({ name: "Toolhead-B", source_kind: "local" }).id;
+    const workspaces = [sourceId, toolheadB].map((id) => join(repos, String(id)));
+    for (const [index, id] of [sourceId, toolheadB].entries()) {
+      fs.mkdirSync(workspaces[index]!, { recursive: true });
+      sqlite.prepare("UPDATE projects SET local_path = ? WHERE id = ?").run(workspaces[index], id);
+    }
+    const plan = repo.createProfile("Stack", sourceId);
+    repo.addAddonLayer(plan.id, toolheadB);
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    const union = new Set<string>();
+    const probes = isolated ? workspaces.flatMap((workspace) => isolatedWorkspaceProbe(repos, workspace)) : [];
+    vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+    try {
+      async function trace(input: Record<string, unknown>, tables: string[], options: { tenantId?: string; activePlanId?: number } = {}) {
+        const traced = await traceInteraction("check_stack_compatibility", input, { roots, repository, ...options });
+        expect(traced.tables).toEqual(tables);
+        for (const resource of [...traced.tables, ...traced.files]) union.add(resource);
+        return traced;
+      }
+      const conflict = { severity: "warning", code: "compat_conflict", message: '"Toolhead-A" conflicts with "Toolhead-B".', sources: ["Toolhead-A", "Toolhead-B"] };
+      const curated = { severity: "info", code: "merge_conflict_curated", message: "frame/skirt.stl: Prefer the Toolhead-A copy.", sources: ["Fixture", "Toolhead-A"], conflict_id: "frame/skirt.stl" };
+      const explicit = await trace({ layers: [" Fixture ", "Toolhead-A", "Toolhead-B", "", 7], plan_id: plan.id }, ["table:build_profiles"]);
+      expect(explicit.body).toEqual({
+        plan_id: plan.id,
+        layers: ["Fixture", "Toolhead-A", "Toolhead-B", "7"],
+        warnings: [conflict, { severity: "warning", code: "compat_slot", message: 'Slot "toolhead" has multiple occupants: Toolhead-A, Toolhead-B.', sources: ["Toolhead-A", "Toolhead-B"], slot: "toolhead" }, curated],
+        suggested_excludes: ["hotend_mount.stl"],
+        conflicts: [{ a: "Toolhead-A", b: "Toolhead-B", reason: "conflicts_with" }, { a: "Toolhead-A", b: "Toolhead-B", reason: "slot:toolhead" }],
+        slots_occupied: { toolhead: ["Toolhead-A", "Toolhead-B"] },
+      });
+      expect(explicit.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+      const layered = ["table:build_profiles", "table:profile_layers", "table:projects"];
+      const stored = await trace({ plan_id: String(plan.id) }, layered);
+      expect(stored.body).toEqual({ plan_id: plan.id, layers: ["Fixture", "Toolhead-B"], warnings: [], suggested_excludes: [], conflicts: [], slots_occupied: { toolhead: ["Toolhead-B"] } });
+      expect(stored.calls.slice(0, probes.length)).toEqual(probes);
+      expect(stored.files).toEqual(isolated ? ["file:assistant-domain", "file:kit-catalog", "file:source-workspace"] : ["file:assistant-domain", "file:kit-catalog"]);
+      const adding = await trace({ adding: " Toolhead-A " }, layered, { activePlanId: plan.id });
+      expect(adding.body).toMatchObject({ plan_id: plan.id, adding: "Toolhead-A", layers: ["Fixture", "Toolhead-B", "Toolhead-A"], suggested_excludes: ["hotend_mount.stl"] });
+      expect(z.object({ warnings: z.array(z.object({ code: z.string() }).passthrough()) }).passthrough().parse(adding.body).warnings.map(({ code }) => code)).toEqual([
+        "compat_conflict", "compat_slot", "compat_not_for", "compat_replace_part", "merge_conflict_curated", "compat_conflict", "compat_slot", "merge_conflict_curated",
+      ]);
+      // A foreign or missing explicit plan falls back to the active plan, then to no layers.
+      expect((await trace({ plan_id: foreign.id }, layered, { activePlanId: plan.id })).body).toMatchObject({ plan_id: plan.id, layers: ["Fixture", "Toolhead-B"] });
+      for (const plan_id of [foreign.id, 999999]) {
+        const empty = await trace({ plan_id }, ["table:build_profiles"]);
+        expect(empty.body).toEqual({ plan_id: null, layers: [], warnings: [], suggested_excludes: [], conflicts: [], slots_occupied: {} });
+        expect(empty.files).toEqual(["file:assistant-domain", "file:kit-catalog"]);
+      }
+      expect((await trace({ plan_id: plan.id }, ["table:build_profiles"], { tenantId: "other" })).body).toMatchObject({ plan_id: null, layers: [] });
+      expect((await trace({}, [])).body).toMatchObject({ plan_id: null, layers: [] });
+      // An unvalidated active plan from another tenant fails the layer read before any file read.
+      const refused = await trace({}, ["table:build_profiles"], { activePlanId: foreign.id });
+      expect(refused.body).toEqual({ error: "Profile not found" });
+      expect(refused.calls).toEqual([]);
+    } finally { vi.unstubAllEnvs(); }
+    expect([...union].sort()).toEqual(isolated ? STACK_UNION : STACK_UNION.filter((resource) => resource !== "file:source-workspace"));
+    const entry = manifest.resources.reviewed.find((candidate) => candidate.operation === "tool.check_stack_compatibility");
+    if (!entry || entry.operation === "source.sync") throw new Error("Missing check_stack_compatibility declaration");
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(STACK_UNION);
+  });
+}
+
+it("rejects reads outside the interaction graph declarations", () => {
+  const { domain, roots } = interactionDomainFixture();
+  for (const access of [
+    { api: "readFileSync", args: [join(root, "README.md"), "utf8"] },
+    { api: "writeFileSync", args: [join(domain, "_global", "merge_conflicts.yaml"), "conflicts: []"] },
+    { api: "readFileSync", args: [join(dataDir, "custom_filaments.json"), "utf8"] },
+    { api: "statSync", args: [join(dataDir, "outside.txt")] },
+    { api: "readSync", args: [42] },
+  ]) {
+    expect(() => interactionFileResources([access], roots)).toThrow("Unclassified filesystem call");
+  }
+  expect(() => stackSelect('select "id" from "source_docs" where "source_docs"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
+  expect(() => stackSelect(`select "id" from "build_profiles" where ("build_profiles"."tenant_id" = 'other' and "build_profiles"."id" = 1.0)`, "default")).toThrow("Unsupported SQL:");
+  expect(stackSelect(`select "id" from "build_profiles" where ("build_profiles"."tenant_id" = 'default' and "build_profiles"."id" = 1.0)`, "default")).toBe("table:build_profiles");
 });
 
 it.each(CHECKOFF_READS)("traces %s isolated symlink snapshot refusal before a unit summary", async (tool) => {

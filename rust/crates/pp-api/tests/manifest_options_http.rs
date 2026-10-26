@@ -1500,13 +1500,16 @@ async fn builder_read_refuses_bad_ids_missing_builds_and_anonymous_callers() {
     let stranger = [("Cookie", fixture.stranger.as_str())];
     for prefix in PREFIXES {
         for method in [Method::GET, Method::HEAD] {
+            // Node reads the id with Number(), so none of these names a Plan.
             for bad in ["abc", "0", "-1", "1.5"] {
                 let path = format!("{prefix}/plans/{bad}/plan-manifest-builder");
                 let (status, body) = fixture.server.send(method.clone(), &path, &owner).await;
-                assert_eq!(status, 400, "{method} {path}");
+                assert_eq!(status, 404, "{method} {path}");
                 if method == Method::GET {
-                    assert_eq!(body, json!({"detail": "Request is invalid"}), "{path}");
+                    assert_eq!(body, json!({"detail": "Profile not found"}), "{path}");
                 }
+                let (status, _) = fixture.server.send(method.clone(), &path, &[]).await;
+                assert_eq!(status, 401, "anonymous {method} {path}");
             }
 
             let missing = format!("{prefix}/plans/{}/plan-manifest-builder", fixture.id + 1000);

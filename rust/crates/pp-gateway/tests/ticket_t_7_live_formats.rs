@@ -100,6 +100,7 @@ fn declared_versions_match_the_node_and_rust_sources() {
             "accepted-thumbnails": {"node_reads": node_thumbnails, "rust_writes": "none"},
             "custom-filaments": {"node_reads": 1, "rust_writes": "none"},
             "filament-catalog": {"node_reads": 1, "rust_writes": "none"},
+            "assistant-domain": {"node_reads": 1, "rust_writes": "none"},
         })
     );
 }
@@ -312,6 +313,7 @@ fn no_writer_declarations_have_family_literal_rules() {
         ("accepted-thumbnails", "thumbs"),
         ("custom-filaments", "custom_filaments"),
         ("filament-catalog", "ambrosia_fallback"),
+        ("assistant-domain", "assistant-domain"),
     ]);
     let manifest = manifest();
     let no_writers: std::collections::BTreeSet<_> = manifest["live_formats"]
@@ -380,6 +382,12 @@ fn read_only_formats_require_explicit_none_and_fail_closed_otherwise() {
             1,
             "tool.get_plan_review",
             "tool.get_plan_review",
+        ),
+        (
+            "assistant-domain",
+            1,
+            "tool.get_interaction_graph",
+            "tool.get_interaction_graph",
         ),
     ] {
         let mut value = manifest();

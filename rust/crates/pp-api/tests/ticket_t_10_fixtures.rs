@@ -814,18 +814,64 @@ mod ticket_t_10_fixtures {
         generated: String,
         sources: Vec<String>,
         ids: std::collections::BTreeMap<String, u64>,
-        cases: Vec<PlansCase>,
+        cases: Vec<HttpCase>,
     }
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct PlansCase {
+    struct HttpCase {
         id: String,
         method: String,
         path: String,
         body: Option<Value>,
+        /// JSON text sent verbatim, for bodies a `Value` would not keep
+        /// byte for byte (`2.0`, `1e0`).
+        #[serde(rename = "rawBody")]
+        raw_body: Option<String>,
         node: Exchange,
         changed: Vec<String>,
+    }
+
+    /// Sends one recorded request to `path` with the session cookie and
+    /// returns Rust's response with the files and tables it changed, named
+    /// as Node's generators name them (bare table names for the main database).
+    async fn send_case(
+        served: &Served,
+        cookie: &str,
+        sandbox: &Sandbox,
+        case: &HttpCase,
+        path: &str,
+    ) -> (Exchange, Vec<String>) {
+        let mut request = served
+            .client
+            .request(
+                Method::from_bytes(case.method.as_bytes()).unwrap(),
+                format!("{}{path}", served.origin),
+            )
+            .header("Origin", &served.origin)
+            .header("Cookie", cookie);
+        if let Some(body) = &case.body {
+            request = request.json(body);
+        }
+        if let Some(raw) = &case.raw_body {
+            request = request
+                .header("Content-Type", "application/json")
+                .body(raw.clone());
+        }
+        let before = StateGraph::capture(sandbox.path()).unwrap();
+        let actual = Exchange::observe(request.send().await.unwrap())
+            .await
+            .unwrap();
+        let after = StateGraph::capture(sandbox.path()).unwrap();
+        let changed = before
+            .changed(&after)
+            .into_iter()
+            .map(|name| match name.strip_prefix("print-partner.db/") {
+                Some(table) => table.to_owned(),
+                None => name,
+            })
+            .collect();
+        (actual, changed)
     }
 
     fn plans_fixture() -> PlansFixture {
@@ -910,34 +956,11 @@ mod ticket_t_10_fixtures {
                 .fold(case.path.clone(), |path, (name, id)| {
                     path.replace(&format!("{{{name}}}"), &id.to_string())
                 });
-            let mut request = served
-                .client
-                .request(
-                    Method::from_bytes(case.method.as_bytes()).unwrap(),
-                    format!("{}{path}", served.origin),
-                )
-                .header("Origin", &served.origin)
-                .header("Cookie", &cookie);
-            if let Some(body) = &case.body {
-                request = request.json(body);
-            }
-            let before = StateGraph::capture(sandbox.path()).unwrap();
-            let mut actual = Exchange::observe(request.send().await.unwrap())
-                .await
-                .unwrap();
-            let after = StateGraph::capture(sandbox.path()).unwrap();
+            let (mut actual, changed) = send_case(&served, &cookie, &sandbox, case, &path).await;
             labels.scrub(&mut actual);
             ledger
                 .compare(&case.id, &case.node, &actual)
                 .unwrap_or_else(|error| panic!("{error}"));
-            let changed: Vec<String> = before
-                .changed(&after)
-                .into_iter()
-                .map(|name| match name.strip_prefix("print-partner.db/") {
-                    Some(table) => table.to_owned(),
-                    None => name,
-                })
-                .collect();
             if case.id == ATOMIC_CREATE {
                 assert_eq!(case.changed, ["build_profiles"], "Node left a Plan");
                 assert_eq!(changed, Vec::<String>::new(), "Rust refusal wrote state");
@@ -953,6 +976,204 @@ mod ticket_t_10_fixtures {
         print_report("plans-http", &report);
         assert_eq!(report.matched, 27);
         assert_eq!(report.corrected.len(), 1);
+    }
+
+    /// A corpus Node captured on a copy of the required-units `unchanged.db`,
+    /// after running `seed` (if any) on it.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SeededFixture {
+        generated: String,
+        sources: Vec<String>,
+        database: String,
+        #[serde(default)]
+        seed: Option<String>,
+        cases: Vec<HttpCase>,
+    }
+
+    /// The Node session in the required-units fixture database, tenant `default`.
+    const FIXTURE_COOKIE: &str = "pp_session=required-unit-fixture-secret";
+
+    fn seeded_fixture(json: &str, corpus: &str, cases: usize) -> SeededFixture {
+        let fixture: SeededFixture = serde_json::from_str(json).unwrap();
+        assert!(
+            fixture
+                .generated
+                .contains(&format!("{corpus}/generate.mjs"))
+        );
+        assert_eq!(fixture.sources.len(), 3);
+        assert_eq!(
+            fixture.database,
+            "rust/crates/pp-storage/tests/fixtures/required-units/unchanged.db"
+        );
+        assert_eq!(fixture.cases.len(), cases);
+        fixture
+    }
+
+    /// Copies the fixture database into `sandbox`, runs the corpus seed on it
+    /// and opens the writer, as Node's generator opened its copy.
+    fn open_seeded(sandbox: &Sandbox, fixture: &SeededFixture) -> WriterOwner {
+        let path = sandbox.path().join("print-partner.db");
+        std::fs::write(
+            &path,
+            include_bytes!("../../pp-storage/tests/fixtures/required-units/unchanged.db"),
+        )
+        .unwrap();
+        if let Some(seed) = &fixture.seed {
+            rusqlite::Connection::open(&path)
+                .unwrap()
+                .execute_batch(seed)
+                .unwrap();
+        }
+        WriterOwner::open(sandbox.path(), Limits::default())
+            .unwrap()
+            .0
+    }
+
+    /// Replays every case in order with the fixture session, comparing each
+    /// response and the tables it changed. A corrected case is a Rust refusal,
+    /// so it must change nothing, whatever Node wrote.
+    async fn replay_seeded(
+        served: &Served,
+        sandbox: &Sandbox,
+        fixture: &SeededFixture,
+        corrections: Vec<Correction>,
+    ) -> Report {
+        let refused: Vec<&str> = corrections
+            .iter()
+            .map(|correction| correction.case)
+            .collect();
+        let mut ledger = Ledger::new(corrections).unwrap();
+        for case in &fixture.cases {
+            let (actual, changed) =
+                send_case(served, FIXTURE_COOKIE, sandbox, case, &case.path).await;
+            ledger
+                .compare(&case.id, &case.node, &actual)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let expected = if refused.contains(&case.id.as_str()) {
+                &[][..]
+            } else {
+                &case.changed[..]
+            };
+            assert_eq!(changed, expected, "{}: changed tables", case.id);
+        }
+        ledger.finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn drafts_flat_v2_match_node_responses_and_changed_tables() {
+        use pp_api::drafts::{DraftHttpConfig, draft_router};
+
+        let fixture = seeded_fixture(
+            include_str!("../../../../fixtures/parity/drafts-http/node.json"),
+            "drafts-http",
+            30,
+        );
+        assert_eq!(fixture.seed, None);
+        let sandbox = Sandbox::new("t10-drafts").unwrap();
+        let owner = open_seeded(&sandbox, &fixture);
+        let drafts = owner.working_drafts_with_policy(ACCOUNT_POLICY).unwrap();
+        let auth = owner
+            .rebuild_auth_with_policy(ACCOUNT_POLICY, AuthLifetimes::default())
+            .unwrap();
+        let served = Served::start(|origin| {
+            draft_router(
+                DraftHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                drafts,
+                auth,
+            )
+        })
+        .await
+        .unwrap();
+        let report = replay_seeded(&served, &sandbox, &fixture, vec![]).await;
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        print_report("drafts-http", &report);
+        assert_eq!(report.matched, 30);
+        assert_eq!(report.corrected.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn layers_flat_v1_v2_match_node_responses_and_changed_tables() {
+        use pp_api::builds::{BuildHttpConfig, build_router};
+
+        let fixture = seeded_fixture(
+            include_str!("../../../../fixtures/parity/layers-http/node.json"),
+            "layers-http",
+            33,
+        );
+        assert!(fixture.seed.is_some());
+        let sandbox = Sandbox::new("t10-layers").unwrap();
+        let owner = open_seeded(&sandbox, &fixture);
+        let graph = owner.build_graph_with_policy(ACCOUNT_POLICY).unwrap();
+        let served = Served::start(|origin| {
+            build_router(
+                BuildHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                graph,
+            )
+        })
+        .await
+        .unwrap();
+        let report = replay_seeded(&served, &sandbox, &fixture, vec![]).await;
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        print_report("layers-http", &report);
+        assert_eq!(report.matched, 33);
+        assert_eq!(report.corrected.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn manifest_flat_v1_v2_match_node_responses_and_changed_tables() {
+        use pp_api::builds::{BuildHttpConfig, build_router};
+
+        let fixture = seeded_fixture(
+            include_str!("../../../../fixtures/parity/manifest-http/node.json"),
+            "manifest-http",
+            46,
+        );
+        let unknown_group = |case: &'static str, group: &str| Correction {
+            case,
+            kind: CorrectionKind::Validation,
+            reason: "Rust refuses a selection for an option group no attached Source defines \
+                     (docs/desktop-rebuild.md); Node skips the check and saves it",
+            rust: Exchange {
+                status: 400,
+                body: json!({"detail": format!("kit.selections.{group} is an unknown option group")}),
+                set_cookie: vec![],
+            },
+        };
+        let corrections = vec![
+            Correction {
+                case: "save_malformed_json_flat",
+                kind: CorrectionKind::Security,
+                reason: "Rust does not expose Fastify parser codes or messages",
+                rust: Exchange {
+                    status: 400,
+                    body: json!({"detail": "Request is invalid"}),
+                    set_cookie: vec![],
+                },
+            },
+            unknown_group("save_unknown_group_v1", "toolhead"),
+            unknown_group("save_unknown_group_list_flat", "extras"),
+        ];
+        assert!(fixture.seed.is_some());
+        let sandbox = Sandbox::new("t10-manifest").unwrap();
+        let owner = open_seeded(&sandbox, &fixture);
+        let graph = owner.build_graph_with_policy(ACCOUNT_POLICY).unwrap();
+        let served = Served::start(|origin| {
+            build_router(
+                BuildHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                graph,
+            )
+        })
+        .await
+        .unwrap();
+        let report = replay_seeded(&served, &sandbox, &fixture, corrections).await;
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        print_report("manifest-http", &report);
+        assert_eq!(report.matched, 43);
+        assert_eq!(report.corrected.len(), 3);
     }
 
     #[test]

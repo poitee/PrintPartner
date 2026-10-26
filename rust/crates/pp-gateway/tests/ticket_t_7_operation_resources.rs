@@ -379,6 +379,96 @@ fn ticket_t_7_ownership_find_filament_matches_has_complete_node_owned_resources(
 }
 
 #[test]
+fn ticket_t_7_ownership_get_interaction_graph_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.get_interaction_graph";
+    let index = admit_bundled_manifest().unwrap();
+    let expected = ResourceSet::from([
+        File(FileFamily::AssistantDomain),
+        File(FileFamily::KitCatalog),
+    ]);
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(index.admit_rollback(id), Ok(&expected));
+    assert_stack_formats_refuse_rollback(id, &expected, &[]);
+}
+
+#[test]
+fn ticket_t_7_ownership_check_stack_compatibility_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.check_stack_compatibility";
+    let index = admit_bundled_manifest().unwrap();
+    let expected = ResourceSet::from([
+        Table(BuildProfiles),
+        Table(ProfileLayers),
+        Table(Projects),
+        File(FileFamily::SourceWorkspace),
+        File(FileFamily::AssistantDomain),
+        File(FileFamily::KitCatalog),
+    ]);
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    assert_stack_formats_refuse_rollback(
+        id,
+        &expected,
+        &[("sqlite-schema", 34), ("source-revision-workspace", 1)],
+    );
+}
+
+/// Rollback admits only when every format the operation reads is compatible,
+/// and each incompatible or undeclared writer refuses before any effect.
+fn assert_stack_formats_refuse_rollback(
+    id: &str,
+    expected: &ResourceSet,
+    extra_formats: &[(&str, u32)],
+) {
+    let formats: Vec<(&str, u32)> = [("assistant-domain", 1), ("kit-catalog", 1)]
+        .into_iter()
+        .chain(extra_formats.iter().copied())
+        .collect();
+    for &(format, node_reads) in &formats {
+        for rust_writes in [None, Some(node_reads + 1)] {
+            let mut value = manifest();
+            for &(compatible_format, version) in &formats {
+                value["live_formats"][compatible_format]["rust_writes"] = json!(version);
+            }
+            assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(expected));
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
+            let mut effect = false;
+            assert_eq!(
+                admit(&value).and_then(|index| {
+                    index.admit_rollback(id)?;
+                    effect = true;
+                    Ok(())
+                }),
+                Err(AdmissionError::IncompatibleLiveFormat {
+                    operation: id.into(),
+                    format: format.into(),
+                    node_reads,
+                    rust_writes,
+                })
+            );
+            assert!(!effect, "{id} {format} {rust_writes:?}");
+        }
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_checkoff_reads_refuse_invalid_admission_before_effects() {
     for id in [
         "tool.get_plan_checkoff",
@@ -386,6 +476,8 @@ fn ticket_t_7_ownership_checkoff_reads_refuse_invalid_admission_before_effects()
         "tool.get_plan_review",
         "tool.find_filament_matches",
         "tool.search_plan_parts",
+        "tool.get_interaction_graph",
+        "tool.check_stack_compatibility",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
     ] {
@@ -780,6 +872,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.get_plan_review",
         "tool.find_filament_matches",
         "tool.search_plan_parts",
+        "tool.get_interaction_graph",
+        "tool.check_stack_compatibility",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
         "tool.get_build_planning_state",
@@ -817,8 +911,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 59);
-    assert_eq!(unresolved.len(), 384);
+    assert_eq!(reviewed.len(), 61);
+    assert_eq!(unresolved.len(), 375);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1101,6 +1195,8 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.get_plan_review",
         "tool.find_filament_matches",
         "tool.search_plan_parts",
+        "tool.get_interaction_graph",
+        "tool.check_stack_compatibility",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
         "tool.get_build_planning_state",
@@ -1228,7 +1324,15 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.get_remaining", "tool.get_plan_review"),
         ("tool.get_plan_review", "tool.find_filament_matches"),
         ("tool.find_filament_matches", "tool.search_plan_parts"),
-        ("tool.search_plan_parts", "tool.get_printer_checkoff"),
+        ("tool.search_plan_parts", "tool.get_interaction_graph"),
+        (
+            "tool.get_interaction_graph",
+            "tool.check_stack_compatibility",
+        ),
+        (
+            "tool.check_stack_compatibility",
+            "tool.get_printer_checkoff",
+        ),
         (
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
