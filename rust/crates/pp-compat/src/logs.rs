@@ -502,35 +502,83 @@ impl Logs {
 /// Rust `tracing` subscriber that writes scrubbed JSON rows to `core.log`
 /// beside the compat logs, with the same rotation. Levels use pino numbers so
 /// both sources read alike. Spans are accepted and not recorded.
+/// `time` is epoch seconds here, while compat.log keeps pino's epoch
+/// milliseconds; a combined view must normalize.
 #[derive(Clone)]
 pub struct CoreLog {
-    file: Arc<Mutex<LogFile>>,
+    sink: Arc<Mutex<Sink>>,
     scrubber: redact::Scrubber,
 }
 
+/// Rows emitted before the data directory is admitted wait in memory, at
+/// most [`PENDING_ROWS`] of them, and reach `core.log` on [`CoreLog::attach`].
+enum Sink {
+    Pending {
+        rows: std::collections::VecDeque<String>,
+        dropped: u64,
+    },
+    File(LogFile),
+}
+
+const PENDING_ROWS: usize = 256;
+
 impl CoreLog {
+    /// A subscriber that holds rows until [`CoreLog::attach`]. Install it
+    /// first thing so startup events are not lost.
+    pub fn buffered() -> Self {
+        Self {
+            sink: Arc::new(Mutex::new(Sink::Pending {
+                rows: std::collections::VecDeque::new(),
+                dropped: 0,
+            })),
+            scrubber: redact::Scrubber::default(),
+        }
+    }
+
     /// Open `<data>/logs/core.log` with the log directory checks used for
     /// every other stream.
     pub fn open(data: &Path) -> std::io::Result<Self> {
-        Ok(Self {
-            file: Arc::new(Mutex::new(LogFile::open(&data.join("logs"), CORE)?)),
-            scrubber: redact::Scrubber::default(),
-        })
+        let log = Self::buffered();
+        log.attach(data)?;
+        Ok(log)
     }
 
-    /// Make this the process-wide subscriber and record panics before the
-    /// previous hook runs. Local crash records do not depend on telemetry.
-    /// Returns false when another subscriber was already installed.
-    pub fn install(self) -> bool {
-        if tracing::subscriber::set_global_default(self.clone()).is_err() {
-            return false;
+    /// Start writing to `<data>/logs/core.log`, first flushing the rows held
+    /// since [`CoreLog::buffered`]. Call once the data directory is admitted.
+    pub fn attach(&self, data: &Path) -> std::io::Result<()> {
+        let mut file = LogFile::open(&data.join("logs"), CORE)?;
+        let Ok(mut sink) = self.sink.lock() else {
+            return Err(std::io::Error::other("core log poisoned"));
+        };
+        if let Sink::Pending { rows, dropped } = &mut *sink {
+            let now = now_secs();
+            if *dropped > 0 {
+                let notice = serde_json::json!({
+                    "time": now, "level": 40, "target": module_path!(),
+                    "message": format!("core log dropped {dropped} early rows"),
+                });
+                file.append(format!("{notice}\n").as_bytes(), now);
+            }
+            for row in rows.drain(..) {
+                file.append(row.as_bytes(), now);
+            }
         }
+        *sink = Sink::File(file);
+        Ok(())
+    }
+
+    /// Record panics before the previous hook runs, then make this the
+    /// process-wide subscriber. Local crash records do not depend on
+    /// telemetry. The panic hook is armed even when another subscriber was
+    /// already installed; that case returns false.
+    pub fn install(&self) -> bool {
+        let log = self.clone();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            self.panic(info);
+            log.panic(info);
             previous(info);
         }));
-        true
+        tracing::subscriber::set_global_default(self.clone()).is_ok()
     }
 
     fn panic(&self, info: &std::panic::PanicHookInfo<'_>) {
@@ -568,12 +616,12 @@ impl CoreLog {
         let record = serde_json::Value::Object(record);
         let mut row = record.to_string();
         if row.len() > LINE_BYTES {
-            let message: String = record["message"]
-                .as_str()
-                .unwrap_or_default()
-                .chars()
-                .take(LINE_BYTES / 2)
-                .collect();
+            let mut message = record["message"].as_str().unwrap_or_default().to_owned();
+            let mut end = LINE_BYTES / 2;
+            while !message.is_char_boundary(end.min(message.len())) {
+                end -= 1;
+            }
+            message.truncate(end);
             row = serde_json::json!({
                 "time": now, "level": level, "target": target,
                 "message": message, "truncated": true,
@@ -581,8 +629,18 @@ impl CoreLog {
             .to_string();
         }
         row.push('\n');
-        if let Ok(mut log) = self.file.lock() {
-            log.append(row.as_bytes(), now);
+        let Ok(mut sink) = self.sink.lock() else {
+            return;
+        };
+        match &mut *sink {
+            Sink::File(log) => log.append(row.as_bytes(), now),
+            Sink::Pending { rows, dropped } => {
+                if rows.len() == PENDING_ROWS {
+                    rows.pop_front();
+                    *dropped += 1;
+                }
+                rows.push_back(row);
+            }
         }
     }
 }
@@ -1340,7 +1398,7 @@ mod tests {
         }
     }
 
-    const T13_SECRETS: [&str; 7] = [
+    const T13_SECRETS: [&str; 8] = [
         "PLANTED_BEARER_1f9c",
         "PLANTED_COOKIE_77aa",
         "PLANTED_BOOTSTRAP_e1",
@@ -1348,6 +1406,7 @@ mod tests {
         "PLANTED_API_KEY_beef",
         "PLANTED_RUNTIME_KEY_ab12cd34",
         "PLANTED_PANIC_TOKEN",
+        "PLANTED_SESSION_ID_77",
     ];
 
     fn assert_clean(text: &str) {
@@ -1465,6 +1524,14 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["truncated"], true);
         assert_eq!(rows[0]["message"].as_str().unwrap().len(), LINE_BYTES / 2);
+        let scratch = Scratch::new();
+        let core = CoreLog::open(&scratch.0).unwrap();
+        let wide = "\u{20ac}".repeat(1024 * 1024);
+        tracing::subscriber::with_default(core, || tracing::warn!("{wide}"));
+        let text = std::fs::read_to_string(scratch.0.join("logs/core.log")).unwrap();
+        assert!(text.len() <= LINE_BYTES);
+        let row: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(row["truncated"], true);
     }
 
     fn stream_files(directory: &Path, stream: Stream) -> Vec<String> {
@@ -1485,12 +1552,18 @@ mod tests {
         let core = CoreLog::open(&scratch.0).unwrap();
         for round in 0..10u64 {
             let size = round % 2 == 0;
-            for file in [&logs.compat, &core.file] {
-                let mut log = file.lock().unwrap();
-                if size {
-                    log.bytes = FILE_BYTES;
-                } else {
-                    log.day = 0;
+            {
+                let mut compat = logs.compat.lock().unwrap();
+                let mut sink = core.sink.lock().unwrap();
+                let Sink::File(core_file) = &mut *sink else {
+                    panic!("core log not attached")
+                };
+                for log in [&mut *compat, core_file] {
+                    if size {
+                        log.bytes = FILE_BYTES;
+                    } else {
+                        log.day = 0;
+                    }
                 }
             }
             logs.capture(format!("{{\"level\":30,\"msg\":\"round {round}\"}}\n").as_bytes())
@@ -1539,14 +1612,44 @@ mod tests {
         assert_eq!(panic["level"], 60);
         assert_eq!(panic["message"], "renderer bridge lost token=[REDACTED]");
         assert!(panic["location"].as_str().unwrap().contains("logs.rs:"));
-        assert_eq!(rows[0]["message"], "before crash");
+        assert_eq!(rows[0]["message"], "before admission session_id=[REDACTED]");
+        assert_eq!(rows[0]["level"], 40);
+        assert_eq!(rows[1]["message"], "before crash");
+    }
+
+    #[test]
+    fn ticket_t_13_core_log_holds_early_rows_until_attach_and_bounds_them() {
+        let scratch = Scratch::new();
+        let core = CoreLog::buffered();
+        tracing::subscriber::with_default(core.clone(), || {
+            tracing::warn!("cutover_evidence_unsaved");
+            for index in 0..PENDING_ROWS + 10 {
+                tracing::info!("early {index}");
+            }
+        });
+        assert!(!scratch.0.join("logs/core.log").exists());
+        core.attach(&scratch.0).unwrap();
+        tracing::subscriber::with_default(core, || tracing::info!("attached"));
+        let rows = rows(&scratch.0.join("logs/core.log"));
+        assert_eq!(rows.len(), PENDING_ROWS + 2);
+        assert_eq!(rows[0]["message"], "core log dropped 11 early rows");
+        assert_eq!(rows[0]["level"], 40);
+        assert_eq!(rows[1]["message"], "early 10");
+        assert_eq!(
+            rows[PENDING_ROWS]["message"],
+            format!("early {}", PENDING_ROWS + 9)
+        );
+        assert_eq!(rows[PENDING_ROWS + 1]["message"], "attached");
     }
 
     #[test]
     #[ignore = "runs in an isolated subprocess and panics on purpose"]
     fn core_log_panic_child() {
         let data = PathBuf::from(std::env::var_os("PP_T13_PANIC_DATA").unwrap());
-        assert!(CoreLog::open(&data).unwrap().install());
+        let log = CoreLog::buffered();
+        assert!(log.install());
+        tracing::warn!("before admission session_id={}", "PLANTED_SESSION_ID_77");
+        log.attach(&data).unwrap();
         tracing::info!("before crash");
         panic!("renderer bridge lost token={}", "PLANTED_PANIC_TOKEN");
     }

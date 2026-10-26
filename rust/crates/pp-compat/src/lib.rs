@@ -628,6 +628,7 @@ impl Process {
             let _ = child.wait().await;
             bail!("Compatibility setup failed");
         }
+        let capture = &capture.with_secret(hex::encode(key));
         let mut logs = Vec::new();
         if let Some(stdout) = child.stdout.take() {
             let capture = capture.clone();

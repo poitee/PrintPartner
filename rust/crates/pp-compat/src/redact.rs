@@ -43,6 +43,9 @@ pub fn sensitive_name(name: &str) -> bool {
             | "credentials"
             | "session"
             | "sessionid"
+            | "session_id"
+            | "session_state"
+            | "sid"
     ) || [
         "_token",
         "_secret",
@@ -51,6 +54,7 @@ pub fn sensitive_name(name: &str) -> bool {
         "_apikey",
         "_credential",
         "_session",
+        "_session_id",
     ]
     .iter()
     .any(|suffix| name.ends_with(suffix))
@@ -74,7 +78,7 @@ struct Rules {
 /// redacts the whole text instead of passing it through.
 static RULES: LazyLock<Option<Rules>> = LazyLock::new(|| {
     Some(Rules {
-        url_userinfo: Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@").ok()?,
+        url_userinfo: Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@").ok()?,
         token_shapes: Regex::new(concat!(
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+",
             r"|\b(?:sk|pk|rk)[-_](?:live[-_]|test[-_])?[A-Za-z0-9_-]{16,}",
@@ -249,6 +253,28 @@ mod tests {
         assert!(scrubbed.contains("\"accept\":\"*/*\""));
         assert!(scrubbed.contains("https://[REDACTED]@proxy.local/"));
         assert!(scrubbed.contains("spoolman api_key=[REDACTED] retrying"));
+    }
+
+    #[test]
+    fn ticket_t_13_scrub_covers_session_ids_and_passwordless_userinfo() {
+        let scrubbed = scrub(concat!(
+            "GET /jobs?session_id=PLANTED_SID_QUERY&tab=1 ",
+            "{\"session-id\":\"PLANTED_SID_JSON\",\"sid\":\"PLANTED_SID_SHORT\"} ",
+            "clone https://PLANTED_USERINFO_TOKEN@git.local/repo",
+        ));
+        for secret in [
+            "PLANTED_SID_QUERY",
+            "PLANTED_SID_JSON",
+            "PLANTED_SID_SHORT",
+            "PLANTED_USERINFO_TOKEN",
+        ] {
+            assert!(!scrubbed.contains(secret), "{secret} leaked: {scrubbed}");
+        }
+        assert!(scrubbed.contains("https://[REDACTED]@git.local/repo"));
+        let mut value = serde_json::json!({"session_id": "PLANTED_SID_JSON", "user": {"session-state": "PLANTED_SID_SHORT"}});
+        Scrubber::default().json(&mut value);
+        assert_eq!(value["session_id"], REDACTED);
+        assert_eq!(value["user"]["session-state"], REDACTED);
     }
 
     #[test]
