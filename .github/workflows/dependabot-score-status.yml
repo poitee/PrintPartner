@@ -1,0 +1,36 @@
+name: Dependabot score status
+
+# Dependabot PRs have no model score, so this posts the pp/score status that
+# the main ruleset requires. The required CI checks still gate every merge.
+# It runs after "PR evidence" finishes, with the base-repo token, because a
+# Dependabot pull_request run gets a read-only token. It checks out nothing.
+
+on:
+  workflow_run:
+    workflows: ["PR evidence"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  post-pp-score:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    name: Post pp/score for Dependabot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Post success status on the Dependabot head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gh api -X POST "repos/$REPO/statuses/$HEAD_SHA" \
+            -f state=success \
+            -f context=pp/score \
+            -f "description=Dependabot PR: no model score; required CI checks gate the merge"
