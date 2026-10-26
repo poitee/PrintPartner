@@ -26,7 +26,7 @@ HTTP route.
 
 ```sh
 umask 022
-export CARGO_TARGET_DIR=/persist/targets/gre-803-read-builder-http-297d
+export CARGO_TARGET_DIR=/persist/targets/gre-803-read-builder
 export CARGO_BUILD_JOBS=2
 
 cargo check -p pp-api --locked --manifest-path rust/Cargo.toml --no-default-features
