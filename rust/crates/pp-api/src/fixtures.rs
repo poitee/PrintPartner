@@ -241,6 +241,8 @@ pub enum CorrectionKind {
     /// A documented difference of the durable store, such as a field Node's
     /// in-memory state never had or a failure text Node does not persist.
     Durable,
+    /// A documented refusal of input Node accepts and saves.
+    Validation,
 }
 
 /// One declared, literal Rust response that replaces Node's for a named case.

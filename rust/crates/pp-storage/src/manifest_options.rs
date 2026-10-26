@@ -21,8 +21,13 @@ impl From<String> for ManifestInputDetail {
 }
 impl ManifestInputDetail {
     pub(super) fn group(group: &crate::manifest_text::JsText, suffix: &str) -> Self {
-        let mut units = "kit.selections.".encode_utf16().collect::<Vec<_>>();
-        units.extend_from_slice(group.units());
+        Self::keyed("kit.selections.", group, suffix)
+    }
+    /// `prefix`, then the key's UTF-16 units, then `suffix`, as Node's template
+    /// strings join them.
+    pub(super) fn keyed(prefix: &str, key: &crate::manifest_text::JsText, suffix: &str) -> Self {
+        let mut units = prefix.encode_utf16().collect::<Vec<_>>();
+        units.extend_from_slice(key.units());
         units.extend(suffix.encode_utf16());
         Self(crate::manifest_text::JsText::from_units(units))
     }

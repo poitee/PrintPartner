@@ -6,7 +6,7 @@ Golden data captured from the TypeScript app, used as the reference for the Rust
 
 `pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security, WebSocket, or durable-store) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
 
-`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `plans-http`, `drafts-http` and `layers-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `plans-http`, `drafts-http`, `layers-http` and `manifest-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
 
 ## jobs-http/node.json (GRE-451)
 
@@ -46,6 +46,20 @@ node fixtures/parity/drafts-http/generate.mjs --check
 
 ```sh
 node fixtures/parity/layers-http/generate.mjs --check
+```
+
+## manifest-http/node.json (GRE-451)
+
+`generate.mjs` uses the same copied database after its `seed` SQL adds two Sources with no local checkout, Plan 3 (base and add-on layers on those Sources, with a stored kit) and Plan 4 (no layers, with a stored kit that is not JSON). It sends 46 requests in order to the kit-manifest and plan-manifest-builder routes Rust's `build_router` serves, on the flat, `/api/v1` and `/api/v2` mounts: kit reads (stored, unreadable, never saved, `HEAD`), builder reads, saves (full, partial, unknown keys), and refusals for missing, foreign, zero and non-numeric Plan ids, a missing body, malformed JSON, and every field the kit parser checks. Each case records the complete response and the tables it changed.
+
+Plan 1's base Source names a local checkout. Rust reads checkouts only through a `DraftReads` adapter, and production does not wire one yet, so Rust answers a builder read or kit save on Plan 1 with 503 "Manifest source observation failed". The corpus reads Plan 1's kit, which needs no checkout, and leaves option groups from real checkouts to the slice that wires the adapter.
+
+`ticket_t_10_fixtures` runs the same seed on its copy and replays the cases against `build_router`: 43 exact matches and 3 declared corrections. A corrected case must change no table. Malformed JSON gets Rust's "Request is invalid" (security: no Fastify parser codes). Two saves select an option group that no attached Source defines: Node skips the check and saves, Rust refuses with "is an unknown option group", as `docs/desktop-rebuild.md` documents (validation). They run last, so no later read sees Node's write.
+
+The fixture made three Rust fixes go red then green. A Plan id that cannot name a Plan (`0`, `abc`, `-1`, `1.5`) is now Node's 404 "Profile not found" after authentication, instead of 400 "Request is invalid". An empty body is now "kit is required". Selection and replacement refusals now use Node's text: `kit.selections group ids must not be empty`, `kit.selections.<group> must be a non-empty string`, `kit.selections.<group>[<index>] must be a non-empty string` (checked for every entry before duplicates), `kit.selections.<group> must not contain duplicate variant ids` and `kit.replacements.<key> must be a string`.
+
+```sh
+node fixtures/parity/manifest-http/generate.mjs --check
 ```
 
 ## auth-reset/node.json (GRE-864)

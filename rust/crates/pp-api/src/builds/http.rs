@@ -424,10 +424,23 @@ fn source_id(value: &Value) -> Option<u64> {
     })
 }
 
-fn parse_build_id(id: &str) -> Option<PositiveId> {
+pub(super) fn parse_build_id(id: &str) -> Option<PositiveId> {
     id.parse::<u64>()
         .ok()
         .and_then(|value| PositiveId::new(value).ok())
+}
+
+/// Node reads a Plan id with `Number()`, so an id that cannot name a Plan
+/// (`0`, `abc`) is "Profile not found" once the caller is authenticated. The
+/// List command only proves the credential; its Plans are not used.
+pub(super) async fn unknown_build(app: App, request: axum::extract::Request) -> Response {
+    let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+    match outcome(app, presented, BuildCommand::List).await {
+        Ok(_) => failure(StatusCode::NOT_FOUND, "Profile not found"),
+        Err(response) => *response,
+    }
 }
 
 pub(super) async fn execute(
