@@ -142,7 +142,7 @@ it("keeps an unblurred request with its Build when switching Builds", async () =
 
 it("failed_special_request_retry_preserves_order", async () => {
   const order: string[] = [];
-  retainFailedAuxiliarySave(9001, "manifest", async () => {
+  retainFailedAuxiliarySave(9001, "manifest", "offline", async () => {
     order.push("manifest");
   });
   update

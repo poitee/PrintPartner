@@ -66,14 +66,15 @@ async function persistBody(
       failedBodies.delete(profileId);
       clearFailedAuxiliarySave(profileId, "special_request");
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save the special request";
       failedBodies.set(profileId, { body, error });
-      retainFailedAuxiliarySave(profileId, "special_request", async () => {
+      retainFailedAuxiliarySave(profileId, "special_request", message, async () => {
         await persistBody(profileId, body, mutateAsync);
       });
       setRequestDraft(profileId, {
         kind: "failed",
         text: body.special_request ?? "",
-        error: error instanceof Error ? error.message : "Could not save the special request",
+        error: message,
       });
       throw error;
     }

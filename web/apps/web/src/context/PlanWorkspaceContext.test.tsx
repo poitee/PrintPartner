@@ -904,7 +904,7 @@ describe("PlanWorkspaceProvider saved draft lifecycle", () => {
     const before = prepareCalls();
     let preparesBeforeManifestRetry: number | null = null;
     // Stands in for KitManifestOptions, whose retried PUT ends in preparePlan({ applyManifest: true }).
-    retainFailedAuxiliarySave(7, "manifest", async () => {
+    retainFailedAuxiliarySave(7, "manifest", "offline", async () => {
       preparesBeforeManifestRetry = prepareCalls() - before;
       await hook.result.current.preparePlan({ applyManifest: true });
     });

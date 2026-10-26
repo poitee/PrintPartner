@@ -12,6 +12,7 @@ import {
 import {
   resetAuxiliarySaveIntentForTests,
   retryFailedAuxiliarySaves,
+  useFailedAuxiliarySaveMessage,
 } from "../lib/planAuxiliarySaveIntent";
 
 const mocks = vi.hoisted(() => ({
@@ -267,6 +268,28 @@ describe("useKitManifestAutosave", () => {
     expect(mocks.savePlanKitManifest.mock.calls[1]?.[1]).toEqual(failedPayload);
     expect(returned.onSaved).toHaveBeenCalledWith(kit({ extras: ["skirts"] }));
     expect(returned.result.current.status).toBe("saved");
+  });
+
+  it("manifest_retry_refusal_updates_retained_message", async () => {
+    mocks.savePlanKitManifest.mockRejectedValue(new Error("offline"));
+    const editor = renderAutosave();
+    const message = renderHook(() => useFailedAuxiliarySaveMessage(7));
+    act(() => editor.result.current.saveUserEdit({ extras: ["skirts"] }));
+    await waitFor(() => expect(message.result.current).toBe("offline"));
+
+    mocks.savePlanKitManifest.mockRejectedValue(new Error("still offline"));
+    await act(async () => {
+      await expect(retryFailedAuxiliarySaves(7)).rejects.toThrow("still offline");
+    });
+    expect(message.result.current).toBe("still offline");
+
+    // With the editor gone, Retry cannot resend; the Plan shows that refusal, not the stale one.
+    editor.unmount();
+    await act(async () => {
+      await expect(retryFailedAuxiliarySaves(7)).rejects.toThrow("Kit manifest autosave is unavailable");
+    });
+    expect(message.result.current).toBe("Kit manifest autosave is unavailable");
+    expect(retainedFailedManifestSelections(7)).toEqual({ extras: ["skirts"] });
   });
 
   it("does not let a detached editor's late failure replace a newer editor's save", async () => {

@@ -49,10 +49,24 @@ const mountedFlushByProfile = new Map<
   { owner: ProfileSaveState; flush: (mode: BuildSaveFlushMode) => Promise<void> }
 >();
 
+function manifestSaveErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Kit selections were not saved";
+}
+
 async function retryMountedManifestSave(profileId: number): Promise<void> {
-  const mounted = mountedFlushByProfile.get(profileId);
-  if (!mounted) throw new Error("Kit manifest autosave is unavailable");
-  await mounted.flush("retry");
+  try {
+    const mounted = mountedFlushByProfile.get(profileId);
+    if (!mounted) throw new Error("Kit manifest autosave is unavailable");
+    await mounted.flush("retry");
+  } catch (error) {
+    // Keep the refusal retained under its latest message for every Retry entry point.
+    if (retainedFailedKitByProfile.has(profileId)) {
+      retainFailedAuxiliarySave(profileId, "manifest", manifestSaveErrorMessage(error), () =>
+        retryMountedManifestSave(profileId),
+      );
+    }
+    throw error;
+  }
 }
 
 /** Selections of a refused manifest save, so a remounted editor shows what Retry sends. */
@@ -220,7 +234,9 @@ export function useKitManifestAutosave({
           const mounted = mountedFlushByProfile.get(profileId);
           if (!mounted || mounted.owner === saveState) {
             retainedFailedKitByProfile.set(profileId, kit);
-            retainFailedAuxiliarySave(profileId, "manifest", () => retryMountedManifestSave(profileId));
+            retainFailedAuxiliarySave(profileId, "manifest", manifestSaveErrorMessage(error), () =>
+              retryMountedManifestSave(profileId),
+            );
           }
         }
         if (saveStateRef.current === saveState) setStatus("error");

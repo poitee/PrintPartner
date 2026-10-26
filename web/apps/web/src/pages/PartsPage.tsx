@@ -17,6 +17,7 @@ import { Button } from "../components/ui/button";
 import { fetchStlNaming } from "../api/endpoints/stlNaming";
 import { useProfileSelection } from "../context/ProfileContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
+import { useFailedSaveRetry } from "../hooks/useFailedSaveRetry";
 import { usePlanLayersQuery } from "../queries/planLayers";
 import { buildSourcesRoute, productionRoute, progressRoute } from "../lib/routes";
 import { statusTone } from "../lib/statusTone";
@@ -24,12 +25,14 @@ import { cn } from "../lib/utils";
 
 export default function PartsPage() {
   const { selectedProfileId, profiles } = useProfileSelection();
-  const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, retryPlanSave, saving, refresh, mergeConflict, discardPendingEdits } = usePlanWorkspace();
+  const { review, loading, error, draftError, draftWorkspace, draftLoading, preparePlan, saving, refresh, mergeConflict, discardPendingEdits } = usePlanWorkspace();
   const layers = usePlanLayersQuery(selectedProfileId);
   const sheetRef = useRef<ReviewPartsSheetHandle>(null);
   const prepared = useRef<number | null>(null);
   const [folderRules, setFolderRules] = useState<StlNamingFolderRule[]>([]);
   const [shareOpen, setShareOpen] = useState(false);
+  const { error: saveError, retry: retryFailedSave } = useFailedSaveRetry();
+  const [retrying, setRetrying] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const hasSources = layers.data?.some((layer) => layer.project_id != null) ?? false;
   const sourceInputsCurrent = profiles.find((profile) => profile.id === selectedProfileId)?.freshness.status === "current";
@@ -58,6 +61,13 @@ export default function PartsPage() {
   }, [draftError, draftLoading, draftWorkspace, hasSources, loading, preparePlan, review, saving, selectedProfileId, sourceInputsCurrent]);
 
   const disabled = saving || loading || draftLoading;
+  // aria-disabled rather than disabled keeps keyboard focus on Retry while it runs.
+  const retryBusy = saving || retrying;
+  const retrySave = () => {
+    if (retryBusy) return;
+    setRetrying(true);
+    void retryFailedSave().catch(() => {}).finally(() => setRetrying(false));
+  };
   return (
     <PageShell>
       <PageHeader
@@ -68,7 +78,7 @@ export default function PartsPage() {
         actions={
           <div className="flex items-center gap-3">
             <span role="status" className="text-xs text-muted-foreground">
-              {saving ? "Saving…" : draftError ? "Not saved" : review?.accepted_basis ? "Saved" : ""}
+              {saving ? "Saving…" : saveError ? "Not saved" : review?.accepted_basis ? "Saved" : ""}
             </span>
             <Button variant="ghost" disabled={!review?.accepted_basis || disabled} onClick={() => void sheetRef.current?.print()}>
               <Printer className="mr-1 h-4 w-4" /> Print
@@ -79,16 +89,16 @@ export default function PartsPage() {
       />
       {shareOpen && selectedProfileId != null && <ShareBuildExportDialog open={shareOpen} onOpenChange={setShareOpen} profileId={selectedProfileId} />}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {draftError && (
+      {saveError && (
         <div role="alert" className={cn("space-y-2 rounded-lg border p-4", statusTone({ tone: "error", emphasis: "soft" }))}>
-          <p className="text-sm">{draftError}</p>
+          <p className="text-sm">{saveError}</p>
           {mergeConflict && (
             <div className="space-y-2">
               <p className="text-sm">Your pending choices remain below. To start from the latest saved Plan, discard these pending edits and make your changes again. Finished print progress is kept.</p>
               <Button variant="secondary" disabled={saving} onClick={() => void discardPendingEdits().catch(() => {})}>Discard pending edits and use saved Plan</Button>
             </div>
           )}
-          <Button variant="secondary" disabled={saving} onClick={() => void retryPlanSave().catch(() => {})}>Retry save</Button>
+          <Button variant="secondary" aria-disabled={retryBusy} className="aria-disabled:opacity-50" onClick={retrySave}>Retry save</Button>
         </div>
       )}
       {selectedProfileId != null && (

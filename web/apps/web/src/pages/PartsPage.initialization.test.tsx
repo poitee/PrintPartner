@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import PartsPage from "./PartsPage";
+import { BuildSaveFlushProvider } from "../context/BuildSaveFlushContext";
 
 const state = vi.hoisted<{
   freshness: string; pending: boolean; saving: boolean; error: string | null; prepare: ReturnType<typeof vi.fn>;
@@ -32,7 +33,7 @@ beforeEach(() => {
   state.prepare.mockReset().mockResolvedValue(undefined);
 });
 afterEach(cleanup);
-function mount() { return render(<MemoryRouter><PartsPage /></MemoryRouter>); }
+function mount() { return render(<MemoryRouter><BuildSaveFlushProvider><PartsPage /></BuildSaveFlushProvider></MemoryRouter>); }
 it("does not prepare or save an unchanged accepted Plan on navigation", async () => {
   mount();
   await waitFor(() => expect(state.prepare).not.toHaveBeenCalled());
@@ -60,7 +61,7 @@ it("refreshes when changed Sources arrive after the saved Plan has loaded", asyn
   const view = mount();
   expect(state.prepare).not.toHaveBeenCalled();
   state.freshness = "stale";
-  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  view.rerender(<MemoryRouter><BuildSaveFlushProvider><PartsPage /></BuildSaveFlushProvider></MemoryRouter>);
   await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
 });
 
@@ -69,9 +70,9 @@ it("refreshes a second Source change after the first refresh finishes", async ()
   const view = mount();
   await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
   state.freshness = "current";
-  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  view.rerender(<MemoryRouter><BuildSaveFlushProvider><PartsPage /></BuildSaveFlushProvider></MemoryRouter>);
   state.freshness = "stale";
-  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  view.rerender(<MemoryRouter><BuildSaveFlushProvider><PartsPage /></BuildSaveFlushProvider></MemoryRouter>);
   await waitFor(() => expect(state.prepare).toHaveBeenCalledTimes(2));
 });
 
@@ -80,9 +81,9 @@ it("does not repeatedly prepare while a refresh is in flight or has failed", asy
   const view = mount();
   await waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
   state.saving = true;
-  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  view.rerender(<MemoryRouter><BuildSaveFlushProvider><PartsPage /></BuildSaveFlushProvider></MemoryRouter>);
   state.saving = false;
   state.error = "Save failed";
-  view.rerender(<MemoryRouter><PartsPage /></MemoryRouter>);
+  view.rerender(<MemoryRouter><BuildSaveFlushProvider><PartsPage /></BuildSaveFlushProvider></MemoryRouter>);
   expect(state.prepare).toHaveBeenCalledOnce();
 });
