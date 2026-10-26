@@ -63,7 +63,28 @@ def workspace_packages(crates_root):
     return packages
 
 
-def filter_expression(event, paths, packages):
+def source_readers(crates_root):
+    """Map each crate to the other crates whose sources read its files by path.
+
+    Tests such as pp-gateway's drift guards `include_str!("../../pp-storage/...")`
+    without a Cargo dependency, so rdeps() alone would skip them.
+    """
+    root = Path(crates_root)
+    if not root.is_dir():
+        return {}
+    crates = {path.name for path in root.iterdir() if path.is_dir()}
+    reference = re.compile(r"\.\./(" + "|".join(map(re.escape, sorted(crates))) + r")/")
+    readers = {}
+    for reader in sorted(crates):
+        for source in sorted(root.joinpath(reader).rglob("*.rs")):
+            text = source.read_text(encoding="utf-8", errors="replace")
+            for read in reference.findall(text):
+                if read != reader:
+                    readers.setdefault(read, set()).add(reader)
+    return readers
+
+
+def filter_expression(event, paths, packages, readers=None):
     if event != "pull_request":
         return "all()"
     selected = set()
@@ -78,6 +99,7 @@ def filter_expression(event, paths, packages):
         if package not in packages:
             return "all()"
         selected.add(package)
+        selected.update((readers or {}).get(package, ()))
     if not selected:
         return "all()"
     return " + ".join(f"rdeps(={name})" for name in sorted(selected))
@@ -108,7 +130,7 @@ if __name__ == "__main__":
     if paths is None:
         expression = "all()"
     else:
-        expression = filter_expression(event, paths, packages)
+        expression = filter_expression(event, paths, packages, source_readers(crates_root))
     message = f"nextest filter: {expression}\n"
     print(message, end="")
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:

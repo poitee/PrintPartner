@@ -88,6 +88,49 @@ class CiAffectedNextestFilterTests(unittest.TestCase):
             ci_affected.filter_expression("pull_request", [], WORKSPACE_PACKAGES),
             "all()")
 
+    def test_source_readers_join_the_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            crates = Path(directory, "crates")
+            for name, path, text in [
+                ("pp-a", "src/lib.rs", 'include_str!("../data/schema.json");\n'),
+                ("pp-b", "tests/guard.rs",
+                 'include_str!("../../pp-a/src/schema.rs");\n'
+                 'include_bytes!("../../../fixtures/x.json");\n'),
+                ("pp-c", "src/lib.rs", 'fn f() {}\n'),
+            ]:
+                Path(crates, name, path).parent.mkdir(parents=True, exist_ok=True)
+                Path(crates, name, path).write_text(text)
+                Path(crates, name, "Cargo.toml").write_text(
+                    f'[package]\nname = "{name}"\n')
+            packages = ci_affected.workspace_packages(crates)
+            readers = ci_affected.source_readers(crates)
+            self.assertEqual(readers, {"pp-a": {"pp-b"}})
+            for changed, expected in [
+                ("pp-a", "rdeps(=pp-a) + rdeps(=pp-b)"),
+                ("pp-b", "rdeps(=pp-b)"),
+                ("pp-c", "rdeps(=pp-c)"),
+            ]:
+                with self.subTest(changed=changed):
+                    self.assertEqual(
+                        ci_affected.filter_expression(
+                            "pull_request", [f"rust/crates/{changed}/src/lib.rs"],
+                            packages, readers),
+                        expected)
+
+    def test_real_workspace_source_readers_cover_gateway_guards(self):
+        # pp-gateway's ticket_t_7 tests read these crates' sources without a
+        # Cargo dependency on them.
+        crates = SCRIPT.parents[1] / "rust" / "crates"
+        packages = ci_affected.workspace_packages(crates)
+        readers = ci_affected.source_readers(crates)
+        for changed in ["pp-storage", "pp-core", "pp-source"]:
+            with self.subTest(changed=changed):
+                selected = ci_affected.filter_expression(
+                    "pull_request", [f"rust/crates/{changed}/src/lib.rs"],
+                    packages, readers).split(" + ")
+                self.assertLessEqual(
+                    {f"rdeps(={changed})", "rdeps(=pp-gateway)"}, set(selected))
+
     def test_package_from_path(self):
         self.assertEqual(
             ci_affected.package_for_path("rust/crates/pp-gateway/src/ownership/resources.rs"),
