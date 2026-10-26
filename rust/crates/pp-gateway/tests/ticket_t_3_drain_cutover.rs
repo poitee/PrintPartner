@@ -28,6 +28,54 @@ use std::{
 const CATALOG: &str = "filament.catalog";
 const PROFILE_SYNC: &str = "profile.sync";
 const SOURCE_SYNC: &str = "source.sync";
+const EXPORT_STL_PACK: &str = "export.stl-pack";
+const EXPORT_ACCEPTED_PLATE: &str = "export.accepted-plate-3mf";
+// Each export job with its route, its /api/v1 alias and any other route that
+// records a job of the same kind.
+const EXPORT_OPERATIONS: [(&str, &[&str]); 5] = [
+    (
+        EXPORT_ACCEPTED_PLATE,
+        &[
+            "http.POST /api/v1/jobs/export-accepted-plate-3mf",
+            "http.POST /api/v1/slicer-instances/:id/open-accepted-plates",
+            "http.POST /jobs/export-accepted-plate-3mf",
+            "http.POST /slicer-instances/:id/open-accepted-plates",
+            "job.export-accepted-plate-3mf",
+        ],
+    ),
+    (
+        "export.checklist-html",
+        &[
+            "http.POST /api/v1/jobs/export-checklist-html",
+            "http.POST /jobs/export-checklist-html",
+            "job.export-checklist-html",
+        ],
+    ),
+    (
+        "export.direct-3mf",
+        &[
+            "http.POST /api/v1/jobs/export-direct-3mf",
+            "http.POST /jobs/export-direct-3mf",
+            "job.export-direct-3mf",
+        ],
+    ),
+    (
+        "export.kit-bundle",
+        &[
+            "http.POST /api/v1/jobs/export-kit-bundle",
+            "http.POST /jobs/export-kit-bundle",
+            "job.export-kit-bundle",
+        ],
+    ),
+    (
+        EXPORT_STL_PACK,
+        &[
+            "http.POST /api/v1/jobs/export-stl-pack",
+            "http.POST /jobs/export-stl-pack",
+            "job.export-stl-pack",
+        ],
+    ),
+];
 // Its own operation: Node cannot fence the printer-upload job yet.
 const PRINTER_UPLOAD: &str = "job.printer-upload";
 const PLANS_CREATE: &str = "http:POST /plans current";
@@ -303,7 +351,13 @@ async fn session(gateway: &mut Gateway) -> (String, String) {
 
 async fn rust_owned_gateway(dir: &Path, node: &FakeNode) -> Gateway {
     let index = fixture_index();
-    for operation in [CATALOG, PLANS_CREATE, PROFILE_SYNC] {
+    for operation in [
+        CATALOG,
+        PLANS_CREATE,
+        PROFILE_SYNC,
+        EXPORT_STL_PACK,
+        EXPORT_ACCEPTED_PLATE,
+    ] {
         switch(&index, dir, operation);
     }
     let (owners, _) = cutover::recover(dir, Some(&index)).unwrap();
@@ -364,6 +418,21 @@ async fn ticket_t_3_drain_cutover_gateway_routes_worker_operation() {
     assert_gateway_ownership(
         &[("GET", "/ws/profile-sync"), ("HEAD", "/ws/profile-sync")],
         "GET",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ticket_t_3_drain_cutover_gateway_routes_export_operation() {
+    assert_gateway_ownership(
+        &[
+            ("POST", "/jobs/export-stl-pack"),
+            ("POST", "/api/v1/jobs/export-stl-pack"),
+            ("POST", "/jobs/export-accepted-plate-3mf"),
+            ("POST", "/slicer-instances/1/open-accepted-plates"),
+            ("POST", "/api/v1/slicer-instances/1/open-accepted-plates"),
+        ],
+        "POST",
     )
     .await;
 }
@@ -582,6 +651,50 @@ fn ticket_t_3_drain_cutover_switches_fenced_worker_with_aliases() {
         json!({"reason": "participant_set_mismatch", "operation": PROFILE_SYNC,
             "missing": ["worker.startManagedProfileSync"], "unexpected": []}),
     );
+}
+
+#[test]
+fn ticket_t_3_drain_cutover_switches_export_jobs_with_their_routes() {
+    let index = fixture_index();
+    for (operation, participants) in EXPORT_OPERATIONS {
+        assert_eq!(
+            index.participants_of(operation),
+            participants.iter().copied().collect::<BTreeSet<_>>(),
+            "{operation}"
+        );
+        let dir = Scratch::new("pp-t3-cutover-export-");
+        assert_json(
+            switch(&index, &dir, operation),
+            json!({"outcome": "committed", "operation": operation,
+                "participants": participants.len(),
+                "manifest_sha256": index.digest(),
+                "parity_sha256": sha256(&parity(operation, index.digest(), 3, 3, 0)),
+                "fixtures": 3, "directory_synced": true}),
+        );
+        let (owners, _) = cutover::recover(&dir, Some(&index)).unwrap();
+        let rust_owned: BTreeSet<&str> = index
+            .claims()
+            .keys()
+            .map(String::as_str)
+            .filter(|id| owners.owner_of(id) == Owner::Rust)
+            .collect();
+        assert_eq!(rust_owned, participants.iter().copied().collect());
+
+        // Leaving the job with Node would split the operation.
+        let job = participants
+            .iter()
+            .find(|id| id.starts_with("job."))
+            .unwrap();
+        let mut partial = participants.to_vec();
+        partial.retain(|id| id != job);
+        let split = Scratch::new("pp-t3-cutover-export-split-");
+        plant_record(&split, index.digest(), operation, &partial);
+        assert_json(
+            cutover::recover(&split, Some(&index)).unwrap_err(),
+            json!({"reason": "participant_set_mismatch", "operation": operation,
+                "missing": [job], "unexpected": []}),
+        );
+    }
 }
 
 #[test]
