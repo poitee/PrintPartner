@@ -747,6 +747,24 @@
         ]
       },
       {
+        "operation": "tool.get_interaction_graph",
+        "resources": [
+          {"kind": "file", "name": "assistant-domain"},
+          {"kind": "file", "name": "kit-catalog"}
+        ]
+      },
+      {
+        "operation": "tool.check_stack_compatibility",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "profile_layers"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "file", "name": "source-workspace"},
+          {"kind": "file", "name": "assistant-domain"},
+          {"kind": "file", "name": "kit-catalog"}
+        ]
+      },
+      {
         "operation": "tool.get_printer_checkoff",
         "resources": [
           {"kind": "table", "name": "app_settings"}
@@ -1787,12 +1805,10 @@
       "tool.apply_stack_preset",
       "tool.archive_plan",
       "tool.audit_build_coverage",
-      "tool.check_stack_compatibility",
       "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
       "tool.duplicate_plan",
       "tool.get_farm_status",
-      "tool.get_interaction_graph",
       "tool.get_print_stats",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",
@@ -1849,6 +1865,10 @@
       "rust_writes": "none"
     },
     "filament-catalog": {
+      "node_reads": 1,
+      "rust_writes": "none"
+    },
+    "assistant-domain": {
       "node_reads": 1,
       "rust_writes": "none"
     }

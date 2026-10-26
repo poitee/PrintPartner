@@ -50,6 +50,7 @@ pub enum FileFamily {
     AcceptedThumbnails,
     CustomFilaments,
     FilamentCatalog,
+    AssistantDomain,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -168,6 +169,10 @@ enum ReviewedEntry {
     FindFilamentMatches { resources: Vec<ResourceId> },
     #[serde(rename = "tool.search_plan_parts")]
     SearchPlanParts { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_interaction_graph")]
+    GetInteractionGraph { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.check_stack_compatibility")]
+    CheckStackCompatibility { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -442,6 +447,26 @@ impl ReviewedEntry {
                 "tool.search_plan_parts",
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(Parts)]),
+            ),
+            Self::GetInteractionGraph { resources } => (
+                "tool.get_interaction_graph",
+                resources,
+                BTreeSet::from([
+                    File(FileFamily::AssistantDomain),
+                    File(FileFamily::KitCatalog),
+                ]),
+            ),
+            Self::CheckStackCompatibility { resources } => (
+                "tool.check_stack_compatibility",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    File(FileFamily::SourceWorkspace),
+                    File(FileFamily::AssistantDomain),
+                    File(FileFamily::KitCatalog),
+                ]),
             ),
             Self::GetPrinterCheckoff { resources } => (
                 "tool.get_printer_checkoff",
@@ -798,6 +823,8 @@ impl Declarations {
             "tool.get_plan_review",
             "tool.find_filament_matches",
             "tool.search_plan_parts",
+            "tool.get_interaction_graph",
+            "tool.check_stack_compatibility",
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
             "tool.get_build_planning_state",
