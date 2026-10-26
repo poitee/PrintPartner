@@ -933,7 +933,17 @@ async fn gates_off_refuse_existing_accounts_even_with_child_env() {
     mapping(&data, selected());
     let before = fs::read(data.join("print-partner.db")).unwrap();
     assert!(!pp_core::DesktopRebuild::from_env().enabled());
-    assert!(CoreRuntime::start(launch(data.clone())).await.is_err());
+    // The refusing child never becomes Ready; the error says how it failed (GRE-989).
+    let error = CoreRuntime::start(launch(data.clone()))
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.starts_with("Compatibility readiness timed out after 32s; last status ")
+            || error.starts_with("Compatibility child stopped before readiness: "),
+        "{error}"
+    );
     assert_eq!(fs::read(data.join("print-partner.db")).unwrap(), before);
 }
 

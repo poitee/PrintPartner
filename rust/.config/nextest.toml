@@ -12,6 +12,12 @@ threads-required = "num-test-threads"
 filter = 'package(=pp-compat) & test(=ticket_t_2::ticket_t_3_drain_measured_release_startup_parent_death)'
 threads-required = "num-test-threads"
 
+# Six waits of up to CRASH_CYCLE_DEADLINE (150s) each, plus startup, must end in the
+# test's own diagnostic panic before nextest terminates it.
+[[profile.default.overrides]]
+filter = 'binary(=runtime_m0) & test(=crash_guard_stops_after_five_failures_and_recovers_explicitly)'
+slow-timeout = { period = "60s", terminate-after = 17 }
+
 [profile.pp-local-linux]
 test-threads = 3
 

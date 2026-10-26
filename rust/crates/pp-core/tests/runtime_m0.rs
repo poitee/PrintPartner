@@ -731,7 +731,8 @@ async fn await_status(
             panic!("supervisor stopped before {what}; saw {seen:?}");
         }
         match tokio::time::timeout_at(deadline, state.changed()).await {
-            Ok(changed) => changed.unwrap(),
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("supervisor exited before {what}; saw {seen:?}"),
             Err(_) => panic!("timed out waiting for {what}; saw {seen:?}"),
         }
     }
@@ -785,9 +786,11 @@ async fn crash_guard_stops_after_five_failures_and_recovers_explicitly() {
             &mut state,
             deadline,
             &format!("crash {attempt} handled"),
+            // A stalled test task can first observe the respawn already Ready.
             |current| match current {
                 CoreStatus::Guarded => attempt == 4,
                 CoreStatus::Backoff { .. } | CoreStatus::Starting => attempt < 4,
+                CoreStatus::Ready { pid, .. } => attempt < 4 && *pid != prior_pid,
                 _ => false,
             },
         )
