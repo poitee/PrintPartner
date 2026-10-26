@@ -42,9 +42,11 @@ class LocalCi:
             self.env["PP_SCHEMA_PARITY_NODE"] = str(fake_tools(scratch / "node22", {"node": node22, "npm": "10.0.0"}) / "node")
         self.fail = set(fail)
         self.ran = []
+        self.envs = {}
 
     def runner(self, step_id, script, cwd, env):
         self.ran.append(step_id)
+        self.envs[step_id] = env
         return 1 if step_id in self.fail else 0
 
     def __call__(self, *argv):
@@ -71,6 +73,21 @@ class LocalCiTests(unittest.TestCase):
             self.assertNotIn(step, ci.ran)
         self.assertIn("rust-windows", ci.output.split("== local CI summary ==")[-1])
         self.assertIn("Windows runner", ci.output)
+
+    def test_historical_schema_commits_are_fetched_before_any_nextest_step(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci(), 0)
+        self.assertEqual(ci.summary["historical-schema"], "PASS")
+        fetched = ci.ran.index("historical-schema")
+        self.assertLess(fetched, ci.ran.index("nextest-off"))
+        self.assertLess(fetched, ci.ran.index("nextest-on"))
+
+    def test_cargo_steps_refuse_to_write_snapshots(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci(), 0)
+        for step in ["clippy-off", "clippy-on", "nextest-off", "nextest-on", "doc-off", "doc-on"]:
+            self.assertEqual(ci.envs[step].get("INSTA_UPDATE"), "no", step)
+        self.assertNotIn("INSTA_UPDATE", ci.envs["node-fixtures"])
 
     def test_a_failed_step_does_not_stop_later_steps_and_fails_the_run(self):
         ci = LocalCi(self, fail={"fmt"})

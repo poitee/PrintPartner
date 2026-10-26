@@ -40,9 +40,11 @@ class Step:
     host_only: str = ""
 
 
+# rust-cross-os.yml sets INSTA_UPDATE workflow-wide so a snapshot mismatch fails
+# instead of writing .snap.new files.
 def cargo(step_id, title, ci_step, command, requires=(("cargo", None),)):
     return Step(step_id, title, (command,), (CROSS_OS + ci_step,), requires=requires,
-                env={"NEXTEST_FILTER": "all()"})
+                env={"NEXTEST_FILTER": "all()", "INSTA_UPDATE": "no"})
 
 
 NEXTEST = (("cargo", None), ("cargo-nextest", None))
@@ -74,6 +76,10 @@ STEPS = [
           "python3 rust/scripts/check-domain-deps.py --self-test"),
          ("chain-tip-gate.yml#check-boundaries", "chain-tip-gate.yml#pp-domain dependency guard"),
          requires=(("python3", None),)),
+    # pp-storage tests `git archive` pinned commits that a shallow clone lacks.
+    Step("historical-schema", "fetch pinned historical schema commits",
+         ("rust/scripts/fetch-historical-schema-commits.sh",),
+         (CROSS_OS + "Fetch pinned historical schema commits",), requires=(("git", None),)),
     Step("fmt", "cargo fmt", ("cargo fmt --manifest-path rust/Cargo.toml --all --check",),
          (CROSS_OS + "cargo fmt",), requires=(("cargo", None),)),
     Step("web-assets", "desktop web assets and rust/bundle-manifest.json",
