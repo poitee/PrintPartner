@@ -292,21 +292,16 @@ mod tests {
     use std::{
         fs::{self, Permissions},
         os::unix::fs::{MetadataExt, PermissionsExt},
-        path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
     };
 
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    struct Tree(PathBuf);
+    use crate::scratch::Scratch;
+
+    /// Removed when the scratch drops, including while a test unwinds from a
+    /// panic.
+    struct Tree(Scratch);
     impl Tree {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "pp-source-root-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&path).unwrap();
-            let tree = Self(fs::canonicalize(path).unwrap());
+            let tree = Self(Scratch::new("pp-source-root-"));
             tree.dir("", 0o755)
         }
         fn dir(self, name: &str, mode: u32) -> Self {
@@ -326,7 +321,6 @@ mod tests {
             // Deny entries can block cleanup, so strip every ACL first.
             #[cfg(target_os = "macos")]
             chmod(&["-R", "-N"], &self.0);
-            fs::remove_dir_all(&self.0).unwrap();
         }
     }
 

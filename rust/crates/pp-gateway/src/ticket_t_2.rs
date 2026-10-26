@@ -1,8 +1,8 @@
 #![cfg(test)]
 
+use crate::scratch::Scratch;
 use std::{
     net::SocketAddr,
-    path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -87,25 +87,15 @@ fn assert_unready_problem(status: StatusCode, headers: &HeaderMap, body: &[u8]) 
     assert!(problem.get("generation").is_none());
 }
 
-struct Assets(PathBuf);
+struct Assets(Scratch);
 
 impl Assets {
     fn create() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pp-t2-{}-{}",
-            std::process::id(),
-            rand::random::<u64>()
-        ));
-        std::fs::create_dir_all(path.join("assets")).unwrap();
+        let path = Scratch::new("pp-t2-");
+        std::fs::create_dir(path.join("assets")).unwrap();
         std::fs::write(path.join("index.html"), b"spa-ready").unwrap();
         std::fs::write(path.join("assets/app.js"), b"asset-ready").unwrap();
         Self(path)
-    }
-}
-
-impl Drop for Assets {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -117,7 +107,7 @@ async fn ticket_t_2_unready_node_routes_return_problem_json_and_keep_rust_surfac
         .unwrap();
     let mut gateway = super::Gateway::start(
         listener,
-        assets.0.clone(),
+        assets.0.to_path_buf(),
         CompatHandle::unpublished(),
         &crate::ownership::cutover::OperationOwners::node_only(),
     )
@@ -205,8 +195,8 @@ async fn ticket_t_2_unready_node_routes_return_problem_json_and_keep_rust_surfac
 #[tokio::test]
 async fn ticket_t_2_status_refresh_unpublish_returns_problem_json() {
     REFRESH_AFTER_PUBLISHED.store(false, Ordering::SeqCst);
-    let sock = std::env::temp_dir().join(format!("pp-t2-refresh-{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&sock);
+    let sock_dir = Scratch::new("pp-t2-refresh-");
+    let sock = sock_dir.join("compat.sock");
     let listener = tokio::net::UnixListener::bind(&sock).unwrap();
     let (held_tx, held_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
@@ -221,7 +211,7 @@ async fn ticket_t_2_status_refresh_unpublish_returns_problem_json() {
         .unwrap();
     let mut gateway = super::Gateway::start(
         tcp,
-        assets.0.clone(),
+        assets.0.to_path_buf(),
         compat,
         &crate::ownership::cutover::OperationOwners::node_only(),
     )
@@ -260,6 +250,5 @@ async fn ticket_t_2_status_refresh_unpublish_returns_problem_json() {
     drop(held);
     let status_route = status_task.await.unwrap();
     assert_unready_problem(status_route.0, &status_route.1, &status_route.2);
-    let _ = std::fs::remove_file(&sock);
     gateway.stop().await.unwrap();
 }
