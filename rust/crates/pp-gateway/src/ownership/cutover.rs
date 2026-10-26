@@ -624,7 +624,15 @@ mod tests {
         // Node fences whole operations: every non-HTTP participant of each
         // listed operation, and nothing outside them.
         let mut expected = BTreeSet::new();
-        for operation in ["profile.sync", "source.sync"] {
+        for operation in [
+            "profile.sync",
+            "source.sync",
+            "export.accepted-plate-3mf",
+            "export.checklist-html",
+            "export.direct-3mf",
+            "export.kit-bundle",
+            "export.stl-pack",
+        ] {
             expected.extend(
                 index
                     .participants_of(operation)
@@ -634,7 +642,7 @@ mod tests {
             );
         }
         assert_eq!(fenced, &expected);
-        assert_eq!(fenced.len(), 10);
+        assert_eq!(fenced.len(), 15);
         for participant in fenced {
             assert!(node_fences(participant));
         }

@@ -34,6 +34,7 @@ import { runWithTenantDiskQuota, withoutTenantDiskQuota, TenantDiskQuotaError } 
 import { runPrinterUploadJob } from "./printer-upload-job.js";
 import { reconcileSendQueueJobResult } from "./printer-send-queue.js";
 import { getLogger } from "./logger.js";
+import { rustOwnedNodeParticipants } from "../ownership/operation-cutover.js";
 import { OwnershipAdmissionError, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
 import {
   ACCEPTED_PLATE_EXPORT_LIMITS,
@@ -100,6 +101,7 @@ export class InProcessJobRunner {
   private readonly completedJobMax: number;
   private readonly completedJobGlobalMax: number;
   private readonly completedJobRetentionMs: number;
+  private rustOwnedParticipants: ReadonlySet<string> | undefined;
 
   constructor(
     private readonly deps: JobRunnerDeps,
@@ -271,6 +273,19 @@ export class InProcessJobRunner {
     }
   }
 
+  /**
+   * Refuses a job the cutover record gives to Rust. The runner reads the record
+   * from its own data directory, so no entry point has to admit it first.
+   * pp-gateway commits the record only while Node is stopped, so one read per
+   * process stays current.
+   */
+  private requireNodeOwnedJob(kind: JobKind): void {
+    this.rustOwnedParticipants ??= rustOwnedNodeParticipants(this.deps.dataDir);
+    if (this.rustOwnedParticipants.has(`job.${kind}`)) {
+      throw new OwnershipAdmissionError("rust_owner", `Rust owns job.${kind}; Node does not run it`);
+    }
+  }
+
   async start(
     kind: JobKind,
     payload: Record<string, unknown>,
@@ -279,6 +294,7 @@ export class InProcessJobRunner {
     if (!STARTABLE_JOB_KINDS.has(kind)) {
       throw new Error(`Unsupported job kind: ${kind}`);
     }
+    this.requireNodeOwnedJob(kind);
     if (kind === "sync") requireSourceSyncParticipant("job.sync");
     if (kind === "import-scan") requireSourceSyncParticipant("job.import-scan");
     if (kind === "extract-source-docs") requireSourceSyncParticipant("job.extract-source-docs");
