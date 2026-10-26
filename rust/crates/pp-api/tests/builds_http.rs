@@ -363,13 +363,29 @@ async fn register(server: &Server, email: &str) -> String {
 }
 
 #[cfg(feature = "desktop_rebuild")]
-fn assert_summary_shape(body: &Value, id: i64, name: &str) {
+fn assert_progress_shape(body: &Value, prefix: &str) {
+    // Node's /api/v1 keeps the legacy unit counts; `/` and /api/v2 send
+    // `accepted_progress`.
+    if prefix == "/api/v1" {
+        assert!(body.get("accepted_progress").is_none(), "{prefix} {body}");
+        assert_eq!(
+            (&body["remaining_units"], &body["total_units"]),
+            (&json!(0), &json!(0))
+        );
+    } else {
+        assert!(body["accepted_progress"].is_object(), "{prefix} {body}");
+        assert!(body.get("remaining_units").is_none(), "{prefix} {body}");
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn assert_summary_shape(body: &Value, prefix: &str, id: i64, name: &str) {
     assert_eq!(body["id"], id);
     assert_eq!(body["name"], name);
     assert!(body.get("order_number").is_some());
     assert!(body.get("special_request").is_some());
     assert_eq!(body["part_count"], 0);
-    assert!(body["accepted_progress"].is_object());
+    assert_progress_shape(body, prefix);
     assert_eq!(body["build_stale"], false);
     assert!(body["freshness"].is_object());
     assert!(body.get("archived_at").is_some());
@@ -583,14 +599,14 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
         .await;
     assert_eq!(status, 200);
     assert_eq!(list_a["profiles"].as_array().unwrap().len(), 1);
-    assert_summary_shape(&list_a["profiles"][0], id_a, "Tenant A Plan");
+    assert_summary_shape(&list_a["profiles"][0], "", id_a, "Tenant A Plan");
 
     let (status, list_b) = server
         .send(Method::GET, "/plans", &[("Cookie", cookie_b.as_str())])
         .await;
     assert_eq!(status, 200);
     assert_eq!(list_b["profiles"].as_array().unwrap().len(), 1);
-    assert_summary_shape(&list_b["profiles"][0], id_b, "Tenant B Plan");
+    assert_summary_shape(&list_b["profiles"][0], "", id_b, "Tenant B Plan");
 
     for prefix in ["", "/api/v1", "/api/v2"] {
         let (status, body) = server
@@ -601,7 +617,7 @@ async fn build_reads_are_authenticated_and_tenant_scoped() {
             )
             .await;
         assert_eq!(status, 200, "{prefix}");
-        assert_summary_shape(&body, id_a, "Tenant A Plan");
+        assert_summary_shape(&body, prefix, id_a, "Tenant A Plan");
         let (status, body) = server
             .send(
                 Method::GET,
@@ -744,13 +760,13 @@ async fn spawn_builds_with_auth(
 }
 
 #[cfg(feature = "desktop_rebuild")]
-fn assert_created_shape(body: &Value, name: &str) {
+fn assert_created_shape(body: &Value, prefix: &str, name: &str) {
     assert_eq!(body["name"], name);
     assert!(body["id"].as_i64().unwrap() > 0);
     assert!(body.get("order_number").is_some());
     assert!(body.get("special_request").is_some());
     assert_eq!(body["part_count"], 0);
-    assert!(body["accepted_progress"].is_object());
+    assert_progress_shape(body, prefix);
     assert_eq!(body["build_stale"], false);
     assert!(body["freshness"].is_object());
     assert!(body.get("archived_at").is_some());
@@ -774,7 +790,7 @@ async fn build_create_matches_node_contract() {
         )
         .await;
     assert_eq!(status, 200, "{created}");
-    assert_created_shape(&created, "Kit");
+    assert_created_shape(&created, "", "Kit");
     assert_eq!(created["layers"].as_array().unwrap().len(), 0);
 
     for prefix in ["", "/api/v1", "/api/v2"] {
@@ -788,7 +804,7 @@ async fn build_create_matches_node_contract() {
             )
             .await;
         assert_eq!(status, 200, "{prefix}");
-        assert_created_shape(&body, &name);
+        assert_created_shape(&body, prefix, &name);
         assert_eq!(body["layers"].as_array().unwrap().len(), 0);
     }
 
@@ -1171,7 +1187,7 @@ async fn build_touch_uses_existing_command() {
             )
             .await;
         assert_eq!(status, 200, "{prefix} {body}");
-        assert_summary_shape(&body, id, "TouchPlan");
+        assert_summary_shape(&body, prefix, id, "TouchPlan");
         assert_ne!(body["last_used_at"], "old");
         let (last_used, config) = last_used_and_config(&directory, id);
         assert_ne!(last_used.as_deref(), Some("old"));

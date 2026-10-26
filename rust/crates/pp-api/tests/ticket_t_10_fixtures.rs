@@ -624,25 +624,17 @@ mod ticket_t_10_fixtures {
             .collect()
     }
 
-    /// Seeds the two retained jobs Node's generator runs, in the same order:
-    /// a finished update check, then (a second later) a failed checklist export.
-    /// Returns the session cookie and the two job ids.
-    async fn seed_jobs(owner: &WriterOwner) -> (String, String, String) {
-        use pp_storage::{
-            auth::Secret,
-            jobs::{
-                CompletedResult, Credential, JobKind, Outcome, Payload, SourceUpdatesResult,
-                UserOperation, WorkerAdmission, WorkerOperation,
-            },
-        };
-        use std::{sync::atomic::AtomicBool, time::Duration};
+    const ACCOUNT_POLICY: AuthPolicy = AuthPolicy {
+        registration: RegistrationPolicy::Open,
+        first_user: FirstUserTenant::NewUser,
+        session_tenant: SessionTenantPolicy::AccountTenant,
+    };
 
-        let policy = AuthPolicy {
-            registration: RegistrationPolicy::Open,
-            first_user: FirstUserTenant::NewUser,
-            session_tenant: SessionTenantPolicy::AccountTenant,
-        };
-        let auth = owner.auth_with_policy(policy).unwrap();
+    /// Registers `email` through the real auth router and returns its
+    /// `pp_session=<token>` cookie pair. Node's corpora need no session, so
+    /// this setup runs before any state is captured.
+    async fn register(owner: &WriterOwner, email: &str) -> String {
+        let auth = owner.auth_with_policy(ACCOUNT_POLICY).unwrap();
         let served = Served::start(|origin| {
             auth_router(
                 AuthHttpConfig::new(origin, CookieTransport::LoopbackHttp, false, None, false)
@@ -658,7 +650,7 @@ mod ticket_t_10_fixtures {
             .client
             .post(format!("{}/auth/register", served.origin))
             .header("Origin", &served.origin)
-            .json(&json!({"email": "jobs-http@example.test", "password": "password-1234"}))
+            .json(&json!({"email": email, "password": "password-1234"}))
             .send()
             .await
             .unwrap();
@@ -671,6 +663,24 @@ mod ticket_t_10_fixtures {
             .unwrap()
             .to_owned();
         served.stop().await.unwrap();
+        cookie
+    }
+
+    /// Seeds the two retained jobs Node's generator runs, in the same order:
+    /// a finished update check, then (a second later) a failed checklist export.
+    /// Returns the session cookie and the two job ids.
+    async fn seed_jobs(owner: &WriterOwner) -> (String, String, String) {
+        use pp_storage::{
+            auth::Secret,
+            jobs::{
+                CompletedResult, Credential, JobKind, Outcome, Payload, SourceUpdatesResult,
+                UserOperation, WorkerAdmission, WorkerOperation,
+            },
+        };
+        use std::{sync::atomic::AtomicBool, time::Duration};
+
+        let policy = ACCOUNT_POLICY;
+        let cookie = register(owner, "jobs-http@example.test").await;
         let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
 
         let jobs = owner.jobs(policy).unwrap();
@@ -744,13 +754,7 @@ mod ticket_t_10_fixtures {
             .unwrap()
             .0;
         let (cookie, done, failed) = seed_jobs(&owner).await;
-        let jobs = owner
-            .jobs(AuthPolicy {
-                registration: RegistrationPolicy::Open,
-                first_user: FirstUserTenant::NewUser,
-                session_tenant: SessionTenantPolicy::AccountTenant,
-            })
-            .unwrap();
+        let jobs = owner.jobs(ACCOUNT_POLICY).unwrap();
         let served = Served::start(|origin| {
             jobs_router(
                 JobsHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
@@ -802,6 +806,153 @@ mod ticket_t_10_fixtures {
         print_report("jobs-http", &report);
         assert_eq!(report.matched, 5);
         assert_eq!(report.corrected.len(), 8);
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PlansFixture {
+        generated: String,
+        sources: Vec<String>,
+        ids: std::collections::BTreeMap<String, u64>,
+        cases: Vec<PlansCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PlansCase {
+        id: String,
+        method: String,
+        path: String,
+        body: Option<Value>,
+        node: Exchange,
+        changed: Vec<String>,
+    }
+
+    fn plans_fixture() -> PlansFixture {
+        let fixture: PlansFixture = serde_json::from_str(include_str!(
+            "../../../../fixtures/parity/plans-http/node.json"
+        ))
+        .unwrap();
+        assert!(fixture.generated.contains("plans-http/generate.mjs"));
+        assert_eq!(fixture.sources.len(), 3);
+        assert_eq!(fixture.cases.len(), 28);
+        fixture
+    }
+
+    /// Node's `POST /plans` inserts the Plan before it looks up the base
+    /// project, so a refused create leaves the row behind. Rust refuses before
+    /// it writes; this is the one case whose tables differ from Node's.
+    const ATOMIC_CREATE: &str = "create_missing_base";
+
+    /// The list after that refusal: Node's shows the leftover Plan, Rust's does not.
+    fn plans_corrections(fixture: &PlansFixture) -> Vec<Correction> {
+        let node = &fixture
+            .cases
+            .iter()
+            .find(|case| case.id == "list_after_refusal_v1")
+            .unwrap()
+            .node;
+        let mut rust = node.clone();
+        let profiles = rust.body["profiles"].as_array_mut().unwrap();
+        let before = profiles.len();
+        profiles.retain(|profile| profile["name"] != "Orphan");
+        assert_eq!(
+            profiles.len(),
+            before - 1,
+            "Node's list shows the leftover Plan"
+        );
+        vec![Correction {
+            case: "list_after_refusal_v1",
+            kind: CorrectionKind::Durable,
+            reason: "Rust refuses a missing base project before it inserts the Plan",
+            rust,
+        }]
+    }
+
+    #[tokio::test]
+    async fn plans_flat_v1_v2_match_node_responses_and_changed_tables() {
+        use pp_api::{
+            builds::{BuildHttpConfig, build_router},
+            fixtures::Labels,
+        };
+
+        let fixture = plans_fixture();
+        let sandbox = Sandbox::new("t10-plans").unwrap();
+        let owner = WriterOwner::open(sandbox.path(), Limits::default())
+            .unwrap()
+            .0;
+        let cookie = register(&owner, "plans-http@example.test").await;
+        let graph = owner.build_graph_with_policy(ACCOUNT_POLICY).unwrap();
+        let served = Served::start(|origin| {
+            build_router(
+                BuildHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                graph,
+            )
+        })
+        .await
+        .unwrap();
+        let mut labels = Labels::new(vec![(
+            "time",
+            &[
+                "created_at",
+                "updated_at",
+                "last_used_at",
+                "config_modified_at",
+                "archived_at",
+            ],
+        )]);
+        let mut ledger = Ledger::new(plans_corrections(&fixture)).unwrap();
+        let mut atomic = false;
+        for case in &fixture.cases {
+            let path = fixture
+                .ids
+                .iter()
+                .fold(case.path.clone(), |path, (name, id)| {
+                    path.replace(&format!("{{{name}}}"), &id.to_string())
+                });
+            let mut request = served
+                .client
+                .request(
+                    Method::from_bytes(case.method.as_bytes()).unwrap(),
+                    format!("{}{path}", served.origin),
+                )
+                .header("Origin", &served.origin)
+                .header("Cookie", &cookie);
+            if let Some(body) = &case.body {
+                request = request.json(body);
+            }
+            let before = StateGraph::capture(sandbox.path()).unwrap();
+            let mut actual = Exchange::observe(request.send().await.unwrap())
+                .await
+                .unwrap();
+            let after = StateGraph::capture(sandbox.path()).unwrap();
+            labels.scrub(&mut actual);
+            ledger
+                .compare(&case.id, &case.node, &actual)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let changed: Vec<String> = before
+                .changed(&after)
+                .into_iter()
+                .map(|name| match name.strip_prefix("print-partner.db/") {
+                    Some(table) => table.to_owned(),
+                    None => name,
+                })
+                .collect();
+            if case.id == ATOMIC_CREATE {
+                assert_eq!(case.changed, ["build_profiles"], "Node left a Plan");
+                assert_eq!(changed, Vec::<String>::new(), "Rust refusal wrote state");
+                atomic = true;
+            } else {
+                assert_eq!(changed, case.changed, "{}: changed tables", case.id);
+            }
+        }
+        assert!(atomic, "{ATOMIC_CREATE} not replayed");
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        let report = ledger.finish().unwrap();
+        print_report("plans-http", &report);
+        assert_eq!(report.matched, 27);
+        assert_eq!(report.corrected.len(), 1);
     }
 
     #[test]
