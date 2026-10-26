@@ -27,6 +27,7 @@ pub enum TableId {
     PlanRevisionRequiredUnits,
     RequiredUnits,
     PrintProgress,
+    PrintJobs,
     PlanDrafts,
     PlanDraftInputs,
     PlanDraftParts,
@@ -173,6 +174,10 @@ enum ReviewedEntry {
     GetInteractionGraph { resources: Vec<ResourceId> },
     #[serde(rename = "tool.check_stack_compatibility")]
     CheckStackCompatibility { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.list_example_builds")]
+    ListExampleBuilds { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.get_print_stats")]
+    GetPrintStats { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_snapshot")]
     GetPlanSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_option_groups")]
@@ -226,8 +231,23 @@ impl ReviewedEntry {
             PlanDraftRequiredUnitDecisions, PlanDraftRequiredUnitReconciliations, PlanDrafts,
             PlanRevisionInputSets, PlanRevisionInputs, PlanRevisionParts,
             PlanRevisionRequiredUnitSets, PlanRevisionRequiredUnits, PlanRevisions, PlanSnapshots,
-            PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs, SourceNotes,
-            SourceRevisions,
+            PrintJobs, PrintProgress, ProfileLayers, Projects, RequiredUnits, SourceDocs,
+            SourceNotes, SourceRevisions,
+        };
+        // Plan headers with part counts and freshness: what `listProfileHeaders` reads.
+        let plan_headers = || {
+            BTreeSet::from([
+                Table(BuildProfiles),
+                Table(Parts),
+                Table(ProfileLayers),
+                Table(Projects),
+                Table(SourceRevisions),
+                Table(AppSettings),
+                Table(PlanAcceptedInputSets),
+                Table(PlanRevisionInputSets),
+                Table(PlanRevisionInputs),
+                File(FileFamily::SourceWorkspace),
+            ])
         };
         let build_workflow = || {
             BTreeSet::from([
@@ -468,6 +488,24 @@ impl ReviewedEntry {
                     File(FileFamily::KitCatalog),
                 ]),
             ),
+            Self::ListExampleBuilds { resources } => ("tool.list_example_builds", resources, {
+                let mut set = plan_headers();
+                set.insert(File(FileFamily::KitCatalog));
+                set
+            }),
+            Self::GetPrintStats { resources } => ("tool.get_print_stats", resources, {
+                let mut set = plan_headers();
+                set.extend([
+                    Table(PlanRevisions),
+                    Table(PlanRevisionParts),
+                    Table(PlanRevisionRequiredUnitSets),
+                    Table(PlanRevisionRequiredUnits),
+                    Table(PrintJobs),
+                    Table(PrintProgress),
+                    Table(RequiredUnits),
+                ]);
+                set
+            }),
             Self::GetPrinterCheckoff { resources } => (
                 "tool.get_printer_checkoff",
                 resources,
@@ -719,22 +757,7 @@ impl ReviewedEntry {
                 resources,
                 BTreeSet::from([Table(BuildProfiles)]),
             ),
-            Self::ListPlans { resources } => (
-                "tool.list_plans",
-                resources,
-                BTreeSet::from([
-                    Table(BuildProfiles),
-                    Table(Parts),
-                    Table(ProfileLayers),
-                    Table(Projects),
-                    Table(SourceRevisions),
-                    Table(AppSettings),
-                    Table(PlanAcceptedInputSets),
-                    Table(PlanRevisionInputSets),
-                    Table(PlanRevisionInputs),
-                    File(FileFamily::SourceWorkspace),
-                ]),
-            ),
+            Self::ListPlans { resources } => ("tool.list_plans", resources, plan_headers()),
             Self::ListSources { resources } => (
                 "tool.list_sources",
                 resources,
@@ -825,6 +848,8 @@ impl Declarations {
             "tool.search_plan_parts",
             "tool.get_interaction_graph",
             "tool.check_stack_compatibility",
+            "tool.list_example_builds",
+            "tool.get_print_stats",
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
             "tool.get_build_planning_state",

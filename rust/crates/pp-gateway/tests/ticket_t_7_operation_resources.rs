@@ -393,7 +393,11 @@ fn ticket_t_7_ownership_get_interaction_graph_has_complete_node_owned_resources(
         Disposition::Owned(Owner::Node)
     );
     assert_eq!(index.admit_rollback(id), Ok(&expected));
-    assert_stack_formats_refuse_rollback(id, &expected, &[]);
+    assert_formats_refuse_rollback(
+        id,
+        &expected,
+        &[("assistant-domain", 1), ("kit-catalog", 1)],
+    );
 }
 
 #[test]
@@ -423,28 +427,84 @@ fn ticket_t_7_ownership_check_stack_compatibility_has_complete_node_owned_resour
             rust_writes: Some(35),
         })
     );
-    assert_stack_formats_refuse_rollback(
+    assert_formats_refuse_rollback(
         id,
         &expected,
-        &[("sqlite-schema", 34), ("source-revision-workspace", 1)],
+        &[
+            ("assistant-domain", 1),
+            ("kit-catalog", 1),
+            ("sqlite-schema", 34),
+            ("source-revision-workspace", 1),
+        ],
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_list_example_builds_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.list_example_builds";
+    let index = admit_bundled_manifest().unwrap();
+    let mut expected = index.resources_for("tool.list_plans").unwrap().clone();
+    expected.insert(File(FileFamily::KitCatalog));
+    assert_eq!(expected.len(), 11);
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    assert_formats_refuse_rollback(
+        id,
+        &expected,
+        &[
+            ("kit-catalog", 1),
+            ("sqlite-schema", 34),
+            ("source-revision-workspace", 1),
+        ],
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_get_print_stats_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.get_print_stats",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "parts"},
+            {"kind": "table", "name": "plan_accepted_input_sets"},
+            {"kind": "table", "name": "plan_revision_input_sets"},
+            {"kind": "table", "name": "plan_revision_inputs"},
+            {"kind": "table", "name": "plan_revision_parts"},
+            {"kind": "table", "name": "plan_revision_required_unit_sets"},
+            {"kind": "table", "name": "plan_revision_required_units"},
+            {"kind": "table", "name": "plan_revisions"},
+            {"kind": "table", "name": "print_jobs"},
+            {"kind": "table", "name": "print_progress"},
+            {"kind": "table", "name": "profile_layers"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "required_units"},
+            {"kind": "table", "name": "source_revisions"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
     );
 }
 
 /// Rollback admits only when every format the operation reads is compatible,
 /// and each incompatible or undeclared writer refuses before any effect.
-fn assert_stack_formats_refuse_rollback(
-    id: &str,
-    expected: &ResourceSet,
-    extra_formats: &[(&str, u32)],
-) {
-    let formats: Vec<(&str, u32)> = [("assistant-domain", 1), ("kit-catalog", 1)]
-        .into_iter()
-        .chain(extra_formats.iter().copied())
-        .collect();
-    for &(format, node_reads) in &formats {
+fn assert_formats_refuse_rollback(id: &str, expected: &ResourceSet, formats: &[(&str, u32)]) {
+    for &(format, node_reads) in formats {
         for rust_writes in [None, Some(node_reads + 1)] {
             let mut value = manifest();
-            for &(compatible_format, version) in &formats {
+            for &(compatible_format, version) in formats {
                 value["live_formats"][compatible_format]["rust_writes"] = json!(version);
             }
             assert_eq!(admit(&value).unwrap().admit_rollback(id), Ok(expected));
@@ -478,6 +538,8 @@ fn ticket_t_7_ownership_checkoff_reads_refuse_invalid_admission_before_effects()
         "tool.search_plan_parts",
         "tool.get_interaction_graph",
         "tool.check_stack_compatibility",
+        "tool.list_example_builds",
+        "tool.get_print_stats",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
     ] {
@@ -874,6 +936,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.search_plan_parts",
         "tool.get_interaction_graph",
         "tool.check_stack_compatibility",
+        "tool.list_example_builds",
+        "tool.get_print_stats",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
         "tool.get_build_planning_state",
@@ -911,8 +975,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 61);
-    assert_eq!(unresolved.len(), 381);
+    assert_eq!(reviewed.len(), 63);
+    assert_eq!(unresolved.len(), 379);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1197,6 +1261,8 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.search_plan_parts",
         "tool.get_interaction_graph",
         "tool.check_stack_compatibility",
+        "tool.list_example_builds",
+        "tool.get_print_stats",
         "tool.get_printer_checkoff",
         "tool.propose_import_3mf_checkoff",
         "tool.get_build_planning_state",
@@ -1329,10 +1395,9 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.get_interaction_graph",
             "tool.check_stack_compatibility",
         ),
-        (
-            "tool.check_stack_compatibility",
-            "tool.get_printer_checkoff",
-        ),
+        ("tool.check_stack_compatibility", "tool.list_example_builds"),
+        ("tool.list_example_builds", "tool.get_print_stats"),
+        ("tool.get_print_stats", "tool.get_printer_checkoff"),
         (
             "tool.get_printer_checkoff",
             "tool.propose_import_3mf_checkoff",
