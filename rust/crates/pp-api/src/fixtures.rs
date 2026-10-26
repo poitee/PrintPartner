@@ -238,6 +238,9 @@ impl StateGraph {
 pub enum CorrectionKind {
     Security,
     WebSocket,
+    /// A documented difference of the durable store, such as a field Node's
+    /// in-memory state never had or a failure text Node does not persist.
+    Durable,
 }
 
 /// One declared, literal Rust response that replaces Node's for a named case.
@@ -367,5 +370,59 @@ impl Ledger {
             matched: self.matched,
             corrected: self.corrected,
         })
+    }
+}
+
+/// Replaces volatile values (random ids, clock readings) with labels numbered
+/// in first-seen order across one capture, the way a Node generator labels its
+/// golden. Each rule maps object keys to a label prefix; a string under one of
+/// those keys becomes `<prefix>-<n>`, and equal strings keep equal labels.
+pub struct Labels {
+    rules: Vec<(&'static str, &'static [&'static str])>,
+    seen: BTreeMap<(&'static str, String), String>,
+}
+
+impl Labels {
+    pub fn new(rules: Vec<(&'static str, &'static [&'static str])>) -> Self {
+        Self {
+            rules,
+            seen: BTreeMap::new(),
+        }
+    }
+
+    /// The label for `raw` under `prefix`, assigning the next number if new.
+    pub fn label(&mut self, prefix: &'static str, raw: &str) -> String {
+        let next = self.seen.keys().filter(|(p, _)| *p == prefix).count() + 1;
+        self.seen
+            .entry((prefix, raw.to_owned()))
+            .or_insert_with(|| format!("{prefix}-{next}"))
+            .clone()
+    }
+
+    /// Labels every matching string in `exchange.body`, depth first in key order.
+    pub fn scrub(&mut self, exchange: &mut Exchange) {
+        self.scrub_value(&mut exchange.body);
+    }
+
+    fn scrub_value(&mut self, value: &mut Value) {
+        match value {
+            Value::Array(items) => items.iter_mut().for_each(|item| self.scrub_value(item)),
+            Value::Object(fields) => {
+                for (key, field) in fields.iter_mut() {
+                    let prefix = self
+                        .rules
+                        .iter()
+                        .find(|(_, keys)| keys.contains(&key.as_str()))
+                        .map(|(prefix, _)| *prefix);
+                    match (prefix, &*field) {
+                        (Some(prefix), Value::String(raw)) => {
+                            *field = Value::String(self.label(prefix, raw));
+                        }
+                        _ => self.scrub_value(field),
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }

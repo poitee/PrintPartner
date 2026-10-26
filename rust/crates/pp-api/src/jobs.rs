@@ -210,8 +210,13 @@ fn encode_jobs(jobs: &RetainedJobs) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&json!({ "jobs": &**jobs }))?)
 }
 
+/// Node's read-one returns the stored snapshot; only its list adds `updated_at`.
 fn encode_job(job: &JobSnapshot) -> Result<Vec<u8>> {
-    Ok(serde_json::to_vec(job)?)
+    let mut body = serde_json::to_value(job)?;
+    if let Some(fields) = body.as_object_mut() {
+        fields.remove("updated_at");
+    }
+    Ok(serde_json::to_vec(&body)?)
 }
 
 fn job_credential(presented: PresentedCredential) -> Credential {

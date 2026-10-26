@@ -547,4 +547,294 @@ mod ticket_t_10_fixtures {
         drop(sandbox);
         assert!(!gone.exists());
     }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct JobsFixture {
+        generated: String,
+        sources: Vec<String>,
+        cases: Vec<JobsCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct JobsCase {
+        id: String,
+        path: String,
+        node: Exchange,
+    }
+
+    fn jobs_fixture() -> JobsFixture {
+        let fixture: JobsFixture = serde_json::from_str(include_str!(
+            "../../../../fixtures/parity/jobs-http/node.json"
+        ))
+        .unwrap();
+        assert!(fixture.generated.contains("jobs-http/generate.mjs"));
+        assert_eq!(fixture.sources.len(), 3);
+        assert_eq!(fixture.cases.len(), 13);
+        fixture
+    }
+
+    /// The durable job snapshot differences documented in docs/desktop-rebuild.md
+    /// (GRE-609): every snapshot adds `created_at`, and a failed job keeps its
+    /// last progress (none here) and reports "Job failed" instead of the
+    /// handler's error, which Node holds only in memory.
+    fn durable_snapshot(node: &Value) -> Value {
+        let mut rust = node.clone();
+        let created = match node["job_id"].as_str().unwrap() {
+            "job-1" => "created-1",
+            "job-2" => "created-2",
+            other => panic!("unexpected job label {other}"),
+        };
+        rust["created_at"] = json!(created);
+        if node["status"] == "error" {
+            rust["message"] = json!("Job failed");
+            rust["error"] = json!("Job failed");
+            rust["progress"] = Value::Null;
+        }
+        rust
+    }
+
+    /// One declared correction for each Node response that carries a job.
+    fn jobs_corrections(fixture: &JobsFixture) -> Vec<Correction> {
+        fixture
+            .cases
+            .iter()
+            .filter(|case| case.node.status == 200)
+            .filter_map(|case| {
+                let body = &case.node.body;
+                let rust = match body.get("jobs") {
+                    Some(Value::Array(jobs)) if jobs.is_empty() => return None,
+                    Some(Value::Array(jobs)) => {
+                        json!({"jobs": jobs.iter().map(durable_snapshot).collect::<Vec<_>>()})
+                    }
+                    _ => durable_snapshot(body),
+                };
+                Some(Correction {
+                    case: case.id.clone().leak(),
+                    kind: CorrectionKind::Durable,
+                    reason: "durable snapshots add created_at and report a generic failure",
+                    rust: Exchange {
+                        status: 200,
+                        body: rust,
+                        set_cookie: vec![],
+                    },
+                })
+            })
+            .collect()
+    }
+
+    /// Seeds the two retained jobs Node's generator runs, in the same order:
+    /// a finished update check, then (a second later) a failed checklist export.
+    /// Returns the session cookie and the two job ids.
+    async fn seed_jobs(owner: &WriterOwner) -> (String, String, String) {
+        use pp_storage::{
+            auth::Secret,
+            jobs::{
+                CompletedResult, Credential, JobKind, Outcome, Payload, SourceUpdatesResult,
+                UserOperation, WorkerAdmission, WorkerOperation,
+            },
+        };
+        use std::{sync::atomic::AtomicBool, time::Duration};
+
+        let policy = AuthPolicy {
+            registration: RegistrationPolicy::Open,
+            first_user: FirstUserTenant::NewUser,
+            session_tenant: SessionTenantPolicy::AccountTenant,
+        };
+        let auth = owner.auth_with_policy(policy).unwrap();
+        let served = Served::start(|origin| {
+            auth_router(
+                AuthHttpConfig::new(origin, CookieTransport::LoopbackHttp, false, None, false)
+                    .unwrap(),
+                auth,
+                ProviderClient::new(None, None).unwrap(),
+                ResetMailer::disabled(),
+            )
+        })
+        .await
+        .unwrap();
+        let registered = served
+            .client
+            .post(format!("{}/auth/register", served.origin))
+            .header("Origin", &served.origin)
+            .json(&json!({"email": "jobs-http@example.test", "password": "password-1234"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(registered.status(), 200);
+        let cookie = registered.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        served.stop().await.unwrap();
+        let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+
+        let jobs = owner.jobs(policy).unwrap();
+        let enqueue = |key: &str, payload: Payload| match jobs
+            .submit(
+                Credential::Session(Secret::new(token.clone())),
+                UserOperation::Enqueue {
+                    key: key.into(),
+                    payload_version: 1,
+                    payload,
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .unwrap()
+        {
+            Outcome::Job(job, _) => job.job_id,
+            _ => panic!("enqueued job expected"),
+        };
+        let worker = owner
+            .job_worker_with_policy(
+                policy,
+                WorkerAdmission {
+                    kinds: vec![
+                        (JobKind::CheckSourceUpdates, 1),
+                        (JobKind::ExportChecklistHtml, 1),
+                    ],
+                    total: 2,
+                    per_resource: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .unwrap();
+        let done = enqueue("check", Payload::CheckSourceUpdates {});
+        let mut lease = worker.claim().unwrap().unwrap().lease;
+        assert_eq!(lease.job_id(), done);
+        worker
+            .update(
+                &mut lease,
+                WorkerOperation::FinishPublic {
+                    artifact: None,
+                    result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                        checked: vec![],
+                        skipped: vec![],
+                        updates_available: 0,
+                        checked_count: 0,
+                    })),
+                },
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let failed = enqueue("export", Payload::ExportChecklistHtml { profile_id: 7 });
+        let mut lease = worker.claim().unwrap().unwrap().lease;
+        assert_eq!(lease.job_id(), failed);
+        worker.update(&mut lease, WorkerOperation::Fail).unwrap();
+        (cookie, done.to_string(), failed.to_string())
+    }
+
+    #[tokio::test]
+    async fn jobs_flat_and_v1_reads_match_node_and_write_nothing() {
+        use pp_api::{
+            fixtures::Labels,
+            jobs::{JobsHttpConfig, jobs_router},
+        };
+
+        let fixture = jobs_fixture();
+        let sandbox = Sandbox::new("t10-jobs").unwrap();
+        let owner = WriterOwner::open(sandbox.path(), Limits::default())
+            .unwrap()
+            .0;
+        let (cookie, done, failed) = seed_jobs(&owner).await;
+        let jobs = owner
+            .jobs(AuthPolicy {
+                registration: RegistrationPolicy::Open,
+                first_user: FirstUserTenant::NewUser,
+                session_tenant: SessionTenantPolicy::AccountTenant,
+            })
+            .unwrap();
+        let served = Served::start(|origin| {
+            jobs_router(
+                JobsHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                jobs,
+            )
+        })
+        .await
+        .unwrap();
+        let mut labels = Labels::new(vec![
+            ("job", &["job_id"]),
+            // Rust's `created_at` has no Node counterpart; its own prefix keeps
+            // the shared time labels independent of whole-second clock ticks.
+            ("created", &["created_at"]),
+            ("time", &["started_at", "finished_at", "updated_at"]),
+        ]);
+        let mut ledger = Ledger::new(jobs_corrections(&fixture)).unwrap();
+        let before = StateGraph::capture(sandbox.path()).unwrap();
+        for case in &fixture.cases {
+            let path = case
+                .path
+                .replace("{done}", &done)
+                .replace("{failed}", &failed);
+            let mut actual = Exchange::observe(
+                served
+                    .client
+                    .get(format!("{}{path}", served.origin))
+                    .header("Origin", &served.origin)
+                    .header("Cookie", &cookie)
+                    .send()
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            labels.scrub(&mut actual);
+            ledger
+                .compare(&case.id, &case.node, &actual)
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+        let after = StateGraph::capture(sandbox.path()).unwrap();
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        assert_eq!(
+            before.changed(&after),
+            Vec::<String>::new(),
+            "job reads wrote state"
+        );
+        let report = ledger.finish().unwrap();
+        print_report("jobs-http", &report);
+        assert_eq!(report.matched, 5);
+        assert_eq!(report.corrected.len(), 8);
+    }
+
+    #[test]
+    fn labels_keep_equality_links_and_catch_swapped_ids() {
+        use pp_api::fixtures::Labels;
+        let exchange = |body: Value| Exchange {
+            status: 200,
+            body,
+            set_cookie: vec![],
+        };
+        let rules = || Labels::new(vec![("job", &["job_id"]), ("time", &["finished_at"])]);
+        let node = exchange(json!({"jobs": [
+            {"job_id": "job-1", "finished_at": "time-1"},
+            {"job_id": "job-2", "finished_at": "time-1"},
+        ]}));
+        let mut labels = rules();
+        let mut rust = exchange(json!({"jobs": [
+            {"job_id": "a", "finished_at": "2026-01-01T00:00:00.000Z"},
+            {"job_id": "b", "finished_at": "2026-01-01T00:00:00.000Z"},
+        ]}));
+        labels.scrub(&mut rust);
+        assert_eq!(rust, node);
+        // A repeated id where Node had two jobs no longer compares equal.
+        let mut labels = rules();
+        let mut collapsed = exchange(json!({"jobs": [
+            {"job_id": "a", "finished_at": "2026-01-01T00:00:00.000Z"},
+            {"job_id": "a", "finished_at": "2026-01-01T00:00:00.000Z"},
+        ]}));
+        labels.scrub(&mut collapsed);
+        let mut ledger = Ledger::new(vec![]).unwrap();
+        assert!(matches!(
+            ledger.compare("collapsed", &node, &collapsed),
+            Err(ParityError::Mismatch { .. })
+        ));
+    }
 }

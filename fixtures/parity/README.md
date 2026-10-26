@@ -4,9 +4,19 @@ Golden data captured from the TypeScript app, used as the reference for the Rust
 
 ## Parity runner (GRE-451, T-10-fixtures)
 
-`pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security or WebSocket) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
+`pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security, WebSocket, or durable-store) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
 
-`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+
+## jobs-http/node.json (GRE-451)
+
+`generate.mjs` registers Node's real job read routes, flat and under `/api/v1`, over an `InProcessJobRunner` that has finished an update check and, a second later, failed a checklist export for profile 7. It records 13 complete responses: the `/api/v1/jobs` list under each filter, both jobs on both read-one aliases, and an unknown id on both aliases. Job ids and timestamps become labels numbered in first-seen order (`job-1`, `time-1`); `pp_api::fixtures::Labels` labels the Rust responses the same way.
+
+`ticket_t_10_fixtures` replays the cases against `jobs_router`, with 5 exact matches and 8 declared durable-store corrections: Rust snapshots add `created_at`, and a failed durable job reports "Job failed" and its last progress instead of the handler's in-memory error (both documented for GRE-609 in `docs/desktop-rebuild.md`). The reads change no table or file. Node's read-one returns the stored snapshot without `updated_at`, which only its list adds; Rust's read-one now does the same.
+
+```sh
+node fixtures/parity/jobs-http/generate.mjs --check
+```
 
 ## auth-reset/node.json (GRE-864)
 
