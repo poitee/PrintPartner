@@ -1,5 +1,7 @@
 //! Cutover commits after drain and graceful Node exit, while the storage lease is held.
-//! Only HTTP-only operations can switch until Node can honor the ownership record.
+//! An operation can switch only when every participant is fenced from Node: the
+//! gateway fences HTTP routes, and Node reads the committed record at startup and
+//! skips each participant listed in `node-fenced-participants.json`.
 
 use super::{
     Owner,
@@ -25,6 +27,32 @@ const RECORD_SCHEMA: &str = "pp-operation-cutover-v1";
 const PARITY_SCHEMA: &str = "pp-operation-parity-v1";
 const TEMPORARY_PREFIX: &str = ".operation-cutover.";
 const TEMPORARY_SUFFIX: &str = ".tmp";
+const NODE_FENCED_SCHEMA: &str = "pp-node-fenced-participants-v1";
+const BUNDLED_NODE_FENCED: &str =
+    include_str!("../../../../../web/apps/server/src/data/node-fenced-participants.json");
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeFenced {
+    schema: String,
+    participants: Vec<String>,
+}
+
+static NODE_FENCED: std::sync::LazyLock<BTreeSet<String>> = std::sync::LazyLock::new(|| {
+    let fenced: NodeFenced =
+        serde_json::from_str(BUNDLED_NODE_FENCED).expect("bundled Node fence list parses");
+    assert_eq!(
+        fenced.schema, NODE_FENCED_SCHEMA,
+        "bundled Node fence schema"
+    );
+    fenced.participants.into_iter().collect()
+});
+
+/// Whether a Rust-owned `participant` cannot also run in Node. The gateway
+/// fences HTTP routes; Node fences the listed participants at startup.
+pub fn node_fences(participant: &str) -> bool {
+    participant.starts_with("http.") || NODE_FENCED.contains(participant)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -265,7 +293,7 @@ fn switchable<'a>(
     }) {
         return Err(Blocked::NotSwitchable(id));
     }
-    if let Some(id) = participants.iter().find(|id| !id.starts_with("http.")) {
+    if let Some(id) = participants.iter().find(|id| !node_fences(id)) {
         return Err(Blocked::NodeCannotFence(id));
     }
     Ok(participants)
@@ -573,6 +601,28 @@ fn append_evidence_with_directory_sync(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ticket_t_3_drain_node_fence_list_names_bundled_workers() {
+        let index = super::super::manifest::admit_bundled_manifest().unwrap();
+        assert_eq!(
+            NODE_FENCED.iter().collect::<Vec<_>>(),
+            ["worker.startManagedProfileSync"]
+        );
+        for participant in NODE_FENCED.iter() {
+            assert!(participant.starts_with("worker."), "{participant}");
+            assert!(index.lookup(participant).is_ok(), "{participant}");
+            assert!(node_fences(participant));
+        }
+        assert!(node_fences("http.GET /ws/profile-sync"));
+        for unfenced in [
+            "worker.startSourceWatcher",
+            "job.printer-upload",
+            "assistant.propose_import_source_files",
+        ] {
+            assert!(!node_fences(unfenced), "{unfenced}");
+        }
+    }
 
     #[test]
     fn ticket_t_3_drain_evidence_directory_sync_failure_preserves_authority() {

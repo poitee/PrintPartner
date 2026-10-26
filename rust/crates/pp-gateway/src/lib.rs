@@ -171,7 +171,9 @@ impl Gateway {
         }
         for participant in owners.rust_participants() {
             anyhow::ensure!(
-                seen.contains(participant),
+                seen.contains(participant)
+                    || (!participant.starts_with("http.")
+                        && ownership::cutover::node_fences(participant)),
                 "Rust-owned participant {participant} is not a registered route"
             );
         }

@@ -39,6 +39,14 @@
         "worker.startSourceWatcher",
         "migration.migrateLegacySourceManifestOverridesForTenant"
       ]
+    },
+    {
+      "operation": "profile.sync",
+      "owner": "node",
+      "participants": [
+        "http.GET /ws/profile-sync",
+        "worker.startManagedProfileSync"
+      ]
     }
   ],
   "node_participants": {
@@ -195,9 +203,7 @@
       "migratePrintOutcomesBlob",
       "prepareSqliteUpgrade"
     ],
-    "worker": [
-      "startManagedProfileSync"
-    ]
+    "worker": []
   },
   "resources": {
     "reviewed": [
@@ -1592,7 +1598,6 @@
       "http:GET /sources/stl-search current",
       "http:GET /webhooks current",
       "http:GET /ws/jobs/:param current",
-      "http:GET /ws/profile-sync current",
       "http:PATCH /integrations/:param current",
       "http:PATCH /parts/:param current",
       "http:PATCH /parts/:param/assembled current",
@@ -1738,6 +1743,7 @@
       "migration.migrateLegacySelfHostExports",
       "migration.migratePrintOutcomesBlob",
       "migration.prepareSqliteUpgrade",
+      "profile.sync",
       "startup.seedStockSlicerInstancesIfEmpty",
       "startup.sweepExpiredTransferArtifacts",
       "tool.add_addon",
@@ -1773,8 +1779,7 @@
       "tool.set_source_git_ref",
       "tool.start_sync",
       "tool.suggest_source_contributions",
-      "tool.update_kit_selections",
-      "worker.startManagedProfileSync"
+      "tool.update_kit_selections"
     ]
   },
   "live_formats": {
