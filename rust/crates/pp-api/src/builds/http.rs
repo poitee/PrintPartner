@@ -353,7 +353,8 @@ async fn detach(
 }
 
 /// Runs a layer mutation whose JSON object body names a Source. Node coerces
-/// `project_id` with `Number()`, so an id that is missing, null or not a
+/// `project_id` with `Number()`, so a JSON number with an integral value
+/// (`2.0`, `1e0`) names that Source, and an id that is missing, null or not a
 /// positive integer finds no Source: after its Plan check (and, for a
 /// replace, its layer check) Node answers 404 "Project not found".
 async fn attachment(
@@ -376,7 +377,7 @@ async fn attachment(
     let source = match serde_json::from_slice::<Value>(&bytes) {
         Ok(Value::Object(body)) => body
             .get("project_id")
-            .and_then(Value::as_u64)
+            .and_then(source_id)
             .and_then(|id| PositiveId::new(id).ok()),
         _ => return failure(StatusCode::BAD_REQUEST, "Request is invalid"),
     };
@@ -411,6 +412,16 @@ async fn missing_source(
         Ok(other) => present(&Method::GET, &path, SummaryContract::Accepted, other),
         Err(response) => *response,
     }
+}
+
+/// Reads a JSON number the way Node's `Number()` does for an id: any whole
+/// number, written as an integer or not. The float bound keeps the cast exact.
+fn source_id(value: &Value) -> Option<u64> {
+    const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
+    value.as_u64().or_else(|| {
+        let id = value.as_f64()?;
+        (id.fract() == 0.0 && (0.0..=MAX_SAFE).contains(&id)).then_some(id as u64)
+    })
 }
 
 fn parse_build_id(id: &str) -> Option<PositiveId> {

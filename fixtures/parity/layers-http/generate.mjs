@@ -36,11 +36,14 @@ const SEED = [
 ].join(" ");
 
 // Each request runs in order on one database. Layer 2 is the add-on that
-// `attach_v2` creates.
+// `attach_v2` creates. A string body is sent verbatim as JSON text and
+// recorded as `rawBody`, because JSON.stringify would write `2.0` as `2`.
 const REQUESTS = [
   ["layers_flat", "GET", "/plans/1/layers"],
   ["attach_v2", "POST", "/api/v2/plans/1/layers", { project_id: 2 }],
   ["attach_again_flat", "POST", "/plans/1/layers", { project_id: 2 }],
+  // Number() reads 2.0 as 2, so this is the duplicate refusal, not a 404.
+  ["attach_float_source_v1", "POST", "/api/v1/plans/1/layers", '{"project_id":2.0}'],
   ["attach_base_source_v1", "POST", "/api/v1/plans/1/layers", { project_id: 1 }],
   ["attach_missing_source_v1", "POST", "/api/v1/plans/1/layers", { project_id: 999999 }],
   ["attach_foreign_source_flat", "POST", "/plans/1/layers", { project_id: 4 }],
@@ -59,6 +62,9 @@ const REQUESTS = [
   ["replace_foreign_plan_flat", "PUT", "/plans/2/layers/2", { project_id: 2 }],
   ["replace_no_source_v2", "PUT", "/api/v2/plans/1/layers/2", {}],
   ["replace_no_source_missing_layer_flat", "PUT", "/plans/1/layers/999999", {}],
+  // Node checks the layer before the Source, so a foreign Source on a missing
+  // layer is "Layer not found".
+  ["replace_foreign_source_missing_layer_v2", "PUT", "/api/v2/plans/1/layers/999999", { project_id: 4 }],
   ["set_base_flat", "PUT", "/plans/1/layers/base", { project_id: 2 }],
   ["set_base_missing_source_v2", "PUT", "/api/v2/plans/1/layers/base", { project_id: 999999 }],
   ["set_base_missing_plan_v1", "PUT", "/api/v1/plans/999999/layers/base", { project_id: 2 }],
@@ -69,6 +75,8 @@ const REQUESTS = [
   ["detach_v1", "DELETE", "/api/v1/plans/1/layers/2"],
   ["detach_again_flat", "DELETE", "/plans/1/layers/2"],
   ["layers_after_detach_flat", "GET", "/plans/1/layers"],
+  ["set_base_float_source_v1", "PUT", "/api/v1/plans/1/layers/base", '{"project_id":1e0}'],
+  ["layers_after_float_base_v2", "GET", "/api/v2/plans/1/layers"],
 ];
 
 if (process.argv.includes("--probe")) {
@@ -103,13 +111,19 @@ if (process.argv.includes("--probe")) {
     const cases = [];
     for (const [id, method, path, payload] of REQUESTS) {
       const before = graph();
-      const response = await app.inject({ method, url: path, ...(payload ? { payload } : {}) });
+      const raw = typeof payload === "string";
+      const response = await app.inject({
+        method,
+        url: path,
+        ...(payload ? { payload } : {}),
+        ...(raw ? { headers: { "content-type": "application/json" } } : {}),
+      });
       const after = graph();
       cases.push({
         id,
         method,
         path,
-        ...(payload ? { body: payload } : {}),
+        ...(raw ? { rawBody: payload } : payload ? { body: payload } : {}),
         node: { status: response.statusCode, body: response.body === "" ? null : response.json(), setCookie: [] },
         changed: tables.filter((table) => before.get(table) !== after.get(table)),
       });
@@ -121,6 +135,8 @@ if (process.argv.includes("--probe")) {
     const byId = Object.fromEntries(cases.map((item) => [item.id, item]));
     assert.equal(byId.attach_v2.node.status, 200);
     assert.equal(byId.detach_v1.node.status, 204);
+    assert.equal(byId.attach_float_source_v1.node.status, 409);
+    assert.equal(byId.set_base_float_source_v1.node.status, 200);
     for (const item of cases) {
       if (item.method === "GET") assert.deepEqual(item.changed, [], `${item.id} wrote state`);
     }

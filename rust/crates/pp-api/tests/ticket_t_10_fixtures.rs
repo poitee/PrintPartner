@@ -824,6 +824,10 @@ mod ticket_t_10_fixtures {
         method: String,
         path: String,
         body: Option<Value>,
+        /// JSON text sent verbatim, for bodies a `Value` would not keep
+        /// byte for byte (`2.0`, `1e0`).
+        #[serde(rename = "rawBody")]
+        raw_body: Option<String>,
         node: Exchange,
         changed: Vec<String>,
     }
@@ -848,6 +852,11 @@ mod ticket_t_10_fixtures {
             .header("Cookie", cookie);
         if let Some(body) = &case.body {
             request = request.json(body);
+        }
+        if let Some(raw) = &case.raw_body {
+            request = request
+                .header("Content-Type", "application/json")
+                .body(raw.clone());
         }
         let before = StateGraph::capture(sandbox.path()).unwrap();
         let actual = Exchange::observe(request.send().await.unwrap())
@@ -1076,7 +1085,7 @@ mod ticket_t_10_fixtures {
         let fixture = seeded_fixture(
             include_str!("../../../../fixtures/parity/layers-http/node.json"),
             "layers-http",
-            29,
+            33,
         );
         assert!(fixture.seed.is_some());
         let sandbox = Sandbox::new("t10-layers").unwrap();
@@ -1094,7 +1103,7 @@ mod ticket_t_10_fixtures {
         served.stop().await.unwrap();
         owner.shutdown().unwrap();
         print_report("layers-http", &report);
-        assert_eq!(report.matched, 29);
+        assert_eq!(report.matched, 33);
         assert_eq!(report.corrected.len(), 0);
     }
 

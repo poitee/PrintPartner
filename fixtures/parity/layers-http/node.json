@@ -7,6 +7,7 @@
     {"id":"layers_flat","method":"GET","path":"/plans/1/layers","node":{"status":200,"body":{"profile_id":1,"layers":[{"id":1,"layer_order":0,"layer_type":"base","project_id":1,"project_name":"Fixture Source"}]},"setCookie":[]},"changed":[]},
     {"id":"attach_v2","method":"POST","path":"/api/v2/plans/1/layers","body":{"project_id":2},"node":{"status":200,"body":{"profile_id":1,"layers":[{"id":1,"layer_order":0,"layer_type":"base","project_id":1,"project_name":"Fixture Source"},{"id":2,"layer_order":1,"layer_type":"addon","project_id":2,"project_name":"Addon Source"}]},"setCookie":[]},"changed":["build_profiles","profile_layers"]},
     {"id":"attach_again_flat","method":"POST","path":"/plans/1/layers","body":{"project_id":2},"node":{"status":409,"body":{"detail":"Source \"Addon Source\" is already attached to this build"},"setCookie":[]},"changed":[]},
+    {"id":"attach_float_source_v1","method":"POST","path":"/api/v1/plans/1/layers","rawBody":"{\"project_id\":2.0}","node":{"status":409,"body":{"detail":"Source \"Addon Source\" is already attached to this build"},"setCookie":[]},"changed":[]},
     {"id":"attach_base_source_v1","method":"POST","path":"/api/v1/plans/1/layers","body":{"project_id":1},"node":{"status":409,"body":{"detail":"Source \"Fixture Source\" is already attached to this build"},"setCookie":[]},"changed":[]},
     {"id":"attach_missing_source_v1","method":"POST","path":"/api/v1/plans/1/layers","body":{"project_id":999999},"node":{"status":404,"body":{"detail":"Project not found"},"setCookie":[]},"changed":[]},
     {"id":"attach_foreign_source_flat","method":"POST","path":"/plans/1/layers","body":{"project_id":4},"node":{"status":404,"body":{"detail":"Project not found"},"setCookie":[]},"changed":[]},
@@ -23,6 +24,7 @@
     {"id":"replace_foreign_plan_flat","method":"PUT","path":"/plans/2/layers/2","body":{"project_id":2},"node":{"status":404,"body":{"detail":"Profile not found"},"setCookie":[]},"changed":[]},
     {"id":"replace_no_source_v2","method":"PUT","path":"/api/v2/plans/1/layers/2","body":{},"node":{"status":404,"body":{"detail":"Project not found"},"setCookie":[]},"changed":[]},
     {"id":"replace_no_source_missing_layer_flat","method":"PUT","path":"/plans/1/layers/999999","body":{},"node":{"status":404,"body":{"detail":"Layer not found"},"setCookie":[]},"changed":[]},
+    {"id":"replace_foreign_source_missing_layer_v2","method":"PUT","path":"/api/v2/plans/1/layers/999999","body":{"project_id":4},"node":{"status":404,"body":{"detail":"Layer not found"},"setCookie":[]},"changed":[]},
     {"id":"set_base_flat","method":"PUT","path":"/plans/1/layers/base","body":{"project_id":2},"node":{"status":200,"body":{"profile_id":1,"layers":[{"id":1,"layer_order":0,"layer_type":"base","project_id":2,"project_name":"Addon Source"},{"id":2,"layer_order":1,"layer_type":"addon","project_id":3,"project_name":"Second Source"}]},"setCookie":[]},"changed":["build_profiles","profile_layers"]},
     {"id":"set_base_missing_source_v2","method":"PUT","path":"/api/v2/plans/1/layers/base","body":{"project_id":999999},"node":{"status":404,"body":{"detail":"Project not found"},"setCookie":[]},"changed":[]},
     {"id":"set_base_missing_plan_v1","method":"PUT","path":"/api/v1/plans/999999/layers/base","body":{"project_id":2},"node":{"status":404,"body":{"detail":"Profile not found"},"setCookie":[]},"changed":[]},
@@ -32,6 +34,8 @@
     {"id":"detach_missing_plan_v2","method":"DELETE","path":"/api/v2/plans/999999/layers/2","node":{"status":404,"body":{"detail":"Profile not found"},"setCookie":[]},"changed":[]},
     {"id":"detach_v1","method":"DELETE","path":"/api/v1/plans/1/layers/2","node":{"status":204,"body":null,"setCookie":[]},"changed":["build_profiles","profile_layers"]},
     {"id":"detach_again_flat","method":"DELETE","path":"/plans/1/layers/2","node":{"status":404,"body":{"detail":"Layer not found"},"setCookie":[]},"changed":[]},
-    {"id":"layers_after_detach_flat","method":"GET","path":"/plans/1/layers","node":{"status":200,"body":{"profile_id":1,"layers":[{"id":1,"layer_order":0,"layer_type":"base","project_id":2,"project_name":"Addon Source"}]},"setCookie":[]},"changed":[]}
+    {"id":"layers_after_detach_flat","method":"GET","path":"/plans/1/layers","node":{"status":200,"body":{"profile_id":1,"layers":[{"id":1,"layer_order":0,"layer_type":"base","project_id":2,"project_name":"Addon Source"}]},"setCookie":[]},"changed":[]},
+    {"id":"set_base_float_source_v1","method":"PUT","path":"/api/v1/plans/1/layers/base","rawBody":"{\"project_id\":1e0}","node":{"status":200,"body":{"profile_id":1,"layers":[{"id":1,"layer_order":0,"layer_type":"base","project_id":1,"project_name":"Fixture Source"}]},"setCookie":[]},"changed":["build_profiles","profile_layers"]},
+    {"id":"layers_after_float_base_v2","method":"GET","path":"/api/v2/plans/1/layers","node":{"status":200,"body":{"profile_id":1,"layers":[{"id":1,"layer_order":0,"layer_type":"base","project_id":1,"project_name":"Fixture Source"}]},"setCookie":[]},"changed":[]}
   ]
 }
