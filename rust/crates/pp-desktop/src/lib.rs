@@ -492,14 +492,8 @@ mod tests {
 
     #[test]
     fn ticket_t_5_release_layout_retains_the_product_launch_identity() {
-        let root = std::env::temp_dir().join(format!(
-            "pp-identity-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let scratch = crate::scratch::Scratch::new("pp-identity-");
+        let root = scratch.to_path_buf();
         std::fs::create_dir_all(root.join("real")).unwrap();
         std::os::unix::fs::symlink(root.join("real"), root.join("linked")).unwrap();
         let fixture = root.join("linked/fixture");
@@ -543,19 +537,12 @@ mod tests {
             ResourceLayout::read(&fixture).err().unwrap().to_string(),
             "Desktop commit identity missing"
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn release_layout_accepts_macos_resource_paths_and_current_version() {
-        let root = std::env::temp_dir().join(format!(
-            "pp-macos-layout-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let scratch = crate::scratch::Scratch::new("pp-macos-layout-");
+        let root = scratch.to_path_buf();
         std::fs::create_dir_all(root.join("MacOS")).unwrap();
         std::fs::create_dir_all(root.join("Resources/desktop-runtime/web")).unwrap();
         std::fs::write(root.join("MacOS/printpartner-node"), b"fixture").unwrap();
@@ -585,7 +572,6 @@ mod tests {
             root.join("Resources/desktop-runtime/web")
         );
         assert_eq!(launch.bundle.runtime_version, "4.2.1-web");
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -732,14 +718,8 @@ mod tests {
 
     #[test]
     fn resource_paths_must_remain_inside_the_package() {
-        let root = std::env::temp_dir().join(format!(
-            "pp-layout-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let scratch = crate::scratch::Scratch::new("pp-layout-");
+        let root = scratch.to_path_buf();
         std::fs::create_dir_all(root.join("bin")).unwrap();
         std::fs::write(root.join("bin/node"), b"node").unwrap();
         let root = root.canonicalize().unwrap();
@@ -752,7 +732,6 @@ mod tests {
         }
         std::os::unix::fs::symlink("/usr/bin/node", root.join("escape")).unwrap();
         assert!(contained(&root, Path::new("escape")).is_err());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -801,4 +780,18 @@ mod tests {
         assert!(AllowedOrigin::parse("http://localhost:46687").is_err());
         assert!(AllowedOrigin::parse("http://127.0.0.1:46687/path").is_err());
     }
+}
+
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+/// Auto-removing test scratch, shared with pp-storage's tests.
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+
+#[cfg(test)]
+#[test]
+fn scratch_root_is_empty_after_lib_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_lib_tests"]);
 }

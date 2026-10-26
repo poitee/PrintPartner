@@ -983,25 +983,18 @@ impl SourceRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        os::unix::fs::PermissionsExt,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use crate::scratch::Scratch;
+    use std::{fs, os::unix::fs::PermissionsExt};
 
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    struct Tree(std::path::PathBuf);
+    /// Removed when the scratch drops, including while a test unwinds from a
+    /// panic.
+    struct Tree(Scratch);
     impl Tree {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "pp-source-tree-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&path).unwrap();
+            let path = Scratch::new("pp-source-tree-");
             // Pin the root mode so the ancestor check does not depend on umask.
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            Self(fs::canonicalize(path).unwrap())
+            Self(path)
         }
         fn paths(&self) -> Result<BTreeSet<String>> {
             let mut paths = BTreeSet::new();
@@ -1013,11 +1006,6 @@ mod tests {
                 TreeIdentity::Unicode17,
             )?;
             Ok(paths)
-        }
-    }
-    impl Drop for Tree {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).unwrap();
         }
     }
 
@@ -1143,27 +1131,13 @@ mod tests {
         assert_eq!(decoded.files[0].path.as_str(), legacy);
         assert_eq!(decoded.selection.omitted_files[0].path.as_str(), omitted);
 
-        let root = std::env::temp_dir().join(format!(
-            "pp-source-unicode16-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).unwrap();
-        let cleanup = root.clone();
-        struct Remove(std::path::PathBuf);
-        impl Drop for Remove {
-            fn drop(&mut self) {
-                fs::remove_dir_all(&self.0).unwrap();
-            }
-        }
-        let _remove = Remove(cleanup);
+        let root = Scratch::new("pp-source-unicode16-");
         for dir in ["repos", "input"] {
             let path = root.join(dir);
             fs::create_dir(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         }
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
-        let root = fs::canonicalize(root).unwrap();
         let revision = root.join("repos/42/revisions/legacy-rev");
         fs::create_dir_all(&revision).unwrap();
         fs::write(revision.join(&legacy), content).unwrap();
@@ -1280,26 +1254,13 @@ mod tests {
         let mut encoded = serde_json::to_vec_pretty(&manifest).unwrap();
         encoded.push(b'\n');
 
-        let root = std::env::temp_dir().join(format!(
-            "pp-source-unicode16-pair-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir(&root).unwrap();
-        struct Remove(std::path::PathBuf);
-        impl Drop for Remove {
-            fn drop(&mut self) {
-                fs::remove_dir_all(&self.0).unwrap();
-            }
-        }
-        let _remove = Remove(root.clone());
+        let root = Scratch::new("pp-source-unicode16-pair-");
         for dir in ["repos", "input"] {
             let path = root.join(dir);
             fs::create_dir(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         }
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
-        let root = fs::canonicalize(root).unwrap();
         let revision = root.join("repos/42/revisions/pair-rev");
         fs::create_dir_all(&revision).unwrap();
         fs::write(revision.join(&legacy), legacy_bytes).unwrap();
@@ -1381,4 +1342,18 @@ mod tests {
             Err(Error::CorruptSnapshot)
         ));
     }
+}
+
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/cleanup.rs"]
+mod cleanup;
+/// Auto-removing test scratch, shared with pp-storage's tests.
+#[cfg(test)]
+#[path = "../../pp-storage/tests/common/scratch.rs"]
+mod scratch;
+
+#[cfg(test)]
+#[test]
+fn scratch_root_is_empty_after_lib_tests() {
+    cleanup::assert_test_run_clean(&["--skip", "scratch_root_is_empty_after_lib_tests"]);
 }

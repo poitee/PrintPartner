@@ -1,10 +1,10 @@
 use super::*;
+use crate::scratch::Scratch;
 use ownership::cutover::{self, CutoverReceipt, DrainEvidence};
 
 #[tokio::test]
 async fn ticket_t_3_drain_legal_body_retains_admission_until_consumed_or_dropped() {
-    let root = std::env::temp_dir().join(format!("pp-t3-legal-body-{}", rand::random::<u64>()));
-    std::fs::create_dir(&root).unwrap();
+    let root = Scratch::new("pp-t3-legal-body-");
     let index = ownership::manifest::admit_bundled_manifest().unwrap();
     let operation = "http:GET /legal/summary current";
     let parity = serde_json::json!({
@@ -34,9 +34,13 @@ async fn ticket_t_3_drain_legal_body_retains_admission_until_consumed_or_dropped
     for path in ["/legal/summary", "/api/v1/legal/summary"] {
         for consume in [true, false] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let mut gateway =
-                Gateway::start(listener, root.clone(), CompatHandle::unpublished(), &owners)
-                    .unwrap();
+            let mut gateway = Gateway::start(
+                listener,
+                root.to_path_buf(),
+                CompatHandle::unpublished(),
+                &owners,
+            )
+            .unwrap();
             let launch = gateway.take_launch_target().unwrap().into_url();
             let bootstrap = Request::builder()
                 .uri(launch.strip_prefix(gateway.origin()).unwrap())
@@ -91,5 +95,4 @@ async fn ticket_t_3_drain_legal_body_retains_admission_until_consumed_or_dropped
             );
         }
     }
-    std::fs::remove_dir_all(root).unwrap();
 }

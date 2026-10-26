@@ -3386,6 +3386,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-wdio-webdriver",
+ "tempfile",
  "tokio",
  "tracing",
 ]
@@ -3433,6 +3434,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tower-http",
