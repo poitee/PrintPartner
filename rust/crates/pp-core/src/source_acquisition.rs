@@ -16,14 +16,15 @@ use pp_storage::{
     },
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io::Read,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
+    time::{Duration, Instant},
 };
 
 /// One file of a capture request, read into the retained capture.
@@ -64,30 +65,64 @@ impl AcquisitionReply {
     }
 }
 
+/// What [`SourceAcquisitions::shutdown`] observed when it returned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcquisitionDrain {
+    /// Whether every acquisition finished within the budget.
+    pub idle: bool,
+    /// Operation keys whose workers stopped for shutdown after admission,
+    /// sorted. Each keeps its journal row. One still admitted keeps its
+    /// retained capture for [`SourceAcquisitions::recover_before_accepting`];
+    /// one whose capture already became owned input resumes through import
+    /// job restart recovery.
+    pub interrupted: Vec<String>,
+    /// Operation keys still in flight when the budget ran out, sorted.
+    pub pending: Vec<String>,
+}
+
+const INTERRUPTED: &str = "Source acquisition interrupted by shutdown; retained for recovery";
+
 struct Gate {
     open: bool,
+    /// Set once by shutdown; refuses every later acquisition and recovery.
+    shut_down: bool,
     active: usize,
     capacity: usize,
     /// Operation keys of every acquisition between preflight and its recorded
     /// result. Keys are held across tenants, so two tenants acquiring one key
     /// at the same moment see the later one refused.
     in_flight: HashSet<String>,
+    interrupted: BTreeSet<String>,
+}
+
+/// The gate, signalled whenever an operation key is released, and the stop
+/// flag every worker observes.
+struct Shared {
+    gate: Mutex<Gate>,
+    released: Condvar,
+    stop: AtomicBool,
+}
+
+impl Shared {
+    fn gate(&self) -> Result<MutexGuard<'_, Gate>> {
+        self.gate
+            .lock()
+            .map_err(|_| anyhow!("Source acquisition gate poisoned"))
+    }
 }
 
 /// One reserved operation key and, once taken, one capacity slot; dropping it
 /// returns both.
 struct Permit {
-    gate: Arc<Mutex<Gate>>,
+    shared: Arc<Shared>,
     key: String,
     slot: bool,
 }
 
 impl Permit {
     fn take_slot(&mut self) -> Result<()> {
-        let mut gate = self
-            .gate
-            .lock()
-            .map_err(|_| anyhow!("Source acquisition gate poisoned"))?;
+        let mut gate = self.shared.gate()?;
+        ensure!(!gate.shut_down, "Source acquisition is shutting down");
         ensure!(gate.open, "Source acquisition ingress is closed");
         ensure!(
             gate.active < gate.capacity,
@@ -97,16 +132,24 @@ impl Permit {
         self.slot = true;
         Ok(())
     }
+
+    /// Records this key as stopped by shutdown, before the key is released.
+    fn interrupt(&self) {
+        if let Ok(mut gate) = self.shared.gate() {
+            gate.interrupted.insert(self.key.clone());
+        }
+    }
 }
 
 impl Drop for Permit {
     fn drop(&mut self) {
-        if let Ok(mut gate) = self.gate.lock() {
+        if let Ok(mut gate) = self.shared.gate() {
             gate.in_flight.remove(&self.key);
             if self.slot {
                 gate.active -= 1;
             }
         }
+        self.shared.released.notify_all();
     }
 }
 
@@ -130,11 +173,13 @@ struct Accepted {
 /// closed until [`SourceAcquisitions::recover_before_accepting`] has settled
 /// every retained capture left by an earlier process. At most `capacity`
 /// acquisitions hold a slot at once; a request beyond that is refused before
-/// it reads input or writes a capture or journal row.
+/// it reads input or writes a capture or journal row. After
+/// [`SourceAcquisitions::shutdown`] the instance refuses all work; a new
+/// instance recovers what it left.
 pub struct SourceAcquisitions {
     imports: Arc<SourceImports>,
     data_dir: PathBuf,
-    gate: Arc<Mutex<Gate>>,
+    shared: Arc<Shared>,
 }
 
 impl SourceAcquisitions {
@@ -153,12 +198,58 @@ impl SourceAcquisitions {
         Ok(Self {
             imports: Arc::new(SourceImports::new(owner, policy, quota)?),
             data_dir,
-            gate: Arc::new(Mutex::new(Gate {
-                open: false,
-                active: 0,
-                capacity,
-                in_flight: HashSet::new(),
-            })),
+            shared: Arc::new(Shared {
+                gate: Mutex::new(Gate {
+                    open: false,
+                    shut_down: false,
+                    active: 0,
+                    capacity,
+                    in_flight: HashSet::new(),
+                    interrupted: BTreeSet::new(),
+                }),
+                released: Condvar::new(),
+                stop: AtomicBool::new(false),
+            }),
+        })
+    }
+
+    /// Begins shutdown and drains acquisition workers within one `budget`
+    /// shared by every acquisition. Ingress closes for good: later
+    /// acquisitions, including replies for recorded keys, and recovery are
+    /// refused without reading input or writing anything. An acquisition
+    /// still capturing its input finishes its capture unless its own
+    /// cancellation stops it. Every worker is told to stop: one that has
+    /// admitted its capture but not settled it stops, leaves its journal row
+    /// and retained capture as they are, and replies that it was interrupted.
+    /// Nothing replays interrupted work here; a new instance's
+    /// [`SourceAcquisitions::recover_before_accepting`] settles a retained
+    /// capture, after a restart when its import job was already claimed.
+    /// Returns once no
+    /// acquisition is in flight or the budget runs out; repeating it waits
+    /// again and reports every interruption so far.
+    pub fn shutdown(&self, budget: Duration) -> Result<AcquisitionDrain> {
+        let deadline = Instant::now() + budget;
+        let mut gate = self.gate()?;
+        gate.shut_down = true;
+        gate.open = false;
+        self.shared.stop.store(true, Ordering::Release);
+        while !gate.in_flight.is_empty() {
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            gate = self
+                .shared
+                .released
+                .wait_timeout(gate, left)
+                .map_err(|_| anyhow!("Source acquisition gate poisoned"))?
+                .0;
+        }
+        let mut pending = gate.in_flight.iter().cloned().collect::<Vec<_>>();
+        pending.sort();
+        Ok(AcquisitionDrain {
+            idle: pending.is_empty(),
+            interrupted: gate.interrupted.iter().cloned().collect(),
+            pending,
         })
     }
 
@@ -169,10 +260,12 @@ impl SourceAcquisitions {
     /// left byte-for-byte unchanged; while any remain, ingress stays closed and
     /// this returns an error naming each remaining capture and its cause.
     /// Refuses while an acquisition still holds a slot, leaving ingress as it
-    /// was. Returns the number of captures reconciled.
+    /// was, and refuses once shutdown has begun. Returns the number of
+    /// captures reconciled.
     pub fn recover_before_accepting(&self) -> Result<usize> {
         {
             let mut gate = self.gate()?;
+            ensure!(!gate.shut_down, "Source acquisitions are shut down");
             ensure!(gate.in_flight.is_empty(), "Source acquisitions are active");
             gate.open = false;
         }
@@ -396,10 +489,12 @@ impl SourceAcquisitions {
     }
 
     /// Admits and settles an accepted capture on its own worker. The slot is
-    /// returned once the operation is recorded, before the reply is sent.
+    /// returned once the operation is recorded, before the reply is sent. A
+    /// worker that sees shutdown after admission stops before settling.
     fn spawn(&self, accepted: Accepted) -> Result<AcquisitionReply> {
         let receipt = accepted.frozen.receipt();
         let imports = self.imports.clone();
+        let shared = self.shared.clone();
         let (sender, result) = mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("pp-source-acquisition".into())
@@ -416,8 +511,12 @@ impl SourceAcquisitions {
                     Ok(())
                 };
                 let admitted = stabilized.and_then(|()| imports.admit_captured(prepared));
-                let outcome =
-                    match imports.work_frozen(frozen, Through::Settled, &AtomicBool::new(false)) {
+                let retained = admitted.is_ok();
+                let stopped = || retained && shared.stop.load(Ordering::Acquire);
+                let outcome = if stopped() {
+                    Err(anyhow!(INTERRUPTED))
+                } else {
+                    match imports.work_frozen(frozen, Through::Settled, &shared.stop) {
                         Ok(Some(operation)) => Ok(operation),
                         Ok(None) => admitted.and_then(|operation| {
                             ensure!(
@@ -427,7 +526,17 @@ impl SourceAcquisitions {
                             Ok(operation)
                         }),
                         Err(error) => Err(error),
-                    };
+                    }
+                };
+                // A failure seen after shutdown stopped an admitted worker
+                // leaves the import for recovery rather than failing it.
+                let outcome = match outcome {
+                    Err(_) if stopped() => {
+                        permit.interrupt();
+                        Err(anyhow!(INTERRUPTED))
+                    }
+                    outcome => outcome,
+                };
                 drop(permit);
                 let _ = sender.send(outcome);
             });
@@ -442,12 +551,13 @@ impl SourceAcquisitions {
 
     fn reserve(&self, key: String) -> Result<Permit> {
         let mut gate = self.gate()?;
+        ensure!(!gate.shut_down, "Source acquisition is shutting down");
         ensure!(
             gate.in_flight.insert(key.clone()),
             "Source acquisition already in progress for this key"
         );
         Ok(Permit {
-            gate: self.gate.clone(),
+            shared: self.shared.clone(),
             key,
             slot: false,
         })
@@ -458,9 +568,7 @@ impl SourceAcquisitions {
         Ok(())
     }
 
-    fn gate(&self) -> Result<std::sync::MutexGuard<'_, Gate>> {
-        self.gate
-            .lock()
-            .map_err(|_| anyhow!("Source acquisition gate poisoned"))
+    fn gate(&self) -> Result<MutexGuard<'_, Gate>> {
+        self.shared.gate()
     }
 }
