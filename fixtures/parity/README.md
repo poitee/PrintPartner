@@ -6,7 +6,7 @@ Golden data captured from the TypeScript app, used as the reference for the Rust
 
 `pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security, WebSocket, or durable-store) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
 
-`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `plans-http`, `drafts-http`, `layers-http` and `manifest-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http` and `catalog-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
 
 ## jobs-http/node.json (GRE-451)
 
@@ -60,6 +60,20 @@ The fixture made three Rust fixes go red then green. A Plan id that cannot name 
 
 ```sh
 node fixtures/parity/manifest-http/generate.mjs --check
+```
+
+## catalog-http/node.json (GRE-451)
+
+`generate.mjs` uses the same copied database after its `seed` SQL adds Source 2 (tenant `default`, with an import rule and a category), Source 3 (tenant `foreign`) and five activity events, one for `foreign`, one of another kind and one whose payload is not JSON. It sends 56 requests in order to the catalog routes Rust's `admit_catalog_routes` serves, on the flat and `/api/v1` mounts: Source list, detail, create, patch and delete, import rules, Source activity, Source naming, Source categories, global STL naming and its preview, with their missing, foreign, non-numeric, duplicate, retained-history and invalid-body refusals. Each case records the complete response and the tables it changed. A created Source's `local_path` sits under Node's scratch data directory, so the golden writes that directory as `{data}`, and the Rust test writes its sandbox the same way.
+
+Creating a GitHub Source makes Node start a `sync` job, which would clone over the network. The generator replaces the job runner's `start` with a stub that records the call, and the case lists it under `effects`. Rust's catalog create starts no job; the test checks that the only recorded effect is that one `sync` start, and that Rust and Node changed the same tables (`projects` only).
+
+`ticket_t_10_fixtures` runs the same seed on its copy and replays the cases against `admit_catalog_routes`: 53 exact matches and 3 declared corrections, none of which writes anything. Malformed JSON gets Rust's "Invalid JSON body" (security: no Fastify parser codes). Renaming a Source to a taken name gets "Source already exists: <name>", Node's create refusal, instead of Node's SQLite constraint text (security). An invalid global naming profile gets Rust's "Invalid export role order" instead of zod's issue path (validation).
+
+The fixture made three Rust fixes go red then green. Source naming refusals now carry Node's `code` (`source_not_found`, `invalid_source_naming`, `source_naming_conflict`, `invalid_source_naming_state`) next to `detail`. A naming id that is not a positive integer (`abc`) is now Node's 400 "Source id must be a positive integer" instead of 404, and a body without a boolean `use_defaults` gets Node's discriminator message. The naming preview now writes a whole `quantity` as `2`, as `JSON.stringify` does, instead of `2.0`.
+
+```sh
+node fixtures/parity/catalog-http/generate.mjs --check
 ```
 
 ## auth-reset/node.json (GRE-864)

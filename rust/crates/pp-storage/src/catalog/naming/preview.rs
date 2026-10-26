@@ -250,10 +250,13 @@ pub(in crate::catalog) fn preview(
     let quantity = captured
         .map(parse_integer)
         .unwrap_or(profile.quantity.default as f64);
-    let quantity = if quantity.is_nan() {
-        None
-    } else {
-        serde_json::Number::from_f64(quantity.max(1.0))
+    // JSON.stringify writes a whole number without a fraction (`2`, not `2.0`).
+    let quantity = match quantity.max(1.0) {
+        _ if quantity.is_nan() => None,
+        whole if whole.fract() == 0.0 && whole < 9.0e18 => {
+            Some(serde_json::Number::from(whole as i64))
+        }
+        other => serde_json::Number::from_f64(other),
     };
     let name = if filename.to_lowercase().ends_with(".stl") {
         &filename[..filename.len() - 4]

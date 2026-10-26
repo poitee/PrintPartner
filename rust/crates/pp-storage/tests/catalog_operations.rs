@@ -1559,23 +1559,23 @@ fn gre601_preview_default_behavior_is_read_only() {
     for (path, expected) in [
         (
             "folder\\[a]gear x3.STL",
-            json!({"role":"accent", "quantity":3.0, "part_slug":"gear", "filename":"[a]gear x3.STL"}),
+            json!({"role":"accent", "quantity":3, "part_slug":"gear", "filename":"[a]gear x3.STL"}),
         ),
         (
             "[c]/[o]gear.stl",
-            json!({"role":"clear", "quantity":1.0, "part_slug":"gear", "filename":"[o]gear.stl"}),
+            json!({"role":"clear", "quantity":1, "part_slug":"gear", "filename":"[o]gear.stl"}),
         ),
         (
             "plain.obj",
-            json!({"role":"primary", "quantity":1.0, "part_slug":"plain.obj", "filename":"plain.obj"}),
+            json!({"role":"primary", "quantity":1, "part_slug":"plain.obj", "filename":"plain.obj"}),
         ),
         (
             "[a].stl",
-            json!({"role":"accent", "quantity":1.0, "part_slug":"[a]", "filename":"[a].stl"}),
+            json!({"role":"accent", "quantity":1, "part_slug":"[a]", "filename":"[a].stl"}),
         ),
         (
             "folder/",
-            json!({"role":"primary", "quantity":1.0, "part_slug":"", "filename":""}),
+            json!({"role":"primary", "quantity":1, "part_slug":"", "filename":""}),
         ),
     ] {
         assert_eq!(preview(&client, path, Value::Null), expected, "{path}");
@@ -1588,7 +1588,7 @@ fn gre601_preview_default_behavior_is_read_only() {
     assert_eq!(
         preview(&owner.local_source_catalog(), "gear.stl", json!({})),
         json!({
-            "role":"primary", "quantity":1.0, "part_slug":"gear", "filename":"gear.stl"
+            "role":"primary", "quantity":1, "part_slug":"gear", "filename":"gear.stl"
         })
     );
     assert_eq!(rows(&fixture.0), before);
@@ -1687,7 +1687,7 @@ fn gre601_preview_merges_roles_and_preserves_reference_ordering() {
         ),
     ] {
         let filename = path.rsplit('/').next().unwrap();
-        let quantity = if path.contains(" x2") { 2.0 } else { 1.0 };
+        let quantity = if path.contains(" x2") { 2 } else { 1 };
         assert_eq!(
             preview(&client, path, profile),
             json!({
@@ -1716,7 +1716,7 @@ fn gre601_preview_quantity_strips_only_literal_stl_suffixes() {
     ] {
         assert_eq!(
             preview(&client, path, json!({"quantity":{"regex":regex}})),
-            json!({"role":"primary","quantity":2.0,"part_slug":slug,"filename":path}),
+            json!({"role":"primary","quantity":2,"part_slug":slug,"filename":path}),
             "{path} with {regex}"
         );
     }
@@ -1761,7 +1761,7 @@ fn gre601_preview_case_matching_preserves_original_marker_length_order() {
     ] {
         assert_eq!(
             preview(&client, path, profile),
-            json!({"role":role,"quantity":1.0,"part_slug":slug,"filename":filename}),
+            json!({"role":role,"quantity":1,"part_slug":slug,"filename":filename}),
             "{path}"
         );
     }
@@ -1776,7 +1776,7 @@ fn gre601_preview_case_matching_preserves_original_marker_length_order() {
             &path,
             json!({"roles":[{"id":"accent","markers":markers}]})
         ),
-        json!({"role":"accent","quantity":1.0,"part_slug":"gear","filename":"gear.stl"})
+        json!({"role":"accent","quantity":1,"part_slug":"gear","filename":"gear.stl"})
     );
     owner.shutdown().unwrap();
 }
@@ -1792,28 +1792,28 @@ fn gre601_preview_quantity_uses_numeric_prefix_clamping_and_null() {
             "gear x0.stl".to_owned(),
             r"[ _]x([0-9]+)\.stl$",
             1,
-            json!(1.0),
+            json!(1),
             "gear",
         ),
         (
             "gear x-9.stl".to_owned(),
             r"x(-?[0-9]+)\.stl$",
             1,
-            json!(1.0),
+            json!(1),
             "gear x-9",
         ),
         (
             "gear x+12tail.stl".to_owned(),
             r"x(.+)\.stl$",
             1,
-            json!(12.0),
+            json!(12),
             "gear x+12tail",
         ),
         (
             "gear x  7tail.stl".to_owned(),
             r"x(.+)\.stl$",
             1,
-            json!(7.0),
+            json!(7),
             "gear x  7tail",
         ),
         (
@@ -1827,21 +1827,21 @@ fn gre601_preview_quantity_uses_numeric_prefix_clamping_and_null() {
             "gear x.stl".to_owned(),
             r"x([0-9]*)\.stl$",
             6,
-            json!(6.0),
+            json!(6),
             "gear x",
         ),
         (
             "gear.stl".to_owned(),
             r"x([0-9]+)\.stl$",
             9,
-            json!(9.0),
+            json!(9),
             "gear",
         ),
         (
             "gear x2.STL".to_owned(),
             r"x([0-9]+)\.stl$",
             1,
-            json!(2.0),
+            json!(2),
             "gear ",
         ),
         (
@@ -1855,7 +1855,7 @@ fn gre601_preview_quantity_uses_numeric_prefix_clamping_and_null() {
             "gear x9007199254740993.stl".to_owned(),
             r"x([0-9]+)\.stl$",
             1,
-            json!(9007199254740992.0),
+            json!(9_007_199_254_740_992_i64),
             "gear ",
         ),
     ] {
@@ -1969,7 +1969,7 @@ fn gre601_preview_rejects_invalid_typed_overrides_without_writes() {
     assert_eq!(
         preview(&client, "gear.stl", json!({"quantity":{},"slug":{}})),
         json!({
-            "role":"primary","quantity":1.0,"part_slug":"gear","filename":"gear.stl"
+            "role":"primary","quantity":1,"part_slug":"gear","filename":"gear.stl"
         })
     );
     assert_eq!(rows(&fixture.0), before);
@@ -2022,7 +2022,7 @@ fn gre601_preview_uses_persisted_tenant_defaults_and_existing_authority() {
     let before = rows(&fixture.0);
     let bytes = database_bytes(&fixture.0);
     let tenant_expected =
-        json!({"role":"accent","quantity":7.0,"part_slug":"gear","filename":"taggear.stl"});
+        json!({"role":"accent","quantity":7,"part_slug":"gear","filename":"taggear.stl"});
     assert_eq!(
         preview(&client, "taggear.stl", Value::Null),
         tenant_expected
@@ -2039,13 +2039,13 @@ fn gre601_preview_uses_persisted_tenant_defaults_and_existing_authority() {
     assert_eq!(
         preview(&client, "taggear.stl", json!({"quantity":{"default":3}})),
         json!({
-            "role":"accent","quantity":3.0,"part_slug":"gear","filename":"taggear.stl"
+            "role":"accent","quantity":3,"part_slug":"gear","filename":"taggear.stl"
         })
     );
     assert_eq!(
         preview(&local, "taggear.stl", json!({})),
         json!({
-            "role":"accent","quantity":19.0,"part_slug":"gear","filename":"taggear.stl"
+            "role":"accent","quantity":19,"part_slug":"gear","filename":"taggear.stl"
         })
     );
     let denied = owner
@@ -2143,13 +2143,13 @@ fn gre601_preview_adds_missing_roles_and_falls_back_from_invalid_stored_defaults
             json!({"roles":[{"id":"accent","markers":["tag"]}]})
         ),
         json!({
-            "role":"accent","quantity":4.0,"part_slug":"gear","filename":"taggear.stl"
+            "role":"accent","quantity":4,"part_slug":"gear","filename":"taggear.stl"
         })
     );
     assert_eq!(
         preview(&client, "taggear.stl", json!({})),
         json!({
-            "role":"primary","quantity":4.0,"part_slug":"taggear","filename":"taggear.stl"
+            "role":"primary","quantity":4,"part_slug":"taggear","filename":"taggear.stl"
         })
     );
     assert_eq!(rows(&fixture.0), before);
@@ -2164,7 +2164,7 @@ fn gre601_preview_adds_missing_roles_and_falls_back_from_invalid_stored_defaults
     assert_eq!(
         preview(&owner.local_source_catalog(), "[a]gear x2.stl", json!({})),
         json!({
-            "role":"accent","quantity":2.0,"part_slug":"gear","filename":"[a]gear x2.stl"
+            "role":"accent","quantity":2,"part_slug":"gear","filename":"[a]gear x2.stl"
         })
     );
     assert_eq!(rows(&fixture.0), before);
