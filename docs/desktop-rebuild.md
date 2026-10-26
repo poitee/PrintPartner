@@ -705,14 +705,19 @@ the same cases. It closes the palette, then reports "Saved" or the refusal
 message. Retry calls `retryPlanSave` only when an ordinary Save failed, because
 with nothing retained it prepares a new Plan draft. Otherwise it resends only
 the retained auxiliary saves through `retryFailedAuxiliarySaves`. It then runs
-`useRetryBuildPageSaves` to settle the mounted editors. Retry never calls
-`preparePlan`. The Plan page Retry uses `aria-disabled` while a save runs, so
+`useRetryBuildPageSaves` to settle the mounted editors. If the resend is
+refused, Retry still settles the mounted editors, through
+`useFlushBuildPageSaves`, so unsent edits are saved but the refusal is not sent
+a second time. A refused kit-manifest Retry keeps the manifest retained under
+the newest refusal message. Retry never calls `preparePlan`. The Plan page Retry uses `aria-disabled` while a save runs, so
 keyboard focus stays on it and a refused retry keeps the alert. The
 auxiliary-save store is now observable (`useFailedAuxiliarySaveMessage`) and
 records each refusal's message. This change is web-only and adds no new Rust
 `desktop_rebuild` surface. Focused proofs: `parts_retry_uses_retained_save` in
 `PartsPage.recovery.test.tsx` and `command_retry_does_not_create_new_intent` in
-`CommandPalette.retry.test.tsx`.
+`CommandPalette.retry.test.tsx`, plus
+`plan_retry_resends_retained_manifest_with_failed_ordinary_save` and
+`manifest_retry_refusal_updates_retained_message`.
 
 ```sh
 npm run test -w @print-partner/web -- src/pages/PartsPage.recovery.test.tsx src/components/CommandPalette.retry.test.tsx src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/hooks/useKitManifestAutosave.test.ts
