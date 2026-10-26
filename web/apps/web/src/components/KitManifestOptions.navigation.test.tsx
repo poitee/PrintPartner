@@ -81,8 +81,9 @@ describe("KitManifestOptions guarded navigation", () => {
     await screen.findByText("Save failed — retry");
     expect(mocks.save).toHaveBeenCalledTimes(1);
     act(() => { void router.navigate(-1); });
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(2));
     await waitFor(() => expect([...router.state.blockers.values()][0]?.state).toBe("unblocked"));
+    // Back is not a deliberate Retry, so the refused kit stays retained and unsent.
+    expect(mocks.save).toHaveBeenCalledTimes(1);
     expect(router.state.location.pathname).toBe("/plan");
     expect(screen.getByRole("button", { name: "Custom" }).getAttribute("aria-pressed")).toBe("true");
   });
@@ -94,7 +95,6 @@ describe("KitManifestOptions guarded navigation", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Custom" }));
     await screen.findByText("Save failed — retry");
     first.unmount();
-    await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(2));
 
     render(editor());
     await screen.findByText("Save failed — retry");
@@ -102,7 +102,7 @@ describe("KitManifestOptions guarded navigation", () => {
     mocks.save.mockImplementation(async (_profileId, kit) => kit);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("Saved");
-    expect(mocks.save).toHaveBeenCalledTimes(3);
-    expect(mocks.save.mock.calls[2]?.[1]).toEqual(mocks.save.mock.calls[0]?.[1]);
+    expect(mocks.save).toHaveBeenCalledTimes(2);
+    expect(mocks.save.mock.calls[1]?.[1]).toEqual(mocks.save.mock.calls[0]?.[1]);
   });
 });
