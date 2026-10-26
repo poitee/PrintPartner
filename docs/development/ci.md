@@ -53,6 +53,44 @@ Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, a
 
 `rust (linux)` and `rust (windows)` are required checks on `main`; `rust (macos)` is advisory. [Settings for Chad](ci-controls.md#settings-for-chad) lists the full ruleset.
 
+## Run the required checks with one command
+
+Run this command from the repository root before you push:
+
+```sh
+PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 python3 scripts/local-ci.py
+```
+
+It runs each step below in order and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `--list`. To select steps, use `--only fmt,clippy-off` or `--skip nextest-on`.
+
+| Step | What it runs | CI source |
+|------|--------------|-----------|
+| `local-ci-self-test` | `scripts/test_local_ci.py` | None. This test fails when a copied command no longer matches its workflow step. |
+| `selector-tests` | The path-filter and macOS-alert unit tests | `rust-cross-os.yml` `changes` |
+| `actionlint` | `actionlint -color` | `actionlint` (required) |
+| `zizmor` | `zizmor --min-severity informational --config .github/zizmor.yml .` | `zizmor` (required) |
+| `ast-grep` | `ast-grep test`, `test_ast_grep.py` and `check-ast-grep.py` against `origin/main` | `ast-grep ratchet` |
+| `boundaries` | `check-boundaries.py --self-test` and `check-domain-deps.py --self-test` | `chain-tip-gate.yml` |
+| `historical-schema` | `rust/scripts/fetch-historical-schema-commits.sh`, which fetches the pinned commits that the pp-storage tests archive. It runs before nextest. | `rust (linux)` (required) |
+| `fmt`, `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 4 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
+| `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
+| `node-fixtures` | The `--check` mode of each Node parity fixture generator, and the HTTP route inventory diff, on Node 22.23.3 | `desktop-contracts.yml` and `auth-admission-freshness.yml` |
+
+Except where noted below, each step runs the command lines of its workflow step without changes. The script sets the same environment that CI sets: `NEXTEST_FILTER`, `PP_TEST_NODE`, `VITE_PRINT_PARTNER_DESKTOP`, and `RUNNER_TEMP`. The cargo steps also get `INSTA_UPDATE=no`, so a snapshot mismatch fails the step instead of writing a `.snap.new` file. `RUNNER_TEMP` is under `$CARGO_TARGET_DIR/local-ci`, or under `rust/target/local-ci` if `CARGO_TARGET_DIR` is not set. The local command differs from CI in these ways:
+
+- It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `node-fixtures` step is also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
+- `ast-grep` fetches `origin/main` without `--depth=1`, because a shallow fetch would make a full clone shallow.
+- `nextest-on` always runs. CI skips it on self-hosted Linux PRs, but the merge queue runs it. Use `--skip nextest-on` for a shorter run.
+- The nextest profile is `default` unless you set `NEXTEST_PROFILE`. Pull requests on `pp-local` use `pp-local-linux`.
+- `node-fixtures` runs `npm ci` with Node 22, so `web/node_modules` ends with Node 22 native modules. The next run's `web-assets` step installs them again with Node 24.
+
+The command does not cover these checks:
+
+- `rust (windows)` and `rust (macos)`. They need Windows and macOS runners. The command reports both as `SKIP`.
+- `Lint Evidence block`. It reads the pull request body. The command reports it as `SKIP`.
+- `cargo deny check` (`desktop-deny.yml`). It runs on changes to `rust/**`. To run it locally, use `cargo deny --manifest-path rust/Cargo.toml --all-features check`. CI also runs `cargo deny --manifest-path rust/fuzz/Cargo.toml --all-features --locked check advisories`.
+- The Linux rebuild partitions, the Desktop runtime, Native macOS bundle, web and Docker workflows, and the `contracts:verify` and `test:desktop-parity` steps of `desktop-contracts.yml`.
+
 ## Run a job locally
 
 To run the same checks on your machine, build the assets and manifest first. From the repository root:
