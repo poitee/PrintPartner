@@ -498,11 +498,12 @@ jobs:
             lsof +f -- "$fixture_mount" || echo "::warning::lsof found no holders or failed at $fixture_mount (status $?)"
             # A forced unmount can succeed while ejecting the backing device still returns EBUSY.
             # The mount path is then an ordinary directory, so retry with the attached device.
-            for attempt in 1 2 3; do
+            # storagekitd can hold the raw device for 5+ seconds after the unmount.
+            for attempt in {1..10}; do
               if hdiutil detach -force "$fixture_device"; then
                 exit "$result"
               fi
-              if [[ "$attempt" -lt 3 ]]; then
+              if [[ "$attempt" -lt 10 ]]; then
                 sleep 2
               fi
             done
