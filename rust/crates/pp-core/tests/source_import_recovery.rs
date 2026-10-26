@@ -827,3 +827,124 @@ fn source_import_fails_when_published_artifact_does_not_verify() {
             .is_none()
     );
 }
+
+fn stage_published(fixture: &Fixture, name: &str) -> (pp_storage::uploads::Operation, PathBuf) {
+    let id = stage_frozen(fixture, name);
+    let published = fixture
+        .imports
+        .work_frozen(
+            open_frozen(fixture, &id),
+            Through::Published,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(published.state, State::Published);
+    let revision = fixture
+        .repos()
+        .join(published.source_id.to_string())
+        .join("revisions")
+        .join(&published.artifact.as_ref().unwrap().upstream_key);
+    (published, revision)
+}
+
+#[cfg(unix)]
+#[test]
+fn source_import_requeues_when_published_artifact_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::open();
+    let (published, revision) = stage_published(&fixture, "unreadable-revision");
+    std::fs::set_permissions(&revision, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    // An I/O error while reading the revision says nothing about whether the
+    // artifact is intact, so the import requeues instead of failing.
+    let fixture = fixture.reopen();
+    let error = fixture
+        .imports
+        .work_operation(
+            &published.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+    std::fs::set_permissions(&revision, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!error.to_string().is_empty());
+    assert_eq!(
+        fixture
+            .imports
+            .get(fixture.credential(), published.key.clone())
+            .unwrap()
+            .state,
+        State::Published
+    );
+    assert_eq!(
+        fixture
+            .observations(&published.key)
+            .iter()
+            .map(|row| row.3.as_str())
+            .collect::<Vec<_>>(),
+        ["owned", "published"]
+    );
+
+    let fixture = fixture.reopen();
+    let resumed = fixture
+        .imports
+        .work_operation(
+            &published.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(resumed.cleanup_settled);
+    assert!(resumed.receipt.as_ref().unwrap().activated);
+}
+
+#[test]
+fn source_import_cancelled_while_published_artifact_does_not_verify_requeues() {
+    let fixture = Fixture::open();
+    let (published, revision) = stage_published(&fixture, "cancelled-tampered-revision");
+    std::fs::remove_dir_all(&revision).unwrap();
+
+    // Cancellation outranks the deterministic verify failure: the stopped
+    // attempt requeues, and the next attempt fails the import.
+    let fixture = fixture.reopen();
+    fixture
+        .imports
+        .work_operation(
+            &published.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(true),
+        )
+        .unwrap_err();
+    assert_eq!(
+        fixture
+            .observations(&published.key)
+            .iter()
+            .map(|row| row.3.as_str())
+            .collect::<Vec<_>>(),
+        ["owned", "published"]
+    );
+
+    let fixture = fixture.reopen();
+    fixture
+        .imports
+        .work_operation(
+            &published.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+    assert_eq!(
+        fixture
+            .observations(&published.key)
+            .iter()
+            .map(|row| row.3.as_str())
+            .collect::<Vec<_>>(),
+        ["owned", "published", "failed", "cleanup"]
+    );
+}
