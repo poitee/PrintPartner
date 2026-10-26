@@ -1,6 +1,9 @@
 #![cfg(feature = "desktop_rebuild")]
 //! Restart reconciliation of retained captures through SourceAcquisitions.
-use pp_core::{source_acquisition::SourceAcquisitions, uploads::SourceImports};
+use pp_core::{
+    source_acquisition::SourceAcquisitions,
+    uploads::{SourceImports, Through},
+};
 use pp_source::{
     SourcePath,
     retained_capture::{FreezeResult, RetainedCaptureVault},
@@ -20,6 +23,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
 };
 
 const QUOTA: u64 = 16 * 1024 * 1024 * 1024;
@@ -268,7 +272,9 @@ fn source_acquisition_conflict_preserves_capture() {
     let acquisitions = fixture.acquisitions();
     assert_eq!(
         refusal(acquisitions.recover_before_accepting()),
-        "Retained captures require repair (1 remaining): Retained capture requires repair"
+        format!(
+            "Retained captures require repair (1 remaining): {conflicted}: Retained capture requires repair"
+        )
     );
     assert_eq!(tree(&fixture.capture_dir(&conflicted)), capture);
     assert_eq!(fixture.journal()[0], tampered_row);
@@ -295,4 +301,105 @@ fn source_acquisition_conflict_preserves_capture() {
     );
     assert_eq!(fixture.journal(), journal);
     assert_eq!(tree(&fixture.capture_dir(&conflicted)), capture);
+}
+
+#[test]
+fn source_acquisition_candidate_and_malformed_hold_ingress() {
+    let fixture = Fixture::open();
+    let interrupted = admitted(&fixture, "unfrozen-admitted");
+    let vault = RetainedCaptureVault::open(&fixture.root.join("data")).unwrap();
+    // A process that stopped while writing a candidate, and a slot that is
+    // neither a candidate nor a frozen capture.
+    let mut candidate = vault.allocate().unwrap();
+    candidate
+        .write_file(
+            SourcePath::try_from("triangle.stl".to_owned()).unwrap(),
+            BYTES,
+            capture_limits().max_input_bytes,
+        )
+        .unwrap();
+    let unfrozen = candidate.capture_id().as_str().to_owned();
+    drop(candidate);
+    let malformed = vault.allocate().unwrap().capture_id().as_str().to_owned();
+    std::fs::create_dir(fixture.capture_dir(&malformed).join("frozen")).unwrap();
+    drop(vault);
+    let fixture = fixture.reopen();
+    let kept = [&unfrozen, &malformed].map(|id| tree(&fixture.capture_dir(id)));
+
+    let acquisitions = fixture.acquisitions();
+    let mut causes = [
+        (unfrozen.clone(), "Capture candidate was never frozen"),
+        (malformed.clone(), "Malformed retained capture"),
+    ];
+    causes.sort();
+    let causes = causes
+        .map(|(id, cause)| format!("{id}: {cause}"))
+        .join("; ");
+    assert_eq!(
+        refusal(acquisitions.recover_before_accepting()),
+        format!("Retained captures require repair (2 remaining): {causes}")
+    );
+    assert_eq!(
+        [&unfrozen, &malformed].map(|id| tree(&fixture.capture_dir(id))),
+        kept
+    );
+
+    // The admitted capture beside them still settles.
+    let settled = fixture
+        .imports
+        .get(fixture.credential(), "unfrozen-admitted".into())
+        .unwrap();
+    assert!(settled.cleanup_settled);
+    assert!(!fixture.capture_dir(&interrupted).exists());
+
+    let (_, next) = freeze(&fixture, "unfrozen-next");
+    let journal = fixture.journal();
+    assert_eq!(
+        refusal(acquisitions.admit_captured(next)),
+        "Source acquisition ingress is closed"
+    );
+    assert_eq!(fixture.journal(), journal);
+}
+
+#[test]
+fn source_acquisition_held_claim_names_its_cause() {
+    let fixture = Fixture::open();
+    let held = admitted(&fixture, "held-claim");
+    let op = fixture
+        .imports
+        .get(fixture.credential(), "held-claim".into())
+        .unwrap();
+    // A worker without the retained capture claims the job and stops; the
+    // claim holds the job until restart recovery requeues it.
+    assert_eq!(
+        refusal(fixture.imports.work_operation(
+            &op.job_id,
+            None,
+            Through::Settled,
+            &AtomicBool::new(false),
+        )),
+        "Import requires explicitly supplied input"
+    );
+
+    let acquisitions = fixture.acquisitions();
+    assert_eq!(
+        refusal(acquisitions.recover_before_accepting()),
+        format!(
+            "Retained captures require repair (1 remaining): {held}: Import job is held by another attempt"
+        )
+    );
+    assert!(fixture.capture_dir(&held).exists());
+
+    // After a restart requeues the job, recovery settles it and opens ingress.
+    let fixture = fixture.reopen();
+    let acquisitions = fixture.acquisitions();
+    assert_eq!(acquisitions.recover_before_accepting().unwrap(), 1);
+    assert!(!fixture.capture_dir(&held).exists());
+    assert!(
+        fixture
+            .imports
+            .get(fixture.credential(), "held-claim".into())
+            .unwrap()
+            .cleanup_settled
+    );
 }
