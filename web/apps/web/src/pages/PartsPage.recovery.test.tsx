@@ -1,16 +1,20 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PartsPage from "./PartsPage";
 import type { PlanDraftWorkspace } from "@print-partner/contracts";
+import PlanSpecialRequestField, { resetSpecialRequestSaveStateForTests } from "../components/PlanSpecialRequestField";
+import { BuildSaveFlushProvider } from "../context/BuildSaveFlushContext";
+import { resetAuxiliarySaveIntentForTests, retryFailedAuxiliarySaves } from "../lib/planAuxiliarySaveIntent";
 
 const state = vi.hoisted(() => ({
-  draftError: "Could not combine these pending edits",
+  draftError: "Could not combine these pending edits" as string | null,
   mergeConflict: false,
   saving: false,
   prepare: vi.fn(),
+  retry: vi.fn(),
   discard: vi.fn(),
   edit: vi.fn(),
   workspace: null as PlanDraftWorkspace | null,
@@ -25,6 +29,7 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
     draftWorkspace: state.workspace,
     draftLoading: false,
     preparePlan: state.prepare,
+    retryPlanSave: state.retry,
     saving: state.saving,
     refresh: vi.fn(),
     mergeConflict: state.mergeConflict,
@@ -35,9 +40,34 @@ vi.mock("../context/PlanWorkspaceContext", () => ({
 vi.mock("../queries/planLayers", () => ({ usePlanLayersQuery: () => ({ data: [], isLoading: false }) }));
 vi.mock("../api/endpoints/stlNaming", () => ({ fetchStlNaming: async () => ({ folder_rules: [] }) }));
 vi.mock("../components/plan/PlanFeaturesCard", () => ({ default: () => null }));
+const updateProfile = vi.hoisted(() => vi.fn());
+vi.mock("../queries/profiles", () => ({
+  useUpdateProfileMutation: () => ({ mutateAsync: updateProfile, isPending: false }),
+}));
 
-function renderPlan() {
-  return render(<MemoryRouter><PartsPage /></MemoryRouter>);
+function renderPlan(options?: { specialRequestField?: boolean }) {
+  return render(
+    <MemoryRouter>
+      <BuildSaveFlushProvider>
+        {options?.specialRequestField && <PlanSpecialRequestField profileId={7} value={null} />}
+        <PartsPage />
+      </BuildSaveFlushProvider>
+    </MemoryRouter>,
+  );
+}
+
+async function failSpecialRequestSave(text: string) {
+  updateProfile.mockRejectedValueOnce(new Error("Server refused the special request"));
+  const input = screen.getByRole("textbox", { name: "Special request" });
+  fireEvent.change(input, { target: { value: text } });
+  fireEvent.blur(input);
+  await waitFor(() => expect(updateProfile).toHaveBeenCalledOnce());
+}
+
+function planRecoveryAlert() {
+  const alert = screen.getAllByRole("alert").find((node) => node.textContent?.includes("Server refused the special request") && !node.textContent.includes("Special request was not saved"));
+  if (!alert) throw new Error("Plan recovery alert is not shown");
+  return alert;
 }
 
 beforeEach(() => {
@@ -47,10 +77,17 @@ beforeEach(() => {
   state.saving = false;
   state.workspace = null;
   state.prepare.mockResolvedValue(undefined);
+  // Mirrors retryPlanSave: the deliberate Plan retry also resends retained auxiliary saves.
+  state.retry.mockImplementation(() => retryFailedAuxiliarySaves(7));
+  updateProfile.mockResolvedValue(undefined);
   state.discard.mockResolvedValue(undefined);
   state.edit.mockResolvedValue(undefined);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetSpecialRequestSaveStateForTests();
+  resetAuxiliarySaveIntentForTests();
+});
 
 describe("Plan pending-edit recovery", () => {
   it("shows retained draft files and saves explicit choices when a first Plan save conflicts", async () => {
@@ -96,9 +133,12 @@ describe("Plan pending-edit recovery", () => {
     renderPlan();
     const discard = screen.getByRole("button", { name: "Discard pending edits and use saved Plan" });
     expect(discard).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: "Retry save" })).toHaveProperty("disabled", true);
+    const retry = screen.getByRole("button", { name: "Retry save" });
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(discard);
+    fireEvent.click(retry);
     expect(state.discard).not.toHaveBeenCalled();
+    expect(state.retry).not.toHaveBeenCalled();
   });
 
   it("keeps a failed discard visible for recovery", async () => {
@@ -110,5 +150,65 @@ describe("Plan pending-edit recovery", () => {
     expect(screen.getByRole("alert").textContent).toContain("Could not combine these pending edits");
     expect(screen.getByRole("status").textContent).toBe("Not saved");
     expect(state.prepare).not.toHaveBeenCalled();
+  });
+
+  it("parts_retry_uses_retained_save", async () => {
+    state.draftError = null;
+    renderPlan({ specialRequestField: true });
+    await failSpecialRequestSave("Call before printing");
+    const failedBody = updateProfile.mock.calls[0]?.[0];
+    expect(failedBody).toEqual({ id: 7, special_request: "Call before printing" });
+
+    const alert = planRecoveryAlert();
+    expect(screen.getByRole("status").textContent).toBe("Not saved");
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry save" }));
+
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledTimes(2));
+    expect(updateProfile.mock.calls[1]?.[0]).toEqual(failedBody);
+    // With no failed ordinary Save, retryPlanSave would prepare a new Plan draft.
+    expect(state.retry).not.toHaveBeenCalled();
+    expect(state.prepare).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(updateProfile).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps focus and the error on Retry when the retained save is refused again", async () => {
+    state.draftError = null;
+    renderPlan({ specialRequestField: true });
+    await failSpecialRequestSave("Call before printing");
+    const retry = within(planRecoveryAlert()).getByRole("button", { name: "Retry save" });
+    retry.focus();
+    let refuse!: (reason: Error) => void;
+    updateProfile.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledTimes(2));
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
+    expect(retry).toHaveProperty("disabled", false);
+    expect(document.activeElement).toBe(retry);
+    fireEvent.click(retry);
+    expect(updateProfile).toHaveBeenCalledTimes(2);
+
+    refuse(new Error("Server refused the special request"));
+    await waitFor(() => expect(retry.getAttribute("aria-disabled")).toBe("false"));
+    expect(document.activeElement).toBe(retry);
+    expect(planRecoveryAlert()).toBeTruthy();
+    expect(updateProfile).toHaveBeenCalledTimes(2);
+    expect(state.retry).not.toHaveBeenCalled();
+    expect(state.prepare).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed ordinary Save and its retained special request once each", async () => {
+    renderPlan({ specialRequestField: true });
+    await failSpecialRequestSave("Call before printing");
+    const failedBody = updateProfile.mock.calls[0]?.[0];
+    const alert = screen.getAllByRole("alert").find((node) => node.textContent?.includes("Could not combine these pending edits"));
+    fireEvent.click(within(alert!).getByRole("button", { name: "Retry save" }));
+
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledTimes(2));
+    expect(updateProfile.mock.calls[1]?.[0]).toEqual(failedBody);
+    expect(state.retry).toHaveBeenCalledExactlyOnceWith();
+    expect(state.prepare).not.toHaveBeenCalled();
+    expect(state.edit).not.toHaveBeenCalled();
   });
 });

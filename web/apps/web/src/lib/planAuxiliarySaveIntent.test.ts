@@ -12,11 +12,11 @@ afterEach(() => {
 describe("planAuxiliarySaveIntent", () => {
   it("retries every retained save when an earlier retry fails", async () => {
     const order: string[] = [];
-    retainFailedAuxiliarySave(7, "special_request", async () => {
+    retainFailedAuxiliarySave(7, "special_request", "offline", async () => {
       order.push("special_request");
       throw new Error("offline");
     });
-    retainFailedAuxiliarySave(7, "manifest", async () => {
+    retainFailedAuxiliarySave(7, "manifest", "offline", async () => {
       order.push("manifest");
     });
 

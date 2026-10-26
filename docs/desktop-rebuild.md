@@ -694,6 +694,30 @@ web-only and adds no new Rust `desktop_rebuild` surface. Focused proofs:
 npm run test -w @print-partner/web -- src/context/BuildSaveFlushContext.test.tsx src/hooks/useKitManifestAutosave.test.ts src/components/KitManifestOptions.navigation.test.tsx src/components/PlanSpecialRequestField.test.tsx
 ```
 
+### D29 explicit retry actions (client)
+
+GRE-815 wires the deliberate Retry into the Plan page and the command palette
+through one hook, `useFailedSaveRetry`. The Plan page shows its recovery alert
+and "Retry save" when the selected Build has a failed ordinary Save or a
+retained special-request or kit-manifest refusal. The alert shows that
+failure's message. The palette lists "Retry failed save" first under Actions in
+the same cases. It closes the palette, then reports "Saved" or the refusal
+message. Retry calls `retryPlanSave` only when an ordinary Save failed, because
+with nothing retained it prepares a new Plan draft. Otherwise it resends only
+the retained auxiliary saves through `retryFailedAuxiliarySaves`. It then runs
+`useRetryBuildPageSaves` to settle the mounted editors. Retry never calls
+`preparePlan`. The Plan page Retry uses `aria-disabled` while a save runs, so
+keyboard focus stays on it and a refused retry keeps the alert. The
+auxiliary-save store is now observable (`useFailedAuxiliarySaveMessage`) and
+records each refusal's message. This change is web-only and adds no new Rust
+`desktop_rebuild` surface. Focused proofs: `parts_retry_uses_retained_save` in
+`PartsPage.recovery.test.tsx` and `command_retry_does_not_create_new_intent` in
+`CommandPalette.retry.test.tsx`.
+
+```sh
+npm run test -w @print-partner/web -- src/pages/PartsPage.recovery.test.tsx src/components/CommandPalette.retry.test.tsx src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/hooks/useKitManifestAutosave.test.ts
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.

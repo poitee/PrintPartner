@@ -12,6 +12,7 @@ import { usePlanActions } from "../context/PlanActionsContext";
 import { usePlanWorkspace } from "../context/PlanWorkspaceContext";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useFlushBuildPageSaves } from "../context/BuildSaveFlushContext";
+import { useFailedSaveRetry } from "../hooks/useFailedSaveRetry";
 import { useImportSharedBuild } from "../hooks/useImportSharedBuild";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import { useJobRunner } from "../hooks/useJobRunner";
@@ -67,6 +68,7 @@ export default function CommandPalette(_props?: Props) {
   const { review } = usePlanWorkspace();
   const { openCreatePlan } = usePlanActions();
   const flushBuildSaves = useFlushBuildPageSaves();
+  const { error: failedSaveError, retry: retryFailedSave } = useFailedSaveRetry();
   const importSharedBuild = useImportSharedBuild();
   const syncJob = useJobRunner("sync");
   const stlExportJob = useJobRunner("stl-export");
@@ -356,6 +358,23 @@ export default function CommandPalette(_props?: Props) {
       );
     }
 
+    if (selectedProfileId != null && failedSaveError != null) {
+      // First in Actions: the Build's refused save waits for this deliberate Retry.
+      list.unshift({
+        id: "retry-failed-save",
+        label: "Retry failed save",
+        hint: "Not saved",
+        group: "Actions",
+        run: () => {
+          setOpen(false);
+          void retryFailedSave().then(
+            () => toast.success("Saved"),
+            (error: unknown) => toast.error(error instanceof Error ? error.message : failedSaveError),
+          );
+        },
+      });
+    }
+
     if (health) {
       list.push({
         id: "search-stl-global",
@@ -406,6 +425,8 @@ export default function CommandPalette(_props?: Props) {
     onLibrary,
     location.pathname,
     flushBuildSaves,
+    failedSaveError,
+    retryFailedSave,
     importSharedBuild,
     openCreatePlan,
   ]);

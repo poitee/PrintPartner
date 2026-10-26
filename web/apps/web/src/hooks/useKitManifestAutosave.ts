@@ -220,7 +220,12 @@ export function useKitManifestAutosave({
           const mounted = mountedFlushByProfile.get(profileId);
           if (!mounted || mounted.owner === saveState) {
             retainedFailedKitByProfile.set(profileId, kit);
-            retainFailedAuxiliarySave(profileId, "manifest", () => retryMountedManifestSave(profileId));
+            retainFailedAuxiliarySave(
+              profileId,
+              "manifest",
+              error instanceof Error ? error.message : "Kit selections were not saved",
+              () => retryMountedManifestSave(profileId),
+            );
           }
         }
         if (saveStateRef.current === saveState) setStatus("error");
