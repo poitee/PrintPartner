@@ -16,10 +16,10 @@ use pp_storage::{
     auth::AuthFailure,
     build_graph::{
         BuildCommand, BuildGraphClient, BuildOutcome, Failure as BuildFailure, PositiveId,
-        wire::{CreateBuildRequest, SourceAttachmentRequest, layer, profile_summary},
+        wire::{CreateBuildRequest, layer, profile_summary},
     },
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     sync::{
         Arc,
@@ -227,8 +227,8 @@ async fn create(State(app): State<App>, request: axum::extract::Request) -> Resp
             // Node reads `String(body.name ?? "")`, so an object without a
             // name, or with a null one, is a blank name.
             let unnamed = matches!(
-                serde_json::from_slice::<serde_json::Value>(&bytes),
-                Ok(serde_json::Value::Object(fields))
+                serde_json::from_slice::<Value>(&bytes),
+                Ok(Value::Object(fields))
                     if fields.get("name").is_none_or(serde_json::Value::is_null)
             );
             let detail = if unnamed {
@@ -297,9 +297,8 @@ async fn set_base(
     let Some(build) = parse_build_id(&id) else {
         return failure(StatusCode::BAD_REQUEST, "Request is invalid");
     };
-    attachment(app, request, Method::PUT, |source| BuildCommand::SetBase {
-        build,
-        source,
+    attachment(app, request, Method::PUT, build, None, |source| {
+        BuildCommand::SetBase { build, source }
     })
     .await
 }
@@ -312,7 +311,7 @@ async fn attach_addon(
     let Some(build) = parse_build_id(&id) else {
         return failure(StatusCode::BAD_REQUEST, "Request is invalid");
     };
-    attachment(app, request, Method::POST, |source| {
+    attachment(app, request, Method::POST, build, None, |source| {
         BuildCommand::AttachAddon { build, source }
     })
     .await
@@ -329,7 +328,7 @@ async fn replace_attachment(
     let Some(layer) = parse_build_id(&layer_id) else {
         return failure(StatusCode::BAD_REQUEST, "Request is invalid");
     };
-    attachment(app, request, Method::PUT, |source| {
+    attachment(app, request, Method::PUT, build, Some(layer), |source| {
         BuildCommand::ReplaceAttachment {
             build,
             layer,
@@ -353,10 +352,16 @@ async fn detach(
     execute(app, request, BuildCommand::Detach { build, layer }).await
 }
 
+/// Runs a layer mutation whose JSON object body names a Source. Node coerces
+/// `project_id` with `Number()`, so an id that is missing, null or not a
+/// positive integer finds no Source: after its Plan check (and, for a
+/// replace, its layer check) Node answers 404 "Project not found".
 async fn attachment(
     app: App,
     request: axum::extract::Request,
     method: Method,
+    build: PositiveId,
+    layer: Option<PositiveId>,
     command: impl FnOnce(PositiveId) -> BuildCommand,
 ) -> Response {
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
@@ -368,20 +373,44 @@ async fn attachment(
         Ok(bytes) => bytes,
         Err(_) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "Request body too large"),
     };
-    let body: SourceAttachmentRequest = match serde_json::from_slice(&bytes) {
-        Ok(body) => body,
-        Err(_) => return failure(StatusCode::BAD_REQUEST, "Request is invalid"),
+    let source = match serde_json::from_slice::<Value>(&bytes) {
+        Ok(Value::Object(body)) => body
+            .get("project_id")
+            .and_then(Value::as_u64)
+            .and_then(|id| PositiveId::new(id).ok()),
+        _ => return failure(StatusCode::BAD_REQUEST, "Request is invalid"),
     };
     let contract = SummaryContract::Accepted;
-    run(
-        app,
-        presented,
-        method,
-        path,
-        contract,
-        command(body.project_id),
-    )
-    .await
+    let Some(source) = source else {
+        return missing_source(app, presented, path, build, layer).await;
+    };
+    run(app, presented, method, path, contract, command(source)).await
+}
+
+/// Node's answer to a layer mutation that names no Source: the Plan's own
+/// refusal if it has one, "Layer not found" for a replace of a layer the Plan
+/// does not have, and otherwise 404 "Project not found". Nothing is written.
+async fn missing_source(
+    app: App,
+    presented: PresentedCredential,
+    path: String,
+    build: PositiveId,
+    layer: Option<PositiveId>,
+) -> Response {
+    match outcome(app, presented, BuildCommand::ListLayers { build }).await {
+        Ok(BuildOutcome::Layers { layers, .. })
+            if layer.is_some_and(|layer| {
+                !layers
+                    .iter()
+                    .any(|item| u64::try_from(item.id) == Ok(layer.get()))
+            }) =>
+        {
+            failure(StatusCode::NOT_FOUND, "Layer not found")
+        }
+        Ok(BuildOutcome::Layers { .. }) => failure(StatusCode::NOT_FOUND, "Project not found"),
+        Ok(other) => present(&Method::GET, &path, SummaryContract::Accepted, other),
+        Err(response) => *response,
+    }
 }
 
 fn parse_build_id(id: &str) -> Option<PositiveId> {
@@ -412,12 +441,24 @@ pub(super) async fn run(
     contract: SummaryContract,
     command: BuildCommand,
 ) -> Response {
+    match outcome(app, presented, command).await {
+        Ok(outcome) => present(&method, &path, contract, outcome),
+        Err(response) => *response,
+    }
+}
+
+/// Executes `command` on a blocking worker; a refusal is already a response.
+async fn outcome(
+    app: App,
+    presented: PresentedCredential,
+    command: BuildCommand,
+) -> Result<BuildOutcome, Box<Response>> {
     let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
-        return json_response(
+        return Err(Box::new(json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             &json!({"detail":"Build service temporarily unavailable","code":"writer_queue_full"}),
             false,
-        );
+        )));
     };
     let client = app.client.clone();
     let wait = app.config.wait;
@@ -429,12 +470,12 @@ pub(super) async fn run(
     })
     .await
     {
-        Ok(Ok(outcome)) => present(&method, &path, contract, outcome),
-        Ok(Err(error)) => domain_error(error),
-        Err(_) => failure(
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(error)) => Err(Box::new(domain_error(error))),
+        Err(_) => Err(Box::new(failure(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Build service unavailable",
-        ),
+        ))),
     }
 }
 
