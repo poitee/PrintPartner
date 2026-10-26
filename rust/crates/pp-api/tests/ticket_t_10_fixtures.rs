@@ -830,6 +830,9 @@ mod ticket_t_10_fixtures {
         raw_body: Option<String>,
         node: Exchange,
         changed: Vec<String>,
+        /// External effects Node's stubs recorded instead of running.
+        #[serde(default)]
+        effects: Vec<Value>,
     }
 
     /// Sends one recorded request to `path` with the session cookie and
@@ -1044,9 +1047,14 @@ mod ticket_t_10_fixtures {
             .map(|correction| correction.case)
             .collect();
         let mut ledger = Ledger::new(corrections).unwrap();
+        let data = sandbox.path().to_str().unwrap();
         for case in &fixture.cases {
-            let (actual, changed) =
+            let (mut actual, changed) =
                 send_case(served, FIXTURE_COOKIE, sandbox, case, &case.path).await;
+            // Node's generators write their scratch data directory as `{data}`.
+            if let Ok(text) = serde_json::to_string(&actual.body) {
+                actual.body = serde_json::from_str(&text.replace(data, "{data}")).unwrap();
+            }
             ledger
                 .compare(&case.id, &case.node, &actual)
                 .unwrap_or_else(|error| panic!("{error}"));
@@ -1173,6 +1181,81 @@ mod ticket_t_10_fixtures {
         owner.shutdown().unwrap();
         print_report("manifest-http", &report);
         assert_eq!(report.matched, 43);
+        assert_eq!(report.corrected.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn catalog_flat_v1_match_node_responses_and_changed_tables() {
+        use pp_api::catalog::{CatalogHttpConfig, admit_catalog_routes};
+        use std::sync::{Arc, Mutex};
+
+        let fixture = seeded_fixture(
+            include_str!("../../../../fixtures/parity/catalog-http/node.json"),
+            "catalog-http",
+            56,
+        );
+        // Node creates a GitHub Source and starts a sync job; its stub recorded
+        // that start instead of cloning. Rust's catalog create starts no job.
+        let started: Vec<(&str, &Value)> = fixture
+            .cases
+            .iter()
+            .flat_map(|case| case.effects.iter().map(|effect| (case.id.as_str(), effect)))
+            .collect();
+        assert_eq!(
+            started,
+            [(
+                "create_github_v1",
+                &json!({"kind": "sync", "params": {"project_ids": [5]}})
+            )]
+        );
+        let refusal = |case, kind, reason, detail: &str| Correction {
+            case,
+            kind,
+            reason,
+            rust: Exchange {
+                status: 400,
+                body: json!({ "detail": detail }),
+                set_cookie: vec![],
+            },
+        };
+        let corrections = vec![
+            refusal(
+                "global_naming_bad_v1",
+                CorrectionKind::Validation,
+                "Rust names the invalid field without zod's issue path and wording",
+                "Invalid export role order",
+            ),
+            refusal(
+                "patch_duplicate_v1",
+                CorrectionKind::Security,
+                "Rust does not expose SQLite constraint text; it uses Node's create refusal",
+                "Source already exists: Renamed Source",
+            ),
+            refusal(
+                "create_malformed_json_flat",
+                CorrectionKind::Security,
+                "Rust does not expose Fastify parser codes or messages",
+                "Invalid JSON body",
+            ),
+        ];
+        assert!(fixture.seed.is_some());
+        let sandbox = Sandbox::new("t10-catalog").unwrap();
+        let owner = Arc::new(Mutex::new(open_seeded(&sandbox, &fixture)));
+        let served = Served::start(|origin| {
+            admit_catalog_routes(
+                CatalogHttpConfig::from_startup(origin, "default", ACCOUNT_POLICY, Some("1"))
+                    .unwrap(),
+                Arc::clone(&owner),
+            )
+        })
+        .await
+        .unwrap();
+        let report = replay_seeded(&served, &sandbox, &fixture, corrections).await;
+        served.stop().await.unwrap();
+        let owner = Arc::into_inner(owner).unwrap().into_inner().unwrap();
+        owner.shutdown().unwrap();
+        print_report("catalog-http", &report);
+        assert_eq!(report.matched, 53);
         assert_eq!(report.corrected.len(), 3);
     }
 

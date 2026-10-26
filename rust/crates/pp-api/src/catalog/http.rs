@@ -423,15 +423,10 @@ async fn get_naming(
     Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> Response {
-    let Some(id) = source_id(&id) else {
-        return reject(StatusCode::NOT_FOUND, "Source not found");
+    let Some(id) = naming_source_id(&id) else {
+        return invalid_naming("Source id must be a positive integer");
     };
-    execute(
-        &app,
-        credentials(principal),
-        CatalogRequest::GetNaming { id },
-    )
-    .await
+    naming(&app, principal, CatalogRequest::GetNaming { id }).await
 }
 
 async fn put_naming(
@@ -440,21 +435,76 @@ async fn put_naming(
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
-    let Some(id) = source_id(&id) else {
-        return reject(StatusCode::NOT_FOUND, "Source not found");
+    let Some(id) = naming_source_id(&id) else {
+        return invalid_naming("Source id must be a positive integer");
     };
-    let Some(body) = object_body(&body) else {
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&body) else {
         return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
     };
+    if !body
+        .get("use_defaults")
+        .is_some_and(serde_json::Value::is_boolean)
+    {
+        return invalid_naming(
+            "source naming request.use_defaults: Invalid discriminator value. \
+             Expected 'true' | 'false'",
+        );
+    }
     let Some(settings) = wire::naming_save(&body) else {
-        return reject(StatusCode::BAD_REQUEST, "Invalid JSON body");
+        return invalid_naming("source naming request is invalid");
     };
-    execute(
-        &app,
-        credentials(principal),
-        CatalogRequest::SaveNaming { id, settings },
+    naming(&app, principal, CatalogRequest::SaveNaming { id, settings }).await
+}
+
+/// Source naming answers with Node's coded envelope, `{ code, detail }`.
+async fn naming(app: &App, principal: Principal, request: CatalogRequest) -> Response {
+    match dispatch_with(app, credentials(principal), request, naming_error).await {
+        Ok(Outcome::Data(value)) => Json(value).into_response(),
+        Ok(_) => reject(StatusCode::INTERNAL_SERVER_ERROR, "Catalog unavailable"),
+        Err(response) => *response,
+    }
+}
+
+fn naming_error(error: anyhow::Error) -> Response {
+    let coded = |status, code, detail| {
+        (status, Json(json!({ "code": code, "detail": detail }))).into_response()
+    };
+    match error.downcast_ref::<CatalogFailure>() {
+        Some(CatalogFailure::NotFound) => coded(
+            StatusCode::NOT_FOUND,
+            "source_not_found",
+            "Source not found",
+        ),
+        Some(CatalogFailure::Conflict) => coded(
+            StatusCode::CONFLICT,
+            "source_naming_conflict",
+            "Source metadata changed while saving naming rules",
+        ),
+        Some(CatalogFailure::InvalidStoredNaming) => coded(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_source_naming_state",
+            "Stored Source naming settings are invalid",
+        ),
+        Some(CatalogFailure::Input(detail)) => invalid_naming(detail),
+        _ => catalog_error(error),
+    }
+}
+
+fn invalid_naming(detail: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "code": "invalid_source_naming", "detail": detail })),
     )
-    .await
+        .into_response()
+}
+
+/// Node's `sourceIdFromParams`: digits only, a safe integer above zero.
+fn naming_source_id(raw: &str) -> Option<i64> {
+    let id = raw
+        .bytes()
+        .all(|byte| byte.is_ascii_digit())
+        .then(|| raw.parse::<i64>().ok())??;
+    (1..=9_007_199_254_740_991).contains(&id).then_some(id)
 }
 
 async fn preview_naming(
@@ -576,6 +626,15 @@ async fn dispatch(
     credentials: Credentials,
     request: CatalogRequest,
 ) -> Result<Outcome, Box<Response>> {
+    dispatch_with(app, credentials, request, catalog_error).await
+}
+
+async fn dispatch_with(
+    app: &App,
+    credentials: Credentials,
+    request: CatalogRequest,
+    on_error: fn(anyhow::Error) -> Response,
+) -> Result<Outcome, Box<Response>> {
     let policy = app.config.policy;
     let client = {
         let Ok(owner) = app.owner.lock() else {
@@ -596,7 +655,7 @@ async fn dispatch(
     };
     match tokio::task::spawn_blocking(move || client.execute(request)).await {
         Ok(Ok(outcome)) => Ok(outcome),
-        Ok(Err(error)) => Err(Box::new(catalog_error(error))),
+        Ok(Err(error)) => Err(Box::new(on_error(error))),
         Err(_) => Err(Box::new(reject(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Catalog unavailable",
