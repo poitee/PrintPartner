@@ -262,7 +262,10 @@ fn source_acquisition_conflict_preserves_capture() {
         .capture_dir(&conflicted)
         .join("frozen/input/triangle.stl");
     let mut permissions = std::fs::metadata(&input).unwrap().permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
+    // Owner read and write only. Writing a mode avoids clippy's permissions_set_readonly_false lint.
+    #[cfg(unix)]
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o600);
+    #[cfg(not(unix))]
     permissions.set_readonly(false);
     std::fs::set_permissions(&input, permissions).unwrap();
     std::fs::write(&input, b"solid tampered").unwrap();
