@@ -1217,7 +1217,7 @@ async fn catalog_naming_preview_matches_storage() {
         expected,
         json!({
             "role":"accent",
-            "quantity":3.0,
+            "quantity":3,
             "part_slug":"bracket",
             "filename":"[custom]bracket x3.stl"
         })

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
+import { createJobRunner } from "../services/job-runner.js";
 import * as sourceManifestMigration from "../services/source-manifest-migration.js";
 import * as sourceWatcher from "../services/source-watcher.js";
 import {
@@ -30,6 +31,12 @@ vi.mock("../services/profile-sync-manager.js", () => ({
 
 vi.mock("../services/source-watcher.js", { spy: true });
 vi.mock("../services/source-manifest-migration.js", { spy: true });
+
+const EXPORT_CHECKLIST_PARTICIPANTS = [
+  "http.POST /jobs/export-checklist-html",
+  "http.POST /api/v1/jobs/export-checklist-html",
+  "job.export-checklist-html",
+];
 
 const PROFILE_SYNC_PARTICIPANTS = [
   "http.GET /ws/profile-sync",
@@ -164,6 +171,49 @@ describe("operation cutover record at Node startup", () => {
       await app.close();
       ports.db.close();
     }
+  });
+
+  it("refuses an export job after Rust takes its operation and keeps other exports", async () => {
+    const { app, ports } = await start((dataDir) => {
+      writeFileSync(join(dataDir, "operation-cutover.json"), record("export.checklist-html", EXPORT_CHECKLIST_PARTICIPANTS));
+    });
+    try {
+      const profile = ports.repository.createProfile("Fenced export");
+      for (const url of ["/jobs/export-checklist-html", "/api/v1/jobs/export-checklist-html"]) {
+        const refused = await app.inject({ method: "POST", url, payload: { profile_id: profile.id } });
+        expect(refused.statusCode, url).toBe(503);
+        expect(refused.json(), url).toEqual({
+          statusCode: 503,
+          code: "rust_owner",
+          error: "Service Unavailable",
+          message: "Rust owns job.export-checklist-html; Node does not run it",
+        });
+      }
+      const kinds = async () => (await app.inject({ method: "GET", url: "/api/v1/jobs" })).json().jobs
+        .map((job: { kind: string }) => job.kind);
+      expect(await kinds()).toEqual([]);
+      const allowed = await app.inject({ method: "POST", url: "/jobs/export-kit-bundle", payload: { profile_id: profile.id } });
+      expect(allowed.statusCode).toBe(200);
+      expect(await kinds()).toEqual(["export-kit-bundle"]);
+      expect(sourceWatcher.startSourceWatcher).toHaveBeenCalledOnce();
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
+  it("refuses a Rust-owned job from the record even when nothing admitted Source Sync first", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "pp-operation-cutover-"));
+    roots.push(dataDir);
+    writeFileSync(join(dataDir, "operation-cutover.json"), record("source.sync", SOURCE_SYNC_PARTICIPANTS));
+    const jobs = createJobRunner(() => {
+      throw new Error("a refused job must not reach the database");
+    }, dataDir);
+    await expect(jobs.start("sync", {})).rejects.toMatchObject({
+      code: "rust_owner",
+      statusCode: 503,
+      message: "Rust owns job.sync; Node does not run it",
+    });
   });
 
   it("refuses to start when the record gives Rust only part of Source Sync", async () => {

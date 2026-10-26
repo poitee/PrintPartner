@@ -856,3 +856,58 @@ Still open: Rust handlers for Source Sync (Rust-owned requests return
 `rust_owner_unavailable`), fences for the export and printer-upload jobs, the
 other assistant actions and startup hooks (they are not grouped into operations
 yet; GRE-593 owns that inventory), a live `CoreRuntime` cutover, and Mac logout.
+
+## Export jobs switch with their routes
+
+Each of the five export jobs is now its own operation. The job switches with
+its `/jobs/export-*` route and the `/api/v1` alias:
+
+| Operation | Participants |
+|---|---|
+| `export.stl-pack` | `job.export-stl-pack`, `POST /jobs/export-stl-pack` and alias |
+| `export.checklist-html` | `job.export-checklist-html`, `POST /jobs/export-checklist-html` and alias |
+| `export.kit-bundle` | `job.export-kit-bundle`, `POST /jobs/export-kit-bundle` and alias |
+| `export.direct-3mf` | `job.export-direct-3mf`, `POST /jobs/export-direct-3mf` and alias |
+| `export.accepted-plate-3mf` | `job.export-accepted-plate-3mf`, `POST /jobs/export-accepted-plate-3mf`, `POST /slicer-instances/:id/open-accepted-plates`, each with its alias |
+
+The slicer handoff route belongs to `export.accepted-plate-3mf` because it
+records a finished job of that kind (`recordAcceptedPlateExport`). Moving the
+job without that route would leave two writers of the same export record.
+
+The five jobs are on the shared Node fence list. `InProcessJobRunner.start`
+reads the cutover record from the runner's own data directory the first time
+it is called. It refuses any `job.<kind>` that Rust owns with
+`OwnershipAdmissionError` `rust_owner` (503). The runner does not depend on an
+entry point admitting the record first, which answers the #1236 review note
+about module-level Source Sync state for jobs: with a `source.sync` record,
+`start("sync")` is refused even when nothing called `beginSourceSyncAdmission`.
+The watcher, migration, MCP and assistant entry points still rely on that call
+(polish list GRE-974).
+
+The unresolved resource partition drops from 381 to 375 entries because eleven
+route and job entries became five operations.
+
+Tests:
+
+- `ticket_t_3_drain_cutover_switches_export_jobs_with_their_routes` checks
+  each operation's exact participant set, commits it, recovers every
+  participant as Rust-owned, and refuses a planted record that leaves the job
+  with Node (`participant_set_mismatch`).
+- `ticket_t_3_drain_cutover_gateway_routes_export_operation` starts the gateway
+  with `export.stl-pack` and `export.accepted-plate-3mf` switched. Both export
+  routes, the slicer handoff route and their aliases return
+  `rust_owner_unavailable`, and Node sees no forwarded request.
+- `ticket_t_3_drain_node_fence_list_names_bundled_operations` holds the list to
+  the non-HTTP participants of the seven fenced operations (15 entries).
+- Node `src/ownership/operation-cutover.test.ts`: with an
+  `export.checklist-html` record both routes return 503 `rust_owner` and no job
+  is listed, while `export-kit-bundle` still starts. With a `source.sync`
+  record, a fresh runner refuses `sync` without any admission call.
+
+Still open: `job.printer-upload`. It belongs with every writer of the printer
+send queue, including `GET /printer-send-queue` (it reconciles rows),
+enqueue, dispatch, drain and cancel. It also needs a fence for the shutdown
+hook `interruptPrinterUploadsOnShutdown` and a decision on the queue path
+rewrite in `migrateLegacySelfHostExports`. Fences for the other assistant
+actions and startup hooks (GRE-593), a live `CoreRuntime` cutover, and Mac
+logout (parent gate) also remain.
