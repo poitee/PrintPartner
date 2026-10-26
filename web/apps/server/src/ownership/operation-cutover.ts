@@ -23,8 +23,10 @@ const nodeFencedSchema = z.object({
   participants: z.array(z.string()),
 }).strict();
 
-// Participants Node skips when Rust owns them. pp-gateway reads the same file,
-// and its tests pin the list to the fences app.ts implements.
+// Participants Node skips or refuses when Rust owns them: the profile-sync
+// worker in app.ts and every Source Sync participant through
+// requireSourceSyncParticipant. pp-gateway reads the same file, and its tests
+// pin the list to those whole operations.
 function nodeFencedParticipants(): ReadonlySet<string> {
   const path = resolve(dirname(fileURLToPath(import.meta.url)), "../data/node-fenced-participants.json");
   return new Set(nodeFencedSchema.parse(JSON.parse(readFileSync(path, "utf8"))).participants);

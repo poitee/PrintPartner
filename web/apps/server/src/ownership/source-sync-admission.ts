@@ -3,7 +3,10 @@ import { closeSync, constants, existsSync, fstatSync, fsyncSync, mkdirSync, open
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Node remains the Source Sync owner. Rust is rejected, not routed back here. */
+/**
+ * Node owns Source Sync until a committed cutover record gives the whole
+ * operation to Rust. Then Node fences every participant and never routes back.
+ */
 export const SOURCE_SYNC_OPERATION = "source.sync";
 const SYNC_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"] as const;
 const UPLOAD_RESOURCES = [...SYNC_RESOURCES, "table:build_profiles"] as const;
@@ -65,11 +68,18 @@ const RECEIPT_FIELDS = new Set([
 const MAX_PROCESS_ID = 2_147_483_647;
 let admittedManifestSha256: string | undefined;
 let admittedReceiptPath: string | undefined;
+let rustOwnsSourceSync = false;
 
 /** Drops the in-process admission session. Tests use this so a deleted temp directory does not leak into the next case. A live server does not call it. */
 export function resetSourceSyncAdmissionSession(): void {
   admittedManifestSha256 = undefined;
   admittedReceiptPath = undefined;
+  rustOwnsSourceSync = false;
+}
+
+/** Whether this process admitted a cutover record that gives Source Sync to Rust. */
+export function sourceSyncOwnedByRust(): boolean {
+  return rustOwnsSourceSync;
 }
 const LIVE_FORMAT_FIELDS = new Set(["id", "rollback"]);
 const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
@@ -271,6 +281,9 @@ export function admitSourceSyncManifest(text: string): {
 }
 
 export function requireSourceSyncParticipant(id: string): undefined {
+  if (rustOwnsSourceSync) {
+    fail("rust_owner", `Rust owns source.sync; Node does not run ${id}`);
+  }
   const admitted = admitSourceSyncManifest(readSourceSyncManifest());
   if (admittedManifestSha256 !== undefined && admitted.manifestSha256 !== admittedManifestSha256) {
     fail("restart_manifest_changed", "runtime manifest does not match the admitted record");
@@ -388,9 +401,35 @@ function readExistingAdmissionReceipt(
   }
 }
 
-/** Admit the bundled manifest and persist one receipt. A later boot reuses it. */
-export function beginSourceSyncAdmission(dataDir: string): SourceSyncAdmissionReceipt {
+// The gateway commits the record only for the complete participant set, and
+// fences the HTTP participants itself. A partial set means the record is not
+// one the gateway wrote, so Node refuses to start rather than split the operation.
+function cutoverGivesSourceSyncToRust(rustOwned: ReadonlySet<string>): boolean {
+  const fenced = SOURCE_SYNC_PARTICIPANTS.filter((id) => !id.startsWith("http."));
+  const missing = fenced.filter((id) => !rustOwned.has(id));
+  if (missing.length === fenced.length) return false;
+  if (missing.length > 0) {
+    fail("participant_set_mismatch", `cutover gives Rust part of source.sync; missing=${JSON.stringify(missing)}`);
+  }
+  return true;
+}
+
+/**
+ * Admit the bundled manifest and persist one receipt. A later boot reuses it.
+ * `rustOwned` is `rustOwnedNodeParticipants(dataDir)`; this module stays free
+ * of imports so fixtures can load it with type stripping alone. Returns null
+ * when the cutover record gives Source Sync to Rust: Node then writes no
+ * receipt and refuses every participant.
+ */
+export function beginSourceSyncAdmission(
+  dataDir: string,
+  rustOwned: ReadonlySet<string> = new Set(),
+): SourceSyncAdmissionReceipt | null {
   const admitted = admitSourceSyncManifest(readSourceSyncManifest());
+  if (cutoverGivesSourceSyncToRust(rustOwned)) {
+    rustOwnsSourceSync = true;
+    return null;
+  }
   const receiptPath = sourceSyncAdmissionReceiptPath(dataDir);
   const existing = readExistingAdmissionReceipt(receiptPath, admitted);
   if (existing) {

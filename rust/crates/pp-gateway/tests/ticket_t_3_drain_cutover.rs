@@ -27,6 +27,9 @@ use std::{
 
 const CATALOG: &str = "filament.catalog";
 const PROFILE_SYNC: &str = "profile.sync";
+const SOURCE_SYNC: &str = "source.sync";
+// Its own operation: Node cannot fence the printer-upload job yet.
+const PRINTER_UPLOAD: &str = "job.printer-upload";
 const PLANS_CREATE: &str = "http:POST /plans current";
 const CATALOG_PARTICIPANTS: [&str; 4] = [
     "http.GET /api/v1/filaments/catalog",
@@ -458,19 +461,81 @@ fn ticket_t_3_drain_cutover_refuses_participant_node_cannot_fence() {
         cutover::plan(
             Some(&index),
             &owners,
-            "source.sync",
-            &parity("source.sync", index.digest(), 3, 3, 0),
+            PRINTER_UPLOAD,
+            &parity(PRINTER_UPLOAD, index.digest(), 3, 3, 0),
         )
         .unwrap_err(),
-        json!({"reason": "node_cannot_fence", "participant": "assistant.propose_import_source_files"}),
+        json!({"reason": "node_cannot_fence", "participant": "job.printer-upload"}),
     );
     let dir = Scratch::new("pp-t3-cutover-unfenced-");
-    let participants: Vec<&str> = index.participants_of("source.sync").into_iter().collect();
-    plant_record(&dir, index.digest(), "source.sync", &participants);
+    plant_record(&dir, index.digest(), PRINTER_UPLOAD, &[PRINTER_UPLOAD]);
     assert_json(
         cutover::recover(&dir, Some(&index)).unwrap_err(),
-        json!({"reason": "node_cannot_fence", "participant": "assistant.propose_import_source_files"}),
+        json!({"reason": "node_cannot_fence", "participant": "job.printer-upload"}),
     );
+}
+
+#[test]
+fn ticket_t_3_drain_cutover_switches_source_sync_as_one_operation() {
+    let index = fixture_index();
+    let participants = index.participants_of(SOURCE_SYNC);
+    // 30 HTTP routes and aliases (GET routes bring their HEAD twins) plus nine others.
+    assert_eq!(participants.len(), 39);
+    let non_http: BTreeSet<&str> = participants
+        .iter()
+        .copied()
+        .filter(|id| !id.starts_with("http."))
+        .collect();
+    assert_eq!(
+        non_http,
+        BTreeSet::from([
+            "assistant.propose_import_source_files",
+            "job.check-source-updates",
+            "job.extract-source-docs",
+            "job.import-scan",
+            "job.sync",
+            "mcp.start_sync",
+            "migration.migrateLegacySourceManifestOverridesForTenant",
+            "startup.startSourceWatcher",
+            "worker.startSourceWatcher",
+        ])
+    );
+    let dir = Scratch::new("pp-t3-cutover-source-sync-");
+    assert_json(
+        switch(&index, &dir, SOURCE_SYNC),
+        json!({"outcome": "committed", "operation": SOURCE_SYNC,
+            "participants": 39,
+            "manifest_sha256": index.digest(),
+            "parity_sha256": sha256(&parity(SOURCE_SYNC, index.digest(), 3, 3, 0)),
+            "fixtures": 3, "directory_synced": true}),
+    );
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(dir.join(CUTOVER_FILE)).unwrap()).unwrap();
+    assert_eq!(
+        record["operations"][SOURCE_SYNC]["participants"],
+        json!(participants)
+    );
+    let (owners, _) = cutover::recover(&dir, Some(&index)).unwrap();
+    let rust_owned: BTreeSet<&str> = index
+        .claims()
+        .keys()
+        .map(String::as_str)
+        .filter(|id| owners.owner_of(id) == Owner::Rust)
+        .collect();
+    assert_eq!(rust_owned, participants);
+
+    // A record that leaves any job, worker or hook with Node is refused at boot.
+    for kept in &non_http {
+        let mut partial: Vec<&str> = participants.iter().copied().collect();
+        partial.retain(|id| id != kept);
+        let split = Scratch::new("pp-t3-cutover-source-sync-split-");
+        plant_record(&split, index.digest(), SOURCE_SYNC, &partial);
+        assert_json(
+            cutover::recover(&split, Some(&index)).unwrap_err(),
+            json!({"reason": "participant_set_mismatch", "operation": SOURCE_SYNC,
+                "missing": [kept], "unexpected": []}),
+        );
+    }
 }
 
 #[test]
@@ -943,11 +1008,11 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
     let index = fixture_index();
     let dir = Scratch::new("pp-t3-cutover-evidence-");
     let owners = OperationOwners::node_only();
-    let refusal = cutover::plan(Some(&index), &owners, "source.sync", "{}").unwrap_err();
+    let refusal = cutover::plan(Some(&index), &owners, PRINTER_UPLOAD, "{}").unwrap_err();
     cutover::append_evidence(
         &dir,
         &Evidence::Refused {
-            operation: "source.sync",
+            operation: PRINTER_UPLOAD,
             refusal: &refusal,
         },
     )
@@ -965,8 +1030,8 @@ fn ticket_t_3_drain_cutover_evidence_log_appends_exact_lines() {
     assert_eq!(
         evidence_lines(&dir),
         vec![
-            json!({"event": "refused", "operation": "source.sync", "reason": "node_cannot_fence",
-                "participant": "assistant.propose_import_source_files"}),
+            json!({"event": "refused", "operation": PRINTER_UPLOAD, "reason": "node_cannot_fence",
+                "participant": "job.printer-upload"}),
             json!({"event": "cutover", "outcome": "drain_timed_out", "operation": CATALOG,
                 "tracked_idle": true, "gateway_idle": false}),
             json!({"event": "cutover", "outcome": "committed", "operation": CATALOG,

@@ -21,6 +21,7 @@ import { loadConfig } from "../config.js";
 import { createPorts } from "../app.js";
 import { createJobRunner, type InProcessJobRunner } from "../services/job-runner.js";
 import type { AppRepository } from "../db/repository.js";
+import { rustOwnedNodeParticipants } from "../ownership/operation-cutover.js";
 import { beginSourceSyncAdmission } from "../ownership/source-sync-admission.js";
 import { createProductMcpServer } from "./product-mcp.js";
 import { mcpAccessEnabled } from "@print-partner/contracts";
@@ -54,7 +55,9 @@ async function main(): Promise<void> {
   process.once("SIGTERM", () => { void stop(); });
   process.once("SIGINT", () => { void stop(); });
   try {
-    beginSourceSyncAdmission(config.dataDir);
+    // Null when Rust owns Source Sync; Rust then runs the migration.
+    const nodeOwnsSourceSync =
+      beginSourceSyncAdmission(config.dataDir, rustOwnedNodeParticipants(config.dataDir)) !== null;
     await ports.db.connect();
 
     const getRepo = (): AppRepository => {
@@ -63,10 +66,9 @@ async function main(): Promise<void> {
       throw new Error("No repository available");
     };
 
-    const migration = await migrateLegacySourceManifestOverridesForTenant(
-      getRepo(),
-      "default",
-    );
+    const migration = nodeOwnsSourceSync
+      ? await migrateLegacySourceManifestOverridesForTenant(getRepo(), "default")
+      : { migrated: [], retained: [] };
     for (const retained of migration.retained) {
       console.error(
         `Retained legacy Source manifest override for Source ${retained.sourceId}: ${retained.reason}`,

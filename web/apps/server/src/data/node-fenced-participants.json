@@ -1,4 +1,15 @@
 {
   "schema": "pp-node-fenced-participants-v1",
-  "participants": ["worker.startManagedProfileSync"]
+  "participants": [
+    "assistant.propose_import_source_files",
+    "job.check-source-updates",
+    "job.extract-source-docs",
+    "job.import-scan",
+    "job.sync",
+    "mcp.start_sync",
+    "migration.migrateLegacySourceManifestOverridesForTenant",
+    "startup.startSourceWatcher",
+    "worker.startManagedProfileSync",
+    "worker.startSourceWatcher"
+  ]
 }
