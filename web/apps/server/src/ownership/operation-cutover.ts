@@ -5,7 +5,7 @@ import { z } from "zod";
 
 // pp-gateway commits this record after Node drains and exits gracefully, so Node
 // only reads it at startup. Rust admits the record before launching Node.
-export const OPERATION_CUTOVER_FILE = "operation-cutover.json";
+const OPERATION_CUTOVER_FILE = "operation-cutover.json";
 const RECORD_LIMIT = 256 * 1024;
 
 const cutoverRecordSchema = z.object({
