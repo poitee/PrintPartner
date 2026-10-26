@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
+import { scratchDir } from "../test/scratch.js";
 import { validateBackup } from "../services/backup-restore.js";
 import { SqliteDatabase } from "./client.js";
 import { PostgresDatabase } from "./client-postgres.js";
@@ -29,7 +30,7 @@ function createVersionedDatabase(dataDir: string, schemaVersion: number): void {
 
 describe("SQLite upgrade guard", () => {
   it("creates and validates one durable backup for a schema transition", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-guard-"));
+    const dataDir = scratchDir("pp-upgrade-guard-");
     createVersionedDatabase(dataDir, 32);
 
     const first = await prepareSqliteUpgrade({ dataDir, appVersion: "3.2.0", targetVersion: 33 });
@@ -43,14 +44,14 @@ describe("SQLite upgrade guard", () => {
   });
 
   it("skips a fresh install", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-guard-fresh-"));
+    const dataDir = scratchDir("pp-upgrade-guard-fresh-");
     await expect(
       prepareSqliteUpgrade({ dataDir, appVersion: "3.2.0", targetVersion: 33 }),
     ).resolves.toEqual({ kind: "fresh-install" });
   });
 
   it("protects data before an application update with no schema change", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-guard-app-"));
+    const dataDir = scratchDir("pp-upgrade-guard-app-");
     createVersionedDatabase(dataDir, 33);
 
     await expect(
@@ -59,7 +60,7 @@ describe("SQLite upgrade guard", () => {
   });
 
   it("atomically replaces an invalid pre-update archive", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-guard-invalid-"));
+    const dataDir = scratchDir("pp-upgrade-guard-invalid-");
     createVersionedDatabase(dataDir, 32);
     const backupsDir = join(dataDir, "backups");
     const backupPath = join(
@@ -76,7 +77,7 @@ describe("SQLite upgrade guard", () => {
   });
 
   it("refuses to open a database from a newer schema", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-guard-newer-"));
+    const dataDir = scratchDir("pp-upgrade-guard-newer-");
     createVersionedDatabase(dataDir, 34);
 
     await expect(
@@ -112,7 +113,7 @@ function schemaObjectNames(dataDir: string): string[] {
 
 describe("upgrade floor", () => {
   it("refuses a database older than the v3.3.0 schema and leaves it untouched", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-floor-old-"));
+    const dataDir = scratchDir("pp-upgrade-floor-old-");
     createVersionedDatabase(dataDir, minimumUpgradeSchemaVersion - 1);
     const dbPath = join(dataDir, "print-partner.db");
     const before = readFileSync(dbPath);
@@ -129,12 +130,12 @@ describe("upgrade floor", () => {
   });
 
   it("upgrades a v3.3.0 schema database to the current schema", async () => {
-    const freshDir = mkdtempSync(join(tmpdir(), "pp-upgrade-floor-fresh-"));
+    const freshDir = scratchDir("pp-upgrade-floor-fresh-");
     const fresh = new SqliteDatabase(freshDir);
     fresh.connect();
     fresh.close();
 
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-floor-v31-"));
+    const dataDir = scratchDir("pp-upgrade-floor-v31-");
     const v31 = new SqliteDatabase(dataDir);
     v31.connect();
     v31.close();
@@ -183,7 +184,7 @@ describe("upgrade floor", () => {
   });
 
   it("initializes an empty data directory at the current schema", async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "pp-upgrade-floor-empty-"));
+    const dataDir = scratchDir("pp-upgrade-floor-empty-");
 
     await expect(prepareSqliteUpgrade({ dataDir, appVersion: "3.4.0" })).resolves.toEqual({
       kind: "fresh-install",
