@@ -705,58 +705,109 @@ async fn expired_bootstrap_is_denied_by_real_listener() {
     runtime.shutdown().await;
 }
 
+// One kill-to-Ready cycle: stop and reap, backoff (at most 4s here), the respawn
+// hash (up to 20s on an idle macOS runner) and the child's 30s readiness probe.
+// The test pinned to one CPU beside two busy loops still finishes each cycle in
+// under this.
+const CRASH_CYCLE_DEADLINE: Duration = Duration::from_secs(150);
+
+/// Waits until `done` accepts the status. If the supervisor stops, or the
+/// deadline passes, it panics with every status it saw.
+async fn await_status(
+    state: &mut tokio::sync::watch::Receiver<CoreStatus>,
+    deadline: tokio::time::Instant,
+    what: &str,
+    done: impl Fn(&CoreStatus) -> bool,
+) -> CoreStatus {
+    let start = tokio::time::Instant::now();
+    let mut seen = Vec::new();
+    loop {
+        let current = state.borrow_and_update().clone();
+        seen.push(format!("{:.1}s {current:?}", start.elapsed().as_secs_f64()));
+        if done(&current) {
+            return current;
+        }
+        if matches!(current, CoreStatus::Stopped | CoreStatus::Failed) {
+            panic!("supervisor stopped before {what}; saw {seen:?}");
+        }
+        match tokio::time::timeout_at(deadline, state.changed()).await {
+            Ok(changed) => changed.unwrap(),
+            Err(_) => panic!("timed out waiting for {what}; saw {seen:?}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn crash_guard_stops_after_five_failures_and_recovers_explicitly() {
     let data = std::env::temp_dir().join(format!(
         "pp-guard-m0-{}",
         hex::encode(rand::random::<[u8; 8]>())
     ));
-    let runtime = CoreRuntime::start(launch(data)).await.unwrap();
+    // Five slow cycles on a loaded runner can span more than the 120s production
+    // window, which would forget the first crash. This test counts crashes, so
+    // keep all five in the window.
+    let runtime = CoreRuntime::start_with_compat_config(
+        launch(data),
+        SupervisorConfig {
+            crash_guard_window: 5 * CRASH_CYCLE_DEADLINE,
+            ..SupervisorConfig::default()
+        },
+    )
+    .await
+    .unwrap();
     let handle = runtime.handle();
     assert!(handle.recover_compat().await.is_err());
     let mut state = handle.subscribe();
     let mut prior_pid = 0;
+    let mut cycle_secs = Vec::new();
     for attempt in 0..5 {
-        let pid = loop {
-            let current = state.borrow().clone();
-            if let CoreStatus::Ready { pid, .. } = current
-                && pid != prior_pid
-            {
-                break pid;
-            }
-            tokio::time::timeout(RESPAWN_READY_FUSE, state.changed())
-                .await
-                .unwrap()
-                .unwrap();
+        let cycle_start = tokio::time::Instant::now();
+        let deadline = cycle_start + CRASH_CYCLE_DEADLINE;
+        let CoreStatus::Ready { pid, .. } = await_status(
+            &mut state,
+            deadline,
+            &format!("respawn {attempt} Ready"),
+            |current| {
+                assert!(
+                    !matches!(current, CoreStatus::Guarded),
+                    "crash guard tripped before kill {attempt}"
+                );
+                matches!(current, CoreStatus::Ready { pid, .. } if *pid != prior_pid)
+            },
+        )
+        .await
+        else {
+            unreachable!()
         };
         prior_pid = pid;
         assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
-        loop {
-            let current = state.borrow().clone();
-            if attempt == 4 && matches!(current, CoreStatus::Guarded) {
-                break;
-            }
-            if attempt < 4 && matches!(current, CoreStatus::Backoff { .. } | CoreStatus::Starting) {
-                break;
-            }
-            tokio::time::timeout(Duration::from_secs(20), state.changed())
-                .await
-                .unwrap()
-                .unwrap();
-        }
+        await_status(
+            &mut state,
+            deadline,
+            &format!("crash {attempt} handled"),
+            |current| match current {
+                CoreStatus::Guarded => attempt == 4,
+                CoreStatus::Backoff { .. } | CoreStatus::Starting => attempt < 4,
+                _ => false,
+            },
+        )
+        .await;
+        cycle_secs.push(cycle_start.elapsed().as_secs_f64());
     }
     assert!(matches!(*state.borrow(), CoreStatus::Guarded));
     handle.recover_compat().await.unwrap();
-    loop {
-        if matches!(*state.borrow(), CoreStatus::Ready { .. }) {
-            break;
-        }
-        tokio::time::timeout(RESPAWN_READY_FUSE, state.changed())
-            .await
-            .unwrap()
-            .unwrap();
-    }
+    await_status(
+        &mut state,
+        tokio::time::Instant::now() + CRASH_CYCLE_DEADLINE,
+        "Ready after recovery",
+        |current| matches!(current, CoreStatus::Ready { .. }),
+    )
+    .await;
     runtime.shutdown().await;
+    println!(
+        "{}",
+        serde_json::json!({"case":"crash_guard", "cycle_secs":cycle_secs, "deadline_secs":CRASH_CYCLE_DEADLINE.as_secs()})
+    );
 }
 
 fn temporary(case: &str) -> PathBuf {
