@@ -39,6 +39,7 @@ import {
 } from "./middleware/tenant-context.js";
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
+import { rustOwnedNodeParticipants } from "./ownership/operation-cutover.js";
 import { beginSourceSyncAdmission } from "./ownership/source-sync-admission.js";
 import { dirname, join, resolve } from "node:path";
 import { isBrowserDocumentNavigation, isSpaClientPath } from "./lib/spa-nav.js";
@@ -412,8 +413,14 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
       sqlite = (ports.db as SelfHostDbStore).sqlite ?? null;
     }
 
+    // Rust owns a fenced operation's worker and every route alias; Node starts neither.
+    const rustOwned = rustOwnedNodeParticipants(config.dataDir);
     let profileSyncHandle: ManagedProfileSyncHandle | null = null;
-    if (config.deployMode === "self-host" && !config.multiUser) {
+    if (
+      config.deployMode === "self-host" &&
+      !config.multiUser &&
+      !rustOwned.has("worker.startManagedProfileSync")
+    ) {
       const { startManagedProfileSync } = await import("./services/profile-sync-manager.js");
       const { broadcastProfileSync, registerProfileSyncWebSocket } = await import(
         "./services/profile-sync-broadcast.js"

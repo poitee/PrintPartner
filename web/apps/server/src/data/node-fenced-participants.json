@@ -1,0 +1,4 @@
+{
+  "schema": "pp-node-fenced-participants-v1",
+  "participants": ["worker.startManagedProfileSync"]
+}
