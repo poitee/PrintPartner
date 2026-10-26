@@ -4,7 +4,7 @@ use crate::loopback::{
 };
 use anyhow::Result;
 use axum::{
-    Router,
+    Extension, Router,
     body::to_bytes,
     extract::{Path, State},
     http::{Method, StatusCode, header},
@@ -102,10 +102,30 @@ impl Drop for Cancellation {
     }
 }
 
+/// Which Plan summary shape a mount answers with. Node's `/api/v1` keeps the
+/// legacy `remaining_units`/`total_units` fields and refuses Plans whose
+/// accepted progress is unavailable; `/` and `/api/v2` send `accepted_progress`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SummaryContract {
+    Accepted,
+    LegacyV1,
+}
+
+impl SummaryContract {
+    fn of(request: &axum::extract::Request) -> Self {
+        request
+            .extensions()
+            .get::<Self>()
+            .copied()
+            .unwrap_or(Self::Accepted)
+    }
+}
+
 /// Mounts Plan list/detail GET+HEAD, create/delete, layer list/mutate, touch,
 /// kit-manifest ReadKit plus SaveKit (`PUT`), and plan-manifest-builder ReadBuilder
 /// at `/`, `/api/v1`, and `/api/v2` when `PP_DESKTOP_REBUILD` was exactly `1` or
-/// `true`. Otherwise mounts nothing. Jobs stay unregistered.
+/// `true`. Otherwise mounts nothing. Jobs stay unregistered. `/api/v1` answers
+/// with the legacy Plan summary (see [`SummaryContract`]).
 pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -136,7 +156,10 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
         );
     Router::new()
         .merge(routes.clone())
-        .nest("/api/v1", routes.clone())
+        .nest(
+            "/api/v1",
+            routes.clone().layer(Extension(SummaryContract::LegacyV1)),
+        )
         .nest("/api/v2", routes)
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
@@ -191,6 +214,7 @@ async fn create(State(app): State<App>, request: axum::extract::Request) -> Resp
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     let path = request.uri().path().to_owned();
+    let contract = SummaryContract::of(&request);
     let limit = app.config.body_limit;
     let bytes = match to_bytes(request.into_body(), limit).await {
         Ok(bytes) => bytes,
@@ -200,10 +224,21 @@ async fn create(State(app): State<App>, request: axum::extract::Request) -> Resp
         Ok(body) => body,
         Err(error) => {
             let message = error.to_string();
-            let detail = ["Profile name is required", "Profile name is too long"]
-                .into_iter()
-                .find(|known| message.contains(known))
-                .unwrap_or("Request is invalid");
+            // Node reads `String(body.name ?? "")`, so an object without a
+            // name, or with a null one, is a blank name.
+            let unnamed = matches!(
+                serde_json::from_slice::<serde_json::Value>(&bytes),
+                Ok(serde_json::Value::Object(fields))
+                    if fields.get("name").is_none_or(serde_json::Value::is_null)
+            );
+            let detail = if unnamed {
+                "Profile name is required"
+            } else {
+                ["Profile name is required", "Profile name is too long"]
+                    .into_iter()
+                    .find(|known| message.contains(known))
+                    .unwrap_or("Request is invalid")
+            };
             return failure(StatusCode::BAD_REQUEST, detail);
         }
     };
@@ -212,6 +247,7 @@ async fn create(State(app): State<App>, request: axum::extract::Request) -> Resp
         presented,
         Method::POST,
         path,
+        contract,
         BuildCommand::Create {
             name: body.name,
             base_source: body.base_project_id,
@@ -336,7 +372,16 @@ async fn attachment(
         Ok(body) => body,
         Err(_) => return failure(StatusCode::BAD_REQUEST, "Request is invalid"),
     };
-    run(app, presented, method, path, command(body.project_id)).await
+    let contract = SummaryContract::Accepted;
+    run(
+        app,
+        presented,
+        method,
+        path,
+        contract,
+        command(body.project_id),
+    )
+    .await
 }
 
 fn parse_build_id(id: &str) -> Option<PositiveId> {
@@ -355,7 +400,8 @@ pub(super) async fn execute(
     };
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
-    run(app, presented, method, path, command).await
+    let contract = SummaryContract::of(&request);
+    run(app, presented, method, path, contract, command).await
 }
 
 pub(super) async fn run(
@@ -363,6 +409,7 @@ pub(super) async fn run(
     presented: PresentedCredential,
     method: Method,
     path: String,
+    contract: SummaryContract,
     command: BuildCommand,
 ) -> Response {
     let Ok(permit) = app.waiters.clone().try_acquire_owned() else {
@@ -382,7 +429,7 @@ pub(super) async fn run(
     })
     .await
     {
-        Ok(Ok(outcome)) => present(&method, &path, outcome),
+        Ok(Ok(outcome)) => present(&method, &path, contract, outcome),
         Ok(Err(error)) => domain_error(error),
         Err(_) => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -391,24 +438,49 @@ pub(super) async fn run(
     }
 }
 
-fn present(method: &Method, path: &str, outcome: BuildOutcome) -> Response {
+fn present(
+    method: &Method,
+    path: &str,
+    contract: SummaryContract,
+    outcome: BuildOutcome,
+) -> Response {
     let head = *method == Method::HEAD;
+    let summary = |value| summary_body(contract, value);
     match outcome {
-        BuildOutcome::Listed { profiles } => json_response(
-            StatusCode::OK,
-            &json!({"profiles": profiles.into_iter().map(profile_summary).collect::<Vec<_>>()}),
-            head,
-        ),
+        BuildOutcome::Listed { profiles } => {
+            // Like Node, an integrity failure on any Plan outranks the other
+            // refusals, wherever it appears in the list.
+            let (profiles, refusals): (Vec<_>, Vec<_>) =
+                profiles.into_iter().map(summary).partition(Result::is_ok);
+            let refusals: Vec<Refusal> = refusals.into_iter().filter_map(Result::err).collect();
+            if refusals.contains(&Refusal::Encode) {
+                return encode_unavailable();
+            }
+            if refusals.contains(&Refusal::Integrity) {
+                return Refusal::Integrity.response();
+            }
+            if !refusals.is_empty() {
+                return failure(
+                    StatusCode::CONFLICT,
+                    "Accepted Plan progress is unavailable for one or more Plans",
+                );
+            }
+            let profiles: Vec<_> = profiles.into_iter().filter_map(Result::ok).collect();
+            json_response(StatusCode::OK, &json!({"profiles": profiles}), head)
+        }
         BuildOutcome::Read { profile: value } | BuildOutcome::Touched { profile: value } => {
-            json_response(StatusCode::OK, &profile_summary(*value), head)
+            match summary(*value) {
+                Ok(body) => json_response(StatusCode::OK, &body, head),
+                Err(refusal) => refusal.response(),
+            }
         }
         BuildOutcome::Created {
             profile: value,
             layers,
         } => {
-            let mut body = match serde_json::to_value(profile_summary(*value)) {
-                Ok(value) => value,
-                Err(_) => return encode_unavailable(),
+            let mut body = match summary(*value) {
+                Ok(body) => body,
+                Err(refusal) => return refusal.response(),
             };
             body["layers"] = json!(layers.into_iter().map(layer).collect::<Vec<_>>());
             json_response(StatusCode::OK, &body, false)
@@ -449,6 +521,81 @@ fn present(method: &Method, path: &str, outcome: BuildOutcome) -> Response {
             "Build service unavailable",
         ),
     }
+}
+
+/// Why the legacy v1 contract cannot present a Plan whose accepted progress
+/// is unavailable.
+#[derive(Debug, PartialEq, Eq)]
+enum Refusal {
+    Integrity,
+    CompatibilityDirty,
+    Uninitialized,
+    ConcurrentUpdate,
+    /// The summary did not serialize; not a progress state.
+    Encode,
+}
+
+impl Refusal {
+    fn response(self) -> Response {
+        match self {
+            Self::Integrity => failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Accepted Plan data is inconsistent",
+            ),
+            Self::CompatibilityDirty => failure(
+                StatusCode::CONFLICT,
+                "Accepted Plan requires compatibility repair",
+            ),
+            Self::Uninitialized => failure(
+                StatusCode::CONFLICT,
+                "Accepted Plan operational state is not initialized",
+            ),
+            Self::ConcurrentUpdate => failure(
+                StatusCode::CONFLICT,
+                "Accepted Plan changed; reload and retry",
+            ),
+            Self::Encode => encode_unavailable(),
+        }
+    }
+}
+
+/// One Plan summary in `contract`'s shape, as Node's `presentProfile` builds it.
+fn summary_body(
+    contract: SummaryContract,
+    value: pp_storage::build_graph::ProfileSummary,
+) -> Result<serde_json::Value, Refusal> {
+    use pp_storage::build_graph::wire::{
+        AcceptedProgressSummary, AcceptedProgressUnavailableReason,
+    };
+    let summary = profile_summary(value);
+    let units = match (&contract, &summary.accepted_progress) {
+        (SummaryContract::Accepted, _) => None,
+        (
+            SummaryContract::LegacyV1,
+            AcceptedProgressSummary::Ready {
+                total_units,
+                remaining_units,
+            },
+        ) => Some((*remaining_units, *total_units)),
+        (SummaryContract::LegacyV1, AcceptedProgressSummary::Empty) => Some((0, 0)),
+        (SummaryContract::LegacyV1, AcceptedProgressSummary::Unavailable { reason }) => {
+            return Err(match reason {
+                AcceptedProgressUnavailableReason::Integrity => Refusal::Integrity,
+                AcceptedProgressUnavailableReason::CompatibilityDirty => {
+                    Refusal::CompatibilityDirty
+                }
+                AcceptedProgressUnavailableReason::Uninitialized => Refusal::Uninitialized,
+                AcceptedProgressUnavailableReason::ConcurrentUpdate => Refusal::ConcurrentUpdate,
+            });
+        }
+    };
+    let mut body = serde_json::to_value(summary).map_err(|_| Refusal::Encode)?;
+    if let (Some((remaining, total)), Some(fields)) = (units, body.as_object_mut()) {
+        fields.remove("accepted_progress");
+        fields.insert("remaining_units".into(), json!(remaining));
+        fields.insert("total_units".into(), json!(total));
+    }
+    Ok(body)
 }
 
 fn domain_error(error: anyhow::Error) -> Response {
@@ -639,5 +786,126 @@ mod tests {
             })
         );
         assert!(wire.get("layers").is_none());
+    }
+
+    fn plan(id: i64, progress: AcceptedProgress) -> DomainSummary {
+        DomainSummary {
+            id,
+            name: format!("Plan {id}"),
+            order_number: None,
+            special_request: None,
+            part_count: 0,
+            accepted_progress: progress,
+            build_stale: false,
+            freshness: DomainFreshness::Unavailable {
+                code: "accepted_inputs".into(),
+            },
+            archived_at: None,
+            last_used_at: None,
+        }
+    }
+
+    async fn answer(contract: SummaryContract, outcome: BuildOutcome) -> (u16, serde_json::Value) {
+        let response = present(&Method::GET, "/plans", contract, outcome);
+        let status = response.status().as_u16();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// Node's legacy v1 projection (`toLegacyProfileSummary` and
+    /// `sendLegacyFailure` in routes/plans.ts) for each accepted progress state.
+    #[tokio::test]
+    async fn legacy_v1_summaries_match_node_projection_and_refusals() {
+        use AcceptedProgressUnavailable::{CompatibilityDirty, Integrity, Uninitialized};
+        let ready = || {
+            plan(
+                1,
+                AcceptedProgress::Ready {
+                    total_units: 5,
+                    remaining_units: 2,
+                },
+            )
+        };
+        let read = |value| BuildOutcome::Read {
+            profile: Box::new(value),
+        };
+        let (status, body) = answer(SummaryContract::LegacyV1, read(ready())).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            (&body["remaining_units"], &body["total_units"]),
+            (&json!(2), &json!(5))
+        );
+        assert!(body.get("accepted_progress").is_none());
+        let (_, accepted) = answer(SummaryContract::Accepted, read(ready())).await;
+        assert_eq!(
+            accepted["accepted_progress"],
+            json!({"kind": "ready", "total_units": 5, "remaining_units": 2})
+        );
+
+        for (reason, status, detail) in [
+            (Integrity, 500, "Accepted Plan data is inconsistent"),
+            (
+                CompatibilityDirty,
+                409,
+                "Accepted Plan requires compatibility repair",
+            ),
+            (
+                Uninitialized,
+                409,
+                "Accepted Plan operational state is not initialized",
+            ),
+        ] {
+            let value = plan(2, AcceptedProgress::Unavailable(reason));
+            assert_eq!(
+                answer(SummaryContract::LegacyV1, read(value)).await,
+                (status, json!({"detail": detail}))
+            );
+        }
+
+        // An integrity failure anywhere in the list outranks an earlier
+        // unavailable Plan, as in Node's preflight.
+        let listed = |progress: Vec<AcceptedProgress>| BuildOutcome::Listed {
+            profiles: progress
+                .into_iter()
+                .enumerate()
+                .map(|(index, progress)| plan(index as i64 + 1, progress))
+                .collect(),
+        };
+        assert_eq!(
+            answer(
+                SummaryContract::LegacyV1,
+                listed(vec![
+                    AcceptedProgress::Empty,
+                    AcceptedProgress::Unavailable(CompatibilityDirty),
+                    AcceptedProgress::Unavailable(Integrity),
+                ])
+            )
+            .await,
+            (500, json!({"detail": "Accepted Plan data is inconsistent"}))
+        );
+        assert_eq!(
+            answer(
+                SummaryContract::LegacyV1,
+                listed(vec![
+                    AcceptedProgress::Empty,
+                    AcceptedProgress::Unavailable(Uninitialized),
+                ])
+            )
+            .await,
+            (
+                409,
+                json!({"detail": "Accepted Plan progress is unavailable for one or more Plans"})
+            )
+        );
+        let (status, body) = answer(
+            SummaryContract::Accepted,
+            listed(vec![AcceptedProgress::Unavailable(Integrity)]),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            body["profiles"][0]["accepted_progress"],
+            json!({"kind": "unavailable", "reason": "integrity"})
+        );
     }
 }

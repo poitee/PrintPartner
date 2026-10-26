@@ -62,6 +62,7 @@ pub(super) async fn save_kit(
         presented,
         Method::PUT,
         path,
+        super::http::SummaryContract::Accepted,
         BuildCommand::Manifest(ManifestOptionsCommand::SaveKit {
             build,
             request: bytes.to_vec(),
