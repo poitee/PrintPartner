@@ -15,6 +15,7 @@ workflow from the PR merge ref. An author can replace its lint steps with a
 successful command while preserving the job name `Lint Evidence block`.
 Checking out the default branch protects the checker files that an unchanged
 workflow executes. It does not protect the workflow definition.
+PRs opened by `dependabot[bot]` skip the Evidence lint step; the job still reports success.
 
 The current workflow checks out the repository default branch with persisted
 credentials disabled. It uses pinned actions, Node 22.23.3, and read-only

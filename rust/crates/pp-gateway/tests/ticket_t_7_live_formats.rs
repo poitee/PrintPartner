@@ -76,7 +76,16 @@ fn declared_versions_match_the_node_and_rust_sources() {
         include_str!("../../../../web/apps/server/src/services/path-hints.ts"),
         "document.version !== ",
     );
+    let node_thumbnails = number_after(
+        include_str!("../../../../web/packages/contracts/src/accepted-media.ts"),
+        "export const THUMBNAIL_RENDERER_VERSION = \"",
+    );
+    let rust_thumbnail_reader = number_after(
+        include_str!("../../pp-core/src/review_observations.rs"),
+        "\"accepted-thumbnail-v",
+    );
     assert_eq!((node_schema, rust_schema), (34, 35));
+    assert_eq!((node_thumbnails, rust_thumbnail_reader), (3, 3));
     assert_eq!((node_snapshot, rust_snapshot), (1, 1));
     assert_eq!(node_path_hints, 1);
     assert_eq!(
@@ -88,6 +97,9 @@ fn declared_versions_match_the_node_and_rust_sources() {
             "kit-catalog": {"node_reads": 1, "rust_writes": "none"},
             "path-hints": {"node_reads": node_path_hints, "rust_writes": "none"},
             "community-manifests": {"node_reads": 1, "rust_writes": "none"},
+            "accepted-thumbnails": {"node_reads": node_thumbnails, "rust_writes": "none"},
+            "custom-filaments": {"node_reads": 1, "rust_writes": "none"},
+            "filament-catalog": {"node_reads": 1, "rust_writes": "none"},
         })
     );
 }
@@ -297,6 +309,9 @@ fn no_writer_declarations_have_family_literal_rules() {
         ("kit-catalog", "kit-catalog"),
         ("path-hints", "path-hints"),
         ("community-manifests", "manifests"),
+        ("accepted-thumbnails", "thumbs"),
+        ("custom-filaments", "custom_filaments"),
+        ("filament-catalog", "ambrosia_fallback"),
     ]);
     let manifest = manifest();
     let no_writers: std::collections::BTreeSet<_> = manifest["live_formats"]
@@ -328,22 +343,43 @@ fn no_writer_declarations_have_family_literal_rules() {
 
 #[test]
 fn read_only_formats_require_explicit_none_and_fail_closed_otherwise() {
-    for (format, participant, operation) in [
+    for (format, node_reads, participant, operation) in [
         (
             "kit-catalog",
+            1,
             "tool.get_kit_catalog",
             "tool.get_kit_catalog",
         ),
-        ("source-covers", "job.sync", "source.sync"),
+        ("source-covers", 1, "job.sync", "source.sync"),
         (
             "path-hints",
+            1,
             "tool.get_plan_option_groups",
             "tool.get_plan_option_groups",
         ),
         (
             "community-manifests",
+            1,
             "tool.get_plan_option_groups",
             "tool.get_plan_option_groups",
+        ),
+        (
+            "accepted-thumbnails",
+            3,
+            "tool.get_plan_review",
+            "tool.get_plan_review",
+        ),
+        (
+            "custom-filaments",
+            1,
+            "tool.get_plan_review",
+            "tool.get_plan_review",
+        ),
+        (
+            "filament-catalog",
+            1,
+            "tool.get_plan_review",
+            "tool.get_plan_review",
         ),
     ] {
         let mut value = manifest();
@@ -355,14 +391,14 @@ fn read_only_formats_require_explicit_none_and_fail_closed_otherwise() {
             index.resources_for(participant)
         );
 
-        for (writer, rust_writes) in [(Value::Null, None), (json!(2), Some(2))] {
-            value["live_formats"][format]["rust_writes"] = writer.clone();
+        for rust_writes in [None, Some(node_reads + 1)] {
+            value["live_formats"][format]["rust_writes"] = json!(rust_writes);
             assert_eq!(
                 admit(&value).unwrap().admit_rollback(participant),
                 Err(AdmissionError::IncompatibleLiveFormat {
                     operation: operation.into(),
                     format: format.into(),
-                    node_reads: 1,
+                    node_reads,
                     rust_writes,
                 })
             );
