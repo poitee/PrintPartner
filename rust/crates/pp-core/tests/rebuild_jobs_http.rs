@@ -11,8 +11,8 @@ mod without_feature {
 
 #[cfg(feature = "desktop_rebuild")]
 mod with_feature {
+    use pp_core::DesktopRebuild;
     use pp_core::rebuild_api::{job_router, router};
-    use pp_core::{DesktopRebuild, ShutdownGate};
     use pp_storage::{
         Limits, WriterOwner,
         auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, Secret, SessionTenantPolicy},
@@ -307,17 +307,11 @@ mod with_feature {
         let rows = job_rows(&directory);
         let mut socket = open_socket(&server.origin, &format!("/ws/jobs/{job_id}"), &cookie).await;
         assert_eq!(expect_text(&mut socket).await["job_id"], job_id);
-        let gate = ShutdownGate::new();
-        let tracked = gate.track().expect("live socket is tracked work");
         owner.shutdown().unwrap();
         assert_eq!(
             expect_close(&mut socket).await,
             (1011, "Job stream unavailable".to_owned())
         );
-        drop(tracked);
-        assert!(gate.wait_idle(Duration::from_secs(2)).await);
-        gate.reject_new();
-        assert!(gate.track().is_err());
         assert_eq!(job_rows(&directory), rows);
         server.stop().await;
         std::fs::remove_dir_all(directory).unwrap();
