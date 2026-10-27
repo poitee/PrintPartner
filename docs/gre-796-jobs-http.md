@@ -4,8 +4,9 @@ With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 `/jobs/{id}` and `/api/v1/jobs/{id}` mount only when the stored
 `PP_DESKTOP_REBUILD` value is exactly `1` or `true`. Otherwise those routes
 answer 404. The bounded list at `/api/v1/jobs` stays as in GRE-795
-(`docs/gre-795-jobs-http.md`). Mutation routes and `/ws/jobs/{id}` stay
-unregistered (later D25 children). Plan HTTP remains as in GRE-791–GRE-794.
+(`docs/gre-795-jobs-http.md`). Mutation routes stay unregistered. Job
+WebSocket admission is GRE-798 (`docs/gre-798-jobs-http.md`). Plan HTTP
+remains as in GRE-791–GRE-794.
 
 Admission matches GRE-791 (loopback Host/Origin, session cookie or API key with
 the configured tenant) through the shared `loopback` module. Each admitted
