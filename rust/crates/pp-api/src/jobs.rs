@@ -1,8 +1,10 @@
-//! Gated HTTP list and read-one for retained jobs (`GET`/`HEAD`).
+//! Gated HTTP list, read-one, and job WebSocket admission (`GET`/`HEAD`).
 //!
 //! Two serializer permits bound JSON construction. A successful response keeps
 //! its permit until the body is sent or the client drops the connection.
 //! A read or encode failure drops the permit before the error response returns.
+//! `/ws/jobs/{id}` admits the caller with `read_public` before `subscribe`.
+//! `HEAD` on that route admits the same way and does not subscribe.
 use crate::loopback::{
     LoopbackOrigin, PresentedCredential, admit, principal, rebuild_flag_enabled,
     require_api_key_tenant,
@@ -11,7 +13,10 @@ use anyhow::Result;
 use axum::{
     Router,
     body::{Body, Bytes},
-    extract::{Path, State},
+    extract::{
+        Path, State,
+        ws::{WebSocket, WebSocketUpgrade},
+    },
     http::{Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -20,8 +25,8 @@ use axum::{
 use pp_storage::{
     auth::{AuthFailure, Secret},
     jobs::{
-        AtomicJobClient, Credential, JobAccessFailure, JobSnapshot, LegacyListFilter,
-        LegacyProfileFilter, LegacyStatusFilter, RetainedJobs,
+        AtomicJobClient, Credential, JobAccessFailure, JobSnapshot, JobSubscription,
+        LegacyListFilter, LegacyProfileFilter, LegacyStatusFilter, RetainedJobs,
     },
 };
 use serde_json::json;
@@ -97,9 +102,10 @@ impl Drop for Cancellation {
     }
 }
 
-/// Mounts `GET`/`HEAD` `/api/v1/jobs` plus read-one aliases `/jobs/{id}` and
-/// `/api/v1/jobs/{id}` when `PP_DESKTOP_REBUILD` was exactly `1` or `true`.
-/// Otherwise mounts nothing. Mutation routes and WS stay unregistered.
+/// Mounts `GET`/`HEAD` `/api/v1/jobs`, read-one aliases `/jobs/{id}` and
+/// `/api/v1/jobs/{id}`, and `/ws/jobs/{id}` when `PP_DESKTOP_REBUILD` was
+/// exactly `1` or `true`. Otherwise mounts nothing. Mutation routes stay
+/// unregistered.
 pub fn jobs_router(config: JobsHttpConfig, client: AtomicJobClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -114,6 +120,7 @@ pub fn jobs_router(config: JobsHttpConfig, client: AtomicJobClient) -> Router {
         .route("/api/v1/jobs", get(list))
         .route("/jobs/{id}", get(detail))
         .route("/api/v1/jobs/{id}", get(detail))
+        .route("/ws/jobs/{id}", get(stream).head(stream_head))
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -202,6 +209,97 @@ async fn detail(
         .await,
         head,
     )
+}
+
+/// Upgrade `/ws/jobs/{id}` only after `authenticate` accepts the caller.
+/// The socket stays open and sends no snapshots; GRE-799 pumps those frames.
+async fn stream(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+    if let Err(response) = authenticate(&app, presented.clone(), id.clone()).await {
+        return *response;
+    }
+    let client = app.client.clone();
+    let wait = app.config.wait;
+    let cancellation = Cancellation::new();
+    let cancelled = cancellation.0.clone();
+    let subscription = match tokio::task::spawn_blocking(move || {
+        client.subscribe(job_credential(presented), id, &cancelled, wait)
+    })
+    .await
+    {
+        Ok(Ok(subscription)) => subscription,
+        Ok(Err(error)) => return domain_error(error),
+        Err(_) => {
+            return failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Jobs service unavailable",
+            );
+        }
+    };
+    ws.on_upgrade(move |socket| hold_subscription(socket, subscription))
+}
+
+/// `HEAD /ws/jobs/{id}` runs the same admission as the upgrade and returns
+/// an empty body. It does not call `subscribe`.
+async fn stream_head(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
+        return failure(StatusCode::UNAUTHORIZED, "Authentication required");
+    };
+    match authenticate(&app, presented, id).await {
+        Ok(()) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_LENGTH, 0)
+            .body(Body::empty())
+            .unwrap_or_else(|_| {
+                failure(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Jobs service unavailable",
+                )
+            }),
+        Err(response) => *response,
+    }
+}
+
+/// Confirms the presented credential can read this job. `read_public` resolves
+/// the session or routed key, including expiry and tenant, and does not
+/// register a stream. Callers subscribe only after this returns `Ok`.
+async fn authenticate(
+    app: &App,
+    presented: PresentedCredential,
+    id: String,
+) -> Result<(), Box<Response>> {
+    let client = app.client.clone();
+    let wait = app.config.wait;
+    let cancellation = Cancellation::new();
+    let cancelled = cancellation.0.clone();
+    match tokio::task::spawn_blocking(move || {
+        client.read_public(job_credential(presented), id, &cancelled, wait)
+    })
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(Box::new(domain_error(error))),
+        Err(_) => Err(Box::new(failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Jobs service unavailable",
+        ))),
+    }
+}
+
+async fn hold_subscription(mut socket: WebSocket, subscription: JobSubscription) {
+    let _subscription = subscription;
+    while let Some(Ok(_)) = socket.recv().await {}
 }
 
 /// A joined read error already dropped its permit inside the blocking task.

@@ -175,7 +175,12 @@ async fn feature_off_404() {
     let snapshot = files(&directory);
     let before = job_rows(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
-    for path in ["/api/v1/jobs", "/api/v1/jobs/missing", "/jobs/missing"] {
+    for path in [
+        "/api/v1/jobs",
+        "/api/v1/jobs/missing",
+        "/jobs/missing",
+        "/ws/jobs/missing",
+    ] {
         let (status, body) = server.send(Method::GET, path, &[]).await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("jobs").is_none() && body.get("job_id").is_none());
@@ -227,6 +232,18 @@ async fn job_response_refusal_releases_permit() {
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
 async fn retained_job_response_preserves_public_json() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_rejects_invalid_origin_or_principal() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_head_does_not_subscribe() {
     feature_off_404().await;
 }
 
@@ -1085,9 +1102,9 @@ async fn job_detail_api_key_matches_cookie() {
     shutdown(owner, directory);
 }
 
-/// Mutation routes and `/ws/jobs/{id}` stay unregistered: `POST` answers 405 on
-/// both aliases with an empty body, and a full WS upgrade handshake to
-/// `/ws/jobs/{id}` answers 404. No row is created or changed.
+/// Mutation routes stay unregistered: `POST` answers 405 on both aliases with
+/// an empty body. `/ws/jobs/{id}` is mounted, and a handshake with no session
+/// answers 401 before any subscription. No row is created or changed.
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn job_detail_mutations_and_ws_unregistered() {
@@ -1140,12 +1157,11 @@ async fn job_detail_mutations_and_ws_unregistered() {
         assert_eq!(response.bytes().await.unwrap().len(), 0, "{path}");
     }
 
-    // `/ws/jobs/{id}` is not mounted even with a full WS upgrade handshake.
+    // No session is refused in the guard, before subscribe.
     let ws = server
         .client
         .get(format!("{}/ws/jobs/{job_id}", server.origin))
         .header("Origin", &server.origin)
-        .header("Cookie", &cookie)
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
@@ -1153,7 +1169,11 @@ async fn job_detail_mutations_and_ws_unregistered() {
         .send()
         .await
         .unwrap();
-    assert_eq!(ws.status(), 404);
+    assert_eq!(ws.status(), 401);
+    assert_eq!(
+        ws.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"detail": "Authentication required"})
+    );
 
     // The same id still reads back over GET, so the 405 was method-only.
     let (status, body) = server
@@ -1445,6 +1465,266 @@ async fn retained_job_response_preserves_public_json() {
     assert_eq!(job_rows(&directory), before);
     server.stop().await;
     shutdown(owner, directory);
+}
+
+/// Wrong origin, wrong listener, missing credential, another tenant, and an
+/// expired session are refused before `subscribe`. Rows and files stay put.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_rejects_invalid_origin_or_principal() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-a@example.test").await;
+    let other = register(&bootstrap, "job-ws-b@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let path = format!("/ws/jobs/{job_id}");
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs.clone(),
+        ),
+    )
+    .await;
+    let bound = bind().await;
+    let mut wrong_listener = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup("http://127.0.0.1:1", "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+
+    for method in [Method::GET, Method::HEAD] {
+        let (status, body) =
+            ws_exchange(&server, &method, &path, "https://evil.test", Some(&cookie)).await;
+        assert_refusal(&method, status, &body, 403, "Invalid request origin");
+        let (status, body) = ws_exchange(
+            &wrong_listener,
+            &method,
+            &path,
+            &wrong_listener.origin,
+            Some(&cookie),
+        )
+        .await;
+        assert_refusal(&method, status, &body, 403, "Invalid request host");
+        let (status, body) = ws_exchange(&server, &method, &path, &server.origin, None).await;
+        assert_refusal(&method, status, &body, 401, "Authentication required");
+        let (status, body) =
+            ws_exchange(&server, &method, &path, &server.origin, Some(&other)).await;
+        assert_refusal(&method, status, &body, 404, "Job not found");
+    }
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+
+    expire_sessions(&directory);
+    let expired_files = files(&directory);
+    let expired_rows = job_rows(&directory);
+    for method in [Method::GET, Method::HEAD] {
+        let (status, body) =
+            ws_exchange(&server, &method, &path, &server.origin, Some(&cookie)).await;
+        assert_refusal(&method, status, &body, 401, "Authentication required");
+    }
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (expired_files, expired_rows)
+    );
+    server.stop().await;
+    wrong_listener.stop().await;
+    shutdown(owner, directory);
+}
+
+/// `HEAD` still answers when all 128 stream slots are held, so it did not
+/// subscribe. Dropping one slot lets a real `subscribe` through.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_head_does_not_subscribe() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+    use pp_storage::{
+        auth::Secret,
+        jobs::{Credential, JobSubscription},
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-head@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let path = format!("/ws/jobs/{job_id}");
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let cancelled = AtomicBool::new(false);
+    let mut held: Vec<JobSubscription> = Vec::new();
+    for _ in 0..128 {
+        held.push(
+            jobs.subscribe(
+                Credential::Session(Secret::new(token.clone())),
+                job_id.clone(),
+                &cancelled,
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+        );
+    }
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs.clone(),
+        ),
+    )
+    .await;
+    let head = server
+        .client
+        .request(Method::HEAD, format!("{}{path}", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head.status(), 200);
+    assert_eq!(head.bytes().await.unwrap().len(), 0);
+    let (status, body) = ws_exchange(
+        &server,
+        &Method::HEAD,
+        &format!("/ws/jobs/{job_id}-missing"),
+        &server.origin,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert!(body.get("job_id").is_none());
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+
+    held.pop();
+    jobs.subscribe(
+        Credential::Session(Secret::new(token)),
+        job_id,
+        &cancelled,
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn ws_exchange(
+    server: &Server,
+    method: &Method,
+    path: &str,
+    origin: &str,
+    cookie: Option<&str>,
+) -> (u16, serde_json::Value) {
+    let mut request = server
+        .client
+        .request(method.clone(), format!("{}{path}", server.origin))
+        .header("Origin", origin)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Sec-WebSocket-Version", "13");
+    if let Some(cookie) = cookie {
+        request = request.header("Cookie", cookie);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = response.bytes().await.unwrap();
+    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+/// reqwest drops the body of a HEAD response, so only GET carries `detail`.
+#[cfg(feature = "desktop_rebuild")]
+fn assert_refusal(
+    method: &Method,
+    status: u16,
+    body: &serde_json::Value,
+    expected: u16,
+    text: &str,
+) {
+    assert_eq!(status, expected, "{method} {text}");
+    if *method == Method::GET {
+        assert_eq!(
+            body.get("detail").and_then(serde_json::Value::as_str),
+            Some(text),
+            "{method}"
+        );
+    } else {
+        assert!(body.get("job_id").is_none(), "{method}");
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn expire_sessions(directory: &Path) {
+    let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(
+        db.execute(
+            "UPDATE sessions SET expires_at='2000-01-01T00:00:00.000Z'",
+            [],
+        )
+        .unwrap()
+            >= 1
+    );
 }
 
 #[test]

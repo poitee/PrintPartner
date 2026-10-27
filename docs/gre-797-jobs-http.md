@@ -3,7 +3,8 @@
 With the default-off `desktop_rebuild` feature compiled, job list and read-one
 keep the GRE-795 and GRE-796 routes. Those routes still mount only when the
 stored `PP_DESKTOP_REBUILD` value is exactly `1` or `true`. Otherwise they
-answer 404. Mutation routes and `/ws/jobs/{id}` stay unregistered.
+answer 404. Mutation routes stay unregistered. Job WebSocket admission is
+GRE-798 (`docs/gre-798-jobs-http.md`).
 
 Each admitted list or read-one takes one of two serializer permits before it
 reads storage or encodes JSON. A missing job or an encode failure drops that
