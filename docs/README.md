@@ -87,15 +87,6 @@ These pages describe the Node server that the Rust core replaces. Its multi-user
 - [Hosted tenant storage](hosted-storage.md)
 - [Single-process guarantees](architecture/background-work-guarantees.md): what one Node server process guarantees for the send queue and backup restore.
 
-## Agent workflows
-
-These describe how coding agents work in this repo. [Gate evidence](contributing/gate-evidence.md) covers the PR evidence rule; this index ships the longer guides.
-
-- [Autopilot](agents/autopilot.md)
-- [Domain docs](agents/domain.md)
-- [Issue tracker](agents/issue-tracker.md)
-- [Triage labels](agents/triage-labels.md)
-
 ## Examples
 
 - [References-only Build and Library sharing](reference-sharing.md)

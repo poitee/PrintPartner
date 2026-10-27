@@ -55,7 +55,7 @@ export function planStatusLabel(plan: {
 /**
  * Reads the Build list "Remaining" cell.
  *
- * The wording follows CONTEXT.md: a Build without an Accepted Plan has not
+ * The wording follows the domain model: a Build without an Accepted Plan has not
  * reached the acceptance checkpoint yet. "Not applied" described the old draft
  * mechanism, not anything the reader can act on.
  */
