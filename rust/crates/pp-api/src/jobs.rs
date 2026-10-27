@@ -1,4 +1,8 @@
 //! Gated HTTP list and read-one for retained jobs (`GET`/`HEAD`).
+//!
+//! Two serializer permits bound JSON construction. A successful response keeps
+//! its permit until the body is sent or the client drops the connection.
+//! A read or encode failure drops the permit before the error response returns.
 use crate::loopback::{
     LoopbackOrigin, PresentedCredential, admit, principal, rebuild_flag_enabled,
     require_api_key_tenant,
@@ -6,6 +10,7 @@ use crate::loopback::{
 use anyhow::Result;
 use axum::{
     Router,
+    body::{Body, Bytes},
     extract::{Path, State},
     http::{Method, StatusCode, header},
     middleware::{self, Next},
@@ -22,12 +27,15 @@ use pp_storage::{
 use serde_json::json;
 use std::{
     collections::HashMap,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    task::{Context, Poll},
     time::Duration,
 };
+use tokio::sync::OwnedSemaphorePermit;
 
 const SERIALIZERS: usize = 2;
 
@@ -155,20 +163,15 @@ async fn list(State(app): State<App>, request: axum::extract::Request) -> Respon
     let wait = app.config.wait;
     let cancellation = Cancellation::new();
     let cancelled = cancellation.0.clone();
-    match tokio::task::spawn_blocking(move || {
-        let jobs = client.list_retained(job_credential(presented), filter, &cancelled, wait)?;
-        let body = encode_jobs(&jobs)?;
-        Ok::<_, anyhow::Error>((body, permit))
-    })
-    .await
-    {
-        Ok(Ok((body, _permit))) => json_bytes(StatusCode::OK, body, head),
-        Ok(Err(error)) => domain_error(error),
-        Err(_) => failure(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Jobs service unavailable",
-        ),
-    }
+    finish_retained(
+        tokio::task::spawn_blocking(move || {
+            let jobs = client.list_retained(job_credential(presented), filter, &cancelled, wait)?;
+            let body = serialize_retained_list(&jobs)?;
+            Ok::<_, anyhow::Error>((body, permit))
+        })
+        .await,
+        head,
+    )
 }
 
 async fn detail(
@@ -190,14 +193,28 @@ async fn detail(
     let wait = app.config.wait;
     let cancellation = Cancellation::new();
     let cancelled = cancellation.0.clone();
-    match tokio::task::spawn_blocking(move || {
-        let job = client.read_public(job_credential(presented), id, &cancelled, wait)?;
-        let body = encode_job(&job)?;
-        Ok::<_, anyhow::Error>((body, permit))
-    })
-    .await
-    {
-        Ok(Ok((body, _permit))) => json_bytes(StatusCode::OK, body, head),
+    finish_retained(
+        tokio::task::spawn_blocking(move || {
+            let job = client.read_public(job_credential(presented), id, &cancelled, wait)?;
+            let body = serialize_retained(&job)?;
+            Ok::<_, anyhow::Error>((body, permit))
+        })
+        .await,
+        head,
+    )
+}
+
+/// A joined read error already dropped its permit inside the blocking task.
+/// A successful body keeps the permit until that body is dropped.
+fn finish_retained(
+    joined: std::result::Result<
+        Result<(Vec<u8>, OwnedSemaphorePermit), anyhow::Error>,
+        tokio::task::JoinError,
+    >,
+    head: bool,
+) -> Response {
+    match joined {
+        Ok(Ok((body, permit))) => retained_response(StatusCode::OK, body, head, permit),
         Ok(Err(error)) => domain_error(error),
         Err(_) => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -206,17 +223,68 @@ async fn detail(
     }
 }
 
-fn encode_jobs(jobs: &RetainedJobs) -> Result<Vec<u8>> {
+fn serialize_retained_list(jobs: &RetainedJobs) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&json!({ "jobs": &**jobs }))?)
 }
 
-/// Node's read-one returns the stored snapshot; only its list adds `updated_at`.
-fn encode_job(job: &JobSnapshot) -> Result<Vec<u8>> {
+/// Node's read-one returns the stored public snapshot. The list keeps
+/// `updated_at`; this read-one encoding removes it.
+fn serialize_retained(job: &JobSnapshot) -> Result<Vec<u8>> {
     let mut body = serde_json::to_value(job)?;
     if let Some(fields) = body.as_object_mut() {
         fields.remove("updated_at");
     }
     Ok(serde_json::to_vec(&body)?)
+}
+
+/// Holds a serializer permit until hyper finishes the body or the client drops it.
+struct RetainedBody {
+    inner: Body,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl http_body::Body for RetainedBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<std::result::Result<http_body::Frame<Bytes>, Self::Error>>> {
+        Pin::new(&mut self.inner).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+fn retained_response(
+    status: StatusCode,
+    body: Vec<u8>,
+    head: bool,
+    permit: OwnedSemaphorePermit,
+) -> Response {
+    let length = body.len();
+    let bytes = if head { Vec::new() } else { body };
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, length)
+        .body(Body::new(RetainedBody {
+            inner: Body::from(bytes),
+            _permit: permit,
+        }))
+        .unwrap_or_else(|_| {
+            failure(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Jobs service unavailable",
+            )
+        })
 }
 
 fn job_credential(presented: PresentedCredential) -> Credential {
@@ -325,21 +393,6 @@ fn domain_error(error: anyhow::Error) -> Response {
     )
 }
 
-fn json_bytes(status: StatusCode, body: Vec<u8>, head: bool) -> Response {
-    let length = body.len();
-    Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CONTENT_LENGTH, length)
-        .body(axum::body::Body::from(if head { Vec::new() } else { body }))
-        .unwrap_or_else(|_| {
-            failure(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Jobs service unavailable",
-            )
-        })
-}
-
 fn failure(status: StatusCode, detail: &str) -> Response {
     let body = serde_json::to_vec(&json!({ "detail": detail }))
         .unwrap_or_else(|_| br#"{"detail":"Jobs service unavailable"}"#.to_vec());
@@ -347,6 +400,26 @@ fn failure(status: StatusCode, detail: &str) -> Response {
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::CONTENT_LENGTH, body.len())
-        .body(axum::body::Body::from(body))
+        .body(Body::from(body))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_body_drop_releases_permit() {
+        let serializers = Arc::new(tokio::sync::Semaphore::new(1));
+        let Some(permit) = serializers.clone().try_acquire_owned().ok() else {
+            panic!("semaphore refused the only permit");
+        };
+        assert!(serializers.try_acquire().is_err());
+        let body = RetainedBody {
+            inner: Body::from(Vec::<u8>::new()),
+            _permit: permit,
+        };
+        drop(body);
+        assert!(serializers.try_acquire().is_ok());
+    }
 }

@@ -218,6 +218,18 @@ async fn job_detail_mutations_and_ws_unregistered() {
     feature_off_404().await;
 }
 
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_response_refusal_releases_permit() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn retained_job_response_preserves_public_json() {
+    feature_off_404().await;
+}
+
 #[cfg(feature = "desktop_rebuild")]
 fn policy() -> pp_storage::auth::AuthPolicy {
     use pp_storage::auth::*;
@@ -1249,6 +1261,188 @@ async fn job_detail_head_has_no_body_and_keeps_status() {
         (files(&directory), job_rows(&directory)),
         (snapshot, before)
     );
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Two refused reads must not stick the two serializer permits. The next read
+/// of the real job is 200, and rows stay unchanged.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_response_refusal_releases_permit() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-permit@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let headers = [("Cookie", cookie.as_str())];
+    for path in [
+        format!("/jobs/{job_id}-missing"),
+        format!("/api/v1/jobs/{job_id}-missing"),
+    ] {
+        let (status, body) = server.send(Method::GET, &path, &headers).await;
+        assert_eq!(status, 404, "{path}");
+        assert_eq!(body, serde_json::json!({"detail": "Job not found"}));
+    }
+    let (status, body) = server
+        .send(Method::GET, &format!("/jobs/{job_id}"), &[])
+        .await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        body,
+        serde_json::json!({"detail": "Authentication required"})
+    );
+    let (status, body) = server
+        .send(Method::GET, &format!("/api/v1/jobs/{job_id}"), &headers)
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["job_id"], job_id);
+    assert_eq!(body["status"], "done");
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Read-one JSON is the public snapshot: the completed result is present and
+/// `updated_at` is absent. The list keeps `updated_at` and the same result.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn retained_job_response_preserves_public_json() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+    use std::collections::BTreeSet;
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-public-json@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("true")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let headers = [("Cookie", cookie.as_str())];
+    let expected_result = serde_json::json!({
+        "checked": [],
+        "skipped": [],
+        "updates_available": 0,
+        "checked_count": 0
+    });
+    let public_keys: BTreeSet<&str> = [
+        "created_at",
+        "error",
+        "finished_at",
+        "job_id",
+        "kind",
+        "message",
+        "progress",
+        "result",
+        "status",
+    ]
+    .into_iter()
+    .collect();
+    for path in [format!("/jobs/{job_id}"), format!("/api/v1/jobs/{job_id}")] {
+        let (status, body) = server.send(Method::GET, &path, &headers).await;
+        assert_eq!(status, 200, "{path}");
+        let keys: BTreeSet<_> = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, public_keys, "{path}");
+        assert!(body.get("updated_at").is_none(), "{path}");
+        assert_eq!(body["job_id"], job_id, "{path}");
+        assert_eq!(body["kind"], "check-source-updates", "{path}");
+        assert_eq!(body["status"], "done", "{path}");
+        assert_eq!(body["message"], "Complete", "{path}");
+        assert_eq!(body["progress"], 100, "{path}");
+        assert_eq!(body["error"], serde_json::Value::Null, "{path}");
+        assert_eq!(body["result"], expected_result, "{path}");
+        assert!(body["created_at"].as_str().unwrap().contains('T'), "{path}");
+        assert!(
+            body["finished_at"].as_str().unwrap().contains('T'),
+            "{path}"
+        );
+    }
+    let (status, list) = server.send(Method::GET, "/api/v1/jobs", &headers).await;
+    assert_eq!(status, 200);
+    let listed = &list["jobs"][0];
+    assert_eq!(listed["result"], expected_result);
+    assert!(
+        listed
+            .get("updated_at")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains('T')
+    );
+    assert_eq!(job_rows(&directory), before);
     server.stop().await;
     shutdown(owner, directory);
 }
