@@ -25,12 +25,12 @@ export CARGO_TARGET_DIR=/persist/targets/gre-797-retained-job
 export CARGO_BUILD_JOBS=2
 cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --test jobs_http job_response_refusal_releases_permit
 cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --test jobs_http retained_job_response_preserves_public_json
-cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --lib retained_body_drop_releases_permit
+cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --lib jobs::tests
 cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --test jobs_http job_response_refusal_releases_permit
 cargo test -p pp-api --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --test jobs_http retained_job_response_preserves_public_json
 ```
 
 With the feature off, each of the two `jobs_http` filters runs 1 test, the
 404 stub. The permit unit test compiles only with `desktop_rebuild`. With the
-feature on, that test reports 1 passed, and each `jobs_http` filter reports 1
-passed.
+feature on, `jobs::tests` reports 2 passed, and each `jobs_http` filter
+reports 1 passed.

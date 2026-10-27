@@ -422,4 +422,23 @@ mod tests {
         drop(body);
         assert!(serializers.try_acquire().is_ok());
     }
+
+    #[test]
+    fn retained_response_holds_permit_until_drop() {
+        let serializers = Arc::new(tokio::sync::Semaphore::new(SERIALIZERS));
+        let Some(first) = serializers.clone().try_acquire_owned().ok() else {
+            panic!("first serializer permit was refused");
+        };
+        let Some(second) = serializers.clone().try_acquire_owned().ok() else {
+            panic!("second serializer permit was refused");
+        };
+        let response_a =
+            retained_response(StatusCode::OK, br#"{"ok":true}"#.to_vec(), false, first);
+        let response_b =
+            retained_response(StatusCode::OK, br#"{"ok":true}"#.to_vec(), false, second);
+        assert!(serializers.try_acquire().is_err());
+        drop(response_a);
+        assert!(serializers.try_acquire().is_ok());
+        drop(response_b);
+    }
 }
