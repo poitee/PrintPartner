@@ -24,6 +24,7 @@ import {
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "../queries/keys";
 import { usePlanDraftWorkspaceQuery } from "../queries/planDraft";
+import { usePlanReviewQuery } from "../queries/planReview";
 import { WORKING_PLAN_CHANGED_MESSAGE } from "../lib/workingPlanChanged";
 import {
   resetAuxiliarySaveIntentForTests,
@@ -191,11 +192,11 @@ vi.mock("./ProfileContext", () => ({
 }));
 
 vi.mock("../queries/planReview", () => ({
-  usePlanReviewQuery: () => ({
+  usePlanReviewQuery: vi.fn(() => ({
     data: acceptedReview,
     isLoading: false,
     error: null,
-  }),
+  })),
   usePatchPartMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartProgressMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartAssembledMutation: () => ({ mutateAsync: vi.fn() }),
@@ -344,6 +345,26 @@ beforeEach(() => {
       draft_id: 10,
       base: { revision_id: 4, plan_version: 2 },
     },
+  });
+});
+
+describe("PlanWorkspaceProvider workspace read selection", () => {
+  it("workspace_rebuild_read_keeps_revision_identity", async () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    expect(vi.mocked(usePlanReviewQuery)).toHaveBeenLastCalledWith(7, expect.objectContaining({
+      revisionId: savedWorkspace.draft.base.revision_id,
+    }));
+  });
+
+  it("workspace_flag_off_preserves_query_path", async () => {
+    healthQueryState.capabilities = [];
+    renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(vi.mocked(usePlanReviewQuery)).toHaveBeenCalled());
+    for (const call of vi.mocked(usePlanReviewQuery).mock.calls) {
+      expect(call[1]?.revisionId).toBeUndefined();
+    }
   });
 });
 

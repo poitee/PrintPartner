@@ -2,17 +2,29 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY, type PlanFeatures } from "@print-partner/contracts";
 import { patchPartAssembled, patchPartProgress } from "../api/endpoints/checkoff";
+import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
 import { patchPart } from "../api/endpoints/plans";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "./keys";
 import {
   usePatchPartAssembledMutation,
   usePatchPartMutation,
   usePatchPartProgressMutation,
+  usePlanReviewQuery,
 } from "./planReview";
+
+const healthState = vi.hoisted(() => ({ capabilities: [] as string[] }));
+
+vi.mock("./health", () => ({
+  useHealthQuery: () => ({
+    data: { ok: true, capabilities: healthState.capabilities },
+    status: "success" as const,
+    isSuccess: true,
+  }),
+}));
 
 const review: PlanReview = {
   profile_id: 1,
@@ -83,6 +95,73 @@ function wrapper(queryClient: QueryClient) {
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 }
+
+function reviewFor(revisionId: number): PlanReview {
+  return {
+    ...review,
+    profile_id: 7,
+    accepted_basis: {
+      profile_id: 7,
+      plan_revision_id: revisionId,
+      plan_version: 2,
+      plan_revision_digest: "c".repeat(64),
+      required_unit_mapping_digest: "d".repeat(64),
+    },
+  };
+}
+
+const features: PlanFeatures = {
+  profile_id: 7,
+  overrides: { spoolman: true },
+  effective: {
+    farm: { enabled: false, source: "default" },
+    orders: { enabled: false, source: "default" },
+    bambu: { enabled: false, source: "default" },
+    spoolman: { enabled: true, source: "plan" },
+  },
+};
+
+describe("Plan workspace read selection", () => {
+  afterEach(() => {
+    healthState.capabilities = [];
+    cleanup();
+  });
+
+  it("workspace_flag_off_preserves_query_path", async () => {
+    healthState.capabilities = [];
+    vi.mocked(fetchPlanReview).mockResolvedValue(reviewFor(11));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const hook = renderHook(() => usePlanReviewQuery(7, { revisionId: 11 }), { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.isSuccess).toBe(true));
+    expect(fetchPlanReview).toHaveBeenCalledWith(7, { includeExcluded: false });
+    expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, false, true))?.accepted_basis?.plan_revision_id).toBe(11);
+    expect(client.getQueryData(queryKeys.planReview(7, false, true, 11))).toBeUndefined();
+  });
+
+  it("workspace_rebuild_read_keeps_revision_identity", async () => {
+    healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const mismatched = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    mismatched.setQueryData(queryKeys.planFeatures(7), features);
+    vi.mocked(fetchPlanReview).mockResolvedValue(reviewFor(4));
+    const refused = renderHook(() => usePlanReviewQuery(7, { revisionId: 11 }), { wrapper: wrapper(mismatched) });
+    await waitFor(() => expect(refused.result.current.isError).toBe(true));
+    expect(mismatched.getQueryData(queryKeys.planReview(7, false, true, 11))).toBeUndefined();
+    refused.unmount();
+
+    const asked = { revisionId: 11 };
+    vi.mocked(fetchPlanReview).mockImplementation(async () => reviewFor(asked.revisionId));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(queryKeys.planFeatures(7), features);
+    const hook = renderHook(() => usePlanReviewQuery(7, { revisionId: asked.revisionId }), { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.data?.accepted_basis?.plan_revision_id).toBe(11));
+    asked.revisionId = 4;
+    hook.rerender();
+    await waitFor(() => expect(hook.result.current.data?.accepted_basis?.plan_revision_id).toBe(4));
+    expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, false, true, 11))?.accepted_basis?.plan_revision_id).toBe(11);
+    expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, false, true, 4))?.accepted_basis?.plan_revision_id).toBe(4);
+    expect(fetchPlanReview).toHaveBeenCalledWith(7, { includeExcluded: false });
+  });
+});
 
 describe("Plan review mutations", () => {
   it.each(["progress", "assembly"] as const)("keeps the Review when a failed %s save targets a missing part", async (kind) => {

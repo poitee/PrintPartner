@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  TENANT_FEATURE_TOGGLES_CAPABILITY,
   type HealthResponse,
   type PlanFeatures,
   parsePlanDraftWorkspace,
@@ -48,6 +49,7 @@ import {
 } from "../queries/planReview";
 import { refreshProfileSummary } from "../queries/profiles";
 import { queryKeys } from "../queries/keys";
+import { useHealthQuery } from "../queries/health";
 import {
   usePlanDraftListQuery,
   usePlanDraftWorkspaceQuery,
@@ -241,13 +243,31 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const healthQuery = useHealthQuery();
+  const rebuildReads = healthQuery.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
+  const draftListQuery = usePlanDraftListQuery(
+    selectedProfileId,
+    Boolean(health?.ok),
+  );
+  const draftQuery = usePlanDraftWorkspaceQuery(
+    selectedProfileId,
+    activeDraftId,
+    Boolean(health?.ok),
+  );
+  const draftIdentityPending = rebuildReads && (
+    draftListQuery.isLoading || (activeDraftId != null && draftQuery.isLoading)
+  );
+  const revisionId = rebuildReads && draftQuery.data
+    ? draftQuery.data.draft.base.revision_id
+    : undefined;
   const {
     data: review = null,
     isLoading,
     error: queryError,
   } = usePlanReviewQuery(selectedProfileId, {
     includeExcluded: false,
-    enabled: Boolean(health?.ok),
+    enabled: Boolean(health?.ok) && !draftIdentityPending,
+    revisionId,
   });
 
   const patchPartMutation = usePatchPartMutation(selectedProfileId);
@@ -258,15 +278,6 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   const patchAssembledMutation = usePatchPartAssembledMutation(
     selectedProfileId,
     false,
-  );
-  const draftListQuery = usePlanDraftListQuery(
-    selectedProfileId,
-    Boolean(health?.ok),
-  );
-  const draftQuery = usePlanDraftWorkspaceQuery(
-    selectedProfileId,
-    activeDraftId,
-    Boolean(health?.ok),
   );
 
   useEffect(() => {
