@@ -14,9 +14,10 @@ job already queued at subscribe. Later commits on that job are sent the same
 way. A `done`, `error`, or `cancelled` snapshot is the last frame, then the
 socket closes with code 1000. Logout revokes the stream: the socket closes
 with code 1008 and reason `Session revoked`, and no further snapshot is sent.
-An expired session closes with code 1008 and reason `Session expired`. A lagged
-mailbox or a stopped jobs service closes with code 1011 and reason
-`Job stream unavailable`.
+A session that reaches its expiry while the socket is open closes with code
+1008 and reason `Session expired`. A new upgrade whose session is already
+expired stays HTTP 401, the same as read-one. A lagged mailbox or a stopped
+jobs service closes with code 1011 and reason `Job stream unavailable`.
 
 ```sh
 umask 022
