@@ -259,6 +259,18 @@ async fn job_ws_revocation_closes_without_further_data() {
     feature_off_404().await;
 }
 
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_reconnect_returns_authoritative_snapshot() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn jobs_router_shutdown_closes_subscriptions() {
+    feature_off_404().await;
+}
+
 #[cfg(feature = "desktop_rebuild")]
 fn policy() -> pp_storage::auth::AuthPolicy {
     use pp_storage::auth::*;
@@ -1851,6 +1863,131 @@ async fn job_ws_revocation_closes_without_further_data() {
     shutdown(owner, directory);
 }
 
+/// A slow socket falls behind the mailbox and closes `1011`. The next upgrade
+/// returns the job's current public snapshot, not the frames that were dropped.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test(flavor = "current_thread")]
+async fn job_ws_reconnect_returns_authoritative_snapshot() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-reconnect@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let mut lagged = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let initial = expect_text(&mut lagged).await;
+    assert_eq!(initial["job_id"], job_id);
+    assert_ne!(initial["progress"], 16);
+    publish_until_lag(&owner, chosen, &job_id);
+    assert_eq!(
+        expect_close(&mut lagged).await,
+        (1011, "Job stream unavailable".to_owned())
+    );
+    let mut again = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let current = expect_text(&mut again).await;
+    assert_eq!(current["job_id"], job_id);
+    assert_eq!(current["progress"], 16);
+    assert!(current.get("updated_at").is_none());
+    drop(again);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Owner shutdown closes every live job socket and a later upgrade is refused.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test(flavor = "current_thread")]
+async fn jobs_router_shutdown_closes_subscriptions() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-shutdown@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let path = format!("/ws/jobs/{job_id}");
+    let mut first = open_socket(&server, &path, Some(&cookie)).await;
+    let mut second = open_socket(&server, &path, Some(&cookie)).await;
+    assert_eq!(expect_text(&mut first).await["job_id"], job_id);
+    assert_eq!(expect_text(&mut second).await["job_id"], job_id);
+    let rows = job_rows(&directory);
+    close_owner(owner);
+    assert_eq!(
+        expect_close(&mut first).await,
+        (1011, "Job stream unavailable".to_owned())
+    );
+    assert_eq!(
+        expect_close(&mut second).await,
+        (1011, "Job stream unavailable".to_owned())
+    );
+    let (status, body) =
+        ws_exchange(&server, &Method::GET, &path, &server.origin, Some(&cookie)).await;
+    assert_refusal(&Method::GET, status, &body, 500, "Jobs service unavailable");
+    assert_eq!(job_rows(&directory), rows);
+    server.stop().await;
+    drop(directory);
+}
+
 #[cfg(feature = "desktop_rebuild")]
 async fn enqueue_queued(
     owner: &Arc<Mutex<WriterOwner>>,
@@ -1926,6 +2063,44 @@ fn finish_queued(
             },
         )
         .unwrap();
+}
+
+/// Claim publishes one snapshot. Sixteen progress updates then fill the
+/// mailbox and the next one closes it as lagged. The stored progress is 16.
+#[cfg(feature = "desktop_rebuild")]
+fn publish_until_lag(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    job_id: &str,
+) {
+    use pp_storage::jobs::{JobKind, WorkerAdmission, WorkerOperation};
+
+    let worker = owner
+        .lock()
+        .unwrap()
+        .job_worker_with_policy(
+            chosen,
+            WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert_eq!(lease.job_id(), job_id);
+    for step in 1..=16 {
+        worker
+            .update(&mut lease, WorkerOperation::Progress(step))
+            .unwrap();
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn close_owner(owner: Arc<Mutex<WriterOwner>>) {
+    let owner = Arc::try_unwrap(owner).unwrap_or_else(|_| panic!("router still holds storage"));
+    owner.into_inner().unwrap().shutdown().unwrap();
 }
 
 #[cfg(feature = "desktop_rebuild")]
