@@ -247,6 +247,18 @@ async fn job_ws_head_does_not_subscribe() {
     feature_off_404().await;
 }
 
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_delivers_initial_and_terminal_snapshot() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_revocation_closes_without_further_data() {
+    feature_off_404().await;
+}
+
 #[cfg(feature = "desktop_rebuild")]
 fn policy() -> pp_storage::auth::AuthPolicy {
     use pp_storage::auth::*;
@@ -1467,8 +1479,10 @@ async fn retained_job_response_preserves_public_json() {
     shutdown(owner, directory);
 }
 
-/// Wrong origin, wrong listener, missing credential, another tenant, and an
-/// expired session are refused before `subscribe`. Rows and files stay put.
+/// Wrong origin, wrong listener, missing credential, and an expired session
+/// are refused before `subscribe`. Another tenant's `GET` upgrades and closes
+/// `1008` `Job not found`. `HEAD` for that caller stays `404`. Rows and files
+/// stay put.
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
 async fn job_ws_rejects_invalid_origin_or_principal() {
@@ -1539,10 +1553,15 @@ async fn job_ws_rejects_invalid_origin_or_principal() {
         assert_refusal(&method, status, &body, 403, "Invalid request host");
         let (status, body) = ws_exchange(&server, &method, &path, &server.origin, None).await;
         assert_refusal(&method, status, &body, 401, "Authentication required");
-        let (status, body) =
-            ws_exchange(&server, &method, &path, &server.origin, Some(&other)).await;
-        assert_refusal(&method, status, &body, 404, "Job not found");
     }
+    let (status, body) =
+        ws_exchange(&server, &Method::HEAD, &path, &server.origin, Some(&other)).await;
+    assert_refusal(&Method::HEAD, status, &body, 404, "Job not found");
+    let mut foreign = open_socket(&server, &path, Some(&other)).await;
+    assert_eq!(
+        expect_close(&mut foreign).await,
+        (1008, "Job not found".to_owned())
+    );
     assert_eq!(
         (files(&directory), job_rows(&directory)),
         (snapshot, before)
@@ -1711,6 +1730,292 @@ fn assert_refusal(
     } else {
         assert!(body.get("job_id").is_none(), "{method}");
     }
+}
+
+/// The first frame is the queued job. Claim may send one later snapshot before
+/// the terminal `done` frame. That frame is followed by a normal close.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_delivers_initial_and_terminal_snapshot() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-pump@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let mut socket = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let initial = expect_text(&mut socket).await;
+    assert_eq!(initial["job_id"], job_id);
+    assert_ne!(initial["status"], "done");
+    assert!(initial.get("updated_at").is_none());
+    finish_queued(&owner, chosen, &job_id);
+    let mut terminal = None;
+    for _ in 0..4 {
+        let frame = expect_text(&mut socket).await;
+        assert_eq!(frame["job_id"], job_id);
+        assert!(frame.get("updated_at").is_none());
+        if frame["status"] == "done" {
+            terminal = Some(frame);
+            break;
+        }
+    }
+    let terminal = terminal.expect("terminal snapshot");
+    assert!(terminal.get("result").is_some());
+    assert_eq!(expect_close(&mut socket).await, (1000, String::new()));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Logout revokes the live stream. The socket closes `1008` and sends no
+/// snapshot after the one already delivered.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_revocation_closes_without_further_data() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-revoke@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let mut socket = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let initial = expect_text(&mut socket).await;
+    assert_eq!(initial["job_id"], job_id);
+    logout(&owner, chosen, &token);
+    assert_eq!(
+        expect_close(&mut socket).await,
+        (1008, "Session revoked".to_owned())
+    );
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn enqueue_queued(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    token: &str,
+) -> String {
+    use pp_storage::{
+        auth::Secret,
+        jobs::{Credential, Outcome, Payload, UserOperation},
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    match owner
+        .lock()
+        .unwrap()
+        .jobs(chosen)
+        .unwrap()
+        .submit(
+            Credential::Session(Secret::new(token.to_owned())),
+            UserOperation::Enqueue {
+                key: "stream".into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        Outcome::Job(job, _) => job.job_id,
+        _ => panic!("enqueued job expected"),
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn finish_queued(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    job_id: &str,
+) {
+    use pp_storage::jobs::{
+        CompletedResult, JobKind, SourceUpdatesResult, WorkerAdmission, WorkerOperation,
+    };
+
+    let worker = owner
+        .lock()
+        .unwrap()
+        .job_worker_with_policy(
+            chosen,
+            WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert_eq!(lease.job_id(), job_id);
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                    checked: vec![],
+                    skipped: vec![],
+                    updates_available: 0,
+                    checked_count: 0,
+                })),
+            },
+        )
+        .unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn logout(owner: &Arc<Mutex<WriterOwner>>, chosen: pp_storage::auth::AuthPolicy, token: &str) {
+    use pp_storage::auth::{Request, Secret};
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    owner
+        .lock()
+        .unwrap()
+        .auth_with_policy(chosen)
+        .unwrap()
+        .submit(
+            Request::Logout {
+                token: Secret::new(token.to_owned()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn open_socket(server: &Server, path: &str, cookie: Option<&str>) -> tokio::net::TcpStream {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let host = server.origin.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+    let cookie_line = cookie
+        .map(|value| format!("Cookie: {value}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{cookie_line}\r\n",
+        origin = server.origin,
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut seen = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).await.unwrap();
+        seen.push(byte[0]);
+        if seen.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    let text = String::from_utf8(seen).unwrap();
+    assert!(text.starts_with("HTTP/1.1 101"), "{text}");
+    stream
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn read_frame(stream: &mut tokio::net::TcpStream) -> (u8, Vec<u8>) {
+    use tokio::io::AsyncReadExt;
+
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head).await.unwrap();
+    let opcode = head[0] & 0x0f;
+    let len = match head[1] & 0x7f {
+        126 => {
+            let mut ext = [0u8; 2];
+            stream.read_exact(&mut ext).await.unwrap();
+            u16::from_be_bytes(ext) as usize
+        }
+        len => len as usize,
+    };
+    assert!(len < 65_536, "test frames stay under 64KiB");
+    let mut payload = vec![0u8; len];
+    if len > 0 {
+        stream.read_exact(&mut payload).await.unwrap();
+    }
+    (opcode, payload)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn expect_text(stream: &mut tokio::net::TcpStream) -> serde_json::Value {
+    let (opcode, payload) = read_frame(stream).await;
+    assert_eq!(opcode, 1, "text frame");
+    serde_json::from_slice(&payload).unwrap()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn expect_close(stream: &mut tokio::net::TcpStream) -> (u16, String) {
+    let (opcode, payload) = read_frame(stream).await;
+    assert_eq!(opcode, 8, "close frame");
+    let code = u16::from_be_bytes([payload[0], payload[1]]);
+    let reason = String::from_utf8(payload[2..].to_vec()).unwrap();
+    (code, reason)
 }
 
 #[cfg(feature = "desktop_rebuild")]
