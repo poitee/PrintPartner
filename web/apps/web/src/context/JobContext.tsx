@@ -9,12 +9,13 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY, type JobEvent, type JobSnapshot } from "@print-partner/contracts";
 import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
 import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
 import { invalidateAfterJob } from "../queries/invalidation";
 import { invalidateAcceptedPlateExportJobs } from "../queries/acceptedPlates";
+import { useHealthQuery } from "../queries/health";
 
 export type ActiveJob = {
   jobId: string;
@@ -53,6 +54,11 @@ type JobContextValue = {
 const JobContext = createContext<JobContextValue | null>(null);
 
 const JOB_TERMINAL = new Set(["done", "error", "cancelled"]);
+
+/** Health advertises this capability only when `PP_DESKTOP_REBUILD` is exactly `1` or `true`. */
+function rebuildJobSnapshots(capabilities: readonly string[] | undefined): boolean {
+  return capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
+}
 
 /**
  * How long a finished job keeps its row in the job strip.
@@ -125,6 +131,8 @@ function upsertJob(jobs: ActiveJob[], next: ActiveJob): ActiveJob[] {
 
 export function JobProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
+  const health = useHealthQuery();
+  const rebuildSnapshots = rebuildJobSnapshots(health.data?.capabilities);
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const observers = useRef(new Set<AbortController>());
   useEffect(() => {
@@ -283,11 +291,15 @@ export function JobProvider({ children }: { children: ReactNode }) {
               finish({ job_id: jobId, kind, status: "error", message: error.message,
                 error: error.message, progress: null, result: null });
             }
-            /* Other WebSocket errors leave HTTP polling to handle completion. */
+            /* Other socket errors stay on this subscription. Flag off still
+               finishes through HTTP polling. Rebuild mode waits for the next
+               socket snapshot, including the one after reconnect. */
           },
         );
 
-        void pollJobUntilTerminal(jobId, onProgress, observer.signal).catch(failObservation);
+        if (!rebuildSnapshots) {
+          void pollJobUntilTerminal(jobId, onProgress, observer.signal).catch(failObservation);
+        }
       } catch (e) {
         if (observer.signal.aborted) return;
         observer.abort();
@@ -310,7 +322,7 @@ export function JobProvider({ children }: { children: ReactNode }) {
         removeAfterTerminalDisplay(failureJobId);
       }
     },
-    [qc],
+    [qc, rebuildSnapshots],
   );
 
   const value = useMemo(

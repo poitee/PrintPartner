@@ -1067,6 +1067,9 @@ Reconnect after a lagged mailbox, and owner shutdown of live sockets, are GRE-80
 (`docs/gre-800-jobs-http.md`).
 Composing those routes on the opted-in rebuild router is GRE-821
 (`docs/gre-821-runtime-jobs.md`).
+The browser job row follows that socket snapshot when health reports
+`tenant_feature_toggles`, and keeps HTTP polling otherwise. That wiring is
+GRE-822 (`docs/gre-822-job-context.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
