@@ -21,7 +21,8 @@ read-one. Node's `/ws/jobs/:jobId` accepts the socket and then closes with
 code 1008 and reason `Job not found`
 (`web/apps/server/src/routes/jobs.ts`). The web client treats only that close
 as final and reconnects on any other close
-(`web/apps/web/src/api/jobWebSocket.ts`). GRE-799 owns that close. This slice
+(`web/apps/web/src/api/jobWebSocket.ts`). GRE-799
+(`docs/gre-799-jobs-http.md`) owns that close and the snapshot pump. This slice
 does not upgrade a missing or foreign job. After `read_public` accepts the
 caller, the upgrade calls `subscribe` and holds that subscription until the
 socket closes. This slice sends no job snapshot.
