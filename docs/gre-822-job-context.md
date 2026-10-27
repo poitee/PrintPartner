@@ -13,6 +13,11 @@ keeps the existing socket plus HTTP poll. A socket error still leaves the poll
 to finish the job. Plan failed-save intent stays with GRE-624. Production
 gateway cutover stays with GRE-593.
 
+Losing the session during a rebuild job does not end the row. The HTTP poll
+that used to see a 401 is skipped, and `connectJobWebSocket` does not report a
+1008 close other than `Job not found` or a failed upgrade. An `stl-export` row
+stays running until reload. That helper gap is GRE-1001.
+
 ```sh
 npm run test -w @print-partner/web -- src/context/JobContext.test.tsx
 ```
