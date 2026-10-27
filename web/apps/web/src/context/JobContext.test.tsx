@@ -3,13 +3,22 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { JobSnapshot } from "@print-partner/contracts";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY, type JobSnapshot } from "@print-partner/contracts";
 import type { ReactNode } from "react";
 import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
 import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
 import { queryKeys } from "../queries/keys";
 import { JobProvider, useJobContext } from "./JobContext";
+
+const healthState = vi.hoisted(() => ({ capabilities: [] as string[] }));
+
+vi.mock("../queries/health", () => ({
+  useHealthQuery: () => ({
+    data: { ok: true, capabilities: healthState.capabilities },
+    status: "success",
+  }),
+}));
 
 vi.mock("../api/endpoints/jobs", () => ({
   fetchJob: vi.fn(),
@@ -261,9 +270,76 @@ describe("JobProvider elapsed observation deadline", () => {
 });
 
 afterEach(() => {
+  healthState.capabilities = [];
   cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+describe("JobProvider rebuild job transport", () => {
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <JobProvider>{children}</JobProvider>
+    </QueryClientProvider>
+  );
+  const running: JobSnapshot = {
+    job_id: "observed", kind: "check-source-updates", status: "running",
+    message: "Checking sources", progress: 4, result: null, error: null,
+  };
+  const reconnected: JobSnapshot = {
+    ...running, message: "Checked 16", progress: 16,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(fetchJob).mockReset();
+    vi.mocked(connectJobWebSocket).mockReset().mockReturnValue(vi.fn());
+    healthState.capabilities = [];
+  });
+
+  it("job_context_rebuild_reconnect_uses_snapshot", async () => {
+    healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    vi.mocked(fetchJob).mockResolvedValue({ ...running, progress: 1, message: "Stale poll" });
+    const { result } = renderHook(useJobContext, { wrapper });
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"));
+    });
+    expect(connectJobWebSocket).toHaveBeenCalledTimes(1);
+    expect(fetchJob).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[1](running);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "running", progress: 4 });
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new Error("Job event stream failed"));
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "running", progress: 4, message: "Checking sources" });
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[1](reconnected);
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({
+      status: "running", message: "Checked 16", progress: 16,
+    });
+    expect(fetchJob).not.toHaveBeenCalled();
+  });
+
+  it("job_context_flag_off_uses_existing_transport", async () => {
+    vi.mocked(fetchJob).mockResolvedValue(running);
+    const { result } = renderHook(useJobContext, { wrapper });
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"));
+    });
+    expect(connectJobWebSocket).toHaveBeenCalledTimes(1);
+    expect(fetchJob).toHaveBeenCalledWith("observed", expect.any(AbortSignal));
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new Error("Job event stream failed"));
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({
+      status: "running", message: "Checking sources", progress: 4,
+    });
+    expect(result.current.activeJobs[0]?.message).not.toMatch(/Lost contact/);
+  });
 });
 
 describe("JobProvider terminal retention", () => {
