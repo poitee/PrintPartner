@@ -1063,6 +1063,8 @@ Quarantined and unreadable rows are skipped. Turning HTTP query strings into
 `/jobs/{id}` and `/api/v1/jobs/{id}` is GRE-796 (`docs/gre-796-jobs-http.md`).
 Job WebSocket admission at `/ws/jobs/{id}` is GRE-798 (`docs/gre-798-jobs-http.md`).
 Snapshot delivery and close reasons on that socket are GRE-799 (`docs/gre-799-jobs-http.md`).
+Reconnect after a lagged mailbox, and owner shutdown of live sockets, are GRE-800
+(`docs/gre-800-jobs-http.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
