@@ -14,7 +14,8 @@ request runs `AtomicJobClient::read_public`. Success is `200` with a bare
 cross-tenant, and internal-only ids answer `404` `"Job not found"`.
 Unauthenticated requests answer `401` `"Authentication required"`. HEAD shares
 status and auth with GET and returns an empty body. Rows and files stay
-unchanged on refusal.
+unchanged on refusal. Serializer permits for these responses are specified in
+GRE-797 (`docs/gre-797-jobs-http.md`).
 
 ```sh
 umask 022
