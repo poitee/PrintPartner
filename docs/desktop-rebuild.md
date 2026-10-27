@@ -1065,6 +1065,8 @@ Job WebSocket admission at `/ws/jobs/{id}` is GRE-798 (`docs/gre-798-jobs-http.m
 Snapshot delivery and close reasons on that socket are GRE-799 (`docs/gre-799-jobs-http.md`).
 Reconnect after a lagged mailbox, and owner shutdown of live sockets, are GRE-800
 (`docs/gre-800-jobs-http.md`).
+Composing those routes on the opted-in rebuild router is GRE-821
+(`docs/gre-821-runtime-jobs.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
