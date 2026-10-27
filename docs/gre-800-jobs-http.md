@@ -5,10 +5,13 @@ still mounts only when the stored `PP_DESKTOP_REBUILD` value is exactly `1` or
 `true`. Otherwise that route answers 404. Admission and snapshot delivery stay
 as in GRE-798 and GRE-799 (`docs/gre-799-jobs-http.md`).
 
-A socket that does not read while the job is claimed and then advanced sixteen
-times falls behind the mailbox. The socket closes with code 1011 and reason
-`Job stream unavailable`. A later upgrade on the same job sends the current
-public snapshot, with progress `16` and no `updated_at`.
+The mailbox holds 16 snapshots. Claim publishes one. Progress 1 through 15
+fills the remaining slots. Progress 16 is the 17th publish, and that publish
+marks the subscription lagged. The socket closes with code 1011 and reason
+`Job stream unavailable` when those 17 snapshots publish before the pump
+admits another frame. The test uses a current_thread runtime so those
+publishes finish before the pump runs. A later upgrade on the same job sends
+the current public snapshot, with progress 16 and no `updated_at`.
 
 Shutting down the storage owner closes every live socket on that route with
 the same 1011 reason. A later upgrade is HTTP 500 `"Jobs service unavailable"`.

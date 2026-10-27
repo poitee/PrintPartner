@@ -1863,8 +1863,10 @@ async fn job_ws_revocation_closes_without_further_data() {
     shutdown(owner, directory);
 }
 
-/// A slow socket falls behind the mailbox and closes `1011`. The next upgrade
-/// returns the job's current public snapshot, not the frames that were dropped.
+/// Seventeen snapshots published before the pump admits another frame close
+/// the socket with 1011. The current_thread runtime keeps the pump from
+/// running during those publishes. The next upgrade returns the current
+/// public snapshot.
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test(flavor = "current_thread")]
 async fn job_ws_reconnect_returns_authoritative_snapshot() {
@@ -2065,8 +2067,8 @@ fn finish_queued(
         .unwrap();
 }
 
-/// Claim publishes one snapshot. Sixteen progress updates then fill the
-/// mailbox and the next one closes it as lagged. The stored progress is 16.
+/// Claim and progress 1 through 15 fill the 16-slot mailbox. Progress 16
+/// closes it as lagged. The stored progress is 16.
 #[cfg(feature = "desktop_rebuild")]
 fn publish_until_lag(
     owner: &Arc<Mutex<WriterOwner>>,
