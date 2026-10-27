@@ -365,7 +365,9 @@ fn close_reason(reason: StreamClose) -> (u16, &'static str) {
 
 /// Sends the queued public snapshot, then waits for the next one. A terminal
 /// snapshot is followed by a normal close. Revocation and expiry close `1008`
-/// and send nothing further.
+/// and send nothing further. `admit` accepts a frame before the socket write,
+/// so a snapshot admitted before logout can still be written after logout
+/// returns. The next close is `1008`. No frame admitted after revocation is sent.
 async fn pump(mut socket: WebSocket, subscription: JobSubscription, wait: Duration) {
     loop {
         let prepare_on = subscription.clone();
