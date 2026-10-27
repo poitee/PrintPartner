@@ -213,6 +213,8 @@ async fn detail(
 
 /// Upgrade `/ws/jobs/{id}` only after `authenticate` accepts the caller.
 /// The socket stays open and sends no snapshots; GRE-799 pumps those frames.
+/// A missing or foreign job stays HTTP 404 here. GRE-799 must upgrade and
+/// close 1008 `Job not found` before the web client uses this route.
 async fn stream(
     State(app): State<App>,
     Path(id): Path<String>,

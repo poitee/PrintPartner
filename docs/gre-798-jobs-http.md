@@ -16,9 +16,15 @@ answers `403` `"Invalid request origin"`. A missing credential answers `401`
 An admitted upgrade calls `read_public` first. An expired session, a key the
 configured tenant does not own, a missing id, and another tenant's job fail
 there and do not call `subscribe`. The status matches read-one: `401`
-`"Authentication required"` or `404` `"Job not found"`. After `read_public`
-accepts the caller, the upgrade calls `subscribe` and holds that
-subscription until the socket closes. This slice sends no job snapshot.
+`"Authentication required"` or `404` `"Job not found"`. That HTTP 404 matches
+read-one. Node's `/ws/jobs/:jobId` accepts the socket and then closes with
+code 1008 and reason `Job not found`
+(`web/apps/server/src/routes/jobs.ts`). The web client treats only that close
+as final and reconnects on any other close
+(`web/apps/web/src/api/jobWebSocket.ts`). GRE-799 owns that close. This slice
+does not upgrade a missing or foreign job. After `read_public` accepts the
+caller, the upgrade calls `subscribe` and holds that subscription until the
+socket closes. This slice sends no job snapshot.
 
 `HEAD /ws/jobs/{id}` uses the same guard and `read_public` check. Success is
 `200` with an empty body. It does not call `subscribe`, including when every

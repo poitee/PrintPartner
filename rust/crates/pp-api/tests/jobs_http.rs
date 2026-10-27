@@ -219,7 +219,7 @@ async fn job_detail_head_has_no_body_and_keeps_status() {
 
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
-async fn job_detail_mutations_and_ws_unregistered() {
+async fn job_detail_mutations_unregistered() {
     feature_off_404().await;
 }
 
@@ -1103,11 +1103,11 @@ async fn job_detail_api_key_matches_cookie() {
 }
 
 /// Mutation routes stay unregistered: `POST` answers 405 on both aliases with
-/// an empty body. `/ws/jobs/{id}` is mounted, and a handshake with no session
-/// answers 401 before any subscription. No row is created or changed.
+/// an empty body. A `/ws/jobs/{id}` handshake with no session answers 401
+/// before any subscription. No row is created or changed.
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
-async fn job_detail_mutations_and_ws_unregistered() {
+async fn job_detail_mutations_unregistered() {
     use pp_api::{
         auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
         jobs::{JobsHttpConfig, jobs_router},
