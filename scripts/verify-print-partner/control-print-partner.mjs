@@ -24,8 +24,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SKILL_ROOT = resolve(__dirname, "..");
-const REPO_ROOT = resolve(SKILL_ROOT, "../../..");
+const REPO_ROOT = resolve(__dirname, "../..");
 const STATE_DIR =
   process.env.PP_VERIFY_STATE_DIR ||
   join(process.env.TMPDIR || "/tmp", "pp-verify");
@@ -164,7 +163,7 @@ function composeArgs(state, extra = []) {
     "-p",
     state.project,
     "-f",
-    join(SKILL_ROOT, "helpers/compose.verify.yml"),
+    join(__dirname, "compose.verify.yml"),
     ...extra,
   ];
 }
@@ -237,7 +236,7 @@ async function cmdLaunch(values) {
       dataDir,
       evidenceDir,
       startedAt: new Date().toISOString(),
-      composeFiles: ["helpers/compose.verify.yml"],
+      composeFiles: ["compose.verify.yml"],
     };
     writeState(state);
     emit({ ...state, health, message: "Print Partner verification instance launched on :8080." });

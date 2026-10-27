@@ -15,7 +15,7 @@ on:
       - 'web/package.json'
       - 'web/package-lock.json'
       - 'web/scripts/**'
-      - '.cursor/skills/verify-print-partner-rust/**'
+      - 'scripts/verify-rust-gateway/**'
       - '.github/workflows/desktop-runtime.yml'
   push:
     branches: [main, master]
@@ -30,7 +30,7 @@ on:
       - 'web/package.json'
       - 'web/package-lock.json'
       - 'web/scripts/**'
-      - '.cursor/skills/verify-print-partner-rust/**'
+      - 'scripts/verify-rust-gateway/**'
       - '.github/workflows/desktop-runtime.yml'
 
 permissions:
@@ -142,7 +142,7 @@ jobs:
         run: |
           python3 rust/tests/workflow_m0.py 2>&1 | tee "$PP_EVIDENCE/workflow.log"
           python3 rust/tests/lifecycle_m0.py 2>&1 | tee "$PP_EVIDENCE/lifecycle.log"
-          PP_TEST_REAL_SERVER="$GITHUB_WORKSPACE/rust/target/debug/pp-server" python3 -m unittest discover -s .cursor/skills/verify-print-partner-rust/helpers -p test_launch.py -k ForceKillTest 2>&1 | tee "$PP_EVIDENCE/launcher-sigkill.log"
+          PP_TEST_REAL_SERVER="$GITHUB_WORKSPACE/rust/target/debug/pp-server" python3 -m unittest discover -s scripts/verify-rust-gateway -p test_launch.py -k ForceKillTest 2>&1 | tee "$PP_EVIDENCE/launcher-sigkill.log"
       - name: Verify gateway effects and product routes
         run: |
           python3 rust/tests/gateway_effects.py 2>&1 | tee "$PP_EVIDENCE/gateway-effects.log"
@@ -302,7 +302,7 @@ jobs:
           sudo iptables -L OUTPUT -n -v | tee "$PP_EVIDENCE/egress-guard-before.txt"
       - name: Run Rust gateway verify.py end to end
         run: |
-          python3 .cursor/skills/verify-print-partner-rust/helpers/verify.py 2>&1 | tee "$PP_EVIDENCE/verify.log"
+          python3 scripts/verify-rust-gateway/verify.py 2>&1 | tee "$PP_EVIDENCE/verify.log"
           grep -qx 'PASS: Rust build, gateway endpoints, persisted Source and shutdown' "$PP_EVIDENCE/verify.log"
           grep -E '^START: pid=[0-9]+ origin=http://127\.0\.0\.1:[0-9]+$' "$PP_EVIDENCE/verify.log"
       - name: Assert no LAN egress was attempted

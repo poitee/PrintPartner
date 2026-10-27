@@ -5,7 +5,7 @@ services:
   print-partner:
     image: ghcr.io/poitee/print-partner:${PRINT_PARTNER_VERSION:-3.3.0}
     build:
-      context: ../../../..
+      context: ../..
       dockerfile: Dockerfile
     ports:
       - "127.0.0.1:8080:8080"
