@@ -262,8 +262,11 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     draftListQuery.isLoading ||
     (openDraftId != null && draftQuery.data == null && (draftQuery.error == null || draftQuery.isFetching))
   );
-  const revisionId = rebuildReads && draftQuery.data?.diff.base_is_current
-    ? draftQuery.data.draft.base.revision_id
+  const boundWorkspace = draftQuery.data;
+  const revisionId = rebuildReads &&
+    boundWorkspace?.diff.base_is_current === true &&
+    !closedDraftIds.current.has(boundWorkspace.draft.draft_id)
+    ? boundWorkspace.draft.base.revision_id
     : undefined;
   const {
     data: review = null,
