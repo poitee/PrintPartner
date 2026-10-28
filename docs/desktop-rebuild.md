@@ -740,6 +740,23 @@ cargo nextest run -p pp-storage --manifest-path rust/Cargo.toml --locked --featu
   -E 'binary(working_draft_lifecycle_replay)'
 ```
 
+### D29 provider recovery with retained intent (client)
+
+GRE-817 drives the real `PlanWorkspaceProvider`, router and Plan page against
+fixture endpoints. A refused file choice stays pending, and the Plan page's own
+`preparePlan` used to flush it, which resent the refusal each time the page
+mounted. With the rebuild health capability (`PP_DESKTOP_REBUILD` set to `1` or
+`true`), `preparePlan` now refuses from the retained intent instead. Leaving
+and reopening the Plan route sends nothing, and one Retry click publishes the
+original request and key once. Flag-off keeps the earlier flush. Focused
+proofs: `provider_recovery_never_auto_retries_failed_save` and
+`provider_explicit_retry_publishes_once` in
+`PartsPage.provider-recovery.test.tsx`, plus a flag-off control.
+
+```sh
+npm run test -w @print-partner/web -- src/pages/PartsPage.provider-recovery.test.tsx
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
