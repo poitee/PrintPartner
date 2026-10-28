@@ -54,6 +54,10 @@ fn declared_versions_match_the_node_and_rust_sources() {
         "export const currentSchemaVersion = ",
     );
     let rust_schema_source = include_str!("../../pp-storage/src/schema.rs");
+    // This reads the default-build constant as text. The search fails on
+    // purpose if that cfg-gated constant is removed, because the shipped
+    // schema then changed and live_formats and the Some(35) refusals must
+    // change with it.
     let rust_schema_marker =
         "#[cfg(not(feature = \"desktop_rebuild\"))]\npub(crate) const CURRENT_VERSION: u64 = ";
     assert!(
