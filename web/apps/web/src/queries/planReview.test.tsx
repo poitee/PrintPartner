@@ -163,6 +163,48 @@ describe("Plan workspace read selection", () => {
     expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, false, true, 4))?.accepted_basis?.plan_revision_id).toBe(4);
     expect(fetchPlanReview).toHaveBeenCalledWith(7, { includeExcluded: false });
   });
+
+  it("workspace_rebuild_read_keeps_unrevised_identity", async () => {
+    healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: 3, retryDelay: 0 } } });
+    client.setQueryData(queryKeys.planFeatures(7), features);
+    const unrevised = { ...review, profile_id: 7, accepted_basis: null };
+    vi.mocked(fetchPlanReview).mockClear();
+    vi.mocked(fetchPlanReview).mockResolvedValue(reviewFor(4));
+    const refused = renderHook(() => usePlanReviewQuery(7, { revisionId: null }), { wrapper: wrapper(client) });
+    await waitFor(() => expect(refused.result.current.isError).toBe(true));
+    expect(fetchPlanReview).toHaveBeenCalledTimes(1);
+    expect(client.getQueryData(queryKeys.planReview(7, false, true, null))).toBeUndefined();
+    refused.unmount();
+
+    vi.mocked(fetchPlanReview).mockResolvedValue(unrevised);
+    const kept = renderHook(() => usePlanReviewQuery(7, { revisionId: null }), { wrapper: wrapper(client) });
+    await waitFor(() => expect(kept.result.current.data?.accepted_basis).toBeNull());
+    expect(client.getQueryData<PlanReview>(queryKeys.planReview(7, false, true, null))?.accepted_basis).toBeNull();
+    kept.unmount();
+
+    const placeholderClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    placeholderClient.setQueryData(queryKeys.planFeatures(7), features);
+    let release: (value: PlanReview) => void = () => {};
+    vi.mocked(fetchPlanReview).mockImplementation(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    const shown = renderHook(
+      ({ revisionId }: { revisionId: number | null }) => usePlanReviewQuery(7, { revisionId }),
+      { wrapper: wrapper(placeholderClient), initialProps: { revisionId: 4 as number | null } },
+    );
+    await act(async () => { release(reviewFor(4)); });
+    await waitFor(() => expect(shown.result.current.data?.accepted_basis?.plan_revision_id).toBe(4));
+    shown.rerender({ revisionId: null });
+    expect(shown.result.current.isPlaceholderData).toBe(false);
+    expect(shown.result.current.data).toBeUndefined();
+    await act(async () => { release(unrevised); });
+    await waitFor(() => expect(shown.result.current.data?.accepted_basis).toBeNull());
+    shown.rerender({ revisionId: 11 });
+    expect(shown.result.current.isPlaceholderData).toBe(false);
+    expect(shown.result.current.data).toBeUndefined();
+    shown.unmount();
+  });
 });
 
 describe("Plan review mutations", () => {

@@ -26,6 +26,11 @@ function reviewQueryShouldRetry(failureCount: number, error: unknown, retry: unk
   return failureCount < 3;
 }
 
+/** `null` is the first Plan, which has no accepted revision. */
+function acceptedRevisionId(review: PlanReview | undefined): number | null {
+  return review?.accepted_basis?.plan_revision_id ?? null;
+}
+
 type ReviewMutationContext<T> = {
   profileId: number | null;
   includeExcluded: boolean;
@@ -49,7 +54,7 @@ export function usePlanReviewQuery(
       reviewQueryShouldRetry(failureCount, error, queryClient.getDefaultOptions().queries?.retry),
     queryFn: async () => {
       const review = await fetchPlanReview(profileId!, { includeExcluded });
-      if (typeof revisionId === "number" && review.accepted_basis?.plan_revision_id !== revisionId) {
+      if (revisionId !== undefined && acceptedRevisionId(review) !== revisionId) {
         throw new Error(PLAN_REVIEW_REVISION_MISMATCH);
       }
       return review;
@@ -57,7 +62,7 @@ export function usePlanReviewQuery(
     enabled: (options?.enabled ?? true) && profileId != null && profileId > 0,
     placeholderData: (previous, query) => {
       if (query?.queryKey[1] !== profileId || query.queryKey[2] !== includeExcluded) return undefined;
-      if (typeof revisionId === "number" && previous?.accepted_basis?.plan_revision_id !== revisionId) return undefined;
+      if (revisionId !== undefined && acceptedRevisionId(previous) !== revisionId) return undefined;
       return previous;
     },
     select: (review) => access.allowed ? review : { ...review, part_groups: review.part_groups.map((group) => ({
