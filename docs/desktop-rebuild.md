@@ -1079,6 +1079,23 @@ the same capability, and a finished plan publication refreshes that plan
 only. Without the capability, a finished source job still refreshes every
 source, profile, and plan review. That wiring is GRE-824
 (`docs/gre-824-job-invalidation.md`).
+GRE-825 runs that browser wiring against a disposable server. One Plan review,
+one draft Save, and one job reconnect run with the opt-in unset and again with
+`PP_DESKTOP_REBUILD` exactly `1`. The unset run keeps the existing review, Save,
+and socket plus `GET /jobs/{id}` poll. Optional feature controls stay absent.
+The opted-in run uses the same review and Save after health reports
+`tenant_feature_toggles`. Feature controls render and stay off. A dropped job
+socket is replaced by the next snapshot, and the row does not poll. The proof
+does not turn the flag on by default and does not cut production data over.
+
+```sh
+npm run build --prefix web
+node --test --test-concurrency=1 web/apps/web/test/browser/gre-825-desktop-rebuild.isolated.mjs
+```
+
+The command runs `desktop_rebuild_flag_off_keeps_existing_flow` and
+`desktop_rebuild_opt_in_save_and_reconnect`. Run it from the repository root
+after that build. `npm run test:browser` from `web/` runs the same file.
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
