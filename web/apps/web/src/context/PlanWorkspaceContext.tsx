@@ -254,10 +254,15 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     activeDraftId,
     Boolean(health?.ok),
   );
-  const draftIdentityPending = rebuildReads && (
-    draftListQuery.isLoading || (activeDraftId != null && draftQuery.isLoading)
+  const openDraftId = activeDraftId ?? latestOpenDraftId(
+    draftListQuery.data?.filter((draft) => !closedDraftIds.current.has(draft.draft_id)),
+    recentlyAppliedDraftId,
   );
-  const revisionId = rebuildReads && draftQuery.data
+  const draftIdentityPending = rebuildReads && (
+    draftListQuery.isLoading ||
+    (openDraftId != null && draftQuery.data == null && (draftQuery.error == null || draftQuery.isFetching))
+  );
+  const revisionId = rebuildReads && draftQuery.data?.diff.base_is_current
     ? draftQuery.data.draft.base.revision_id
     : undefined;
   const {
@@ -543,12 +548,21 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         }
       }
       closedDraftIds.current.add(workspace.draft.draft_id);
+      queryClient.removeQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "planReview" &&
+          query.queryKey[1] === workspace.profile_id &&
+          query.queryKey.length >= 5,
+      });
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: queryKeys.planDrafts(workspace.profile_id),
         }),
         queryClient.invalidateQueries({
-          predicate: (query) => query.queryKey[0] === "planReview" && query.queryKey[1] === workspace.profile_id,
+          predicate: (query) =>
+            query.queryKey[0] === "planReview" &&
+            query.queryKey[1] === workspace.profile_id &&
+            query.queryKey.length < 5,
           refetchType: "all",
         }, { throwOnError: true }),
         refreshProfileSummary(queryClient, workspace.profile_id),

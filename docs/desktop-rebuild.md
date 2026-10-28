@@ -1070,9 +1070,10 @@ Composing those routes on the opted-in rebuild router is GRE-821
 The browser job row follows that socket snapshot when health reports
 `tenant_feature_toggles`, and keeps HTTP polling otherwise. That wiring is
 GRE-822 (`docs/gre-822-job-context.md`).
-The Plan review cache follows the open draft's revision when health reports
-that same capability, and keeps the existing review query otherwise. That
-wiring is GRE-823 (`docs/gre-823-workspace-reads.md`).
+The Plan review cache follows an open draft's revision when health reports
+that same capability and the draft base is current, and keeps the existing
+review query otherwise. That wiring is GRE-823
+(`docs/gre-823-workspace-reads.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes

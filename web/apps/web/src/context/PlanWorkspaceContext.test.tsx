@@ -366,6 +366,51 @@ describe("PlanWorkspaceProvider workspace read selection", () => {
       expect(call[1]?.revisionId).toBeUndefined();
     }
   });
+
+  it("workspace_rebuild_read_waits_for_the_open_draft", () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    expect(vi.mocked(usePlanReviewQuery).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
+  it("workspace_rebuild_read_skips_a_stale_draft_revision", async () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    draftQueryState.workspace = {
+      ...savedWorkspace,
+      diff: { ...savedWorkspace.diff, base_is_current: false },
+    };
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    const enabledCalls = vi.mocked(usePlanReviewQuery).mock.calls.filter((call) => call[1]?.enabled !== false);
+    expect(enabledCalls.length).toBeGreaterThan(0);
+    for (const call of enabledCalls) expect(call[1]?.revisionId).toBeUndefined();
+  });
+
+  it("workspace_rebuild_apply_drops_pinned_review_slots", async () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const acceptedKey = queryKeys.planReview(7, false, true);
+    const pinnedKey = queryKeys.planReview(7, false, true, savedWorkspace.draft.base.revision_id);
+    const refreshReview = vi.fn().mockResolvedValue(acceptedReview);
+    const pinnedFetch = vi.fn(async () => {
+      throw new Error("The Build Review response belongs to a different Plan revision");
+    });
+    client.setQueryDefaults(acceptedKey, { queryFn: refreshReview });
+    client.setQueryDefaults(pinnedKey, { queryFn: pinnedFetch });
+    client.setQueryData(acceptedKey, acceptedReview);
+    client.setQueryData(pinnedKey, acceptedReview);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await act(async () => {
+      await hook.result.current.applyActivePlanDraft();
+    });
+    expect(hook.result.current.draftError).toBeNull();
+    expect(refreshReview).toHaveBeenCalledOnce();
+    expect(pinnedFetch).not.toHaveBeenCalled();
+    expect(client.getQueryState(pinnedKey)).toBeUndefined();
+  });
 });
 
 describe("PlanWorkspaceProvider saved draft lifecycle", () => {

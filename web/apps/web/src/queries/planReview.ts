@@ -10,9 +10,20 @@ import { useHealthQuery } from "./health";
 import { invalidateProfiles } from "./profiles";
 import { invalidateRoleFilaments } from "./roleFilaments";
 
+const PLAN_REVIEW_REVISION_MISMATCH =
+  "The Build Review response belongs to a different Plan revision";
+
 /** Health advertises this capability only when `PP_DESKTOP_REBUILD` is exactly `1` or `true`. */
 function rebuildWorkspaceReads(capabilities: readonly string[] | undefined): boolean {
   return capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
+}
+
+function reviewQueryShouldRetry(failureCount: number, error: unknown, retry: unknown): boolean {
+  if (error instanceof Error && error.message === PLAN_REVIEW_REVISION_MISMATCH) return false;
+  if (typeof retry === "function") return Boolean(retry(failureCount, error));
+  if (typeof retry === "boolean") return retry;
+  if (typeof retry === "number") return failureCount < retry;
+  return failureCount < 3;
 }
 
 type ReviewMutationContext<T> = {
@@ -28,15 +39,18 @@ export function usePlanReviewQuery(
   const includeExcluded = options?.includeExcluded ?? false;
   const access = useSpoolmanWorkflowAccess(profileId);
   const health = useHealthQuery();
+  const queryClient = useQueryClient();
   const rebuild = rebuildWorkspaceReads(health.data?.capabilities);
   const revisionId = rebuild && options?.revisionId !== undefined ? options.revisionId : undefined;
   return useQuery({
     queryKey: queryKeys.planReview(profileId ?? 0, includeExcluded, access.queryAllowed, revisionId),
     ...(access.gated ? { staleTime: 0 } : {}),
+    retry: (failureCount, error) =>
+      reviewQueryShouldRetry(failureCount, error, queryClient.getDefaultOptions().queries?.retry),
     queryFn: async () => {
       const review = await fetchPlanReview(profileId!, { includeExcluded });
       if (typeof revisionId === "number" && review.accepted_basis?.plan_revision_id !== revisionId) {
-        throw new Error("The Build Review response belongs to a different Plan revision");
+        throw new Error(PLAN_REVIEW_REVISION_MISMATCH);
       }
       return review;
     },

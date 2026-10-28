@@ -140,11 +140,13 @@ describe("Plan workspace read selection", () => {
 
   it("workspace_rebuild_read_keeps_revision_identity", async () => {
     healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
-    const mismatched = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const mismatched = new QueryClient({ defaultOptions: { queries: { retry: 3, retryDelay: 0 } } });
     mismatched.setQueryData(queryKeys.planFeatures(7), features);
+    vi.mocked(fetchPlanReview).mockClear();
     vi.mocked(fetchPlanReview).mockResolvedValue(reviewFor(4));
     const refused = renderHook(() => usePlanReviewQuery(7, { revisionId: 11 }), { wrapper: wrapper(mismatched) });
     await waitFor(() => expect(refused.result.current.isError).toBe(true));
+    expect(fetchPlanReview).toHaveBeenCalledTimes(1);
     expect(mismatched.getQueryData(queryKeys.planReview(7, false, true, 11))).toBeUndefined();
     refused.unmount();
 
