@@ -133,16 +133,17 @@ pub(super) struct CaptureManifestIdentity {
     pub capture_id: CaptureId,
     pub operation_key: String,
     pub actor: String,
+    pub requested_files: Vec<File>,
 }
 
-/// Decode capture id, operation key, and actor without full digest verification.
+/// Verify capture-manifest digests, then return the identity used to find journal rows.
 pub(super) fn capture_manifest_identity(bytes: &[u8]) -> Result<CaptureManifestIdentity> {
-    let manifest: CaptureManifestV1 =
-        serde_json::from_slice(bytes).map_err(|_| anyhow::anyhow!("Invalid capture manifest"))?;
+    let manifest = verify_capture_manifest(bytes)?;
     Ok(CaptureManifestIdentity {
         capture_id: manifest.capture_id,
         operation_key: manifest.operation_key,
         actor: manifest.actor,
+        requested_files: manifest.requested_files,
     })
 }
 

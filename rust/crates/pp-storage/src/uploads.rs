@@ -784,6 +784,7 @@ pub struct PreparedCapturedAdmission {
 }
 
 /// Retained capture claim that still matches an admitted journal row.
+#[derive(Debug, PartialEq, Eq)]
 pub struct ResolvedCapturedClaim {
     manifest: Vec<u8>,
     inventory: Vec<File>,
@@ -793,6 +794,7 @@ pub struct ResolvedCapturedClaim {
 }
 
 /// How a capture manifest lines up with the upload journal and import jobs.
+#[derive(Debug, PartialEq, Eq)]
 pub enum CaptureJournalCorrelation {
     ExactAdmitted(ResolvedCapturedClaim),
     ExactOwnedOrLater,
@@ -2221,6 +2223,11 @@ pub(crate) fn correlate_capture(
             ));
         }
         return Ok(CaptureJournalCorrelation::ExactOwnedOrLater);
+    }
+    // Absent invites a fresh admission, so the retained inventory must still
+    // match the verified manifest.
+    if identity.requested_files != inventory {
+        return Ok(CaptureJournalCorrelation::MismatchRepairRequired);
     }
 
     let jobs = tx
