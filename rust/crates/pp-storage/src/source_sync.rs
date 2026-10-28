@@ -1127,6 +1127,12 @@ pub(crate) fn halt_after_error(
     halt_job(tx, job, code, detail).map(Some)
 }
 
+/// Prune filter on `durable_jobs`. A terminal Job stays while any target is
+/// pending, claimed or awaiting reconciliation, or holds a terminal result whose
+/// reservation is not acknowledged. Cleanup of a settled batch drops its rows,
+/// and the archived Job document keeps the finish result.
+pub(crate) const PRUNE_HOLD: &str = " AND NOT EXISTS (SELECT 1 FROM source_sync_targets t WHERE t.job_id=durable_jobs.id AND (t.state IN ('pending','claimed','reconciliation_required') OR (t.state IN ('succeeded','failed') AND t.reservation_acknowledged=0)))";
+
 /// Ends the Job and closes its batch. Pending targets become not-run. A
 /// claimed or unacknowledged target, or a generic effect, leaves the Job for
 /// reconciliation instead of a terminal state.

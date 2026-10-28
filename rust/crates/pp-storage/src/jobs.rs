@@ -2239,17 +2239,21 @@ pub(crate) fn actor(
     }
 }
 fn prune(tx: &Transaction<'_>, per_tenant: usize, global: usize) -> Result<usize> {
-    let mut statement=tx.prepare(
+    #[cfg(feature = "desktop_rebuild")]
+    let held = crate::source_sync::PRUNE_HOLD;
+    #[cfg(not(feature = "desktop_rebuild"))]
+    let held = "";
+    let mut statement=tx.prepare(&format!(
         "WITH ranked AS (
             SELECT id,document,updated,rowid AS sequence,
                    ROW_NUMBER() OVER(PARTITION BY tenant ORDER BY updated DESC,rowid DESC) AS local_rank
-            FROM durable_jobs WHERE state IN ('uploaded_only','succeeded','failed','cancelled')
+            FROM durable_jobs WHERE state IN ('uploaded_only','succeeded','failed','cancelled'){held}
          )
          SELECT id,document FROM ranked
          WHERE updated<=?3 OR local_rank>?1 OR id NOT IN (
              SELECT id FROM ranked WHERE local_rank<=?1 AND updated>?3
              ORDER BY updated DESC,sequence DESC LIMIT ?2
-         )")?;
+         )"))?;
     let removed = statement
         .query_map(
             params![per_tenant as i64, global as i64, now() - 86400],
@@ -2589,6 +2593,12 @@ pub(crate) fn user(
             receipt,
         } => {
             let mut job = owned(tx, &job_id, tenant)?;
+            // The Sync batch owns its retained evidence and reconciliation.
+            #[cfg(feature = "desktop_rebuild")]
+            ensure!(
+                job.kind != JobKind::Sync,
+                "Sync cannot use generic effect reconciliation"
+            );
             #[cfg(feature = "desktop_rebuild")]
             ensure!(
                 decision != Decision::ConfirmSucceeded
