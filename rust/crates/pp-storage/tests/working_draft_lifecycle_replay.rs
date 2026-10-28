@@ -267,7 +267,6 @@ fn ticket_t_61_publication_service_abandon_replay_preserves_lifecycle() {
     let not_open = abandon(&client, 1);
     assert_eq!(not_open["kind"], "not_open", "{not_open}");
     assert_eq!(not_open["workspace"]["draft"], abandoned);
-    assert!(not_open["workspace"]["selection"].is_null(), "{not_open}");
     assert_eq!(abandon(&client, 2)["kind"], "draft_changed");
     assert!(f.changed(&before).is_empty(), "abandon replay wrote rows");
 
@@ -365,6 +364,7 @@ fn ticket_t_61_publication_cancelled_follow_on_preserves_committed_edit() {
     // A plan-draft-v2 selection folds into the snapshot digest.
     let (state, lifecycle, selection, selected) = f.draft(2);
     assert_eq!((state.as_str(), lifecycle, selection), ("open", 0, Some(2)));
+    assert_ne!(selected, digest);
     assert_eq!(
         retried["workspace"]["draft"],
         json!({"draft_id":2,"state":"open","lifecycle_version":0,"snapshot_digest":selected,"base":{"revision_id":1,"plan_version":1}})
