@@ -153,6 +153,9 @@ const profileSelectionState = vi.hoisted<{
 
 const healthQueryState = vi.hoisted<{ capabilities: string[] }>(() => ({ capabilities: [] }));
 
+/** A disabled review query reports isLoading false. This models that empty result. */
+const reviewQueryState = vi.hoisted(() => ({ empty: false }));
+
 const editedWorkspace: PlanDraftWorkspace = {
   ...replacementWorkspace,
   draft: { ...replacementWorkspace.draft, snapshot_digest: "c".repeat(64) },
@@ -193,7 +196,7 @@ vi.mock("./ProfileContext", () => ({
 
 vi.mock("../queries/planReview", () => ({
   usePlanReviewQuery: vi.fn(() => ({
-    data: acceptedReview,
+    data: reviewQueryState.empty ? null : acceptedReview,
     isLoading: false,
     error: null,
   })),
@@ -293,6 +296,7 @@ afterEach(() => {
 
 beforeEach(() => {
   healthQueryState.capabilities = [];
+  reviewQueryState.empty = false;
   profileSelectionState.selectedProfileId = 7;
   draftQueryState.hasOpenDraft = true;
   draftQueryState.hasOtherWorkspace = false;
@@ -370,23 +374,11 @@ describe("PlanWorkspaceProvider workspace read selection", () => {
   it("workspace_rebuild_read_stays_loading_until_the_draft_is_known", () => {
     healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
     draftQueryState.listPending = true;
-    vi.mocked(usePlanReviewQuery).mockImplementation(() => ({
-      data: null,
-      isLoading: false,
-      error: null,
-    }));
-    try {
-      const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
-      expect(hook.result.current.loading).toBe(true);
-      expect(hook.result.current.review).toBeNull();
-      expect(hook.result.current.error).toBeNull();
-    } finally {
-      vi.mocked(usePlanReviewQuery).mockImplementation(() => ({
-        data: acceptedReview,
-        isLoading: false,
-        error: null,
-      }));
-    }
+    reviewQueryState.empty = true;
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    expect(hook.result.current.loading).toBe(true);
+    expect(hook.result.current.review).toBeNull();
+    expect(hook.result.current.error).toBeNull();
   });
 
   it("workspace_rebuild_read_waits_for_the_open_draft", () => {
