@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import test from "node:test";
 import { fileURLToPath, URL } from "node:url";
 import { chromium } from "playwright-core";
@@ -16,9 +17,9 @@ const { loadConfig } = await import(new URL("config.js", serverRuntime).href);
 // browser to drop the socket and take the next snapshot.
 const realFetch = globalThis.fetch.bind(globalThis);
 globalThis.fetch = (input, init) => {
-  const target = input instanceof Request ? input.url : String(input);
+  const target = input instanceof globalThis.Request ? input.url : String(input);
   if (target.includes("api.github.com")) {
-    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    const signal = init?.signal ?? (input instanceof globalThis.Request ? input.signal : undefined);
     return new Promise((_resolve, reject) => {
       const abort = () => reject(signal?.reason ?? new Error("GitHub fixture aborted"));
       if (signal?.aborted) abort();
@@ -47,7 +48,7 @@ function waitFor(predicate, label, timeoutMs = 20_000) {
     const tick = () => {
       if (predicate()) resolve();
       else if (Date.now() - started > timeoutMs) reject(new Error(`timed out waiting for ${label}`));
-      else setTimeout(tick, 50);
+      else globalThis.setTimeout(tick, 50);
     };
     tick();
   });
@@ -112,9 +113,9 @@ async function prove(rebuild) {
     page.setDefaultTimeout(20_000);
     const seen = observe(page, planId);
     await page.addInitScript(() => {
-      const NativeWebSocket = window.WebSocket;
+      const NativeWebSocket = globalThis.WebSocket;
       const opened = [];
-      window.__ppJobSockets = opened;
+      globalThis.__ppJobSockets = opened;
       function JobSocket(url, protocols) {
         const socket = protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
         opened.push(socket);
@@ -125,7 +126,7 @@ async function prove(rebuild) {
       JobSocket.OPEN = NativeWebSocket.OPEN;
       JobSocket.CLOSING = NativeWebSocket.CLOSING;
       JobSocket.CLOSED = NativeWebSocket.CLOSED;
-      window.WebSocket = JobSocket;
+      globalThis.WebSocket = JobSocket;
     });
     // The Plan page applies the open draft once layers load. Hold that read so
     // Save pending choices can publish quantity 2 on the draft first.
@@ -191,7 +192,7 @@ async function prove(rebuild) {
     } else {
       assert.equal(await page.getByRole("heading", { name: "Feature toggles", exact: true }).count(), 0);
     }
-    const features = await page.evaluate(async (url) => (await fetch(url)).status, `${origin}/settings/features`);
+    const features = await page.evaluate(async (url) => (await globalThis.fetch(url)).status, `${origin}/settings/features`);
     assert.equal(features, rebuild ? 200 : 404);
 
     const started = page.waitForResponse((response) => {
@@ -208,7 +209,7 @@ async function prove(rebuild) {
     const firstEvent = JSON.parse(first.frames.at(-1));
     assert.equal(firstEvent.status === "done" || firstEvent.status === "error", false);
     await page.evaluate((id) => {
-      const sockets = window.__ppJobSockets ?? [];
+      const sockets = globalThis.__ppJobSockets ?? [];
       const open = sockets.filter((socket) => socket.url.endsWith(`/ws/jobs/${id}`) && socket.readyState === 1);
       if (open.length === 0) throw new Error(`no open socket for ${id}`);
       for (const socket of open) socket.close();
@@ -308,5 +309,5 @@ function draftQuantity(workspace) {
 }
 
 function waitForPollWindow() {
-  return new Promise((resolve) => setTimeout(resolve, 900));
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 900));
 }
