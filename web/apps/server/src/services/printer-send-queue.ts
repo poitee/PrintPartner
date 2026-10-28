@@ -4,6 +4,7 @@ import type { PrinterMachine } from "@print-partner/domain";
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
 import { tenantStorage } from "../middleware/tenant-context.js";
+import { rustOwnedNodeParticipants } from "../ownership/operation-cutover.js";
 import { loadFleet } from "./printer-fleet.js";
 import {
   assertPrinterUploadArtifactPath,
@@ -263,8 +264,10 @@ type ShutdownPorts = {
   db?: { defaultRepository?: AppRepository | null };
 };
 
-export function interruptPrinterUploadsOnShutdown(source: ShutdownPorts, tenantId?: string): PrinterSendQueueItem[] {
+export function interruptPrinterUploadsOnShutdown(dataDir: string, source: ShutdownPorts, tenantId?: string): PrinterSendQueueItem[] {
   printerUploadsHalted = true;
+  // After cutover the sending rows are Rust's uploads, which outlive this process.
+  if (rustOwnedNodeParticipants(dataDir).has("shutdown.interruptPrinterUploadsOnShutdown")) return [];
   const repo = source.repository ?? source.db?.defaultRepository ?? null;
   if (!repo) return [];
   if (tenantId !== undefined) return tenantStorage.run(tenantId, () => interruptInFlightPrinterSends(repo));

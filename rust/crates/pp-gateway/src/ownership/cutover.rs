@@ -632,6 +632,7 @@ mod tests {
             "export.direct-3mf",
             "export.kit-bundle",
             "export.stl-pack",
+            "printer.send-queue",
         ] {
             expected.extend(
                 index
@@ -642,13 +643,13 @@ mod tests {
             );
         }
         assert_eq!(fenced, &expected);
-        assert_eq!(fenced.len(), 15);
+        assert_eq!(fenced.len(), 20);
         for participant in fenced {
             assert!(node_fences(participant));
         }
         assert!(node_fences("http.GET /ws/profile-sync"));
         for unfenced in [
-            "job.printer-upload",
+            "migration.migratePrintOutcomesBlob",
             "assistant.propose_add_source",
             "startup.seedStockSlicerInstancesIfEmpty",
         ] {

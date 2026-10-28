@@ -273,6 +273,12 @@ export class InProcessJobRunner {
     }
   }
 
+  /** Whether the cutover record in this runner's data directory gives `participant` to Rust. */
+  rustOwns(participant: string): boolean {
+    this.rustOwnedParticipants ??= rustOwnedNodeParticipants(this.deps.dataDir);
+    return this.rustOwnedParticipants.has(participant);
+  }
+
   /**
    * Refuses a job the cutover record gives to Rust. The runner reads the record
    * from its own data directory, so no entry point has to admit it first.
@@ -280,8 +286,7 @@ export class InProcessJobRunner {
    * process stays current.
    */
   private requireNodeOwnedJob(kind: JobKind): void {
-    this.rustOwnedParticipants ??= rustOwnedNodeParticipants(this.deps.dataDir);
-    if (this.rustOwnedParticipants.has(`job.${kind}`)) {
+    if (this.rustOwns(`job.${kind}`)) {
       throw new OwnershipAdmissionError("rust_owner", `Rust owns job.${kind}; Node does not run it`);
     }
   }

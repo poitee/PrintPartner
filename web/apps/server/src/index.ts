@@ -13,7 +13,7 @@ startServer(config)
       app.log.info({ signal }, "received shutdown signal, draining connections");
       void (async () => {
         try {
-          interruptPrinterUploadsOnShutdown(ports);
+          interruptPrinterUploadsOnShutdown(config.dataDir, ports);
           await app.close();
           await ports.db.close();
           process.exit(0);

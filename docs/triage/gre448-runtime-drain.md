@@ -904,10 +904,84 @@ Tests:
   is listed, while `export-kit-bundle` still starts. With a `source.sync`
   record, a fresh runner refuses `sync` without any admission call.
 
-Still open: `job.printer-upload`. It belongs with every writer of the printer
-send queue, including `GET /printer-send-queue` (it reconciles rows),
-enqueue, dispatch, drain and cancel. It also needs a fence for the shutdown
-hook `interruptPrinterUploadsOnShutdown` and a decision on the queue path
-rewrite in `migrateLegacySelfHostExports`. Fences for the other assistant
-actions and startup hooks (GRE-593), a live `CoreRuntime` cutover, and Mac
-logout (parent gate) also remain.
+Still open after this slice: see "Printer send queue switches with every
+writer" below.
+
+## Printer send queue switches with every writer
+
+`job.printer-upload` and every Node writer of the `printer.send_queue` setting
+are now one operation, `printer.send-queue`:
+
+| Participant | Writes |
+|---|---|
+| `GET /printer-send-queue` and alias (HEAD twins inherit) | interrupts `sending` rows whose job Node no longer has |
+| `POST /printer-send-queue` and alias | enqueues a row |
+| `POST /printer-send-queue/:id/dispatch`, `POST /printer-send-queue/drain`, each with its alias | claims rows and starts upload jobs |
+| `DELETE /printer-send-queue/:id` and alias | cancels a row |
+| `POST /jobs/printer-upload` and alias | starts an upload job |
+| `job.printer-upload` | marks the row done or failed |
+| `reconcile.reconcilePrinterSendsAfterProcessStart` | interrupts `sending` rows when the routes register |
+| `reconcile.reconcileMissingPrinterUploadJob` | interrupts a `sending` row from `GET /jobs/:id` when Node does not know the job |
+| `shutdown.interruptPrinterUploadsOnShutdown` | interrupts `sending` rows when Node stops |
+| `migration.migrateLegacySelfHostExports` | moves legacy exports under `tenant-default` and rewrites queue artifact paths |
+
+`shutdown` and `reconcile` are new participant kinds. They name a write that
+Node makes while it stops, or inside a route that stays with Node
+(`GET /jobs/:id` serves every job kind). The ownership census reads them from
+the literal ids at the Node checks in `routes/jobs.ts`,
+`routes/printer-send-queue.ts` and `services/printer-send-queue.ts`, and
+requires each id to name a call in that file.
+
+Decision on the legacy export migration: the whole migration moves with the
+queue. Moving the files without rewriting the queue paths would leave rows
+pointing at files that are gone, and rewriting rows Rust owns would split the
+operation. Node has run the migration on every start before cutover, and
+pp-gateway commits a cutover only after Node drained, so a data directory with
+a record has already been migrated.
+
+`GET /printer-send-queue/suggestions` only reads the queue and stays with Node.
+
+Node fences, all read from the cutover record in the data directory:
+
+- `InProcessJobRunner.start("printer-upload")` refuses with `rust_owner` (503),
+  as for the export jobs. The new `InProcessJobRunner.rustOwns(participant)`
+  holds the one cached read of the record.
+- The route registration skips the startup reconcile, and `GET /jobs/:id`
+  skips the missing-job reconcile, through `rustOwns`.
+- `interruptPrinterUploadsOnShutdown(dataDir, ports, tenantId?)` still halts
+  local uploads but leaves the rows alone. `index.ts` passes
+  `config.dataDir`; `desktop.ts` passes the desktop setup's `data_dir`.
+- `app.ts` skips `migrateLegacySelfHostExports`.
+
+The unresolved resource partition drops from 375 to 368 entries: six route
+operations, the job and the migration became one operation.
+
+Tests:
+
+- `ticket_t_3_drain_cutover_switches_printer_send_queue_with_every_writer`
+  checks the exact 19-participant set, commits it, recovers every participant
+  as Rust-owned while suggestions and `GET /jobs/:id` stay with Node, and
+  refuses a planted record without the shutdown hook
+  (`participant_set_mismatch`).
+- `ticket_t_3_drain_cutover_gateway_routes_printer_send_queue_operation`
+  starts the gateway with the operation switched. Every queue route, the
+  upload route and their aliases return `rust_owner_unavailable` and Node sees
+  no forwarded request; suggestions still reach Node.
+- `ticket_t_3_drain_node_fence_list_names_bundled_operations` now holds the
+  list to 20 entries.
+- `ticket_t_7_ownership_manifest_claims_every_source_participant` counts the
+  three `shutdown`/`reconcile` participants from Node source.
+- Node `src/ownership/operation-cutover.test.ts`: with no record, a legacy
+  upload is moved and its stale `sending` row becomes `error` at startup. With
+  a `printer.send-queue` record the row stays `sending` with its legacy path
+  through startup, `GET /jobs/job-gone` and the shutdown hook, and the runner
+  refuses `printer-upload`.
+
+Still open:
+
+- Plan Apply (`applyPlanChanges`, `applyCheckoffRemap` in `db/repository.ts`)
+  remaps `checkoff_units` in queue rows in the same transaction as the
+  checkoff links. It belongs with the Plan Apply and checkoff operations, which
+  have not switched, so it is not fenced here.
+- Fences for the other assistant actions and startup hooks (GRE-593), a live
+  `CoreRuntime` cutover, and Mac logout (parent gate).
