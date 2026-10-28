@@ -10,9 +10,15 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { TENANT_FEATURE_TOGGLES_CAPABILITY, type JobEvent, type JobSnapshot } from "@print-partner/contracts";
+import { notifyEngineUnauthorized } from "../api/contractRequest";
 import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
-import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
+import {
+  connectJobWebSocket,
+  JobNotFoundError,
+  JobSocketClosedError,
+  JobSocketSetupError,
+} from "../api/jobWebSocket";
 import { invalidateAfterJob } from "../queries/invalidation";
 import { invalidateAcceptedPlateExportJobs } from "../queries/acceptedPlates";
 import { useHealthQuery } from "../queries/health";
@@ -293,10 +299,20 @@ export function JobProvider({ children }: { children: ReactNode }) {
             if (error instanceof JobNotFoundError) {
               finish({ job_id: jobId, kind, status: "error", message: error.message,
                 error: error.message, progress: null, result: null });
+              return;
             }
-            /* Other socket errors stay on this subscription. Flag off still
-               finishes through HTTP polling. Rebuild mode waits for the next
-               socket snapshot, including the one after reconnect. */
+            // A stream error that will reconnect stays on this subscription.
+            // Flag off still finishes through the HTTP poll. Rebuild mode has
+            // no poll, so a close that will not reconnect ends the row here.
+            if (!rebuildSnapshots) return;
+            if (!(error instanceof JobSocketClosedError) && !(error instanceof JobSocketSetupError)) {
+              return;
+            }
+            if (error instanceof JobSocketClosedError &&
+                (error.reason === "Session expired" || error.reason === "Session revoked")) {
+              notifyEngineUnauthorized();
+            }
+            failObservation(error);
           },
         );
 

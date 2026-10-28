@@ -1097,6 +1097,12 @@ The command runs `desktop_rebuild_flag_off_keeps_existing_flow` and
 `desktop_rebuild_opt_in_save_and_reconnect`. Run it from the repository root
 after that build. `npm run test:browser` from `web/` runs the same file.
 
+A rebuild job row ends when its socket closes 1008 for a reason other than
+`Job not found`, including `Session expired` and `Session revoked`. Those
+session reasons also call `notifyEngineUnauthorized`. An ordinary drop still
+reconnects, and the flag-off poll stays. That close handling is GRE-1001
+(`docs/gre-1001-job-session.md`).
+
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
 the update check with Node's literal result and asserts the public read and each list.
