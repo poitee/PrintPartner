@@ -1139,7 +1139,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       rebaseActivePlanDraft,
       reconcileActivePlanDraft,
       editActivePlanDraft,
-      loading: isLoading,
+      loading: isLoading || (draftIdentityPending && review == null),
       error:
         queryError instanceof Error
           ? queryError.message
@@ -1179,6 +1179,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       reconcileActivePlanDraft,
       editActivePlanDraft,
       isLoading,
+      draftIdentityPending,
       queryError,
       refresh,
       setQuantity,

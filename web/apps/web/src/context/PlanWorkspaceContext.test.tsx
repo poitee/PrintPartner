@@ -367,6 +367,28 @@ describe("PlanWorkspaceProvider workspace read selection", () => {
     }
   });
 
+  it("workspace_rebuild_read_stays_loading_until_the_draft_is_known", () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    draftQueryState.listPending = true;
+    vi.mocked(usePlanReviewQuery).mockImplementation(() => ({
+      data: null,
+      isLoading: false,
+      error: null,
+    }));
+    try {
+      const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+      expect(hook.result.current.loading).toBe(true);
+      expect(hook.result.current.review).toBeNull();
+      expect(hook.result.current.error).toBeNull();
+    } finally {
+      vi.mocked(usePlanReviewQuery).mockImplementation(() => ({
+        data: acceptedReview,
+        isLoading: false,
+        error: null,
+      }));
+    }
+  });
+
   it("workspace_rebuild_read_waits_for_the_open_draft", () => {
     healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
     renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
