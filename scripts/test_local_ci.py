@@ -65,8 +65,8 @@ class LocalCiTests(unittest.TestCase):
         ci = LocalCi(self)
         self.assertEqual(ci(), 0)
         for step in ["fmt", "clippy-off", "clippy-on", "nextest-off", "nextest-on", "doc-off", "doc-on",
-                     "web-assets", "ast-grep", "boundaries", "selector-tests", "node-fixtures",
-                     "actionlint", "zizmor"]:
+                     "web-assets", "workaround-ratchet", "ast-grep", "boundaries", "selector-tests",
+                     "node-fixtures", "actionlint", "zizmor"]:
             self.assertEqual(ci.summary[step], "PASS", step)
         for step in ["rust-windows", "rust-macos", "pr-evidence"]:
             self.assertEqual(ci.summary[step], "SKIP", step)
@@ -142,6 +142,17 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci.ran, [])
         for step in ["fmt", "nextest-on", "node-fixtures", "rust-windows"]:
             self.assertIn(step, ci.output)
+
+    def test_the_ratchet_runs_after_web_assets_installs_its_parser(self):
+        ci = LocalCi(self)
+        self.assertEqual(ci(), 0)
+        self.assertLess(ci.ran.index("web-assets"), ci.ran.index("workaround-ratchet"))
+
+    def test_just_ci_runs_this_command_with_its_arguments_and_no_step_list_of_its_own(self):
+        recipe = (ROOT / "justfile").read_text().split("\nci *args:\n", 1)[1]
+        commands = [line.strip() for line in recipe.splitlines() if line.startswith((" ", "\t"))]
+        self.assertEqual(commands, ['python3 scripts/local-ci.py "$@"'])
+        self.assertIn("set positional-arguments", (ROOT / "justfile").read_text())
 
     def test_mirrored_commands_match_the_workflow_steps_they_copy(self):
         checked = 0

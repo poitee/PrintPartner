@@ -63,13 +63,15 @@ Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, a
 
 ## Run the required checks with one command
 
-Run this command from the repository root before you push:
+Run this command from the repository before you push:
 
 ```sh
-PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 python3 scripts/local-ci.py
+PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 just ci
 ```
 
-It runs each step below in order and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `--list`. To select steps, use `--only fmt,clippy-off` or `--skip nextest-on`.
+`just ci` passes its arguments to `python3 scripts/local-ci.py`, which holds the only list of steps. Without [just](https://github.com/casey/just), run `python3 scripts/local-ci.py` from the repository root with the same arguments. Agents run this command before they push, as [Gate evidence](../contributing/gate-evidence.md#run-ci-locally-before-you-push) says.
+
+It runs each step below in order and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `just ci --list`. To select steps, use `just ci --only fmt,clippy-off` or `just ci --skip nextest-on`.
 
 | Step | What it runs | CI source |
 |------|--------------|-----------|
@@ -82,6 +84,7 @@ It runs each step below in order and continues after a failure, so one run repor
 | `historical-schema` | `rust/scripts/fetch-historical-schema-commits.sh`, which fetches the pinned commits that the pp-storage tests archive. It runs before nextest. | `rust (linux)` (required) |
 | `fmt`, `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 4 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
 | `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
+| `workaround-ratchet` | `scripts/workaround-ratchet.mjs` and its tests, which cap `TODO`, `eslint-disable` and Rust `#[allow]` markers. It runs after `web-assets`, which installs its parser. | `web` job of `web-ci.yml` |
 | `node-fixtures` | The `--check` mode of each Node parity fixture generator, and the HTTP route inventory diff, on Node 22.23.3 | `desktop-contracts.yml` and `auth-admission-freshness.yml` |
 
 Except where noted below, each step runs the command lines of its workflow step without changes. The script sets the same environment that CI sets: `NEXTEST_FILTER`, `PP_TEST_NODE`, `VITE_PRINT_PARTNER_DESKTOP`, and `RUNNER_TEMP`. The cargo steps also get `INSTA_UPDATE=no`, so a snapshot mismatch fails the step instead of writing a `.snap.new` file. `RUNNER_TEMP` is under `$CARGO_TARGET_DIR/local-ci`, or under `rust/target/local-ci` if `CARGO_TARGET_DIR` is not set. The local command differs from CI in these ways:
@@ -98,7 +101,7 @@ The command does not cover these checks:
 - `rust (windows)` and `rust (macos)`. They need Windows and macOS runners. The command reports both as `SKIP`.
 - `Lint Evidence block`. It reads the pull request body. The command reports it as `SKIP`.
 - `cargo deny check` (`desktop-deny.yml`). It runs on changes to `rust/**`. To run it locally, use `cargo deny --manifest-path rust/Cargo.toml --all-features check`. CI also runs `cargo deny --manifest-path rust/fuzz/Cargo.toml --all-features --locked check`.
-- The Linux rebuild partitions, the Desktop runtime, Native macOS bundle, web and Docker workflows, and the `contracts:verify` and `test:desktop-parity` steps of `desktop-contracts.yml`.
+- The Linux rebuild partitions, the Desktop runtime, Native macOS bundle and Docker workflows, the `web-ci.yml` steps other than the workaround ratchet, and the `contracts:verify` and `test:desktop-parity` steps of `desktop-contracts.yml`.
 
 ## Run a job locally
 

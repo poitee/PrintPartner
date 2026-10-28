@@ -38,6 +38,27 @@ node scripts/lint-pr-evidence.mjs --body-file body.md
 
 The checker also accepts `PR_BODY` or `--stdin`.
 
+## Run CI locally before you push
+
+Agents and contributors run the required CI checks before each push:
+
+```sh
+PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 just ci
+```
+
+The command runs fmt, clippy with `-D warnings`, nextest and doctests with
+`desktop_rebuild` off and on, the boundary, ast-grep and workaround ratchet
+checks, and the Node parity fixture freshness checks. It continues after a
+failure and ends with one `PASS`, `FAIL` or `SKIP` line per step. Fix every
+`FAIL` before you push. A `SKIP` line names the missing tool or pinned version;
+list each skipped step under Evidence.
+
+Without `just`, run `python3 scripts/local-ci.py` with the same arguments.
+`just ci --list` prints the step ids, and `--only` or `--skip` takes a
+comma-separated list of them. Change steps in `scripts/local-ci.py`, not in the
+`justfile`. [Continuous integration](../development/ci.md#run-the-required-checks-with-one-command)
+lists each step, its CI source and what the command does not cover.
+
 ## Desktop and tray capture
 
 For changes to the desktop app, including Tauri tray menus, windows, and native
