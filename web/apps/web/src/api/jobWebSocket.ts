@@ -8,6 +8,22 @@ export class JobNotFoundError extends Error {
   }
 }
 
+/** A 1008 close other than `Job not found`. The socket does not reconnect. */
+export class JobSocketClosedError extends Error {
+  constructor(readonly reason: string) {
+    super(reason.length > 0 ? reason : "Job socket closed");
+    this.name = "JobSocketClosedError";
+  }
+}
+
+/** The job socket URL could not be built. Nothing is connected. */
+export class JobSocketSetupError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "JobSocketSetupError";
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -43,7 +59,7 @@ export function connectJobWebSocket(
     url = new URL(`${origin || "http://localhost"}/ws/jobs/${encodeURIComponent(jobId)}`);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   } catch (error) {
-    onError(error instanceof Error ? error : new Error(String(error)));
+    onError(new JobSocketSetupError(error));
     return () => undefined;
   }
 
@@ -95,10 +111,15 @@ export function connectJobWebSocket(
           onError(new JobNotFoundError());
           return;
         }
-        // Policy rejection is terminal. Every other close can be a restart,
-        // including a no-code shutdown (1005 in the browser).
-        if (event.code === 1008) closed = true;
-        else reconnect();
+        // A 1008 close will not reconnect. Report it once, including session
+        // expiry. Every other close can be a restart, including a no-code
+        // shutdown, code 1005 in the browser.
+        if (event.code === 1008) {
+          closed = true;
+          onError(new JobSocketClosedError(event.reason));
+          return;
+        }
+        reconnect();
       };
     } catch (error) {
       onError(error instanceof Error ? error : new Error(String(error)));
