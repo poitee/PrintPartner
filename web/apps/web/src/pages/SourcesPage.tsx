@@ -171,7 +171,9 @@ export default function SourcesPage() {
   const { health, error: healthError, loading: healthLoading } = useEngineHealth();
   const hostedPlanning = isHostedPlanning(health);
   const addActions = libraryAddActionsForHost(hostedPlanning);
-  const { busy, runJob } = useJobRunner("sync");
+  const { busy: syncBusy, runJob } = useJobRunner("sync");
+  const { busy: importScanBusy, runJob: runImportScanJob } = useJobRunner("import-scan");
+  const busy = syncBusy || importScanBusy;
   const { busy: updateBusy, runJob: runUpdateJob } =
     useJobRunner("check-source-updates");
   const { activeJobs } = useJobContext();
@@ -1529,9 +1531,10 @@ export default function SourcesPage() {
           void assignSourceCategory(source, category)
         }
         runImportScan={(sourceId) => {
-          void runJob(
+          void runImportScanJob(
             () => startImportScan(sourceId),
             () => {},
+            { sourceIds: [sourceId] },
           );
         }}
       />
