@@ -12,16 +12,18 @@ Job while any of its Sync targets is still:
 - `pending`, `claimed` or `reconciliation_required`, or
 - `succeeded` or `failed` with an unacknowledged reservation.
 
-Those rows are the durable claim and the retained evidence that block another
-Job from claiming the same Source. A skipped Job keeps its batch, target,
-document, history and key rows as they were. Retention still prunes and counts
-other Jobs.
+Deleting the Job row cascades to its batch and target rows, so pruning would
+drop that evidence. A `claimed` row, or a `succeeded` or `failed` row with an
+unacknowledged reservation, is also the durable claim that blocks another Sync
+Job from claiming the same Source. `pending` and `reconciliation_required` rows
+do not block a claim. They are kept because the batch has not settled them. A
+skipped Job keeps its batch, target, document, history and key rows as they
+were. Retention still prunes and counts other Jobs.
 
 Retention can prune a Sync Job whose targets are all settled and acknowledged.
-Deleting the Job row cascades to its batch and target rows. The archived document in
-`durable_job_keys` keeps the finish result: the terminal state, the version and
-the `public_result` aggregate. An Enqueue replay with the original key returns
-that archived Job.
+The archived document in `durable_job_keys` keeps the finish result: the
+terminal state, the version and the `public_result` aggregate. An Enqueue
+replay with the original key returns that archived Job.
 
 ## Reconciliation
 
@@ -42,9 +44,9 @@ covers that path.
 `sync_prune_refuses_retained_claim` runs three held shapes: a claimed target,
 an unacknowledged `local_read` failure, and a halted claim left in
 `reconciliation_required`. The test forces each held Job terminal and ages it
-past the 24 hour window, next to an aged finished Job. `retain_jobs(1, 1)` returns 1,
-the held rows are unchanged, and the finished Job's archived document keeps the
-aggregate. A second call returns 0 and changes nothing.
+past the 24 hour window, next to an aged finished Job. `retain_jobs(1, 1)`
+returns 1, the held rows are unchanged, and the finished Job's archived
+document keeps the aggregate. A second call returns 0 and changes nothing.
 
 `sync_reconciliation_uses_batch_owner` recovers a Sync Job with a claimed
 target and an unconfirmed generic effect. Every Reconcile decision fails with
