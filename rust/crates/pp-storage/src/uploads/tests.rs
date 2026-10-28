@@ -2078,7 +2078,7 @@ mod capture_admission {
 mod capture_correlation {
     use super::super::{
         AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedPayloadV1, File, OwnedInput,
-        Phase, State, Target,
+        Phase, ResolvedCapturedClaim, State, Target,
     };
     use crate::{
         Limits, WriterOwner,
@@ -2185,39 +2185,63 @@ mod capture_correlation {
             )
             .unwrap();
         let manifest = prepared.manifest().to_vec();
-        assert!(matches!(
+        let mut conflicted = inventory.clone();
+        conflicted[0].sha256 = "b".repeat(64);
+        let mut tampered: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        tampered["requested_files"][0]["sha256"] = "b".repeat(64).into();
+        let tampered = serde_json::to_vec(&tampered).unwrap();
+
+        let before_admit = journal_snapshot(&root);
+        assert_eq!(
             client
                 .correlate_capture_manifest(manifest.clone(), inventory.clone())
                 .unwrap(),
             CaptureJournalCorrelation::Absent
-        ));
-        let before_admit = journal_snapshot(&root);
+        );
+        assert_eq!(
+            client
+                .correlate_capture_manifest(manifest.clone(), conflicted.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::MismatchRepairRequired
+        );
+        assert_eq!(
+            client
+                .correlate_capture_manifest(tampered, inventory.clone())
+                .err()
+                .unwrap()
+                .to_string(),
+            "Capture requested digest mismatch"
+        );
+        assert_eq!(journal_snapshot(&root), before_admit);
 
         let admitted = client
             .admit_prepared(prepared, 0, client.accounting_epoch())
             .unwrap();
         let after_admit = journal_snapshot(&root);
+        let epoch = client.accounting_epoch();
         assert_ne!(before_admit, after_admit);
-
-        let matched = client
-            .correlate_capture_manifest(manifest.clone(), inventory.clone())
-            .unwrap();
-        assert!(matches!(
-            matched,
-            CaptureJournalCorrelation::ExactAdmitted(_)
-        ));
-        assert_eq!(journal_snapshot(&root), after_admit);
         assert_eq!(admitted.input_version, 2);
 
-        let mut conflicted = inventory.clone();
-        conflicted[0].sha256 = "b".repeat(64);
-        assert!(matches!(
+        assert_eq!(
+            client
+                .correlate_capture_manifest(manifest.clone(), inventory.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::ExactAdmitted(ResolvedCapturedClaim {
+                manifest: manifest.clone(),
+                inventory: inventory.clone(),
+                tenant: admitted.tenant.clone(),
+                operation_key: key.into(),
+                job_id: admitted.job_id.clone(),
+            })
+        );
+        assert_eq!(
             client
                 .correlate_capture_manifest(manifest, conflicted)
                 .unwrap(),
             CaptureJournalCorrelation::MismatchRepairRequired
-        ));
+        );
         assert_eq!(journal_snapshot(&root), after_admit);
+        assert_eq!(client.accounting_epoch(), epoch);
         owner.shutdown().unwrap();
     }
 
@@ -2253,16 +2277,17 @@ mod capture_correlation {
             .unwrap();
 
         let CaptureJournalCorrelation::ExactAdmitted(mut claim) = client
-            .correlate_capture_manifest(manifest, inventory)
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
             .unwrap()
         else {
             panic!("expected exact admitted claim");
         };
-        // Keep the journal valid so load→validate_operation succeeds; only the
-        // retained claim inventory diverges, forcing capture_claim_matches.
+        // Keep the journal valid so load and validate_operation succeed. Only
+        // the retained claim inventory diverges, forcing capture_claim_matches.
         claim.inventory[0].sha256 = "c".repeat(64);
 
         let before = journal_snapshot(&root);
+        let epoch = client.accounting_epoch();
         let refused = worker(&owner)
             .claim_resolved_import(claim)
             .err()
@@ -2270,7 +2295,20 @@ mod capture_correlation {
             .to_string();
         assert_eq!(refused, "Captured import requires repair");
         assert_eq!(journal_snapshot(&root), before);
-        assert_eq!(admitted.key, key);
+        assert_eq!(client.accounting_epoch(), epoch);
+        // The queued job is untouched, so the original claim still resolves.
+        assert_eq!(
+            client
+                .correlate_capture_manifest(manifest.clone(), inventory.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::ExactAdmitted(ResolvedCapturedClaim {
+                manifest,
+                inventory,
+                tenant: admitted.tenant.clone(),
+                operation_key: key.into(),
+                job_id: admitted.job_id.clone(),
+            })
+        );
         owner.shutdown().unwrap();
     }
 

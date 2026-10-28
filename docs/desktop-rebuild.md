@@ -1442,6 +1442,13 @@ revalidated in the claim transaction against the admitted operation, inventory,
 captured job payload, and Source; a changed inventory or other mismatch refuses
 with `Captured import requires repair` and leaves queued job rows unchanged.
 
+GRE-772 also makes correlation verify the manifest digests before it reads the
+journal, so tampered bytes refuse with an error instead of returning `Absent`.
+`Absent` also requires the retained inventory to match the manifest. A changed
+inventory returns `MismatchRepairRequired`, so recovery does not re-admit a
+capture whose files changed. Correlation and refused claims leave journal rows,
+job rows, and the accounting epoch unchanged.
+
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_admission

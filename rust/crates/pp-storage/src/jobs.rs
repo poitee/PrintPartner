@@ -1838,7 +1838,7 @@ pub(crate) fn execute(
             policy,
             storage,
         } => {
-            let job_id = crate::uploads::validate_resolved_claim(&tx, &resolved)?.to_owned();
+            let job_id = crate::uploads::validate_resolved_claim(&tx, &resolved)?;
             claim(
                 &tx,
                 &worker,
