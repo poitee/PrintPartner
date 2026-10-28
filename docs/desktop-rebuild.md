@@ -723,6 +723,23 @@ records each refusal's message. This change is web-only and adds no new Rust
 npm run test -w @print-partner/web -- src/pages/PartsPage.recovery.test.tsx src/components/CommandPalette.retry.test.tsx src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/hooks/useKitManifestAutosave.test.ts
 ```
 
+### D29 draft lifecycle replay and cancelled selection
+
+GRE-816 adds regression proofs for behavior already on main; it changes no
+production code. `abandon` writes only the `plan_drafts` row and starts no
+Required-unit selection. Retrying it with the same lifecycle version returns
+the same `ready` identity, before and after a later Save, and writes nothing. A
+Save that still names the open draft refuses with `draft_changed` and writes
+nothing; a Save without a source publishes and leaves the abandoned draft as it
+was. When the selection after `edit` is cancelled, the edit stays committed
+and unselected, survives a writer restart, and a retry of the same edit only
+selects. Default builds omit the target.
+
+```sh
+cargo nextest run -p pp-storage --manifest-path rust/Cargo.toml --locked --features desktop_rebuild \
+  -E 'binary(working_draft_lifecycle_replay)'
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
