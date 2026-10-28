@@ -23,9 +23,10 @@ New Rust rebuild code compiles only with the `desktop_rebuild` Cargo feature, wh
 ## Open the pull request
 
 1. Meet the [definition of done](definition-of-done.md).
-2. Fill in every section of the [pull request template](../../.github/pull_request_template.md). Put verification output under `## Evidence`.
-3. Start the PR description with `Refs GRE-xxx` for a partial slice or `Fixes GRE-xxx` for the PR that completes the ticket.
-4. Move the ticket to In Review only when the PR is ready for review. If the PR is blocked or escalated, keep the ticket In Progress and add a comment.
+2. Run `just ci` and fix every failure before you push. [Gate evidence](../contributing/gate-evidence.md#run-ci-locally-before-you-push) describes the command.
+3. Fill in every section of the [pull request template](../../.github/pull_request_template.md). Put verification output under `## Evidence`.
+4. Start the PR description with `Refs GRE-xxx` for a partial slice or `Fixes GRE-xxx` for the PR that completes the ticket.
+5. Move the ticket to In Review only when the PR is ready for review. If the PR is blocked or escalated, keep the ticket In Progress and add a comment.
 
 ## After the merge
 
