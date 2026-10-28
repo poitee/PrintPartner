@@ -10,4 +10,4 @@ Without that capability, including while health is still loading, the review que
 npm run test -w @print-partner/web -- src/queries/planReview.test.tsx src/context/PlanWorkspaceContext.test.tsx src/context/PlanWorkspaceContext.rebuildApply.test.tsx
 ```
 
-That command runs the existing tests plus `workspace_rebuild_read_keeps_revision_identity` and `workspace_flag_off_preserves_query_path`.
+That command runs the existing tests plus `workspace_rebuild_read_keeps_revision_identity`, `workspace_flag_off_preserves_query_path`, and `workspace_rebuild_apply_does_not_repin_a_closed_draft`.
