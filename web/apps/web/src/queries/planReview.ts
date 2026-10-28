@@ -61,7 +61,9 @@ export function usePlanReviewQuery(
     },
     enabled: (options?.enabled ?? true) && profileId != null && profileId > 0,
     placeholderData: (previous, query) => {
-      if (query?.queryKey[1] !== profileId || query.queryKey[2] !== includeExcluded) return undefined;
+      if (query?.queryKey[1] !== profileId || query?.queryKey[2] !== includeExcluded) return undefined;
+      // The accepted query is unbound. A pinned slot must not stand in for it.
+      if (revisionId === undefined && query.queryKey.length >= 5) return undefined;
       if (revisionId !== undefined && acceptedRevisionId(previous) !== revisionId) return undefined;
       return previous;
     },

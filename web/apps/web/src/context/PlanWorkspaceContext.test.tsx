@@ -383,10 +383,14 @@ describe("PlanWorkspaceProvider workspace read selection", () => {
 
   it("workspace_rebuild_read_waits_for_the_open_draft", () => {
     healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
-    renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    draftQueryState.hasWorkspace = false;
+    reviewQueryState.empty = true;
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
     expect(vi.mocked(usePlanReviewQuery).mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({ enabled: false }),
     );
+    expect(hook.result.current.loading).toBe(true);
+    expect(hook.result.current.review).toBeNull();
   });
 
   it("workspace_rebuild_read_skips_a_stale_draft_revision", async () => {

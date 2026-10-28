@@ -205,6 +205,29 @@ describe("Plan workspace read selection", () => {
     expect(shown.result.current.data).toBeUndefined();
     shown.unmount();
   });
+
+  it("workspace_rebuild_read_does_not_show_a_pinned_review_as_accepted", async () => {
+    healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(queryKeys.planFeatures(7), features);
+    let release: (value: PlanReview) => void = () => {};
+    vi.mocked(fetchPlanReview).mockImplementation(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    const shown = renderHook(
+      ({ revisionId }: { revisionId?: number | null }) => usePlanReviewQuery(7, { revisionId }),
+      { wrapper: wrapper(client), initialProps: { revisionId: 3 as number | null | undefined } },
+    );
+    await act(async () => { release(reviewFor(3)); });
+    await waitFor(() => expect(shown.result.current.data?.accepted_basis?.plan_revision_id).toBe(3));
+    shown.rerender({ revisionId: undefined });
+    expect(shown.result.current.isPlaceholderData).toBe(false);
+    expect(shown.result.current.data).toBeUndefined();
+    expect(shown.result.current.isLoading).toBe(true);
+    await act(async () => { release(reviewFor(4)); });
+    await waitFor(() => expect(shown.result.current.data?.accepted_basis?.plan_revision_id).toBe(4));
+    shown.unmount();
+  });
 });
 
 describe("Plan review mutations", () => {

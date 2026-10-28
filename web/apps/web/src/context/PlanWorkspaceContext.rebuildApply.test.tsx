@@ -154,7 +154,12 @@ describe("PlanWorkspaceProvider real review apply", () => {
       required_unit_mapping_digest: "d".repeat(64),
       applied_at: "2026-08-21T12:00:00.000Z",
     });
-    vi.mocked(fetchPlanReview).mockImplementation(async () => reviewFor(applyPhase.on ? 4 : 3));
+    const acceptedReview = held();
+    vi.mocked(fetchPlanReview).mockImplementation(() =>
+      applyPhase.on
+        ? acceptedReview.promise.then(() => reviewFor(4))
+        : Promise.resolve(reviewFor(3)),
+    );
     const hook = renderHook(usePlanWorkspace, {
       wrapper: ({ children }: { children: ReactNode }) => (
         <QueryClientProvider client={client}>
@@ -166,6 +171,7 @@ describe("PlanWorkspaceProvider real review apply", () => {
       ),
     });
     await waitFor(() => expect(hook.result.current.review?.accepted_basis?.plan_revision_id).toBe(3));
+    client.removeQueries({ queryKey: queryKeys.planReview(7, false, true), exact: true });
     const pinnedKey = queryKeys.planReview(7, false, true, workspace.draft.base.revision_id);
     applyPhase.gate = workflow.promise;
     applyPhase.on = true;
@@ -179,9 +185,16 @@ describe("PlanWorkspaceProvider real review apply", () => {
       const listed = client.getQueryData<Array<{ state: string }>>(queryKeys.planDrafts(7));
       expect(listed?.[0]?.state).toBe("abandoned");
     });
+    await waitFor(() => {
+      expect(client.getQueryState(queryKeys.planReview(7, false, true))?.fetchStatus).toBe("fetching");
+      expect(hook.result.current.loading).toBe(true);
+      expect(hook.result.current.review).toBeNull();
+    });
     expect(settled).toBe(false);
     expect(hook.result.current.error).toBeNull();
     expect(client.getQueryState(pinnedKey)?.status).not.toBe("error");
+    acceptedReview.release();
+    await waitFor(() => expect(hook.result.current.review?.accepted_basis?.plan_revision_id).toBe(4));
     workflow.release();
     await act(async () => { await applying; });
     await waitFor(() => expect(hook.result.current.review?.accepted_basis?.plan_revision_id).toBe(4));
