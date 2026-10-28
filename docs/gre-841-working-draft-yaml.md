@@ -34,4 +34,4 @@ A random run of 4,000 documents built from these shapes found other differences.
 - An empty block scalar with a CRLF break, as in `a:\n  |\r\n`. js-yaml loads `""`. Rust loads `"\n"`.
 - An anchor name that runs into a tag or a quote, as in `&x!!str` or `&x'k':`. js-yaml refuses it. Rust accepts it.
 
-The known-difference list in `docs/desktop-rebuild.md` still names forms that now match js-yaml, including the two closed here. That file is left to the pull requests that own it.
+The known-difference list in `docs/desktop-rebuild.md` still names forms that now match js-yaml, including the own-line property form closed here. It does not list the tab after a block `?`. That file is left to the pull requests that own it.
