@@ -314,17 +314,22 @@ pub(crate) fn initialize(
     };
     // The first backup is the database exactly as opened, before configure
     // or any repair, seed, or step write. A legacy upgrade keeps an earlier
-    // copy because its pass is not one transaction.
+    // copy because its pass is not one transaction. With the feature, that
+    // copy is named for its from and to versions, as Node's upgrade guard
+    // names its backups, so a database restored at another version gets its
+    // own copy instead of reporting an unrelated older one.
     let first_step = if version < legacy_version {
         legacy_version
     } else {
         version + 1
     };
     let backup_path = if version < CURRENT_VERSION && populated {
-        let target = path
-            .parent()
-            .unwrap()
-            .join(format!("backups/pre-schema{first_step}.db"));
+        let name = if cfg!(feature = "desktop_rebuild") && version < legacy_version {
+            format!("backups/pre-schema{version}-to-{CURRENT_VERSION}.db")
+        } else {
+            format!("backups/pre-schema{first_step}.db")
+        };
+        let target = path.parent().unwrap().join(name);
         if version >= legacy_version || !target.exists() {
             backup(&conn, &target, true)?;
         }

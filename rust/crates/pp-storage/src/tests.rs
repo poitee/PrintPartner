@@ -430,6 +430,12 @@ fn reopen_preserves_the_pre_upgrade_backup() {
     let (owner, ready) = WriterOwner::open(&path, Limits::default()).unwrap();
     let backup = ready.backup.unwrap();
     owner.shutdown().unwrap();
+    let name = if cfg!(feature = "desktop_rebuild") {
+        format!("pre-schema33-to-{}.db", crate::schema::CURRENT_VERSION)
+    } else {
+        "pre-schema35.db".into()
+    };
+    assert_eq!(backup, path.join("backups").join(name));
     let version = |path: &Path| {
         Connection::open(path)
             .unwrap()
