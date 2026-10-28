@@ -1,0 +1,1229 @@
+[
+  {
+    "name": "own-line-verbatim-anchor-key",
+    "source": "a:\n  !<tag:yaml.org,2002:str> &x : ",
+    "expected": null
+  },
+  {
+    "name": "own-line-verbatim-anchor-key-crlf",
+    "source": "a:\r\n  !<tag:yaml.org,2002:str> &x : ",
+    "expected": null
+  },
+  {
+    "name": "own-line-verbatim-anchor-key-cr",
+    "source": "a:\r  !<tag:yaml.org,2002:str> &x : ",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-key",
+    "source": "a:\n  !!str &x : ",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-key-crlf",
+    "source": "a:\r\n  !!str &x : ",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-key-cr",
+    "source": "a:\r  !!str &x : ",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-key",
+    "source": "a:\n  !!str : ",
+    "expected": {
+      "a": {
+        "": null
+      }
+    }
+  },
+  {
+    "name": "own-line-str-key-crlf",
+    "source": "a:\r\n  !!str : ",
+    "expected": {
+      "a": {
+        "": null
+      }
+    }
+  },
+  {
+    "name": "own-line-str-key-cr",
+    "source": "a:\r  !!str : ",
+    "expected": {
+      "a": {
+        "": null
+      }
+    }
+  },
+  {
+    "name": "own-line-anchor-key",
+    "source": "a:\n  &x : ",
+    "expected": {
+      "a": {
+        "null": null
+      }
+    }
+  },
+  {
+    "name": "own-line-anchor-key-crlf",
+    "source": "a:\r\n  &x : ",
+    "expected": {
+      "a": {
+        "null": null
+      }
+    }
+  },
+  {
+    "name": "own-line-anchor-key-cr",
+    "source": "a:\r  &x : ",
+    "expected": {
+      "a": {
+        "null": null
+      }
+    }
+  },
+  {
+    "name": "own-line-str-anchor-value",
+    "source": "a:\n  !!str &x : b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-value-crlf",
+    "source": "a:\r\n  !!str &x : b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-value-cr",
+    "source": "a:\r  !!str &x : b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-plain-key",
+    "source": "a:\n  !!str &x k: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-plain-key-crlf",
+    "source": "a:\r\n  !!str &x k: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-plain-key-cr",
+    "source": "a:\r  !!str &x k: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-quoted-key",
+    "source": "a:\n  !!str &x \"k\": b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-quoted-key-crlf",
+    "source": "a:\r\n  !!str &x \"k\": b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-quoted-key-cr",
+    "source": "a:\r  !!str &x \"k\": b",
+    "expected": null
+  },
+  {
+    "name": "own-line-str-anchor-scalar",
+    "source": "a:\n  !!str &x k",
+    "expected": {
+      "a": "k"
+    }
+  },
+  {
+    "name": "own-line-str-anchor-scalar-crlf",
+    "source": "a:\r\n  !!str &x k",
+    "expected": {
+      "a": "k"
+    }
+  },
+  {
+    "name": "own-line-str-anchor-scalar-cr",
+    "source": "a:\r  !!str &x k",
+    "expected": {
+      "a": "k"
+    }
+  },
+  {
+    "name": "own-line-map-anchor-key",
+    "source": "a:\n  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-key-crlf",
+    "source": "a:\r\n  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-key-cr",
+    "source": "a:\r  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-plain-key",
+    "source": "a:\n  !!map &x k: b",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-plain-key-crlf",
+    "source": "a:\r\n  !!map &x k: b",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-plain-key-cr",
+    "source": "a:\r  !!map &x k: b",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-second-entry",
+    "source": "a:\n  !!map &x k: b\n        l: c",
+    "expected": {
+      "a": {
+        "k": "b",
+        "l": "c"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-second-entry-crlf",
+    "source": "a:\r\n  !!map &x k: b\r\n        l: c",
+    "expected": {
+      "a": {
+        "k": "b",
+        "l": "c"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-second-entry-cr",
+    "source": "a:\r  !!map &x k: b\r        l: c",
+    "expected": {
+      "a": {
+        "k": "b",
+        "l": "c"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-shallow-entry",
+    "source": "a:\n  !!map &x k: b\n  l: c",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-shallow-entry-crlf",
+    "source": "a:\r\n  !!map &x k: b\r\n  l: c",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-shallow-entry-cr",
+    "source": "a:\r  !!map &x k: b\r  l: c",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-shallow-value",
+    "source": "a:\n  !!map &x k:\n    l: m",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-shallow-value-crlf",
+    "source": "a:\r\n  !!map &x k:\r\n    l: m",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-shallow-value-cr",
+    "source": "a:\r  !!map &x k:\r    l: m",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-single-key",
+    "source": "a:\n  !!map &x 'k''s': b",
+    "expected": {
+      "a": {
+        "k's": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-single-key-crlf",
+    "source": "a:\r\n  !!map &x 'k''s': b",
+    "expected": {
+      "a": {
+        "k's": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-single-key-cr",
+    "source": "a:\r  !!map &x 'k''s': b",
+    "expected": {
+      "a": {
+        "k's": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-escaped-key",
+    "source": "a:\n  !!map &x \"k\\\"\": b",
+    "expected": {
+      "a": {
+        "k\"": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-escaped-key-crlf",
+    "source": "a:\r\n  !!map &x \"k\\\"\": b",
+    "expected": {
+      "a": {
+        "k\"": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-escaped-key-cr",
+    "source": "a:\r  !!map &x \"k\\\"\": b",
+    "expected": {
+      "a": {
+        "k\"": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-comment-scalar",
+    "source": "a:\n  !!map &x k #c: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-comment-scalar-crlf",
+    "source": "a:\r\n  !!map &x k #c: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-comment-scalar-cr",
+    "source": "a:\r  !!map &x k #c: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-trailing-comment",
+    "source": "a:\n  !!map &x k: b # c",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-trailing-comment-crlf",
+    "source": "a:\r\n  !!map &x k: b # c",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-trailing-comment-cr",
+    "source": "a:\r  !!map &x k: b # c",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-tag-key",
+    "source": "a:\n  !!map &x !!str k: b",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-tag-key-crlf",
+    "source": "a:\r\n  !!map &x !!str k: b",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-anchor-tag-key-cr",
+    "source": "a:\r  !!map &x !!str k: b",
+    "expected": {
+      "a": {
+        "k": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-two-tags",
+    "source": "a:\n  !!map !!str : b",
+    "expected": {
+      "a": {
+        "": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-two-tags-crlf",
+    "source": "a:\r\n  !!map !!str : b",
+    "expected": {
+      "a": {
+        "": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-two-tags-cr",
+    "source": "a:\r  !!map !!str : b",
+    "expected": {
+      "a": {
+        "": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-map-flow-key",
+    "source": "a:\n  !!map &x [k]: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-flow-key-crlf",
+    "source": "a:\r\n  !!map &x [k]: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-flow-key-cr",
+    "source": "a:\r  !!map &x [k]: b",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-alias-key",
+    "source": "a:\n  &x 1\nb:\n  !!map *x : c",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-alias-key-crlf",
+    "source": "a:\r\n  &x 1\r\nb:\r\n  !!map *x : c",
+    "expected": null
+  },
+  {
+    "name": "own-line-map-alias-key-cr",
+    "source": "a:\r  &x 1\rb:\r  !!map *x : c",
+    "expected": null
+  },
+  {
+    "name": "own-line-bare-tag",
+    "source": "a:\n  ! &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-bare-tag-crlf",
+    "source": "a:\r\n  ! &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-bare-tag-cr",
+    "source": "a:\r  ! &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-two-anchors",
+    "source": "a:\n  &x &y : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-two-anchors-crlf",
+    "source": "a:\r\n  &x &y : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-two-anchors-cr",
+    "source": "a:\r  &x &y : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-two-anchors-alias",
+    "source": "a:\n  &x &y k: b\nc: *x\nd: *y",
+    "expected": {
+      "a": {
+        "k": "b"
+      },
+      "c": {
+        "k": "b"
+      },
+      "d": "k"
+    }
+  },
+  {
+    "name": "own-line-two-anchors-alias-crlf",
+    "source": "a:\r\n  &x &y k: b\r\nc: *x\r\nd: *y",
+    "expected": {
+      "a": {
+        "k": "b"
+      },
+      "c": {
+        "k": "b"
+      },
+      "d": "k"
+    }
+  },
+  {
+    "name": "own-line-two-anchors-alias-cr",
+    "source": "a:\r  &x &y k: b\rc: *x\rd: *y",
+    "expected": {
+      "a": {
+        "k": "b"
+      },
+      "c": {
+        "k": "b"
+      },
+      "d": "k"
+    }
+  },
+  {
+    "name": "own-line-anchor-tag-alias",
+    "source": "a:\n  &x !!str : b\nc: *x",
+    "expected": {
+      "a": {
+        "": "b"
+      },
+      "c": {
+        "": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-anchor-tag-alias-crlf",
+    "source": "a:\r\n  &x !!str : b\r\nc: *x",
+    "expected": {
+      "a": {
+        "": "b"
+      },
+      "c": {
+        "": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-anchor-tag-alias-cr",
+    "source": "a:\r  &x !!str : b\rc: *x",
+    "expected": {
+      "a": {
+        "": "b"
+      },
+      "c": {
+        "": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-verbatim-map",
+    "source": "a:\n  !<tag:yaml.org,2002:map> &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-verbatim-map-crlf",
+    "source": "a:\r\n  !<tag:yaml.org,2002:map> &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-verbatim-map-cr",
+    "source": "a:\r  !<tag:yaml.org,2002:map> &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-verbatim-map-adjacent",
+    "source": "a:\n  !<tag:yaml.org,2002:map>&x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-verbatim-map-adjacent-crlf",
+    "source": "a:\r\n  !<tag:yaml.org,2002:map>&x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-verbatim-map-adjacent-cr",
+    "source": "a:\r  !<tag:yaml.org,2002:map>&x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-after-comment",
+    "source": "a:\n  # c\n  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-after-comment-crlf",
+    "source": "a:\r\n  # c\r\n  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-after-comment-cr",
+    "source": "a:\r  # c\r  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-after-blank",
+    "source": "a:\n\n  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-after-blank-crlf",
+    "source": "a:\r\n\r\n  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-after-blank-cr",
+    "source": "a:\r\r  !!map &x : b",
+    "expected": {
+      "a": {
+        "null": "b"
+      }
+    }
+  },
+  {
+    "name": "own-line-deeper",
+    "source": "a:\n    !!map &x : b\nc: d",
+    "expected": {
+      "a": {
+        "null": "b"
+      },
+      "c": "d"
+    }
+  },
+  {
+    "name": "own-line-deeper-crlf",
+    "source": "a:\r\n    !!map &x : b\r\nc: d",
+    "expected": {
+      "a": {
+        "null": "b"
+      },
+      "c": "d"
+    }
+  },
+  {
+    "name": "own-line-deeper-cr",
+    "source": "a:\r    !!map &x : b\rc: d",
+    "expected": {
+      "a": {
+        "null": "b"
+      },
+      "c": "d"
+    }
+  },
+  {
+    "name": "own-line-tab-between",
+    "source": "a:\n  !!map\t&x : b",
+    "expected": null
+  },
+  {
+    "name": "own-line-tab-between-crlf",
+    "source": "a:\r\n  !!map\t&x : b",
+    "expected": null
+  },
+  {
+    "name": "own-line-tab-between-cr",
+    "source": "a:\r  !!map\t&x : b",
+    "expected": null
+  },
+  {
+    "name": "property-then-break",
+    "source": "a: !!str\n  &x : b",
+    "expected": null
+  },
+  {
+    "name": "property-then-break-crlf",
+    "source": "a: !!str\r\n  &x : b",
+    "expected": null
+  },
+  {
+    "name": "property-then-break-cr",
+    "source": "a: !!str\r  &x : b",
+    "expected": null
+  },
+  {
+    "name": "explicit-value-own-line",
+    "source": "? a\n:\n  !!str &x : b",
+    "expected": null
+  },
+  {
+    "name": "explicit-value-own-line-crlf",
+    "source": "? a\r\n:\r\n  !!str &x : b",
+    "expected": null
+  },
+  {
+    "name": "explicit-value-own-line-cr",
+    "source": "? a\r:\r  !!str &x : b",
+    "expected": null
+  },
+  {
+    "name": "explicit-key-own-line",
+    "source": "?\n  !!map &x : b",
+    "expected": null
+  },
+  {
+    "name": "explicit-key-own-line-crlf",
+    "source": "?\r\n  !!map &x : b",
+    "expected": null
+  },
+  {
+    "name": "explicit-key-own-line-cr",
+    "source": "?\r  !!map &x : b",
+    "expected": null
+  },
+  {
+    "name": "sequence-entry-same-line",
+    "source": "- !!str &x : b",
+    "expected": [
+      {
+        "": "b"
+      }
+    ]
+  },
+  {
+    "name": "sequence-entry-own-line",
+    "source": "-\n  !!str &x : b",
+    "expected": [
+      {
+        "": "b"
+      }
+    ]
+  },
+  {
+    "name": "sequence-entry-own-line-crlf",
+    "source": "-\r\n  !!str &x : b",
+    "expected": [
+      {
+        "": "b"
+      }
+    ]
+  },
+  {
+    "name": "sequence-entry-own-line-cr",
+    "source": "-\r  !!str &x : b",
+    "expected": [
+      {
+        "": "b"
+      }
+    ]
+  },
+  {
+    "name": "root-same-line",
+    "source": "!!str &x : b",
+    "expected": {
+      "": "b"
+    }
+  },
+  {
+    "name": "root-after-break",
+    "source": "\n!!str &x k: b",
+    "expected": {
+      "k": "b"
+    }
+  },
+  {
+    "name": "root-after-break-crlf",
+    "source": "\r\n!!str &x k: b",
+    "expected": {
+      "k": "b"
+    }
+  },
+  {
+    "name": "root-after-break-cr",
+    "source": "\r!!str &x k: b",
+    "expected": {
+      "k": "b"
+    }
+  },
+  {
+    "name": "root-after-marker",
+    "source": "---\n!!str &x : b",
+    "expected": {
+      "": "b"
+    }
+  },
+  {
+    "name": "root-after-marker-crlf",
+    "source": "---\r\n!!str &x : b",
+    "expected": {
+      "": "b"
+    }
+  },
+  {
+    "name": "root-after-marker-cr",
+    "source": "---\r!!str &x : b",
+    "expected": {
+      "": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-plain",
+    "source": "? \ta",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "explicit-tab-value",
+    "source": "? \ta\n: b",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-value-crlf",
+    "source": "? \ta\r\n: b",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-value-cr",
+    "source": "? \ta\r: b",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-implicit-key",
+    "source": "?\ta: b",
+    "expected": null
+  },
+  {
+    "name": "explicit-tab-spaced-key",
+    "source": "? \ta: b",
+    "expected": null
+  },
+  {
+    "name": "explicit-tab-sequence-entry",
+    "source": "- ? \tx",
+    "expected": [
+      {
+        "x": null
+      }
+    ]
+  },
+  {
+    "name": "explicit-space-tab",
+    "source": "?  \tx",
+    "expected": {
+      "x": null
+    }
+  },
+  {
+    "name": "explicit-two-tabs",
+    "source": "?\t\ta",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "explicit-tab-space",
+    "source": "?\t a",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "explicit-tab-single",
+    "source": "? \t'a'",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "explicit-tab-double",
+    "source": "? \t\"a\"",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "explicit-tab-tag",
+    "source": "? \t!!str a\n: b",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-tag-crlf",
+    "source": "? \t!!str a\r\n: b",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-tag-cr",
+    "source": "? \t!!str a\r: b",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-anchor",
+    "source": "? \t&x a",
+    "expected": {
+      "a": null
+    }
+  },
+  {
+    "name": "explicit-tab-anchor-break",
+    "source": "? \t&x\n: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-anchor-break-crlf",
+    "source": "? \t&x\r\n: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-anchor-break-cr",
+    "source": "? \t&x\r: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-literal",
+    "source": "? \t|\n  a",
+    "expected": {
+      "a\n": null
+    }
+  },
+  {
+    "name": "explicit-tab-literal-crlf",
+    "source": "? \t|\r\n  a",
+    "expected": {
+      "a\n": null
+    }
+  },
+  {
+    "name": "explicit-tab-literal-cr",
+    "source": "? \t|\r  a",
+    "expected": {
+      "a\n": null
+    }
+  },
+  {
+    "name": "explicit-tab-folded",
+    "source": "? \t>\n  a",
+    "expected": {
+      "a\n": null
+    }
+  },
+  {
+    "name": "explicit-tab-folded-crlf",
+    "source": "? \t>\r\n  a",
+    "expected": {
+      "a\n": null
+    }
+  },
+  {
+    "name": "explicit-tab-folded-cr",
+    "source": "? \t>\r  a",
+    "expected": {
+      "a\n": null
+    }
+  },
+  {
+    "name": "explicit-tab-comment",
+    "source": "? \t# c\n: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-comment-crlf",
+    "source": "? \t# c\r\n: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-comment-cr",
+    "source": "? \t# c\r: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-empty",
+    "source": "? \t\n: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-empty-crlf",
+    "source": "? \t\r\n: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-empty-cr",
+    "source": "? \t\r: b",
+    "expected": {
+      "null": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-multiline",
+    "source": "? \ta\n  b",
+    "expected": {
+      "a b": null
+    }
+  },
+  {
+    "name": "explicit-tab-multiline-crlf",
+    "source": "? \ta\r\n  b",
+    "expected": {
+      "a b": null
+    }
+  },
+  {
+    "name": "explicit-tab-multiline-cr",
+    "source": "? \ta\r  b",
+    "expected": {
+      "a b": null
+    }
+  },
+  {
+    "name": "explicit-tab-twice",
+    "source": "? \ta\n? \tb",
+    "expected": {
+      "a": null,
+      "b": null
+    }
+  },
+  {
+    "name": "explicit-tab-twice-crlf",
+    "source": "? \ta\r\n? \tb",
+    "expected": {
+      "a": null,
+      "b": null
+    }
+  },
+  {
+    "name": "explicit-tab-twice-cr",
+    "source": "? \ta\r? \tb",
+    "expected": {
+      "a": null,
+      "b": null
+    }
+  },
+  {
+    "name": "explicit-tab-value-tab",
+    "source": "? \ta\n: \tb",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-value-tab-crlf",
+    "source": "? \ta\r\n: \tb",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-value-tab-cr",
+    "source": "? \ta\r: \tb",
+    "expected": {
+      "a": "b"
+    }
+  },
+  {
+    "name": "explicit-tab-alias",
+    "source": "a: &x 1\n? \t*x",
+    "expected": {
+      "1": null,
+      "a": 1
+    }
+  },
+  {
+    "name": "explicit-tab-alias-crlf",
+    "source": "a: &x 1\r\n? \t*x",
+    "expected": {
+      "1": null,
+      "a": 1
+    }
+  },
+  {
+    "name": "explicit-tab-alias-cr",
+    "source": "a: &x 1\r? \t*x",
+    "expected": {
+      "1": null,
+      "a": 1
+    }
+  },
+  {
+    "name": "explicit-tab-nested",
+    "source": "a:\n  ? \tb\n  : c",
+    "expected": {
+      "a": {
+        "b": "c"
+      }
+    }
+  },
+  {
+    "name": "explicit-tab-nested-crlf",
+    "source": "a:\r\n  ? \tb\r\n  : c",
+    "expected": {
+      "a": {
+        "b": "c"
+      }
+    }
+  },
+  {
+    "name": "explicit-tab-nested-cr",
+    "source": "a:\r  ? \tb\r  : c",
+    "expected": {
+      "a": {
+        "b": "c"
+      }
+    }
+  },
+  {
+    "name": "explicit-tab-glued-colon",
+    "source": "? \ta:b",
+    "expected": {
+      "a:b": null
+    }
+  },
+  {
+    "name": "explicit-tab-spaced-colon",
+    "source": "? \ta :b",
+    "expected": {
+      "a :b": null
+    }
+  },
+  {
+    "name": "explicit-tab-flow-sequence",
+    "source": "? \t[a]",
+    "expected": null
+  },
+  {
+    "name": "explicit-tab-flow-mapping",
+    "source": "? \t{a: 1}",
+    "expected": null
+  },
+  {
+    "name": "explicit-tab-tagged-flow",
+    "source": "? \t!!seq [a]",
+    "expected": null
+  },
+  {
+    "name": "explicit-tab-dash",
+    "source": "? \t- a",
+    "expected": null
+  },
+  {
+    "name": "explicit-tab-question",
+    "source": "? \t? a",
+    "expected": null
+  }
+]
