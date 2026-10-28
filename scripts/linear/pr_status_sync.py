@@ -119,19 +119,73 @@ def issue(ident):
     return d["issues"]["nodes"][0] if d["issues"]["nodes"] else None
 
 
-def move(iss, target):
-    cur = iss["state"]["name"]
-    if cur == target or iss["state"]["type"] in TERMINAL:
-        return False
-    if DRY:
-        print(f"{iss['identifier']}: {cur} -> {target}")
-        return True
-    updated = gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
-        {"id": iss["id"], "s": state_id(target)})
-    if not updated["issueUpdate"]["success"]:
-        raise RuntimeError("Linear issueUpdate failed")
-    print(f"{iss['identifier']}: {cur} -> {target}")
-    return True
+def ts(value):
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+HISTORY = "nodes{id createdAt fromState{name type} toState{name type}}"
+def transitions(iss):
+    """State changes Linear recorded after the snapshot iss, oldest first."""
+    # Both ends are read so the result does not depend on Linear's default history order.
+    d = gql('query($id:String!){issue(id:$id){a:history(first:25){%s} b:history(last:25){%s}}}'
+            % (HISTORY, HISTORY), {"id": iss["id"]})
+    nodes = {e["id"]: e for side in ("a", "b") for e in d["issue"][side]["nodes"]}
+    since = ts(iss["updatedAt"])
+    return sorted((e for e in nodes.values() if e.get("toState") and ts(e["createdAt"]) > since),
+                  key=lambda e: ts(e["createdAt"]))
+
+
+def settle(ident, decide, basis=None):
+    """Write decide(issue, refreshed) and reject the write if it raced another writer.
+
+    Linear's issueUpdate has no conditional input. The issue is read again just before
+    the mutation, and any change since the decision repeats the decision. After the
+    mutation, the history shows whether another state change landed between that read
+    and this write. If one did, the decision is repeated as if that change had been
+    seen, with fresh GitHub data, which restores it unless the facts now say otherwise.
+    A writer that lands after this one owns the state and runs the same check.
+    """
+    global _prs
+    refreshed = False
+    basis = basis or issue(ident)
+    version = basis and (basis["state"]["name"], basis["updatedAt"])
+    for _ in range(4):
+        if not basis:
+            return False
+        target = basis["state"]["name"]
+        if basis["state"]["type"] not in TERMINAL:
+            target = decide(basis, refreshed) or target
+        if target == basis["state"]["name"] and not refreshed:
+            return False
+        if DRY:
+            print(f"{ident}: {basis['state']['name']} -> {target}")
+            return True
+        current = issue(ident)
+        if not current or (current["state"]["name"], current["updatedAt"]) != version:
+            basis, version = current, current and (current["state"]["name"], current["updatedAt"])
+            continue
+        if current["state"]["name"] == target:
+            return False
+        updated = gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
+            {"id": current["id"], "s": state_id(target)})
+        if not updated["issueUpdate"]["success"]:
+            raise RuntimeError("Linear issueUpdate failed")
+        print(f"{ident}: {current['state']['name']} -> {target}")
+        changes = transitions(current)
+        if not changes or len(changes) == 1 and changes[0]["toState"]["name"] == target \
+                and (changes[0]["fromState"] or {}).get("name") == current["state"]["name"]:
+            return True
+        # The latest change to target is this write, or its gql replay. Its fromState is
+        # the state it replaced, whatever number of other writes landed before it.
+        mine = [e for e in changes if e["toState"]["name"] == target]
+        replaced = (mine[-1]["fromState"] if mine else None) or changes[-1]["toState"]
+        _prs, refreshed = None, True
+        basis = issue(ident)
+        if not basis or basis["state"]["name"] != target:
+            return True
+        version = (basis["state"]["name"], basis["updatedAt"])
+        basis = dict(basis, state=replaced)
+    raise RuntimeError(f"{ident}: concurrent Linear writes did not settle")
 
 
 def refs(pr):
@@ -177,27 +231,38 @@ def other_open(ident, exclude):
     return [p["number"] for p in open_prs() if p["number"] != exclude and ident in refs(p)[1]]
 
 
+def latest(pr):
+    return next((p for p in all_prs() if p["number"] == pr["number"]), pr)
+
+
 def apply_pr(pr, errors=None):
     if pr["isCrossRepository"]:
         return
-    closing, ids = refs(pr)
     n = pr["number"]
-    for ident in sorted(ids):
-        try:
-            iss = issue(ident)
-            if not iss:
-                continue
-            if pr["state"] == "OPEN":
-                move(iss, "In Review")
-            elif pr["state"] == "MERGED":
+
+    def decide(ident):
+        def target(iss, refreshed):
+            p = latest(pr) if refreshed else pr
+            closing, ids = refs(p)
+            if ident not in ids:
+                return None
+            if p["state"] == "OPEN":
+                return "In Review"
+            if p["state"] == "MERGED":
                 if ident in closing:
-                    move(iss, "Done")
-                elif other_open(ident, n):
-                    move(iss, "In Review")
-                elif iss["state"]["name"] in {"In Review", "In Progress"}:  # never pull Todo/Backlog back up
-                    move(iss, "In Progress")
-            elif pr["state"] == "CLOSED" and iss["state"]["name"] == "In Review" and not other_open(ident, n):
-                move(iss, "In Progress")
+                    return "Done"
+                if other_open(ident, n):
+                    return "In Review"
+                if iss["state"]["name"] in {"In Review", "In Progress"}:  # never pull Todo/Backlog back up
+                    return "In Progress"
+            elif p["state"] == "CLOSED" and iss["state"]["name"] == "In Review" and not other_open(ident, n):
+                return "In Progress"
+            return None
+        return target
+
+    for ident in sorted(refs(pr)[1]):
+        try:
+            settle(ident, decide(ident))
         except Exception:
             if errors is None:
                 raise
@@ -214,9 +279,8 @@ def apply_event(pr, event):
                 previous[field] = event["changes"][field]["from"]
         removed = refs(previous)[1] - refs(pr)[1]
         for ident in sorted(removed):
-            iss = issue(ident)
-            if iss and iss["state"]["name"] == "In Review" and not other_open(ident, pr["number"]):
-                move(iss, "In Progress")
+            settle(ident, lambda iss, _, ident=ident: "In Progress" if iss["state"]["name"] == "In Review"
+                   and not other_open(ident, pr["number"]) else None)
     apply_pr(pr)
 
 
@@ -231,9 +295,6 @@ def reconcile(hours):
 
 
 def _reconcile(hours):
-    def ts(value):
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
     prs = all_prs()
     errors = []
@@ -264,11 +325,10 @@ def _reconcile(hours):
     for iss in issues:
         ident = iss["identifier"]
         try:
-            if other_open(ident, -1):
-                continue
-            t = max([ts(iss["updatedAt"])] + ([last[ident]] if ident in last else []))
-            if t < cutoff:
-                move(iss, "Backlog")
+            def stale(fresh, _, ident=ident):
+                t = max([ts(fresh["updatedAt"])] + ([last[ident]] if ident in last else []))
+                return "Backlog" if not other_open(ident, -1) and t < cutoff else None
+            settle(ident, stale, iss)
         except Exception:
             errors.append(f"stale {ident}")
     if errors:

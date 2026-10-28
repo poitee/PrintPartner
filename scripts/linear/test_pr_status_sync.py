@@ -239,9 +239,11 @@ class SyncTest(unittest.TestCase):
         sync._prs = []
         self.issues = {"GRE-1": ticket()}
         self.comments = []
+        self.history = []
         self.fail_update = False
         self.pages = None
         self.api = patch.object(sync, "gql", side_effect=self.linear).start()
+        patch.object(sync, "gh", side_effect=AssertionError("Unexpected GitHub call")).start()
         patch("builtins.print").start()
         self.addCleanup(patch.stopall)
 
@@ -258,9 +260,17 @@ class SyncTest(unittest.TestCase):
             return {"commentCreate": {"success": True}}
         if "issueUpdate(" in query:
             if not self.fail_update:
-                self.issues[f"GRE-{variables['id']}"]["state"] = {
+                iss = self.issues[f"GRE-{variables['id']}"]
+                before, iss["state"] = iss["state"], {
                     "name": variables["s"], "type": "completed" if variables["s"] == "Done" else "started"}
+                iss["updatedAt"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(
+                    seconds=len(self.history) + 1)).isoformat()
+                self.history.append({"id": str(len(self.history)), "issueId": variables["id"],
+                                     "createdAt": iss["updatedAt"], "fromState": before, "toState": iss["state"]})
             return {"issueUpdate": {"success": not self.fail_update}}
+        if "history(" in query:
+            nodes = [h for h in self.history if h["issueId"] == variables["id"]]
+            return {"issue": {"a": {"nodes": nodes[::-1][:25]}, "b": {"nodes": nodes[-25:]}}}
         if "issues(first:" in query:
             offset = int(variables["after"] or 0)
             pages = self.pages or [list(copy.deepcopy(self.issues).values())]
@@ -501,6 +511,7 @@ class SyncTest(unittest.TestCase):
     def test_edit_returns_removed_ticket_to_in_progress(self):
         for field in ("title", "body"):
             with self.subTest(field=field):
+                self.history = []
                 self.issues["GRE-1"] = ticket(state="In Review")
                 current = pr(body="Refs GRE-2")
                 self.issues["GRE-2"] = ticket(2)

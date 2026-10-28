@@ -9,7 +9,7 @@ import copy
 import unittest
 from unittest.mock import patch
 
-import reproduce_concurrent_writes as fake
+import test_concurrent_writes as fake
 from test_pr_status_sync import pr, ticket
 
 
@@ -19,7 +19,7 @@ REMOVED = [{"issueId": "1", "body":
 
 class ReferenceRecoveryReproduction(unittest.TestCase):
     def setUp(self):
-        self.store = fake.ConcurrentWriteReproduction()
+        self.store = fake.ConcurrentWriteTest()
         self.addCleanup(self.store.doCleanups)
         self.store.setUp()
         for target in ("socket.socket", "subprocess.Popen", "os.system"):
