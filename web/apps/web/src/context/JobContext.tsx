@@ -228,7 +228,10 @@ export function JobProvider({ children }: { children: ReactNode }) {
           finished = true;
           observer.abort();
           onDone?.(snap);
-          invalidateAfterJob(qc, kind, snap, options?.profileId);
+          invalidateAfterJob(qc, kind, snap, options?.profileId, {
+            sourceIds,
+            rebuild: rebuildSnapshots,
+          });
           setActiveJobs((prev) =>
             upsertJob(prev, {
               jobId,

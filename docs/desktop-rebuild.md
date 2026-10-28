@@ -1074,6 +1074,11 @@ The Plan review cache follows an open draft's revision when health reports
 that same capability and the draft base is current, and keeps the existing
 review query otherwise. That wiring is GRE-823
 (`docs/gre-823-workspace-reads.md`).
+A finished import scan refreshes that source's queries when health reports
+the same capability, and a finished plan publication refreshes that plan
+only. Without the capability, a finished source job still refreshes every
+source, profile, and plan review. That wiring is GRE-824
+(`docs/gre-824-job-invalidation.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
