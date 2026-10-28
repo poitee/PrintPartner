@@ -10,8 +10,15 @@ export const queryKeys = {
   sourceCategories: ["sourceCategories"] as const,
   source: (id: number) => ["sources", id] as const,
   planReviews: ["planReview"] as const,
-  planReview: (profileId: number, includeExcluded = false, spoolmanAllowed = true) =>
-    ["planReview", profileId, includeExcluded, spoolmanAllowed] as const,
+  planReview: (
+    profileId: number,
+    includeExcluded = false,
+    spoolmanAllowed = true,
+    revisionId?: number | null,
+  ) =>
+    revisionId === undefined
+      ? (["planReview", profileId, includeExcluded, spoolmanAllowed] as const)
+      : (["planReview", profileId, includeExcluded, spoolmanAllowed, revisionId] as const),
   allPlanLayers: ["planLayers"] as const,
   planLayers: (profileId: number) => ["planLayers", profileId] as const,
   planRecipeBundle: (profileId: number) => ["planRecipeBundle", profileId] as const,

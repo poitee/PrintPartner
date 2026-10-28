@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  TENANT_FEATURE_TOGGLES_CAPABILITY,
   type HealthResponse,
   type PlanFeatures,
   parsePlanDraftWorkspace,
@@ -48,6 +49,7 @@ import {
 } from "../queries/planReview";
 import { refreshProfileSummary } from "../queries/profiles";
 import { queryKeys } from "../queries/keys";
+import { useHealthQuery } from "../queries/health";
 import {
   usePlanDraftListQuery,
   usePlanDraftWorkspaceQuery,
@@ -241,13 +243,39 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const healthQuery = useHealthQuery();
+  const rebuildReads = healthQuery.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
+  const draftListQuery = usePlanDraftListQuery(
+    selectedProfileId,
+    Boolean(health?.ok),
+  );
+  const draftQuery = usePlanDraftWorkspaceQuery(
+    selectedProfileId,
+    activeDraftId,
+    Boolean(health?.ok),
+  );
+  const openDraftId = activeDraftId ?? latestOpenDraftId(
+    draftListQuery.data?.filter((draft) => !closedDraftIds.current.has(draft.draft_id)),
+    recentlyAppliedDraftId,
+  );
+  const draftIdentityPending = rebuildReads && (
+    draftListQuery.isLoading ||
+    (openDraftId != null && draftQuery.data == null && (draftQuery.error == null || draftQuery.isFetching))
+  );
+  const boundWorkspace = draftQuery.data;
+  const revisionId = rebuildReads &&
+    boundWorkspace?.diff.base_is_current === true &&
+    !closedDraftIds.current.has(boundWorkspace.draft.draft_id)
+    ? boundWorkspace.draft.base.revision_id
+    : undefined;
   const {
     data: review = null,
     isLoading,
     error: queryError,
   } = usePlanReviewQuery(selectedProfileId, {
     includeExcluded: false,
-    enabled: Boolean(health?.ok),
+    enabled: Boolean(health?.ok) && !draftIdentityPending,
+    revisionId,
   });
 
   const patchPartMutation = usePatchPartMutation(selectedProfileId);
@@ -258,15 +286,6 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   const patchAssembledMutation = usePatchPartAssembledMutation(
     selectedProfileId,
     false,
-  );
-  const draftListQuery = usePlanDraftListQuery(
-    selectedProfileId,
-    Boolean(health?.ok),
-  );
-  const draftQuery = usePlanDraftWorkspaceQuery(
-    selectedProfileId,
-    activeDraftId,
-    Boolean(health?.ok),
   );
 
   useEffect(() => {
@@ -532,12 +551,21 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
         }
       }
       closedDraftIds.current.add(workspace.draft.draft_id);
+      queryClient.removeQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "planReview" &&
+          query.queryKey[1] === workspace.profile_id &&
+          query.queryKey.length >= 5,
+      });
       await Promise.all([
         queryClient.invalidateQueries({
           queryKey: queryKeys.planDrafts(workspace.profile_id),
         }),
         queryClient.invalidateQueries({
-          predicate: (query) => query.queryKey[0] === "planReview" && query.queryKey[1] === workspace.profile_id,
+          predicate: (query) =>
+            query.queryKey[0] === "planReview" &&
+            query.queryKey[1] === workspace.profile_id &&
+            query.queryKey.length < 5,
           refetchType: "all",
         }, { throwOnError: true }),
         refreshProfileSummary(queryClient, workspace.profile_id),
@@ -1111,7 +1139,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       rebaseActivePlanDraft,
       reconcileActivePlanDraft,
       editActivePlanDraft,
-      loading: isLoading,
+      loading: isLoading || (draftIdentityPending && review == null),
       error:
         queryError instanceof Error
           ? queryError.message
@@ -1151,6 +1179,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       reconcileActivePlanDraft,
       editActivePlanDraft,
       isLoading,
+      draftIdentityPending,
       queryError,
       refresh,
       setQuantity,
