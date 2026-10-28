@@ -53,7 +53,8 @@ failure and ends with one `PASS`, `FAIL` or `SKIP` line per step. Fix every
 `FAIL` before you push. A `SKIP` line names the missing tool or pinned version;
 list each skipped step under Evidence.
 
-Without `just`, run `python3 scripts/local-ci.py` with the same arguments.
+Without `just`, run `python3 scripts/local-ci.py` from the repository root with
+the same arguments.
 `just ci --list` prints the step ids, and `--only` or `--skip` takes a
 comma-separated list of them. Change steps in `scripts/local-ci.py`, not in the
 `justfile`. [Continuous integration](../development/ci.md#run-the-required-checks-with-one-command)

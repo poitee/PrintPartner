@@ -71,7 +71,7 @@ PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 just ci
 
 `just ci` passes its arguments to `python3 scripts/local-ci.py`, which holds the only list of steps. Without [just](https://github.com/casey/just), run `python3 scripts/local-ci.py` from the repository root with the same arguments. Agents run this command before they push, as [Gate evidence](../contributing/gate-evidence.md#run-ci-locally-before-you-push) says.
 
-It runs each step below in order and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `just ci --list`. To select steps, use `just ci --only fmt,clippy-off` or `just ci --skip nextest-on`.
+It runs the steps below in the order that `just ci --list` prints, and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `just ci --list`. To select steps, use `just ci --only fmt,clippy-off` or `just ci --skip nextest-on`.
 
 | Step | What it runs | CI source |
 |------|--------------|-----------|
@@ -84,12 +84,12 @@ It runs each step below in order and continues after a failure, so one run repor
 | `historical-schema` | `rust/scripts/fetch-historical-schema-commits.sh`, which fetches the pinned commits that the pp-storage tests archive. It runs before nextest. | `rust (linux)` (required) |
 | `fmt`, `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 4 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
 | `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
-| `workaround-ratchet` | `scripts/workaround-ratchet.mjs` and its tests, which cap `TODO`, `eslint-disable` and Rust `#[allow]` markers. It runs after `web-assets`, which installs its parser. | `web` job of `web-ci.yml` |
+| `workaround-ratchet` | `scripts/workaround-ratchet.mjs` and its tests, which cap `TODO`, `eslint-disable` and Rust `#[allow]` markers, on Node 22.23.3. It runs after `web-assets`, which installs its parser. | `web` job of `web-ci.yml` |
 | `node-fixtures` | The `--check` mode of each Node parity fixture generator, and the HTTP route inventory diff, on Node 22.23.3 | `desktop-contracts.yml` and `auth-admission-freshness.yml` |
 
 Except where noted below, each step runs the command lines of its workflow step without changes. The script sets the same environment that CI sets: `NEXTEST_FILTER`, `PP_TEST_NODE`, `VITE_PRINT_PARTNER_DESKTOP`, and `RUNNER_TEMP`. The cargo steps also get `INSTA_UPDATE=no`, so a snapshot mismatch fails the step instead of writing a `.snap.new` file. `RUNNER_TEMP` is under `$CARGO_TARGET_DIR/local-ci`, or under `rust/target/local-ci` if `CARGO_TARGET_DIR` is not set. The local command differs from CI in these ways:
 
-- It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `node-fixtures` step is also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
+- It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `workaround-ratchet` and `node-fixtures` steps are also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
 - `ast-grep` fetches `origin/main` without `--depth=1`, because a shallow fetch would make a full clone shallow.
 - It does not set the CI-only `CARGO_PROFILE_*_DEBUG` and mold `RUSTFLAGS` values. They change debug info and the linker, not test results, and setting them would invalidate your local build cache.
 - `nextest-on` always runs. CI skips it on self-hosted Linux PRs, but the merge queue runs it. Use `--skip nextest-on` for a shorter run.

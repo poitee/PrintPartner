@@ -92,11 +92,12 @@ STEPS = [
          (CROSS_OS + "Build desktop assets and generate measured manifest",),
          requires=(("node", "v24.21.0"), ("npm", None), ("python3", None)),
          env={"VITE_PRINT_PARTNER_DESKTOP": "1", "MANIFEST_PYTHON": "python3"}),
-    # After web-assets: the ratchet parses sources with web/node_modules.
-    Step("workaround-ratchet", "TODO, eslint-disable and Rust #[allow] ratchet",
+    # After web-assets, which installs the parser it loads from web/node_modules, and
+    # before node-fixtures reinstalls them. Web CI runs it on Node 22.
+    Step("workaround-ratchet", "TODO, eslint-disable and Rust #[allow] ratchet (Node 22)",
          ("node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs",),
          ("web-ci.yml#Check workaround ratchet",),
-         requires=(("node", "v24.21.0"),), cwd="web"),
+         requires=(("node", "v22.23.3"),), cwd="web", node22=True),
     cargo("clippy-off", "clippy, desktop_rebuild off", "clippy (desktop_rebuild off)",
           CARGO.format("clippy") + " --all-targets --keep-going -- -D warnings"),
     cargo("clippy-on", "clippy, desktop_rebuild on", "clippy (desktop_rebuild on)",

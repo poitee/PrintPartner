@@ -110,14 +110,15 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci.summary["ast-grep"], "SKIP")
         self.assertIn("ast-grep 0.50.0", ci.output)
 
-    def test_node_fixtures_skip_without_the_pinned_node_22(self):
+    def test_node_22_steps_skip_without_the_pinned_node_22(self):
         for node22 in [None, "v22.22.0"]:
-            with self.subTest(node22=node22):
-                ci = LocalCi(self, node22=node22)
-                self.assertEqual(ci(), 0)
-                self.assertEqual(ci.summary["node-fixtures"], "SKIP")
-                self.assertNotIn("node-fixtures", ci.ran)
-                self.assertIn("PP_SCHEMA_PARITY_NODE", ci.output)
+            for step in ["node-fixtures", "workaround-ratchet"]:
+                with self.subTest(node22=node22, step=step):
+                    ci = LocalCi(self, node22=node22)
+                    self.assertEqual(ci(), 0)
+                    self.assertEqual(ci.summary[step], "SKIP")
+                    self.assertNotIn(step, ci.ran)
+                    self.assertIn("PP_SCHEMA_PARITY_NODE", ci.output)
 
     def test_only_and_skip_select_steps_in_plan_order(self):
         ci = LocalCi(self)
@@ -143,10 +144,11 @@ class LocalCiTests(unittest.TestCase):
         for step in ["fmt", "nextest-on", "node-fixtures", "rust-windows"]:
             self.assertIn(step, ci.output)
 
-    def test_the_ratchet_runs_after_web_assets_installs_its_parser(self):
+    def test_the_ratchet_runs_between_the_two_installs_of_web_node_modules(self):
         ci = LocalCi(self)
         self.assertEqual(ci(), 0)
         self.assertLess(ci.ran.index("web-assets"), ci.ran.index("workaround-ratchet"))
+        self.assertLess(ci.ran.index("workaround-ratchet"), ci.ran.index("node-fixtures"))
 
     def test_just_ci_runs_this_command_with_its_arguments_and_no_step_list_of_its_own(self):
         recipe = (ROOT / "justfile").read_text().split("\nci *args:\n", 1)[1]
