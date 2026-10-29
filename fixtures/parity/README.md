@@ -20,15 +20,32 @@ node fixtures/parity/jobs-http/generate.mjs --check
 
 ## jobs-ws/node.json (GRE-451)
 
-`generate.mjs` registers Node's real job socket (`registerJobWebSocket`, with `PP_DESKTOP_REBUILD=1`) over the same two retained jobs as `jobs-http`, listens on loopback and opens `/ws/jobs/:jobId` with a `ws` client. Each case records every text frame and the close code and reason the client saw: the finished job, the failed job, an unknown id, and the finished job read by another tenant. Node mounts the socket only at the root, so there is no `/api/v1` case.
+`generate.mjs` registers Node's real job socket (`registerJobWebSocket`, with `PP_DESKTOP_REBUILD=1`) over the same two retained jobs as `jobs-http`, listens on loopback and opens `/ws/jobs/:jobId` with a `ws` client. Each case records every text frame plus the close code and reason the client saw. The five cases are the finished job, the failed job, an unknown id, the finished job read by another tenant, and a live job (`ws_live`). Node mounts the socket only at the root, so there is no `/api/v1` case.
 
-`ticket_t_10_fixtures` opens the same paths on `jobs_router` with the owning session, or a second account's session for the other tenant, and reads frames off the raw socket. An unknown or foreign job matches exactly: no frame, then 1008 "Job not found". The two finished jobs have declared WebSocket corrections. Node ends them with `socket.close()`, an empty close frame the client reads as 1005; Rust sends 1000. Rust's frame is also the durable snapshot that `jobs-http` corrects (`created_at`, and "Job failed" with no progress). The sockets change no table or file. Live progress frames are not captured: Node's runner has no handler that the probe can hold open.
+Two parts of the probe are stubs, not Node's app:
+
+- The probe mounts no auth. Node's app sets `request.tenantId` from the session; here an `x-parity-tenant` header sets it. The runner's own owner check still decides who reads a job, so the foreign case exercises Node's tenant refusal but not its session lookup.
+- `ws_live` follows a third update check. The probe replaces `runner.runJob` so the job stays queued, then sends the two patches `runJob` emits (running at 10%, then done) through the runner's own `emit`, one after each frame. Node's handlers have nothing a probe can hold open without network access.
+
+A socket that has not closed within 10 seconds fails the capture. Node stamps `updated_at` with its own clock read, so it gets `updated-N` labels, and the probe spaces the live steps 5 ms apart so each frame's stamp is distinct.
+
+`ticket_t_10_fixtures` opens the same paths on `jobs_router` with the owning session, or a second account's session for the other tenant. It reads frames off the raw socket, joins fragmented text, skips ping and pong frames, and fails if a socket stays open for 10 seconds. For `ws_live`, the seeded worker claims the job after the first frame and finishes it after the second. The results are 2 exact matches and 3 declared WebSocket corrections:
+
+- An unknown or foreign job matches exactly. Each gets no frame, then 1008 "Job not found".
+- For the finished and failed jobs, Node ends the stream with `socket.close()`, an empty close frame the client reads as 1005, and Rust sends 1000. Rust's frame is the durable snapshot that `jobs-http` corrects (`created_at`, and "Job failed" with no progress).
+- In `ws_live`, Rust streams the durable model's wording, as `docs/desktop-rebuild.md` and `jobs_engine_parity` record. The queued frame says "Waiting for a compatible worker" instead of "Queued", and the running frame says "Running" with no progress instead of "Running…" at 10. Every frame carries `created_at` and `finished_at`, and none carries `updated_at`, which Node adds only to live frames. The stream closes 1000.
+
+No socket changes a table or file. The test checks this just before the live case. After that, only the worker writes.
 
 ```sh
 node fixtures/parity/jobs-ws/generate.mjs --check
 ```
 
-CI runs every GRE-451 generator with `--check` in the Desktop contracts workflow ("Verify GRE-451 parity Node fixtures"), and `scripts/local-ci.py` runs the same commands.
+CI runs every GRE-451 generator with `--check` in the Desktop contracts workflow ("Verify GRE-451 parity Node fixtures"), and `scripts/local-ci.py` runs the same commands. PR CI skips the `desktop_rebuild` nextest on self-hosted Linux, so the same workflow also replays the goldens against Rust on the Node 22 leg ("Replay GRE-451 parity fixtures against Rust"):
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test ticket_t_10_fixtures
+```
 
 ## plans-http/node.json (GRE-451)
 

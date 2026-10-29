@@ -5,7 +5,7 @@
 //   node fixtures/parity/jobs-ws/generate.mjs --check  # verify, no writes
 // Each case records every text frame (parsed) and the close code and reason
 // the client saw. Job ids and timestamps become labels numbered in first-seen
-// order (`job-1`, `time-1`), as in jobs-http.
+// order (`job-1`, `time-1`, `updated-1`), as in jobs-http.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -20,7 +20,8 @@ const sources = [
   "web/apps/server/src/routes/jobs.ts",
   "web/apps/server/src/services/job-runner.ts",
 ];
-const TIME_KEYS = new Set(["created_at", "started_at", "finished_at", "updated_at"]);
+const TIME_KEYS = new Set(["created_at", "started_at", "finished_at"]);
+const TIMEOUT_MS = 10_000;
 
 if (process.argv.includes("--probe")) {
   // registerJobWebSocket reads the flag when it registers the route.
@@ -52,11 +53,29 @@ if (process.argv.includes("--probe")) {
   const done = await settle("check-source-updates", {});
   await new Promise((resolve) => setTimeout(resolve, 1100));
   const failed = await settle("export-checklist-html", { profile_id: 7 });
+  // A third update check stays queued: with `runJob` stubbed, the probe sends
+  // the two patches `runJob` would emit through the runner's own `emit`, one
+  // after each frame the socket receives.
+  runner.runJob = async () => undefined;
+  const live = await runner.start("check-source-updates", {}, "default");
+  const liveSteps = [
+    () => runner.emit(live, { status: "running", message: "Running…", progress: 10 }),
+    () => runner.emit(live, {
+      status: "done",
+      message: "Complete",
+      progress: 100,
+      result: { checked: [], skipped: [], updates_available: 0, checked_count: 0 },
+      error: null,
+      finished_at: new Date().toISOString(),
+    }),
+  ];
 
   const app = Fastify({ logger: false });
   await app.register(websocket);
-  // Node's app resolves the tenant from the session; here a header picks it so
-  // one case can read another tenant's job.
+  // Node's app resolves the tenant from the session. This probe mounts no auth,
+  // so a header picks the tenant and one case can read another tenant's job.
+  // The runner's own owner check still decides; only the session lookup is
+  // replaced.
   app.decorateRequest("tenantId", "default");
   app.addHook("onRequest", async (request) => {
     const tenant = request.headers["x-parity-tenant"];
@@ -70,28 +89,43 @@ if (process.argv.includes("--probe")) {
     ["ws_failed", `/ws/jobs/${failed}`, "default"],
     ["ws_missing", "/ws/jobs/never-started", "default"],
     ["ws_foreign", `/ws/jobs/${done}`, "other"],
+    ["ws_live", `/ws/jobs/${live}`, "default", liveSteps],
   ];
-  const observe = (path, tenant) =>
+  // Runs `steps[i]` after frame i arrives. A socket that has not closed within
+  // TIMEOUT_MS is terminated and fails the capture.
+  const observe = (path, tenant, steps = []) =>
     new Promise((resolve, reject) => {
       const frames = [];
       const socket = new WebSocket(`${address.replace("http", "ws")}${path}`, {
         headers: { "x-parity-tenant": tenant },
       });
+      const timer = setTimeout(() => {
+        socket.terminate();
+        reject(new Error(`${path} did not close within ${TIMEOUT_MS} ms`));
+      }, TIMEOUT_MS);
+      const fail = (error) => {
+        clearTimeout(timer);
+        reject(error);
+      };
       socket.on("unexpected-response", (_request, response) =>
-        reject(new Error(`${path} answered HTTP ${response.statusCode}`)),
+        fail(new Error(`${path} answered HTTP ${response.statusCode}`)),
       );
       socket.on("message", (data, binary) => {
         assert.equal(binary, false, "text frames only");
         frames.push(JSON.parse(data.toString("utf8")));
+        // The delay keeps each step's `updated_at` in its own millisecond.
+        const step = steps[frames.length - 1];
+        if (step) setTimeout(step, 5);
       });
-      socket.on("close", (code, reason) =>
-        resolve({ frames, close: { code, reason: reason.toString("utf8") } }),
-      );
-      socket.on("error", reject);
+      socket.on("close", (code, reason) => {
+        clearTimeout(timer);
+        resolve({ frames, close: { code, reason: reason.toString("utf8") } });
+      });
+      socket.on("error", fail);
     });
   const cases = [];
-  for (const [id, path, tenant] of requests) {
-    cases.push({ id, path, tenant, node: { status: 101, body: await observe(path, tenant), setCookie: [] } });
+  for (const [id, path, tenant, steps] of requests) {
+    cases.push({ id, path, tenant, node: { status: 101, body: await observe(path, tenant, steps), setCookie: [] } });
   }
   await app.close();
 
@@ -103,13 +137,16 @@ if (process.argv.includes("--probe")) {
     }
     return labels.get(key);
   };
-  const ids = new Map([[done, "{done}"], [failed, "{failed}"]]);
+  const ids = new Map([[done, "{done}"], [failed, "{failed}"], [live, "{live}"]]);
   const scrub = (value, key) => {
     if (Array.isArray(value)) return value.map((item) => scrub(item));
     if (value && typeof value === "object") {
       return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrub(v, k)]));
     }
     if (key === "job_id" && typeof value === "string") return label("job", value);
+    // Node stamps `updated_at` with its own clock read, so its equality with
+    // `finished_at` is a millisecond race.
+    if (key === "updated_at" && typeof value === "string") return label("updated", value);
     if (TIME_KEYS.has(key) && typeof value === "string") return label("time", value);
     return value;
   };
@@ -122,6 +159,7 @@ if (process.argv.includes("--probe")) {
   const byId = (id) => scrubbed.find((c) => c.id === id).node;
   assert.deepEqual(byId("ws_missing").body, { frames: [], close: { code: 1008, reason: "Job not found" } });
   assert.deepEqual(byId("ws_foreign"), byId("ws_missing"), "a foreign job reads as missing");
+  assert.deepEqual(byId("ws_live").body.frames.map((frame) => frame.status), ["pending", "running", "done"]);
   process.stdout.write(`\n${JSON.stringify({ cases: scrubbed })}`);
   process.exit(0);
 }
