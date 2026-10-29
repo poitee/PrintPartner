@@ -2,7 +2,10 @@
 //! Moonraker driver and compares every result and the exact request transcript
 //! with `node-oracle.json`. `moonraker.driver-oracle.test.ts` in the web server
 //! checks that the Node adapter produces the same file.
-use pp_drivers::{moonraker::QUERY, moonraker_driver::Driver};
+use pp_drivers::{
+    moonraker::QUERY,
+    moonraker_driver::{Driver, UploadSource},
+};
 use pp_net::outbound::{HttpGuard, SystemResolver};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -215,7 +218,12 @@ async fn ticket_t_21_unusable_base_urls_match_node_oracle() {
         serde_json::from_slice(&fixture("node-oracle-bases.json")).unwrap();
     assert_eq!(oracle.len(), bases.bases.len());
     for base in &bases.bases {
-        let actual = read_calls(&driver(base, None), &[String::new()]).await;
+        let driver = driver(base, None);
+        let mut actual = read_calls(&driver, &[String::new()]).await;
+        let upload = driver
+            .upload_file(UploadSource::Bytes(b"G28\n".to_vec()), "a.gcode", true)
+            .await;
+        actual.insert("upload".into(), json!(upload));
         assert_eq!(Value::Object(actual), oracle[base], "{base:?}");
     }
 }
