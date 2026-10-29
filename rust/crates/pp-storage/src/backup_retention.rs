@@ -3,10 +3,11 @@
 //! verified `pre-schema*.db` copies left by earlier upgrades. The count is
 //! per file, not per upgrade.
 //!
-//! A `pre-schema{N}-to-{M}.db` copy is never pruned. It is written only for a
-//! database older than schema 37, so there are at most six, and after an
-//! upgrade interrupted between steps it can be the only copy the previous
-//! release opens, even though a later attempt pinned a newer rollback.
+//! A `pre-schema{N}-to-{M}.db` copy is never pruned. It is written only when
+//! a database older than schema 37 upgrades, one per source and target
+//! version. After an upgrade interrupted between steps it can be the only
+//! copy the previous release opens, even though a later attempt pinned a
+//! newer rollback.
 //!
 //! Only this crate's own files are candidates: Node's pre-update and manual
 //! `.tar.gz` archives, temporary `.backup-*.db` files and SQLite sidecars are
