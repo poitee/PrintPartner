@@ -48,6 +48,30 @@
           "id": "camera-7",
           "name": "Legacy",
           "view": "mjpeg"
+        },
+        {
+          "id": "backslash-path",
+          "name": "Backslash path",
+          "view": "mjpeg",
+          "service": "mjpegstreamer"
+        },
+        {
+          "id": "userinfo-backslash",
+          "name": "Userinfo backslash",
+          "view": "mjpeg",
+          "service": "mjpegstreamer"
+        },
+        {
+          "id": "dotdot-backslash",
+          "name": "Dotdot backslash",
+          "view": "mjpeg",
+          "service": "mjpegstreamer"
+        },
+        {
+          "id": "absolute-origin",
+          "name": "Absolute origin",
+          "view": "mjpeg",
+          "service": "mjpegstreamer"
         }
       ]
     },
