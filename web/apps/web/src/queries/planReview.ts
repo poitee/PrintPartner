@@ -1,12 +1,35 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY } from "@print-partner/contracts";
 import { patchPart } from "../api/endpoints/plans";
 import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
 import { patchPartAssembled, patchPartProgress } from "../api/endpoints/checkoff";
 import { useSpoolmanWorkflowAccess } from "../hooks/useSpoolmanWorkflowAccess";
 import { maskSpoolmanReviewPart, mergeAssembledIntoReview, mergeProgressIntoReview } from "../lib/reviewParts";
 import { queryKeys } from "./keys";
+import { useHealthQuery } from "./health";
 import { invalidateProfiles } from "./profiles";
 import { invalidateRoleFilaments } from "./roleFilaments";
+
+const PLAN_REVIEW_REVISION_MISMATCH =
+  "The Build Review response belongs to a different Plan revision";
+
+/** Health advertises this capability only when `PP_DESKTOP_REBUILD` is exactly `1` or `true`. */
+function rebuildWorkspaceReads(capabilities: readonly string[] | undefined): boolean {
+  return capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
+}
+
+function reviewQueryShouldRetry(failureCount: number, error: unknown, retry: unknown): boolean {
+  if (error instanceof Error && error.message === PLAN_REVIEW_REVISION_MISMATCH) return false;
+  if (typeof retry === "function") return Boolean(retry(failureCount, error));
+  if (typeof retry === "boolean") return retry;
+  if (typeof retry === "number") return failureCount < retry;
+  return failureCount < 3;
+}
+
+/** `null` is the first Plan, which has no accepted revision. */
+function acceptedRevisionId(review: PlanReview | undefined): number | null {
+  return review?.accepted_basis?.plan_revision_id ?? null;
+}
 
 type ReviewMutationContext<T> = {
   profileId: number | null;
@@ -16,16 +39,34 @@ type ReviewMutationContext<T> = {
 
 export function usePlanReviewQuery(
   profileId: number | null,
-  options?: { includeExcluded?: boolean; enabled?: boolean },
+  options?: { includeExcluded?: boolean; enabled?: boolean; revisionId?: number | null },
 ) {
   const includeExcluded = options?.includeExcluded ?? false;
   const access = useSpoolmanWorkflowAccess(profileId);
+  const health = useHealthQuery();
+  const queryClient = useQueryClient();
+  const rebuild = rebuildWorkspaceReads(health.data?.capabilities);
+  const revisionId = rebuild && options?.revisionId !== undefined ? options.revisionId : undefined;
   return useQuery({
-    queryKey: queryKeys.planReview(profileId ?? 0, includeExcluded, access.queryAllowed),
+    queryKey: queryKeys.planReview(profileId ?? 0, includeExcluded, access.queryAllowed, revisionId),
     ...(access.gated ? { staleTime: 0 } : {}),
-    queryFn: () => fetchPlanReview(profileId!, { includeExcluded }),
+    retry: (failureCount, error) =>
+      reviewQueryShouldRetry(failureCount, error, queryClient.getDefaultOptions().queries?.retry),
+    queryFn: async () => {
+      const review = await fetchPlanReview(profileId!, { includeExcluded });
+      if (revisionId !== undefined && acceptedRevisionId(review) !== revisionId) {
+        throw new Error(PLAN_REVIEW_REVISION_MISMATCH);
+      }
+      return review;
+    },
     enabled: (options?.enabled ?? true) && profileId != null && profileId > 0,
-    placeholderData: (previous, query) => query?.queryKey[1] === profileId && query.queryKey[2] === includeExcluded ? previous : undefined,
+    placeholderData: (previous, query) => {
+      if (query?.queryKey[1] !== profileId || query?.queryKey[2] !== includeExcluded) return undefined;
+      // The accepted query is unbound. A pinned slot must not stand in for it.
+      if (revisionId === undefined && query.queryKey.length >= 5) return undefined;
+      if (revisionId !== undefined && acceptedRevisionId(previous) !== revisionId) return undefined;
+      return previous;
+    },
     select: (review) => access.allowed ? review : { ...review, part_groups: review.part_groups.map((group) => ({
       ...group, parts: group.parts.map(maskSpoolmanReviewPart),
     })) },

@@ -117,11 +117,31 @@ describe("job stream observation lifetime", () => {
     expect(onEvent).not.toHaveBeenCalled();
   });
 
-  it("does not retry a policy rejection", async () => {
-    const { socket, disconnect } = await connection();
-    socket.onclose?.({ code: 1008, reason: "Policy rejected" });
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(TestSocket.connections).toHaveLength(1);
+  it.each(["Session expired", "Session revoked", "Policy rejected"])(
+    "reports %s once and does not reconnect",
+    async (reason) => {
+      const { socket, onError, onEvent } = await connection();
+      socket.onclose?.({ code: 1008, reason });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(TestSocket.connections).toHaveLength(1);
+      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        name: "JobSocketClosedError",
+        reason,
+      }));
+      expect(onEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports a job socket URL that cannot be built and does not connect", async () => {
+    vi.resetModules();
+    vi.stubGlobal("WebSocket", TestSocket);
+    vi.stubEnv("VITE_API_URL", "http://[");
+    vi.stubEnv("VITE_API_PREFIX", "");
+    const { connectJobWebSocket, JobSocketSetupError } = await import("./jobWebSocket");
+    const onError = vi.fn();
+    const disconnect = connectJobWebSocket("one", () => undefined, onError);
+    expect(TestSocket.connections).toHaveLength(0);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(expect.any(JobSocketSetupError));
     disconnect();
   });
 

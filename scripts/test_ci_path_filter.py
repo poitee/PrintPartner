@@ -19,6 +19,8 @@ class CiPathFilterTests(unittest.TestCase):
                      "rust-toolchain.toml", "web/package.json", "web/package-lock.json",
                      "web/apps/web/src/App.tsx", "web/packages/contracts/src/a.ts",
                      ".github/workflows/rust-cross-os.yml", "scripts/ci-path-filter.py",
+                     "scripts/ci-affected-nextest-filter.py",
+                     "scripts/test_ci_affected_nextest_filter.py",
                      "web/tsconfig.base.json", "web/scripts/atomic-package-build.mjs",
                      "web/scripts/storage-fixtures/prepare.mts",
                      "fixtures/parity/jobs-model/jobs-model.json",
@@ -36,9 +38,9 @@ class CiPathFilterTests(unittest.TestCase):
                      ".github/workflows/desktop-native-macos.yml",
                      "scripts/native_image_diagnostics.py",
                      "scripts/test_native_image_cleanup.py", "scripts/ci-path-filter.py",
-                     ".cursor/skills/verify-print-partner-rust/helpers/test_launch.py",
-                     ".cursor/skills/verify-print-partner-rust/helpers/verify.py",
-                     ".cursor/skills/verify-print-partner-rust/helpers/future_helper.py"]:
+                     "scripts/verify-rust-gateway/test_launch.py",
+                     "scripts/verify-rust-gateway/verify.py",
+                     "scripts/verify-rust-gateway/future_helper.py"]:
             self.assertTrue(ci_filter.relevant(path, "native"))
         for path in ["README.md", "docs/ci.md", ".github/workflows/pr-evidence.yml"]:
             self.assertFalse(ci_filter.relevant(path, "native"))
@@ -92,7 +94,7 @@ class CiPathFilterTests(unittest.TestCase):
             for kind in ["rust", "actions", "native"]:
                 self.assertEqual(select(base, docs, kind)[0], "relevant=false\n")
             git("checkout", "-q", "--detach", base)
-            helper = commit(".cursor/skills/verify-print-partner-rust/helpers/verify.py")
+            helper = commit("scripts/verify-rust-gateway/verify.py")
             self.assertEqual(select(base, helper, "native")[0], "relevant=true\n")
             self.assertEqual(select(base, helper, "rust")[0], "relevant=false\n")
             git("checkout", "-q", "--detach", base)

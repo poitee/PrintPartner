@@ -468,6 +468,77 @@ fn push_quoted_plain(
     Ok(())
 }
 
+// js-yaml tries a block mapping at each later property of a block value that
+// starts on its own line, and the earlier properties then belong to that
+// mapping. Reports whether an implicit key and its `:` follow on this line.
+fn property_key(
+    chars: &[char],
+    mut pos: usize,
+    budget: &PreparationBudget<'_>,
+) -> ReadResult<bool> {
+    let end = line_end(chars, pos, budget)?;
+    let mut steps = 0usize;
+    let mut step = || -> ReadResult<()> {
+        steps += 1;
+        if steps.is_multiple_of(1024) {
+            budget.check()?;
+        }
+        Ok(())
+    };
+    while pos < end && matches!(chars[pos], '!' | '&') {
+        let verbatim = chars[pos] == '!' && chars.get(pos + 1) == Some(&'<');
+        while pos < end && !yaml_blank_break(chars[pos]) {
+            step()?;
+            pos += 1;
+            if verbatim && chars[pos - 1] == '>' {
+                break;
+            }
+        }
+        while pos < end && matches!(chars[pos], ' ' | '\t') {
+            step()?;
+            pos += 1;
+        }
+    }
+    match chars.get(pos) {
+        Some(&q @ ('"' | '\'')) => {
+            pos += 1;
+            loop {
+                step()?;
+                if pos >= end {
+                    return Ok(false);
+                }
+                if q == '"' && chars[pos] == '\\' {
+                    pos += 2;
+                } else if chars[pos] == q && !(q == '\'' && chars.get(pos + 1) == Some(&'\'')) {
+                    pos += 1;
+                    break;
+                } else {
+                    pos += 1 + usize::from(q == '\'' && chars[pos] == '\'');
+                }
+            }
+            while pos < end && matches!(chars[pos], ' ' | '\t') {
+                step()?;
+                pos += 1;
+            }
+        }
+        // An alias key cannot carry the property, and js-yaml keeps no
+        // collection key in a plain object.
+        Some('*' | '[' | '{' | '|' | '>' | '#') | None => return Ok(false),
+        Some(_) => {
+            while pos < end
+                && !(chars[pos] == ':' && chars.get(pos + 1).copied().is_none_or(yaml_blank_break))
+            {
+                step()?;
+                if chars[pos] == '#' && matches!(chars[pos - 1], ' ' | '\t') {
+                    return Ok(false);
+                }
+                pos += 1;
+            }
+        }
+    }
+    Ok(pos < end && chars[pos] == ':' && chars.get(pos + 1).copied().is_none_or(yaml_blank_break))
+}
+
 fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String> {
     budget.check()?;
     // js-yaml rejects any input that contains a NUL.
@@ -517,6 +588,12 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
     // Byte offset just after a flow sequence's `?`. saphyr drops an empty
     // explicit key, so the shield writes that key as `~`.
     let mut explicit_key: Option<usize> = None;
+    // Line of the last block `:` or `?` when no node has started since.
+    let mut seek: Option<usize> = None;
+    // Only separation follows a block `?` on this line. saphyr rejects a tab
+    // there, and js-yaml reads it as separation.
+    let mut explicit_space = false;
+    let mut explicit_tab = false;
     let mut consumed = 0usize;
     let mut next_check = 4096usize;
     while i < chars.len() {
@@ -539,6 +616,8 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             shallow_flow = false;
             separation_tab = false;
             node_tab = false;
+            explicit_space = false;
+            explicit_tab = false;
             if flow.is_empty() {
                 block_tab = false;
                 tab_key = false;
@@ -642,6 +721,7 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 i += 3;
                 parent = None;
                 document_indent = None;
+                seek = None;
                 plain = false;
                 node = true;
                 quoted_end = false;
@@ -846,8 +926,15 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
         }
         let mut separator = false;
         let mut empty_key = None;
+        let mut seek_line = None;
         if !yaml_blank_break(c) {
             empty_key = explicit_key.take();
+            seek_line = seek.take();
+            explicit_space = false;
+            // js-yaml reads no flow collection after a tab that follows `?`.
+            if std::mem::take(&mut explicit_tab) && matches!(c, '[' | '{') {
+                return invalid();
+            }
             // js-yaml ends a flow node at its properties when a line break
             // follows and the next line is not indented past the collection.
             // That line may sit below the collection's indent.
@@ -922,6 +1009,33 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 }
             }
             let closed_verbatim = verbatim && end > i && chars[end - 1] == '>';
+            let mut second = end;
+            while chars.get(second) == Some(&' ') {
+                if (second - end).is_multiple_of(1024) {
+                    budget.check()?;
+                }
+                second += 1;
+            }
+            // A block value that starts on its own line gives its first
+            // property to the mapping that a later property's key opens.
+            // saphyr reads a property alone on its line that way.
+            if c != '*'
+                && flow.is_empty()
+                && seek_line.is_some_and(|line| line != line_begin)
+                && i == line_begin + line_indent
+                && parent.is_none_or(|column| line_indent > column)
+                && matches!(chars.get(second), Some('!' | '&'))
+                && property_key(&chars, second, budget)?
+            {
+                output.push('\n');
+                for _ in line_begin..second {
+                    output.push(' ');
+                }
+                node_column = Some(second - line_begin);
+                consumed += second - end;
+                i = second;
+                continue;
+            }
             i = end;
             // saphyr requires whitespace after a verbatim tag. js-yaml allows
             // the following scalar to touch the closing `>`.
@@ -1050,6 +1164,10 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
             } else if flow.is_empty() && matches!(c, '-' | '?') {
                 parent = Some(column);
             }
+            if flow.is_empty() && (colon || c == '?') {
+                seek = Some(line_begin);
+            }
+            explicit_space = flow.is_empty() && c == '?';
             node_column = None;
             if node_tab && shallow_flow && !flow.is_empty() {
                 if !matches!(c, '[' | '{') {
@@ -1102,7 +1220,12 @@ fn shield(source: &str, budget: &mut PreparationBudget<'_>) -> ReadResult<String
                 separation_tab = true;
             }
         }
-        output.push(c);
+        if explicit_space && c == '\t' {
+            output.push(' ');
+            explicit_tab = true;
+        } else {
+            output.push(c);
+        }
         // saphyr needs a space after a flow `:` before a tab or a collection,
         // and after a block `:` before a tab that starts a plain value. A block
         // tab before `[` or `{` is a different document, which js-yaml rejects.
@@ -1919,6 +2042,51 @@ mod tests {
         assert_js_yaml_cases(include_str!(
             "../../tests/fixtures/yaml-block-tabs-node.json"
         ));
+    }
+
+    #[test]
+    fn yaml_property_keys_match_js_yaml() {
+        assert_js_yaml_cases(include_str!(
+            "../../tests/fixtures/yaml-property-keys-node.json"
+        ));
+    }
+
+    // GRE-841's own inputs, as js-yaml loads them in the shared Node corpus.
+    #[test]
+    fn yaml_flow_property_corpus_matches_js_yaml() {
+        #[derive(serde::Deserialize)]
+        struct Outcome {
+            kind: String,
+            value: Option<serde_json::Value>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            id: String,
+            input: String,
+            outcome: Outcome,
+        }
+        #[derive(serde::Deserialize)]
+        struct Corpus {
+            cases: Vec<Case>,
+        }
+        let corpus: Corpus = serde_json::from_str(include_str!(
+            "../../../../../fixtures/parity/yaml-flow-properties/node.json"
+        ))
+        .unwrap();
+        let cases = corpus
+            .cases
+            .into_iter()
+            .map(|case| {
+                let expected = match case.outcome.kind.as_str() {
+                    "decoded" => case.outcome.value,
+                    "refused" => None,
+                    kind => panic!("{}: {kind}", case.id),
+                };
+                serde_json::json!({ "name": case.id, "source": case.input, "expected": expected })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cases.len(), 31);
+        assert_js_yaml_cases(&serde_json::to_string(&cases).unwrap());
     }
 
     #[test]

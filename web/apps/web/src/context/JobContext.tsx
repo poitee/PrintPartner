@@ -9,12 +9,19 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY, type JobEvent, type JobSnapshot } from "@print-partner/contracts";
+import { notifyEngineUnauthorized } from "../api/contractRequest";
 import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
-import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
+import {
+  connectJobWebSocket,
+  JobNotFoundError,
+  JobSocketClosedError,
+  JobSocketSetupError,
+} from "../api/jobWebSocket";
 import { invalidateAfterJob } from "../queries/invalidation";
 import { invalidateAcceptedPlateExportJobs } from "../queries/acceptedPlates";
+import { useHealthQuery } from "../queries/health";
 
 export type ActiveJob = {
   jobId: string;
@@ -53,6 +60,11 @@ type JobContextValue = {
 const JobContext = createContext<JobContextValue | null>(null);
 
 const JOB_TERMINAL = new Set(["done", "error", "cancelled"]);
+
+/** Health advertises this capability only when `PP_DESKTOP_REBUILD` is exactly `1` or `true`. */
+function rebuildJobSnapshots(capabilities: readonly string[] | undefined): boolean {
+  return capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
+}
 
 /**
  * How long a finished job keeps its row in the job strip.
@@ -125,6 +137,8 @@ function upsertJob(jobs: ActiveJob[], next: ActiveJob): ActiveJob[] {
 
 export function JobProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
+  const health = useHealthQuery();
+  const rebuildSnapshots = rebuildJobSnapshots(health.data?.capabilities);
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const observers = useRef(new Set<AbortController>());
   useEffect(() => {
@@ -220,7 +234,10 @@ export function JobProvider({ children }: { children: ReactNode }) {
           finished = true;
           observer.abort();
           onDone?.(snap);
-          invalidateAfterJob(qc, kind, snap, options?.profileId);
+          invalidateAfterJob(qc, kind, snap, options?.profileId, {
+            sourceIds,
+            rebuild: rebuildSnapshots,
+          });
           setActiveJobs((prev) =>
             upsertJob(prev, {
               jobId,
@@ -282,12 +299,26 @@ export function JobProvider({ children }: { children: ReactNode }) {
             if (error instanceof JobNotFoundError) {
               finish({ job_id: jobId, kind, status: "error", message: error.message,
                 error: error.message, progress: null, result: null });
+              return;
             }
-            /* Other WebSocket errors leave HTTP polling to handle completion. */
+            // A stream error that will reconnect stays on this subscription.
+            // Flag off still finishes through the HTTP poll. Rebuild mode has
+            // no poll, so a close that will not reconnect ends the row here.
+            if (!rebuildSnapshots) return;
+            if (!(error instanceof JobSocketClosedError) && !(error instanceof JobSocketSetupError)) {
+              return;
+            }
+            if (error instanceof JobSocketClosedError &&
+                (error.reason === "Session expired" || error.reason === "Session revoked")) {
+              notifyEngineUnauthorized();
+            }
+            failObservation(error);
           },
         );
 
-        void pollJobUntilTerminal(jobId, onProgress, observer.signal).catch(failObservation);
+        if (!rebuildSnapshots) {
+          void pollJobUntilTerminal(jobId, onProgress, observer.signal).catch(failObservation);
+        }
       } catch (e) {
         if (observer.signal.aborted) return;
         observer.abort();
@@ -310,7 +341,7 @@ export function JobProvider({ children }: { children: ReactNode }) {
         removeAfterTerminalDisplay(failureJobId);
       }
     },
-    [qc],
+    [qc, rebuildSnapshots],
   );
 
   const value = useMemo(

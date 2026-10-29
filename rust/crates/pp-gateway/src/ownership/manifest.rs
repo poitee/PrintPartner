@@ -32,6 +32,10 @@ const PARTICIPANT_KINDS: &[&str] = &[
     "startup",
     "worker",
     "migration",
+    // A write Node makes while it stops, or inside a route another operation
+    // owns. Node checks the cutover record at that call.
+    "shutdown",
+    "reconcile",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

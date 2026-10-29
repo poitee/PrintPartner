@@ -175,7 +175,12 @@ async fn feature_off_404() {
     let snapshot = files(&directory);
     let before = job_rows(&directory);
     let mut server = Server::spawn(bind().await, axum::Router::new()).await;
-    for path in ["/api/v1/jobs", "/api/v1/jobs/missing", "/jobs/missing"] {
+    for path in [
+        "/api/v1/jobs",
+        "/api/v1/jobs/missing",
+        "/jobs/missing",
+        "/ws/jobs/missing",
+    ] {
         let (status, body) = server.send(Method::GET, path, &[]).await;
         assert_eq!(status, 404, "{path}");
         assert!(body.get("jobs").is_none() && body.get("job_id").is_none());
@@ -214,7 +219,55 @@ async fn job_detail_head_has_no_body_and_keeps_status() {
 
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
-async fn job_detail_mutations_and_ws_unregistered() {
+async fn job_detail_mutations_unregistered() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_response_refusal_releases_permit() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn retained_job_response_preserves_public_json() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_rejects_invalid_origin_or_principal() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_head_does_not_subscribe() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_delivers_initial_and_terminal_snapshot() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_revocation_closes_without_further_data() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn job_ws_reconnect_returns_authoritative_snapshot() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
+async fn jobs_router_shutdown_closes_subscriptions() {
     feature_off_404().await;
 }
 
@@ -1073,12 +1126,12 @@ async fn job_detail_api_key_matches_cookie() {
     shutdown(owner, directory);
 }
 
-/// Mutation routes and `/ws/jobs/{id}` stay unregistered: `POST` answers 405 on
-/// both aliases with an empty body, and a full WS upgrade handshake to
-/// `/ws/jobs/{id}` answers 404. No row is created or changed.
+/// Mutation routes stay unregistered: `POST` answers 405 on both aliases with
+/// an empty body. A `/ws/jobs/{id}` handshake with no session answers 401
+/// before any subscription. No row is created or changed.
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test]
-async fn job_detail_mutations_and_ws_unregistered() {
+async fn job_detail_mutations_unregistered() {
     use pp_api::{
         auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
         jobs::{JobsHttpConfig, jobs_router},
@@ -1128,12 +1181,11 @@ async fn job_detail_mutations_and_ws_unregistered() {
         assert_eq!(response.bytes().await.unwrap().len(), 0, "{path}");
     }
 
-    // `/ws/jobs/{id}` is not mounted even with a full WS upgrade handshake.
+    // No session is refused in the guard, before subscribe.
     let ws = server
         .client
         .get(format!("{}/ws/jobs/{job_id}", server.origin))
         .header("Origin", &server.origin)
-        .header("Cookie", &cookie)
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
@@ -1141,7 +1193,11 @@ async fn job_detail_mutations_and_ws_unregistered() {
         .send()
         .await
         .unwrap();
-    assert_eq!(ws.status(), 404);
+    assert_eq!(ws.status(), 401);
+    assert_eq!(
+        ws.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"detail": "Authentication required"})
+    );
 
     // The same id still reads back over GET, so the 405 was method-only.
     let (status, body) = server
@@ -1251,6 +1307,906 @@ async fn job_detail_head_has_no_body_and_keeps_status() {
     );
     server.stop().await;
     shutdown(owner, directory);
+}
+
+/// Two refused reads must not stick the two serializer permits. The next read
+/// of the real job is 200, and rows stay unchanged.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_response_refusal_releases_permit() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-permit@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let headers = [("Cookie", cookie.as_str())];
+    for path in [
+        format!("/jobs/{job_id}-missing"),
+        format!("/api/v1/jobs/{job_id}-missing"),
+    ] {
+        let (status, body) = server.send(Method::GET, &path, &headers).await;
+        assert_eq!(status, 404, "{path}");
+        assert_eq!(body, serde_json::json!({"detail": "Job not found"}));
+    }
+    let (status, body) = server
+        .send(Method::GET, &format!("/jobs/{job_id}"), &[])
+        .await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        body,
+        serde_json::json!({"detail": "Authentication required"})
+    );
+    let (status, body) = server
+        .send(Method::GET, &format!("/api/v1/jobs/{job_id}"), &headers)
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["job_id"], job_id);
+    assert_eq!(body["status"], "done");
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Read-one JSON is the public snapshot: the completed result is present and
+/// `updated_at` is absent. The list keeps `updated_at` and the same result.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn retained_job_response_preserves_public_json() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+    use std::collections::BTreeSet;
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-public-json@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("true")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let headers = [("Cookie", cookie.as_str())];
+    let expected_result = serde_json::json!({
+        "checked": [],
+        "skipped": [],
+        "updates_available": 0,
+        "checked_count": 0
+    });
+    let public_keys: BTreeSet<&str> = [
+        "created_at",
+        "error",
+        "finished_at",
+        "job_id",
+        "kind",
+        "message",
+        "progress",
+        "result",
+        "status",
+    ]
+    .into_iter()
+    .collect();
+    for path in [format!("/jobs/{job_id}"), format!("/api/v1/jobs/{job_id}")] {
+        let (status, body) = server.send(Method::GET, &path, &headers).await;
+        assert_eq!(status, 200, "{path}");
+        let keys: BTreeSet<_> = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, public_keys, "{path}");
+        assert!(body.get("updated_at").is_none(), "{path}");
+        assert_eq!(body["job_id"], job_id, "{path}");
+        assert_eq!(body["kind"], "check-source-updates", "{path}");
+        assert_eq!(body["status"], "done", "{path}");
+        assert_eq!(body["message"], "Complete", "{path}");
+        assert_eq!(body["progress"], 100, "{path}");
+        assert_eq!(body["error"], serde_json::Value::Null, "{path}");
+        assert_eq!(body["result"], expected_result, "{path}");
+        assert!(body["created_at"].as_str().unwrap().contains('T'), "{path}");
+        assert!(
+            body["finished_at"].as_str().unwrap().contains('T'),
+            "{path}"
+        );
+    }
+    let (status, list) = server.send(Method::GET, "/api/v1/jobs", &headers).await;
+    assert_eq!(status, 200);
+    let listed = &list["jobs"][0];
+    assert_eq!(listed["result"], expected_result);
+    assert!(
+        listed
+            .get("updated_at")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains('T')
+    );
+    assert_eq!(job_rows(&directory), before);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Wrong origin, wrong listener, missing credential, and an expired session
+/// are refused before `subscribe`. Another tenant's `GET` upgrades and closes
+/// `1008` `Job not found`. `HEAD` for that caller stays `404`. Rows and files
+/// stay put.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_rejects_invalid_origin_or_principal() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-a@example.test").await;
+    let other = register(&bootstrap, "job-ws-b@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let path = format!("/ws/jobs/{job_id}");
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs.clone(),
+        ),
+    )
+    .await;
+    let bound = bind().await;
+    let mut wrong_listener = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup("http://127.0.0.1:1", "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+
+    for method in [Method::GET, Method::HEAD] {
+        let (status, body) =
+            ws_exchange(&server, &method, &path, "https://evil.test", Some(&cookie)).await;
+        assert_refusal(&method, status, &body, 403, "Invalid request origin");
+        let (status, body) = ws_exchange(
+            &wrong_listener,
+            &method,
+            &path,
+            &wrong_listener.origin,
+            Some(&cookie),
+        )
+        .await;
+        assert_refusal(&method, status, &body, 403, "Invalid request host");
+        let (status, body) = ws_exchange(&server, &method, &path, &server.origin, None).await;
+        assert_refusal(&method, status, &body, 401, "Authentication required");
+    }
+    let (status, body) =
+        ws_exchange(&server, &Method::HEAD, &path, &server.origin, Some(&other)).await;
+    assert_refusal(&Method::HEAD, status, &body, 404, "Job not found");
+    let mut foreign = open_socket(&server, &path, Some(&other)).await;
+    assert_eq!(
+        expect_close(&mut foreign).await,
+        (1008, "Job not found".to_owned())
+    );
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+
+    expire_sessions(&directory);
+    let expired_files = files(&directory);
+    let expired_rows = job_rows(&directory);
+    for method in [Method::GET, Method::HEAD] {
+        let (status, body) =
+            ws_exchange(&server, &method, &path, &server.origin, Some(&cookie)).await;
+        assert_refusal(&method, status, &body, 401, "Authentication required");
+    }
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (expired_files, expired_rows)
+    );
+    server.stop().await;
+    wrong_listener.stop().await;
+    shutdown(owner, directory);
+}
+
+/// `HEAD` still answers when all 128 stream slots are held, so it did not
+/// subscribe. Dropping one slot lets a real `subscribe` through.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_head_does_not_subscribe() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+    use pp_storage::{
+        auth::Secret,
+        jobs::{Credential, JobSubscription},
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-head@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_and_finish_public(&owner, chosen, &token).await;
+    let path = format!("/ws/jobs/{job_id}");
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let cancelled = AtomicBool::new(false);
+    let mut held: Vec<JobSubscription> = Vec::new();
+    for _ in 0..128 {
+        held.push(
+            jobs.subscribe(
+                Credential::Session(Secret::new(token.clone())),
+                job_id.clone(),
+                &cancelled,
+                Duration::from_secs(5),
+            )
+            .unwrap(),
+        );
+    }
+    let snapshot = files(&directory);
+    let before = job_rows(&directory);
+
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs.clone(),
+        ),
+    )
+    .await;
+    let head = server
+        .client
+        .request(Method::HEAD, format!("{}{path}", server.origin))
+        .header("Origin", &server.origin)
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head.status(), 200);
+    assert_eq!(head.bytes().await.unwrap().len(), 0);
+    let (status, body) = ws_exchange(
+        &server,
+        &Method::HEAD,
+        &format!("/ws/jobs/{job_id}-missing"),
+        &server.origin,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert!(body.get("job_id").is_none());
+    assert_eq!(
+        (files(&directory), job_rows(&directory)),
+        (snapshot, before)
+    );
+
+    held.pop();
+    jobs.subscribe(
+        Credential::Session(Secret::new(token)),
+        job_id,
+        &cancelled,
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn ws_exchange(
+    server: &Server,
+    method: &Method,
+    path: &str,
+    origin: &str,
+    cookie: Option<&str>,
+) -> (u16, serde_json::Value) {
+    let mut request = server
+        .client
+        .request(method.clone(), format!("{}{path}", server.origin))
+        .header("Origin", origin)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("Sec-WebSocket-Version", "13");
+    if let Some(cookie) = cookie {
+        request = request.header("Cookie", cookie);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = response.bytes().await.unwrap();
+    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+/// reqwest drops the body of a HEAD response, so only GET carries `detail`.
+#[cfg(feature = "desktop_rebuild")]
+fn assert_refusal(
+    method: &Method,
+    status: u16,
+    body: &serde_json::Value,
+    expected: u16,
+    text: &str,
+) {
+    assert_eq!(status, expected, "{method} {text}");
+    if *method == Method::GET {
+        assert_eq!(
+            body.get("detail").and_then(serde_json::Value::as_str),
+            Some(text),
+            "{method}"
+        );
+    } else {
+        assert!(body.get("job_id").is_none(), "{method}");
+    }
+}
+
+/// The first frame is the queued job. Claim may send one later snapshot before
+/// the terminal `done` frame. That frame is followed by a normal close.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_delivers_initial_and_terminal_snapshot() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-pump@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let mut socket = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let initial = expect_text(&mut socket).await;
+    assert_eq!(initial["job_id"], job_id);
+    assert_ne!(initial["status"], "done");
+    assert!(initial.get("updated_at").is_none());
+    finish_queued(&owner, chosen, &job_id);
+    let mut terminal = None;
+    for _ in 0..4 {
+        let frame = expect_text(&mut socket).await;
+        assert_eq!(frame["job_id"], job_id);
+        assert!(frame.get("updated_at").is_none());
+        if frame["status"] == "done" {
+            terminal = Some(frame);
+            break;
+        }
+    }
+    let terminal = terminal.expect("terminal snapshot");
+    assert!(terminal.get("result").is_some());
+    assert_eq!(expect_close(&mut socket).await, (1000, String::new()));
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Logout revokes the live stream. The socket closes `1008` and sends no
+/// snapshot after the one already delivered.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn job_ws_revocation_closes_without_further_data() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-revoke@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let mut socket = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let initial = expect_text(&mut socket).await;
+    assert_eq!(initial["job_id"], job_id);
+    logout(&owner, chosen, &token);
+    assert_eq!(
+        expect_close(&mut socket).await,
+        (1008, "Session revoked".to_owned())
+    );
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Seventeen snapshots published before the pump admits another frame close
+/// the socket with 1011. The current_thread runtime keeps the pump from
+/// running during those publishes. The next upgrade returns the current
+/// public snapshot.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test(flavor = "current_thread")]
+async fn job_ws_reconnect_returns_authoritative_snapshot() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-reconnect@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let mut lagged = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let initial = expect_text(&mut lagged).await;
+    assert_eq!(initial["job_id"], job_id);
+    assert_ne!(initial["progress"], 16);
+    publish_until_lag(&owner, chosen, &job_id);
+    assert_eq!(
+        expect_close(&mut lagged).await,
+        (1011, "Job stream unavailable".to_owned())
+    );
+    let mut again = open_socket(&server, &format!("/ws/jobs/{job_id}"), Some(&cookie)).await;
+    let current = expect_text(&mut again).await;
+    assert_eq!(current["job_id"], job_id);
+    assert_eq!(current["progress"], 16);
+    assert!(current.get("updated_at").is_none());
+    drop(again);
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
+/// Owner shutdown closes every live job socket and a later upgrade is refused.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test(flavor = "current_thread")]
+async fn jobs_router_shutdown_closes_subscriptions() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-shutdown@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let path = format!("/ws/jobs/{job_id}");
+    let mut first = open_socket(&server, &path, Some(&cookie)).await;
+    let mut second = open_socket(&server, &path, Some(&cookie)).await;
+    assert_eq!(expect_text(&mut first).await["job_id"], job_id);
+    assert_eq!(expect_text(&mut second).await["job_id"], job_id);
+    let rows = job_rows(&directory);
+    close_owner(owner);
+    assert_eq!(
+        expect_close(&mut first).await,
+        (1011, "Job stream unavailable".to_owned())
+    );
+    assert_eq!(
+        expect_close(&mut second).await,
+        (1011, "Job stream unavailable".to_owned())
+    );
+    let (status, body) =
+        ws_exchange(&server, &Method::GET, &path, &server.origin, Some(&cookie)).await;
+    assert_refusal(&Method::GET, status, &body, 500, "Jobs service unavailable");
+    assert_eq!(job_rows(&directory), rows);
+    server.stop().await;
+    drop(directory);
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn enqueue_queued(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    token: &str,
+) -> String {
+    use pp_storage::{
+        auth::Secret,
+        jobs::{Credential, Outcome, Payload, UserOperation},
+    };
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    match owner
+        .lock()
+        .unwrap()
+        .jobs(chosen)
+        .unwrap()
+        .submit(
+            Credential::Session(Secret::new(token.to_owned())),
+            UserOperation::Enqueue {
+                key: "stream".into(),
+                payload_version: 1,
+                payload: Payload::CheckSourceUpdates {},
+            },
+            &AtomicBool::new(false),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .receive()
+        .unwrap()
+    {
+        Outcome::Job(job, _) => job.job_id,
+        _ => panic!("enqueued job expected"),
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn finish_queued(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    job_id: &str,
+) {
+    use pp_storage::jobs::{
+        CompletedResult, JobKind, SourceUpdatesResult, WorkerAdmission, WorkerOperation,
+    };
+
+    let worker = owner
+        .lock()
+        .unwrap()
+        .job_worker_with_policy(
+            chosen,
+            WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert_eq!(lease.job_id(), job_id);
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                    checked: vec![],
+                    skipped: vec![],
+                    updates_available: 0,
+                    checked_count: 0,
+                })),
+            },
+        )
+        .unwrap();
+}
+
+/// Claim and progress 1 through 15 fill the 16-slot mailbox. Progress 16
+/// closes it as lagged. The stored progress is 16.
+#[cfg(feature = "desktop_rebuild")]
+fn publish_until_lag(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    job_id: &str,
+) {
+    use pp_storage::jobs::{JobKind, WorkerAdmission, WorkerOperation};
+
+    let worker = owner
+        .lock()
+        .unwrap()
+        .job_worker_with_policy(
+            chosen,
+            WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert_eq!(lease.job_id(), job_id);
+    for step in 1..=16 {
+        worker
+            .update(&mut lease, WorkerOperation::Progress(step))
+            .unwrap();
+    }
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn close_owner(owner: Arc<Mutex<WriterOwner>>) {
+    let owner = Arc::try_unwrap(owner).unwrap_or_else(|_| panic!("router still holds storage"));
+    owner.into_inner().unwrap().shutdown().unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn logout(owner: &Arc<Mutex<WriterOwner>>, chosen: pp_storage::auth::AuthPolicy, token: &str) {
+    use pp_storage::auth::{Request, Secret};
+    use std::{sync::atomic::AtomicBool, time::Duration};
+
+    owner
+        .lock()
+        .unwrap()
+        .auth_with_policy(chosen)
+        .unwrap()
+        .submit(
+            Request::Logout {
+                token: Secret::new(token.to_owned()),
+            },
+            Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .recv()
+        .unwrap()
+        .unwrap();
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn open_socket(server: &Server, path: &str, cookie: Option<&str>) -> tokio::net::TcpStream {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let host = server.origin.trim_start_matches("http://");
+    let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+    let cookie_line = cookie
+        .map(|value| format!("Cookie: {value}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{cookie_line}\r\n",
+        origin = server.origin,
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut seen = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte).await.unwrap();
+        seen.push(byte[0]);
+        if seen.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    let text = String::from_utf8(seen).unwrap();
+    assert!(text.starts_with("HTTP/1.1 101"), "{text}");
+    stream
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn read_frame(stream: &mut tokio::net::TcpStream) -> (u8, Vec<u8>) {
+    use tokio::io::AsyncReadExt;
+
+    let mut head = [0u8; 2];
+    stream.read_exact(&mut head).await.unwrap();
+    let opcode = head[0] & 0x0f;
+    let len = match head[1] & 0x7f {
+        126 => {
+            let mut ext = [0u8; 2];
+            stream.read_exact(&mut ext).await.unwrap();
+            u16::from_be_bytes(ext) as usize
+        }
+        len => len as usize,
+    };
+    assert!(len < 65_536, "test frames stay under 64KiB");
+    let mut payload = vec![0u8; len];
+    if len > 0 {
+        stream.read_exact(&mut payload).await.unwrap();
+    }
+    (opcode, payload)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn expect_text(stream: &mut tokio::net::TcpStream) -> serde_json::Value {
+    let (opcode, payload) = read_frame(stream).await;
+    assert_eq!(opcode, 1, "text frame");
+    serde_json::from_slice(&payload).unwrap()
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn expect_close(stream: &mut tokio::net::TcpStream) -> (u16, String) {
+    let (opcode, payload) = read_frame(stream).await;
+    assert_eq!(opcode, 8, "close frame");
+    let code = u16::from_be_bytes([payload[0], payload[1]]);
+    let reason = String::from_utf8(payload[2..].to_vec()).unwrap();
+    (code, reason)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn expire_sessions(directory: &Path) {
+    let db = rusqlite::Connection::open(directory.join("print-partner.db")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(
+        db.execute(
+            "UPDATE sessions SET expires_at='2000-01-01T00:00:00.000Z'",
+            [],
+        )
+        .unwrap()
+            >= 1
+    );
 }
 
 #[test]

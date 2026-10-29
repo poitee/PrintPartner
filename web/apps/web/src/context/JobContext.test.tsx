@@ -3,13 +3,23 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { JobSnapshot } from "@print-partner/contracts";
+import { TENANT_FEATURE_TOGGLES_CAPABILITY, type JobSnapshot } from "@print-partner/contracts";
 import type { ReactNode } from "react";
 import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
-import { connectJobWebSocket, JobNotFoundError } from "../api/jobWebSocket";
+import { connectJobWebSocket, JobNotFoundError, JobSocketClosedError, JobSocketSetupError } from "../api/jobWebSocket";
 import { queryKeys } from "../queries/keys";
 import { JobProvider, useJobContext } from "./JobContext";
+
+const healthState = vi.hoisted(() => ({ capabilities: [] as string[] }));
+const notifyEngineUnauthorized = vi.hoisted(() => vi.fn());
+
+vi.mock("../queries/health", () => ({
+  useHealthQuery: () => ({
+    data: { ok: true, capabilities: healthState.capabilities },
+    status: "success",
+  }),
+}));
 
 vi.mock("../api/endpoints/jobs", () => ({
   fetchJob: vi.fn(),
@@ -18,6 +28,11 @@ vi.mock("../api/endpoints/jobs", () => ({
 vi.mock("../api/jobWebSocket", async (importOriginal) => ({
   ...await importOriginal<typeof import("../api/jobWebSocket")>(),
   connectJobWebSocket: vi.fn(() => vi.fn()),
+}));
+
+vi.mock("../api/contractRequest", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../api/contractRequest")>(),
+  notifyEngineUnauthorized,
 }));
 
 describe("JobProvider elapsed observation deadline", () => {
@@ -38,6 +53,7 @@ describe("JobProvider elapsed observation deadline", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    notifyEngineUnauthorized.mockClear();
     vi.mocked(fetchJob).mockReset();
     vi.mocked(connectJobWebSocket).mockReset().mockReturnValue(vi.fn());
   });
@@ -261,9 +277,154 @@ describe("JobProvider elapsed observation deadline", () => {
 });
 
 afterEach(() => {
+  healthState.capabilities = [];
   cleanup();
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+describe("JobProvider rebuild job transport", () => {
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <JobProvider>{children}</JobProvider>
+    </QueryClientProvider>
+  );
+  const running: JobSnapshot = {
+    job_id: "observed", kind: "check-source-updates", status: "running",
+    message: "Checking sources", progress: 4, result: null, error: null,
+  };
+  const reconnected: JobSnapshot = {
+    ...running, message: "Checked 16", progress: 16,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    notifyEngineUnauthorized.mockClear();
+    vi.mocked(fetchJob).mockReset();
+    vi.mocked(connectJobWebSocket).mockReset().mockReturnValue(vi.fn());
+    healthState.capabilities = [];
+  });
+
+  it("job_context_rebuild_reconnect_uses_snapshot", async () => {
+    healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    vi.mocked(fetchJob).mockResolvedValue({ ...running, progress: 1, message: "Stale poll" });
+    const { result } = renderHook(useJobContext, { wrapper });
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"));
+    });
+    expect(connectJobWebSocket).toHaveBeenCalledTimes(1);
+    expect(fetchJob).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[1](running);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "running", progress: 4 });
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new Error("Job event stream failed"));
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({ status: "running", progress: 4, message: "Checking sources" });
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[1](reconnected);
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({
+      status: "running", message: "Checked 16", progress: 16,
+    });
+    expect(fetchJob).not.toHaveBeenCalled();
+  });
+
+  it("job_context_flag_off_uses_existing_transport", async () => {
+    vi.mocked(fetchJob).mockResolvedValue(running);
+    const { result } = renderHook(useJobContext, { wrapper });
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"));
+    });
+    expect(connectJobWebSocket).toHaveBeenCalledTimes(1);
+    expect(fetchJob).toHaveBeenCalledWith("observed", expect.any(AbortSignal));
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new Error("Job event stream failed"));
+    });
+    expect(result.current.activeJobs[0]).toMatchObject({
+      status: "running", message: "Checking sources", progress: 4,
+    });
+    expect(result.current.activeJobs[0]?.message).not.toMatch(/Lost contact/);
+    expect(notifyEngineUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it.each(["Session expired", "Session revoked"])(
+    "job_context_rebuild_session_loss_ends_the_row for %s",
+    async (reason) => {
+      healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+      const { result } = renderHook(useJobContext, { wrapper });
+      const onDone = vi.fn();
+      await act(async () => {
+        await result.current.runJob("stl-export", () => Promise.resolve("observed"), onDone);
+      });
+      const message = `Lost contact with the job. It may still be running on the server. ${reason}`;
+      await act(async () => {
+        vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new JobSocketClosedError(reason));
+      });
+      expect(notifyEngineUnauthorized).toHaveBeenCalledOnce();
+      expect(fetchJob).not.toHaveBeenCalled();
+      expect(result.current.activeJobs[0]).toMatchObject({ status: "error", message });
+      expect(onDone).toHaveBeenCalledExactlyOnceWith({
+        job_id: "observed", kind: "stl-export", status: "error", message,
+        error: message, progress: null, result: null,
+      });
+      expect(result.current.isJobKindRunning("stl-export")).toBe(false);
+    },
+  );
+
+  it("ends a rebuild row on any other final socket close without an unauthorized notice", async () => {
+    healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const { result } = renderHook(useJobContext, { wrapper });
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("observed"));
+    });
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new JobSocketClosedError("Policy rejected"));
+    });
+    expect(notifyEngineUnauthorized).not.toHaveBeenCalled();
+    expect(fetchJob).not.toHaveBeenCalled();
+    expect(result.current.activeJobs[0]).toMatchObject({
+      status: "error",
+      message: "Lost contact with the job. It may still be running on the server. Policy rejected",
+    });
+  });
+
+  it("ends a rebuild row when the job socket URL cannot be built", async () => {
+    healthState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const { result } = renderHook(useJobContext, { wrapper });
+    await act(async () => {
+      await result.current.runJob("stl-export", () => Promise.resolve("observed"));
+    });
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new JobSocketSetupError(new TypeError("Invalid URL")));
+    });
+    expect(notifyEngineUnauthorized).not.toHaveBeenCalled();
+    expect(fetchJob).not.toHaveBeenCalled();
+    expect(result.current.activeJobs[0]?.status).toBe("error");
+    expect(result.current.activeJobs[0]?.message).toMatch(/Lost contact/);
+    expect(result.current.isJobKindRunning("stl-export")).toBe(false);
+  });
+
+  it("keeps the flag-off row on the poll after a session close", async () => {
+    vi.mocked(fetchJob).mockResolvedValue({
+      job_id: "observed", kind: "check-source-updates", status: "running",
+      message: "Checking sources", progress: 4, result: null, error: null,
+    });
+    const { result } = renderHook(useJobContext, { wrapper });
+    await act(async () => {
+      await result.current.runJob("check-source-updates", () => Promise.resolve("observed"));
+    });
+    await act(async () => {
+      vi.mocked(connectJobWebSocket).mock.calls[0]?.[2](new JobSocketClosedError("Session expired"));
+    });
+    expect(notifyEngineUnauthorized).not.toHaveBeenCalled();
+    expect(fetchJob).toHaveBeenCalledWith("observed", expect.any(AbortSignal));
+    expect(result.current.activeJobs[0]).toMatchObject({
+      status: "running", message: "Checking sources", progress: 4,
+    });
+  });
 });
 
 describe("JobProvider terminal retention", () => {

@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:browser:filename-grouping": "node test/browser/filename-grouping.isolated.mjs",
     "test:browser:part-color": "node test/browser/part-color.isolated.mjs",
-    "test:browser": "node --experimental-vm-modules --test test/isolated-startup.test.mjs && node test/browser/skip-link.browser.mjs && node test/browser/checkoff-sheet-dark.browser.mjs && node test/browser/filament-preview-colors.browser.mjs && node test/browser/stl-orientation.browser.mjs && node test/browser/thumbnail-recovery.browser.mjs && node test/browser/filename-grouping.isolated.mjs && node test/browser/part-color.isolated.mjs && node test/browser/account-password.isolated.mjs && node test/browser/gre-498-feature-proof.browser.mjs",
+    "test:browser": "node --experimental-vm-modules --test test/isolated-startup.test.mjs && node test/browser/skip-link.browser.mjs && node test/browser/checkoff-sheet-dark.browser.mjs && node test/browser/filament-preview-colors.browser.mjs && node test/browser/stl-orientation.browser.mjs && node test/browser/thumbnail-recovery.browser.mjs && node test/browser/filename-grouping.isolated.mjs && node test/browser/part-color.isolated.mjs && node test/browser/account-password.isolated.mjs && node test/browser/gre-498-feature-proof.browser.mjs && node --test --test-concurrency=1 test/browser/gre-825-desktop-rebuild.isolated.mjs",
     "test:bundles": "node --test test/route-bundles.test.mjs && node scripts/route-bundles.mjs"
   },
   "dependencies": {
@@ -36,14 +36,14 @@
     "@radix-ui/react-tooltip": "^1.4.1",
     "@sentry/react": "^10.76.2",
     "@tailwindcss/vite": "^4.3.1",
-    "@tanstack/react-query": "^5.104.2",
+    "@tanstack/react-query": "^5.104.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "jszip": "^3.10.2",
-    "lucide-react": "^1.56.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "lucide-react": "^1.59.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.4",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.7.0",
@@ -61,12 +61,12 @@
     "fastify": "^5.12.7",
     "fflate": "^0.8.3",
     "jsdom": "^29.1.1",
-    "playwright-core": "^1.64.0",
+    "playwright-core": "^1.64.1",
     "tailwindcss": "^4.3.1",
     "tw-animate-css": "^1.4.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.4",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "description": "Print Partner React SPA — desk loop UI, spine navigation, plate export, and Progress checkoff."
 }

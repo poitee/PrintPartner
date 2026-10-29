@@ -87,7 +87,7 @@ async function fixture(tenantId = "default") {
     getStatus: async () => ({ state: "idle" as const }),
   };
 
-  return { repo, jobs, exportsDir, upload, artifact, enqueue, dispatchDeps, inTenant, tenantId };
+  return { dir, repo, jobs, exportsDir, upload, artifact, enqueue, dispatchDeps, inTenant, tenantId };
 }
 
 describe("printer upload interrupted by shutdown", () => {
@@ -207,8 +207,8 @@ describe("printer upload interrupted by shutdown", () => {
     });
     if (!foreign) throw new Error("Foreign queue fixture missing");
 
-    if (mode === "unscoped") interruptPrinterUploadsOnShutdown({ repository: f.repo });
-    else interruptPrinterUploadsOnShutdown(mode === "unavailable" ? {} : { repository: f.repo }, tenant);
+    if (mode === "unscoped") interruptPrinterUploadsOnShutdown(f.dir, { repository: f.repo });
+    else interruptPrinterUploadsOnShutdown(f.dir, mode === "unavailable" ? {} : { repository: f.repo }, tenant);
     finishUpload({ ok: true, started: true, remote_path: "plate.gcode" });
     const terminal = await f.jobs.waitForTerminal(jobId, 3000, tenant);
 
@@ -237,7 +237,7 @@ describe("printer upload interrupted by shutdown", () => {
     if ("error" in dispatched) throw new Error(dispatched.error);
     await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
 
-    const interrupted = interruptPrinterUploadsOnShutdown({ repository: f.repo }, mode === "scoped" ? "shop-b" : undefined);
+    const interrupted = interruptPrinterUploadsOnShutdown(f.dir, { repository: f.repo }, mode === "scoped" ? "shop-b" : undefined);
     expect(interrupted.map((row) => row.id)).toEqual([item.id]);
     finishUpload({ ok: true, started: true, remote_path: "plate.gcode" });
     const terminal = await f.jobs.waitForTerminal(dispatched.job_id, 3000, "shop-b");

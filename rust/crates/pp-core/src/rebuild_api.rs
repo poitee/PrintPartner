@@ -6,6 +6,7 @@ use pp_api::{
     builds::{BuildHttpConfig, build_router},
     catalog::{CatalogHttpConfig, admit_catalog_routes},
     drafts::{DraftHttpConfig, draft_router as api_draft_router},
+    jobs::{JobsHttpConfig, jobs_router as api_jobs_router},
 };
 // Re-export so desktop_rebuild integration tests can build AuthRoutes without a
 // non-optional pp-api [dev-dependencies] edge (gated boundary check).
@@ -27,7 +28,7 @@ pub struct AuthRoutes {
 }
 
 /// Completed authenticated read surfaces the rebuild router may admit.
-/// Jobs/WS stay with GRE-821.
+/// Job HTTP and WebSocket routes are `job_router` (GRE-821), not this set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildReadOwner {
     Auth,
@@ -49,7 +50,7 @@ impl RebuildReadOwner {
 }
 
 /// Completed draft mutation surfaces the rebuild router may admit.
-/// Jobs/WS stay with GRE-821.
+/// Job HTTP and WebSocket routes are `job_router` (GRE-821), not this set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildDraftOwner {
     Drafts,
@@ -194,6 +195,30 @@ pub fn draft_router(
         DraftHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
         drafts,
         auth,
+    )))
+}
+
+/// Compose the completed jobs list, read-one, and `/ws/jobs/{id}` router when
+/// the stored rebuild setting is on. The listener `origin` is the current
+/// bind. A request for another host or origin is refused before subscribe.
+/// Returns `None` before creating a jobs client when the setting is off.
+/// Owner shutdown closes live sockets through the existing subscription
+/// registry. Production gateway cutover stays with GRE-593, and the shutdown
+/// drain algorithm stays with GRE-448.
+pub fn job_router(
+    rebuild: DesktopRebuild,
+    owner: &WriterOwner,
+    policy: AuthPolicy,
+    origin: &str,
+    api_key_tenant: &str,
+) -> Result<Option<Router>> {
+    if !rebuild.enabled() {
+        return Ok(None);
+    }
+    let client = owner.jobs(policy)?;
+    Ok(Some(api_jobs_router(
+        JobsHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
+        client,
     )))
 }
 

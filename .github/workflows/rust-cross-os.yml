@@ -5,9 +5,12 @@ name: Rust cross-OS
 # still skip desktop_rebuild=on as before). nextest with desktop_rebuild on is
 # skipped on self-hosted Linux PR runners (pp-local ~67m monolithic). Windows PRs
 # (including pp-local-win) and hosted Linux PRs still run it. macOS PRs skip it.
-# On main push, merge_group, and workflow_dispatch, Linux archives desktop_rebuild
-# nextest once and runs --partition slice:m/3 across the three pp-local slots.
-# Schedule keeps the in-job monolithic desktop_rebuild nextest on ubuntu-latest.
+# On PRs, nextest uses rdeps(=crate) for changed rust/crates/* (see
+# scripts/ci-affected-nextest-filter.py); shared inputs and non-PR events keep
+# all(). On main push, merge_group, and workflow_dispatch, Linux archives
+# desktop_rebuild nextest once and runs --partition slice:m/3 across the three
+# pp-local slots. Schedule keeps the in-job monolithic desktop_rebuild nextest
+# on ubuntu-latest.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -46,6 +49,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.select.outputs.relevant }}
+      nextest_filter: ${{ steps.select.outputs.nextest_filter }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,8 +63,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 -B -m unittest discover -s scripts -p 'test_*path_filter.py'
+          python3 -B -m unittest discover -s scripts -p 'test_*affected_nextest_filter.py'
           python3 -B -m unittest discover -s scripts -p test_alert_macos_main.py
           python3 scripts/ci-path-filter.py rust
+          python3 scripts/ci-affected-nextest-filter.py
 
   rust-linux-build:
     name: rust (linux) build
@@ -74,7 +80,9 @@ jobs:
     env:
       RUST_OS: linux
       CARGO_SCOPE: --workspace
-      NEXTEST_FILTER: all()
+      # PRs: rdeps of changed crates (see scripts/ci-affected-nextest-filter.py).
+      # Non-PR events always emit all() from the changes job.
+      NEXTEST_FILTER: ${{ needs.changes.outputs.nextest_filter || 'all()' }}
       NEXTEST_PROFILE: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && 'pp-local-linux' || 'default' }}
     # PRs skip only nextest desktop_rebuild-on (~67m on #1021). Clippy/doctests
     # still run both feature states (except macOS PRs, unchanged). 90m covers both.
@@ -134,8 +142,10 @@ jobs:
           rustup toolchain install
           rustc --version
       # Only main saves; PRs and other refs restore main's entry when keys match.
+      # Linux skips it: pp-local uses its runner-local sccache, and the hosted nightly
+      # entry was evicted before the next run could restore it (GRE-662, GRE-975).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: runner.environment != 'self-hosted' || runner.os != 'Linux'
+        if: runner.os != 'Linux'
         with:
           workspaces: rust -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -148,7 +158,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
-            libayatana-appindicator3-dev librsvg2-dev pkg-config
+            libayatana-appindicator3-dev librsvg2-dev pkg-config mold
+          # Link with mold instead of the toolchain's default rust-lld (GRE-975).
+          mold --version
+          echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold' >> "$GITHUB_ENV"
       - name: Install pinned storage-fixture Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -199,7 +212,7 @@ jobs:
       - name: nextest (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
         timeout-minutes: 45
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER"
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --no-tests=warn -E "$NEXTEST_FILTER"
       - name: Archive nextest (desktop_rebuild on)
         # Main push / merge_group / workflow_dispatch: build once for slice partitions.
         # PRs never archive; they keep skipping the rebuild-on suite on pp-local.
@@ -282,7 +295,7 @@ jobs:
         # this in-job pass on ubuntu-latest.
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && (github.event_name != 'pull_request' || env.RUST_OS == 'windows' || (env.RUST_OS == 'linux' && runner.environment != 'self-hosted')) && !(env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')) }}
         timeout-minutes: 75
-        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild
+        run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --no-tests=warn -E "$NEXTEST_FILTER" --features desktop_rebuild
       # nextest does not run doctests.
       - name: doctests (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
@@ -439,7 +452,7 @@ jobs:
     env:
       RUST_OS: macos
       CARGO_SCOPE: --workspace
-      NEXTEST_FILTER: all()
+      NEXTEST_FILTER: ${{ needs.changes.outputs.nextest_filter || 'all()' }}
     timeout-minutes: 90
     steps: *rust-steps
 
@@ -458,7 +471,7 @@ jobs:
         --exclude pp-compat --exclude pp-core
         --exclude pp-api --exclude pp-gateway --exclude pp-server
         --exclude pp-desktop
-      NEXTEST_FILTER: all()
+      NEXTEST_FILTER: ${{ needs.changes.outputs.nextest_filter || 'all()' }}
     timeout-minutes: 90
     steps: *rust-steps
 

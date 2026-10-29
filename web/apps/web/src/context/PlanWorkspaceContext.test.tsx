@@ -24,6 +24,7 @@ import {
 import type { PlanReview } from "../api/endpoints/planManifests";
 import { queryKeys } from "../queries/keys";
 import { usePlanDraftWorkspaceQuery } from "../queries/planDraft";
+import { usePlanReviewQuery } from "../queries/planReview";
 import { WORKING_PLAN_CHANGED_MESSAGE } from "../lib/workingPlanChanged";
 import {
   resetAuxiliarySaveIntentForTests,
@@ -152,6 +153,9 @@ const profileSelectionState = vi.hoisted<{
 
 const healthQueryState = vi.hoisted<{ capabilities: string[] }>(() => ({ capabilities: [] }));
 
+/** A disabled review query reports isLoading false. This models that empty result. */
+const reviewQueryState = vi.hoisted(() => ({ empty: false }));
+
 const editedWorkspace: PlanDraftWorkspace = {
   ...replacementWorkspace,
   draft: { ...replacementWorkspace.draft, snapshot_digest: "c".repeat(64) },
@@ -191,11 +195,11 @@ vi.mock("./ProfileContext", () => ({
 }));
 
 vi.mock("../queries/planReview", () => ({
-  usePlanReviewQuery: () => ({
-    data: acceptedReview,
+  usePlanReviewQuery: vi.fn(() => ({
+    data: reviewQueryState.empty ? null : acceptedReview,
     isLoading: false,
     error: null,
-  }),
+  })),
   usePatchPartMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartProgressMutation: () => ({ mutateAsync: vi.fn() }),
   usePatchPartAssembledMutation: () => ({ mutateAsync: vi.fn() }),
@@ -292,6 +296,7 @@ afterEach(() => {
 
 beforeEach(() => {
   healthQueryState.capabilities = [];
+  reviewQueryState.empty = false;
   profileSelectionState.selectedProfileId = 7;
   draftQueryState.hasOpenDraft = true;
   draftQueryState.hasOtherWorkspace = false;
@@ -344,6 +349,85 @@ beforeEach(() => {
       draft_id: 10,
       base: { revision_id: 4, plan_version: 2 },
     },
+  });
+});
+
+describe("PlanWorkspaceProvider workspace read selection", () => {
+  it("workspace_rebuild_read_keeps_revision_identity", async () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    expect(vi.mocked(usePlanReviewQuery)).toHaveBeenLastCalledWith(7, expect.objectContaining({
+      revisionId: savedWorkspace.draft.base.revision_id,
+    }));
+  });
+
+  it("workspace_flag_off_preserves_query_path", async () => {
+    healthQueryState.capabilities = [];
+    renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(vi.mocked(usePlanReviewQuery)).toHaveBeenCalled());
+    for (const call of vi.mocked(usePlanReviewQuery).mock.calls) {
+      expect(call[1]?.revisionId).toBeUndefined();
+    }
+  });
+
+  it("workspace_rebuild_read_stays_loading_until_the_draft_is_known", () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    draftQueryState.listPending = true;
+    reviewQueryState.empty = true;
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    expect(hook.result.current.loading).toBe(true);
+    expect(hook.result.current.review).toBeNull();
+    expect(hook.result.current.error).toBeNull();
+  });
+
+  it("workspace_rebuild_read_waits_for_the_open_draft", () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    draftQueryState.hasWorkspace = false;
+    reviewQueryState.empty = true;
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    expect(vi.mocked(usePlanReviewQuery).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+    expect(hook.result.current.loading).toBe(true);
+    expect(hook.result.current.review).toBeNull();
+  });
+
+  it("workspace_rebuild_read_skips_a_stale_draft_revision", async () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    draftQueryState.workspace = {
+      ...savedWorkspace,
+      diff: { ...savedWorkspace.diff, base_is_current: false },
+    };
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(new QueryClient()) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    const enabledCalls = vi.mocked(usePlanReviewQuery).mock.calls.filter((call) => call[1]?.enabled !== false);
+    expect(enabledCalls.length).toBeGreaterThan(0);
+    for (const call of enabledCalls) expect(call[1]?.revisionId).toBeUndefined();
+  });
+
+  it("workspace_rebuild_apply_drops_pinned_review_slots", async () => {
+    healthQueryState.capabilities = [TENANT_FEATURE_TOGGLES_CAPABILITY];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const acceptedKey = queryKeys.planReview(7, false, true);
+    const pinnedKey = queryKeys.planReview(7, false, true, savedWorkspace.draft.base.revision_id);
+    const refreshReview = vi.fn().mockResolvedValue(acceptedReview);
+    const pinnedFetch = vi.fn(async () => {
+      throw new Error("The Build Review response belongs to a different Plan revision");
+    });
+    client.setQueryDefaults(acceptedKey, { queryFn: refreshReview });
+    client.setQueryDefaults(pinnedKey, { queryFn: pinnedFetch });
+    client.setQueryData(acceptedKey, acceptedReview);
+    client.setQueryData(pinnedKey, acceptedReview);
+    const hook = renderHook(usePlanWorkspace, { wrapper: wrapper(client) });
+    await waitFor(() => expect(hook.result.current.draftWorkspace?.draft.draft_id).toBe(9));
+    await act(async () => {
+      await hook.result.current.applyActivePlanDraft();
+    });
+    expect(hook.result.current.draftError).toBeNull();
+    expect(refreshReview).toHaveBeenCalledOnce();
+    expect(pinnedFetch).not.toHaveBeenCalled();
+    expect(client.getQueryState(pinnedKey)).toBeUndefined();
   });
 });
 

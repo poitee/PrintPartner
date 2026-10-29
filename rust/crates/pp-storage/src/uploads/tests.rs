@@ -72,7 +72,10 @@ fn each_upgrade_step_backs_up_its_input_before_writing() {
     let node = include_bytes!("../../tests/fixtures/accepted-plan-node.db");
     let (from34, ready) = upgrade("uploads-from34", node);
     assert_eq!((ready.version, ready.previous_version), (41, 34));
-    assert_eq!(ready.backup, Some(from34.join("backups/pre-schema37.db")));
+    assert_eq!(
+        ready.backup,
+        Some(from34.join("backups/pre-schema34-to-41.db"))
+    );
     let chain = backups(&from34);
     let names: Vec<_> = chain
         .iter()
@@ -81,7 +84,7 @@ fn each_upgrade_step_backs_up_its_input_before_writing() {
     assert_eq!(
         names,
         [
-            ("pre-schema37.db", "34"),
+            ("pre-schema34-to-41.db", "34"),
             ("pre-schema38.db", "37"),
             ("pre-schema39.db", "38"),
             ("pre-schema40.db", "39"),
@@ -124,14 +127,16 @@ fn each_upgrade_step_backs_up_its_input_before_writing() {
     ] {
         let (directory, ready) = upgrade(label, input);
         assert_eq!((ready.version, ready.previous_version), (41, previous));
-        let first = format!("pre-schema{}.db", steps[0]);
+        // Only the legacy pass to 37 names its copy for the from and to versions.
+        let name = |step: u64| match step {
+            37 => format!("pre-schema{previous}-to-41.db"),
+            _ => format!("pre-schema{step}.db"),
+        };
+        let first = name(steps[0]);
         assert_eq!(ready.backup, Some(directory.join("backups").join(&first)));
         let saved = backups(&directory);
         let names: Vec<_> = saved.iter().map(|(name, _, _)| name.clone()).collect();
-        let expected: Vec<_> = steps
-            .iter()
-            .map(|step| format!("pre-schema{step}.db"))
-            .collect();
+        let expected: Vec<_> = steps.iter().map(|step| name(*step)).collect();
         assert_eq!(names, expected, "{label}");
         assert!(
             saved[0].2 == *input,
@@ -140,6 +145,41 @@ fn each_upgrade_step_backs_up_its_input_before_writing() {
         assert_eq!(saved[0].1, previous.to_string(), "{label}");
         assert_reopen_is_noop(&directory);
     }
+}
+
+#[test]
+fn restored_database_gets_its_own_legacy_backup() {
+    let node = include_bytes!("../../tests/fixtures/accepted-plan-node.db");
+    let (directory, ready) = upgrade("uploads-restored", node);
+    let earlier = directory.join("backups/pre-schema34-to-41.db");
+    assert_eq!(ready.backup.as_ref(), Some(&earlier));
+    let kept = std::fs::read(&earlier).unwrap();
+    let scratch = directory.join("scratch.db");
+    std::fs::copy(directory.join("backups/pre-schema38.db"), &scratch).unwrap();
+    let raw = Connection::open(&scratch).unwrap();
+    raw.execute_batch("DROP TABLE plan_apply_admissions; UPDATE app_settings SET value='35' WHERE tenant_id='default' AND key='schema_version'")
+        .unwrap();
+    raw.backup("main", directory.join("schema35.db"), None)
+        .unwrap();
+    drop(raw);
+    let at35 = std::fs::read(directory.join("schema35.db")).unwrap();
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(directory.join(format!("print-partner.db{suffix}")));
+    }
+    std::fs::write(directory.join("print-partner.db"), &at35).unwrap();
+    let (owner, ready) = WriterOwner::open(&directory, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    assert_eq!((ready.version, ready.previous_version), (41, 35));
+    let own = directory.join("backups/pre-schema35-to-41.db");
+    assert_eq!(ready.backup.as_ref(), Some(&own));
+    assert!(
+        std::fs::read(&own).unwrap() == at35,
+        "restored database backup differs from its input"
+    );
+    assert!(
+        std::fs::read(&earlier).unwrap() == kept,
+        "earlier backup changed"
+    );
 }
 
 #[test]
@@ -2078,7 +2118,7 @@ mod capture_admission {
 mod capture_correlation {
     use super::super::{
         AdmissionLimits, CaptureId, CaptureJournalCorrelation, CapturedPayloadV1, File, OwnedInput,
-        Phase, State, Target,
+        Phase, ResolvedCapturedClaim, State, Target,
     };
     use crate::{
         Limits, WriterOwner,
@@ -2185,39 +2225,63 @@ mod capture_correlation {
             )
             .unwrap();
         let manifest = prepared.manifest().to_vec();
-        assert!(matches!(
+        let mut conflicted = inventory.clone();
+        conflicted[0].sha256 = "b".repeat(64);
+        let mut tampered: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        tampered["requested_files"][0]["sha256"] = "b".repeat(64).into();
+        let tampered = serde_json::to_vec(&tampered).unwrap();
+
+        let before_admit = journal_snapshot(&root);
+        assert_eq!(
             client
                 .correlate_capture_manifest(manifest.clone(), inventory.clone())
                 .unwrap(),
             CaptureJournalCorrelation::Absent
-        ));
-        let before_admit = journal_snapshot(&root);
+        );
+        assert_eq!(
+            client
+                .correlate_capture_manifest(manifest.clone(), conflicted.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::MismatchRepairRequired
+        );
+        assert_eq!(
+            client
+                .correlate_capture_manifest(tampered, inventory.clone())
+                .err()
+                .unwrap()
+                .to_string(),
+            "Capture requested digest mismatch"
+        );
+        assert_eq!(journal_snapshot(&root), before_admit);
 
         let admitted = client
             .admit_prepared(prepared, 0, client.accounting_epoch())
             .unwrap();
         let after_admit = journal_snapshot(&root);
+        let epoch = client.accounting_epoch();
         assert_ne!(before_admit, after_admit);
-
-        let matched = client
-            .correlate_capture_manifest(manifest.clone(), inventory.clone())
-            .unwrap();
-        assert!(matches!(
-            matched,
-            CaptureJournalCorrelation::ExactAdmitted(_)
-        ));
-        assert_eq!(journal_snapshot(&root), after_admit);
         assert_eq!(admitted.input_version, 2);
 
-        let mut conflicted = inventory.clone();
-        conflicted[0].sha256 = "b".repeat(64);
-        assert!(matches!(
+        assert_eq!(
+            client
+                .correlate_capture_manifest(manifest.clone(), inventory.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::ExactAdmitted(ResolvedCapturedClaim {
+                manifest: manifest.clone(),
+                inventory: inventory.clone(),
+                tenant: admitted.tenant.clone(),
+                operation_key: key.into(),
+                job_id: admitted.job_id.clone(),
+            })
+        );
+        assert_eq!(
             client
                 .correlate_capture_manifest(manifest, conflicted)
                 .unwrap(),
             CaptureJournalCorrelation::MismatchRepairRequired
-        ));
+        );
         assert_eq!(journal_snapshot(&root), after_admit);
+        assert_eq!(client.accounting_epoch(), epoch);
         owner.shutdown().unwrap();
     }
 
@@ -2253,16 +2317,17 @@ mod capture_correlation {
             .unwrap();
 
         let CaptureJournalCorrelation::ExactAdmitted(mut claim) = client
-            .correlate_capture_manifest(manifest, inventory)
+            .correlate_capture_manifest(manifest.clone(), inventory.clone())
             .unwrap()
         else {
             panic!("expected exact admitted claim");
         };
-        // Keep the journal valid so load→validate_operation succeeds; only the
-        // retained claim inventory diverges, forcing capture_claim_matches.
+        // Keep the journal valid so load and validate_operation succeed. Only
+        // the retained claim inventory diverges, forcing capture_claim_matches.
         claim.inventory[0].sha256 = "c".repeat(64);
 
         let before = journal_snapshot(&root);
+        let epoch = client.accounting_epoch();
         let refused = worker(&owner)
             .claim_resolved_import(claim)
             .err()
@@ -2270,7 +2335,20 @@ mod capture_correlation {
             .to_string();
         assert_eq!(refused, "Captured import requires repair");
         assert_eq!(journal_snapshot(&root), before);
-        assert_eq!(admitted.key, key);
+        assert_eq!(client.accounting_epoch(), epoch);
+        // The queued job is untouched, so the original claim still resolves.
+        assert_eq!(
+            client
+                .correlate_capture_manifest(manifest.clone(), inventory.clone())
+                .unwrap(),
+            CaptureJournalCorrelation::ExactAdmitted(ResolvedCapturedClaim {
+                manifest,
+                inventory,
+                tenant: admitted.tenant.clone(),
+                operation_key: key.into(),
+                job_id: admitted.job_id.clone(),
+            })
+        );
         owner.shutdown().unwrap();
     }
 

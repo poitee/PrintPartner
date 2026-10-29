@@ -4,8 +4,9 @@ With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 `/jobs/{id}` and `/api/v1/jobs/{id}` mount only when the stored
 `PP_DESKTOP_REBUILD` value is exactly `1` or `true`. Otherwise those routes
 answer 404. The bounded list at `/api/v1/jobs` stays as in GRE-795
-(`docs/gre-795-jobs-http.md`). Mutation routes and `/ws/jobs/{id}` stay
-unregistered (later D25 children). Plan HTTP remains as in GRE-791–GRE-794.
+(`docs/gre-795-jobs-http.md`). Mutation routes stay unregistered. Job
+WebSocket admission is GRE-798 (`docs/gre-798-jobs-http.md`). Plan HTTP
+remains as in GRE-791–GRE-794.
 
 Admission matches GRE-791 (loopback Host/Origin, session cookie or API key with
 the configured tenant) through the shared `loopback` module. Each admitted
@@ -14,7 +15,8 @@ request runs `AtomicJobClient::read_public`. Success is `200` with a bare
 cross-tenant, and internal-only ids answer `404` `"Job not found"`.
 Unauthenticated requests answer `401` `"Authentication required"`. HEAD shares
 status and auth with GET and returns an empty body. Rows and files stay
-unchanged on refusal.
+unchanged on refusal. Serializer permits for these responses are specified in
+GRE-797 (`docs/gre-797-jobs-http.md`).
 
 ```sh
 umask 022

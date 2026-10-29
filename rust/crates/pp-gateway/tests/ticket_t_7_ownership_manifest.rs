@@ -13,6 +13,11 @@ use std::{
 const DESKTOP_MODE: &str = "self-host/single-user-auth";
 const HOOK_VERBS: &[&str] = &["start", "migrate", "sweep", "backfill", "prepare", "seed"];
 const HOOK_FILES: &[&str] = &["app.ts", "mcp/stdio-server.ts", "desktop.ts", "index.ts"];
+const FENCED_CALL_FILES: &[&str] = &[
+    "routes/jobs.ts",
+    "routes/printer-send-queue.ts",
+    "services/printer-send-queue.ts",
+];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -183,6 +188,18 @@ fn source_census() -> BTreeSet<String> {
         census.insert(format!("mcp.{name}"));
     }
 
+    // Writes Node checks against the cutover record where it makes them. Each
+    // check names the call it guards.
+    for file in FENCED_CALL_FILES {
+        let text = server(file);
+        for kind in ["shutdown", "reconcile"] {
+            for name in quoted_after(&text, &format!("\"{kind}.")) {
+                assert!(text.contains(&format!("{name}(")), "{file}: {kind}.{name}");
+                census.insert(format!("{kind}.{name}"));
+            }
+        }
+    }
+
     let contracts = read(&root.join("web/packages/contracts/src/index.ts"));
     let kinds = &contracts[contracts.find("export const JOB_KINDS = [").unwrap()..];
     let kinds = &kinds[..kinds.find(']').unwrap()];
@@ -235,9 +252,10 @@ fn ticket_t_7_ownership_manifest_claims_every_source_participant() {
             count("assistant."),
             count("mcp."),
             count("job."),
+            count("shutdown.") + count("reconcile."),
             hooks.len()
         ],
-        [839, 89, 38, 4, 10, 9],
+        [839, 89, 38, 4, 10, 3, 9],
         "census counts changed; review the new participants and their owners"
     );
 }
@@ -261,7 +279,7 @@ fn ticket_t_7_ownership_manifest_lookup_resolves_owners() {
     assert_eq!(
         index.lookup("job.printer-upload").unwrap(),
         &Claim {
-            operation: "job.printer-upload".to_string(),
+            operation: "printer.send-queue".to_string(),
             disposition: Disposition::Owned(Owner::Node),
         }
     );

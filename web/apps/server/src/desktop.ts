@@ -29,9 +29,11 @@ const stop = async () => {
   stopping = true;
   const deadline = setTimeout(() => process.kill(-process.pid, "SIGKILL"), 9000);
   try {
-    if (runtime) {
+    const setup = desktopContext();
+    if (runtime && setup) {
       const tenant = mappedDesktopTenant();
       interruptPrinterUploadsOnShutdown(
+        setup.data_dir,
         tenant && !mappedDesktopDatabaseAvailable() ? {} : runtime.ports,
         tenant ?? undefined,
       );

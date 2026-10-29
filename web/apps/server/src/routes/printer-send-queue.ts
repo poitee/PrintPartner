@@ -74,7 +74,10 @@ export async function registerPrinterSendQueueRoutes(
   app: FastifyInstance,
   deps: RouteDeps,
 ): Promise<void> {
-  reconcilePrinterSendsAfterProcessStart(deps.repo);
+  // Rust reconciles its own queue rows after cutover.
+  if (!deps.jobs.rustOwns("reconcile.reconcilePrinterSendsAfterProcessStart")) {
+    reconcilePrinterSendsAfterProcessStart(deps.repo);
+  }
 
   const reconcileLiveSends = (tenantId: string) =>
     reconcilePrinterSendsAgainstLiveJobs(deps.repo, async (jobId) => {

@@ -9,10 +9,11 @@ merge groups, schedules and manual runs keep their existing behavior.
 
 On ready PRs, the jobs are selected as follows:
 
-- `rust (linux)` and `rust (windows)` run when a `changes` job finds a change to `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, `fixtures/**`, `scripts/setup-ci-linux.sh`, the workflow itself, or the CI filter script and its tests. Other changes skip both jobs while keeping their check reports present.
+- `rust (linux)` and `rust (windows)` run when a `changes` job finds a change to `rust/**`, `rust-toolchain.toml`, `web/package*.json`, `web/apps/**`, `web/packages/**`, `web/tsconfig*.json`, `web/scripts/atomic-package-build.mjs`, `web/scripts/storage-fixtures/**`, `fixtures/**`, `scripts/setup-ci-linux.sh`, the workflow itself, or the CI filter scripts and their tests. Other changes skip both jobs while keeping their check reports present.
 - `rust (macos)` uses the same path selection. It runs only when relevant inputs change and the PR has the exact `macos` label and is not a draft. Adding or removing the label, marking the PR ready for review and converting it to a draft each start a new run.
+- When those jobs run on a pull request, nextest uses an affected-crate filter from `scripts/ci-affected-nextest-filter.py`: for each changed `rust/crates/<pkg>/` path it unions `rdeps(=<pkg>)` so reverse dependents are covered. A crate whose sources read another crate's files by path (for example pp-gateway's `include_str!("../../pp-storage/...")` drift guards) joins the selection when that crate changes. The filtered nextest steps pass `--no-tests=warn`, so a selection that matches nothing in a job's `CARGO_SCOPE` (Windows excludes every reverse dependent of pp-core, for example) passes instead of exiting 4. Shared inputs (workspace `Cargo.toml` / `Cargo.lock`, toolchain, web assets, fixtures, `rust/tests/**`, `rust/scripts/**`, the workflow, or the filter scripts) keep `all()`. Clippy and doctests still cover the whole `CARGO_SCOPE`.
 
-Pushes to `main`, merge groups, nightly and manual runs execute all three jobs regardless of paths. A new push to a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so each merge has a result and no `main` run waits for or cancels another. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+Pushes to `main`, merge groups, nightly and manual runs execute all three jobs regardless of paths, and nextest keeps `all()`. A new push to a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so each merge has a result and no `main` run waits for or cancels another. Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
@@ -27,6 +28,13 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 | `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
 
 `rust (linux) build` uses `[self-hosted, linux, x64, pp-local]` for same-repository PRs, pushes to `main`, merge groups, and manual dispatch. The nightly schedule keeps `ubuntu-latest`.
+
+Build caching and linking differ by OS:
+
+- Linux does not use the GitHub Actions cache for Rust builds. On `pp-local`, sccache caches compiler output on the runner fleet. The hosted nightly run builds without a cache.
+- macOS and Windows restore and save `Swatinem/rust-cache`. Only `main` saves.
+- Linux installs `mold` and links with it through `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold`. macOS and Windows keep their default linkers.
+- All jobs set `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to `line-tables-only`. Panic locations keep their file and line, and the build output is smaller.
 
 Each job runs these steps in order:
 
@@ -49,19 +57,21 @@ The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of
 
 Steps 4 to 10 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
 
-Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, and its test filter in `NEXTEST_FILTER`. The three jobs share the same anchored steps. They have no matrix, so GitHub reports their exact required names both when running and when skipped. To use a self-hosted runner, change `runs-on`.
+Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, and its test filter in `NEXTEST_FILTER` (from the `changes` job output, defaulting to `all()`). The three jobs share the same anchored steps. They have no matrix, so GitHub reports their exact required names both when running and when skipped. To use a self-hosted runner, change `runs-on`. The Linux rebuild partitions always use `all()` because they only run on non-PR events.
 
 `rust (linux)` and `rust (windows)` are required checks on `main`; `rust (macos)` is advisory. [Settings for Chad](ci-controls.md#settings-for-chad) lists the full ruleset.
 
 ## Run the required checks with one command
 
-Run this command from the repository root before you push:
+Run this command from the repository before you push:
 
 ```sh
-PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 python3 scripts/local-ci.py
+PP_SCHEMA_PARITY_NODE=/path/to/node-v22.23.3 just ci
 ```
 
-It runs each step below in order and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `--list`. To select steps, use `--only fmt,clippy-off` or `--skip nextest-on`.
+`just ci` passes its arguments to `python3 scripts/local-ci.py`, which holds the only list of steps. Without [just](https://github.com/casey/just), run `python3 scripts/local-ci.py` from the repository root with the same arguments. Agents run this command before they push, as [Gate evidence](../contributing/gate-evidence.md#run-ci-locally-before-you-push) says.
+
+It runs the steps below in the order that `just ci --list` prints, and continues after a failure, so one run reports every failure. At the end it prints one `PASS`, `FAIL` or `SKIP` line for each step and exits 1 if any step failed. To see the step ids, use `just ci --list`. To select steps, use `just ci --only fmt,clippy-off` or `just ci --skip nextest-on`.
 
 | Step | What it runs | CI source |
 |------|--------------|-----------|
@@ -72,14 +82,17 @@ It runs each step below in order and continues after a failure, so one run repor
 | `ast-grep` | `ast-grep test`, `test_ast_grep.py` and `check-ast-grep.py` against `origin/main` | `ast-grep ratchet` |
 | `boundaries` | `check-boundaries.py --self-test` and `check-domain-deps.py --self-test` | `chain-tip-gate.yml` |
 | `historical-schema` | `rust/scripts/fetch-historical-schema-commits.sh`, which fetches the pinned commits that the pp-storage tests archive. It runs before nextest. | `rust (linux)` (required) |
-| `fmt`, `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 4 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
+| `fmt` | Step 4 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
 | `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
+| `workaround-ratchet` | `scripts/workaround-ratchet.mjs` and its tests, which cap `TODO`, `eslint-disable` and Rust `#[allow]` markers, on Node 22.23.3. It runs after `web-assets`, which installs its parser. | `web` job of `web-ci.yml` |
+| `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 5 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
 | `node-fixtures` | The `--check` mode of each Node parity fixture generator, and the HTTP route inventory diff, on Node 22.23.3 | `desktop-contracts.yml` and `auth-admission-freshness.yml` |
 
 Except where noted below, each step runs the command lines of its workflow step without changes. The script sets the same environment that CI sets: `NEXTEST_FILTER`, `PP_TEST_NODE`, `VITE_PRINT_PARTNER_DESKTOP`, and `RUNNER_TEMP`. The cargo steps also get `INSTA_UPDATE=no`, so a snapshot mismatch fails the step instead of writing a `.snap.new` file. `RUNNER_TEMP` is under `$CARGO_TARGET_DIR/local-ci`, or under `rust/target/local-ci` if `CARGO_TARGET_DIR` is not set. The local command differs from CI in these ways:
 
-- It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `node-fixtures` step is also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
+- It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `workaround-ratchet` and `node-fixtures` steps are also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
 - `ast-grep` fetches `origin/main` without `--depth=1`, because a shallow fetch would make a full clone shallow.
+- It does not set the CI-only `CARGO_PROFILE_*_DEBUG` and mold `RUSTFLAGS` values. They change debug info and the linker, not test results, and setting them would invalidate your local build cache.
 - `nextest-on` always runs. CI skips it on self-hosted Linux PRs, but the merge queue runs it. Use `--skip nextest-on` for a shorter run.
 - The nextest profile is `default` unless you set `NEXTEST_PROFILE`. Pull requests on `pp-local` use `pp-local-linux`.
 - `node-fixtures` runs `npm ci` with Node 22, so `web/node_modules` ends with Node 22 native modules. The next run's `web-assets` step installs them again with Node 24.
@@ -89,7 +102,7 @@ The command does not cover these checks:
 - `rust (windows)` and `rust (macos)`. They need Windows and macOS runners. The command reports both as `SKIP`.
 - `Lint Evidence block`. It reads the pull request body. The command reports it as `SKIP`.
 - `cargo deny check` (`desktop-deny.yml`). It runs on changes to `rust/**`. To run it locally, use `cargo deny --manifest-path rust/Cargo.toml --all-features check`. CI also runs `cargo deny --manifest-path rust/fuzz/Cargo.toml --all-features --locked check`.
-- The Linux rebuild partitions, the Desktop runtime, Native macOS bundle, web and Docker workflows, and the `contracts:verify` and `test:desktop-parity` steps of `desktop-contracts.yml`.
+- The Linux rebuild partitions, the Desktop runtime, Native macOS bundle and Docker workflows, the `web-ci.yml` steps other than the workaround ratchet, and the `contracts:verify` and `test:desktop-parity` steps of `desktop-contracts.yml`.
 
 ## Run a job locally
 
@@ -166,7 +179,7 @@ These crates do not build on Windows yet. The Windows job excludes them with `--
 
 ## macOS test filter
 
-The macOS job uses `NEXTEST_FILTER: all()`. It runs `pp-core` `runtime_m0`, `pp-compat` `ticket_t_2::`, and `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it`. Linux runs the same filter. **Native macOS bundle** still runs its own selected lifecycle tests.
+On non-PR events the macOS job uses `NEXTEST_FILTER: all()`. On PRs it uses the same affected-crate `rdeps` filter as Linux and Windows. It still runs any selected `pp-core` `runtime_m0`, `pp-compat` `ticket_t_2::`, and `origin_tests::ticket_t_12_missing_config_persists_private_port_and_reuses_it` binaries that match the filter. **Native macOS bundle** still runs its own selected lifecycle tests.
 
 GRE-645 removed the earlier group skip. Hosted run 38925272452 mounted `/Volumes/pptmp` with `apfs, local, nodev, nosuid, journaled, nobrowse` and recorded `exec /usr/bin/node` exiting 126: `/bin/sh: line 0: exec: /usr/bin/node: cannot execute: No such file or directory`. Those scripts now `exec "$NODE"` from `PP_TEST_NODE`. Run 38941881212, with `--test-threads 1`, still failed 3 of 74 because one release verification hashed about 42,203 dependency files in 10.7 to 19.7 seconds. Each start verifies once, on a blocking thread, before the 32-second readiness budget (GRE-661). Each restart verifies again after `Starting` is published. The crash-guard status fuse covers that hash plus the 30-second probe. The measured-release parent-death test starts its 30-second acknowledgement when the helper publishes `release-verified`, not when the helper process is spawned. The config test's 3-second deadline starts when the re-executed child enters. The GRE-671 backoff test never ran Node; it runs with the rest of `ticket_t_2::`.
 

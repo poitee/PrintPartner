@@ -4128,3 +4128,248 @@ fn sync_finish_refuses_unsettled_claims_unacknowledged_failures_and_reconciliati
     owner.shutdown().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+fn job_rows(sync: &Fixture, job_id: &str) -> Value {
+    let connection = sync.connection();
+    let rows = |sql: &str| -> Vec<Vec<String>> {
+        let mut statement = connection.prepare(sql).unwrap();
+        let width = statement.column_count();
+        statement
+            .query_map([job_id], |row| {
+                (0..width)
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .map(|value| value.map(|value| format!("{value:?}")))
+                    .collect()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    };
+    serde_json::json!([
+        rows("SELECT * FROM source_sync_batches WHERE job_id=?1"),
+        rows("SELECT * FROM source_sync_targets WHERE job_id=?1 ORDER BY ordinal"),
+        rows("SELECT * FROM durable_jobs WHERE id=?1"),
+        rows("SELECT * FROM durable_job_history WHERE job_id=?1 ORDER BY version"),
+        rows("SELECT * FROM durable_job_keys WHERE job_id=?1"),
+    ])
+}
+
+#[test]
+fn sync_prune_refuses_retained_claim() {
+    for shape in ["claimed", "failed", "reconciliation_required"] {
+        let sync = Fixture::new();
+        let finished_source = sync.source("Prune Finished");
+        let held_source = sync.source("Prune Held");
+        let finished_id = sync.enqueue(Some(vec![finished_source as u64]));
+        let mut lease = sync.open();
+        let mut target = local(sync.next(&mut lease));
+        sync.worker
+            .settle_source_sync_target(&lease, &mut target, settlement(finished_source))
+            .unwrap();
+        drop(target);
+        let finished = completed_finish(&sync, &lease);
+        let held_id = enqueue_later(&sync, held_source);
+        let mut lease = sync.open();
+        let target = local(sync.next(&mut lease));
+        match shape {
+            "claimed" => {}
+            "failed" => {
+                sync.worker
+                    .fail_source_sync_target(&mut lease, &target, "disk read failed")
+                    .unwrap();
+            }
+            _ => {
+                sync.worker
+                    .update(&mut lease, WorkerOperation::Fail)
+                    .unwrap();
+            }
+        }
+        drop(target);
+        // Force a terminal Job that still holds Sync evidence, so this test
+        // checks the prune guard on its own.
+        change_job(&sync, &held_id, |job| {
+            job.state = PersistentState::Failed;
+            job.worker = None;
+            job.fence = None;
+            job.lease_until = None;
+        });
+        let mut connection = sync.connection();
+        let tx = connection.transaction().unwrap();
+        for id in [&finished_id, &held_id] {
+            tx.execute(
+                "UPDATE durable_jobs SET updated=?1 WHERE id=?2",
+                params![now() - 86401, id],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        let held_state = match shape {
+            "claimed" => (held_source, "claimed".into(), None),
+            "failed" => (held_source, "failed".into(), Some("local_read".into())),
+            _ => (
+                held_source,
+                "reconciliation_required".into(),
+                Some("local_settlement".into()),
+            ),
+        };
+        assert_eq!(sync.targets(&held_id), std::slice::from_ref(&held_state));
+        let held_rows = job_rows(&sync, &held_id);
+        assert_eq!(sync.owner.retain_jobs(1, 1).unwrap(), 1, "{shape}");
+        assert_eq!(job_rows(&sync, &held_id), held_rows, "{shape}");
+        assert_eq!(sync.targets(&held_id), [held_state]);
+        // Permitted cleanup drops the settled batch and archives the finish result.
+        let rows = job_rows(&sync, &finished_id);
+        assert_eq!(rows[0], serde_json::json!([]));
+        assert_eq!(rows[1], serde_json::json!([]));
+        assert_eq!(rows[2], serde_json::json!([]));
+        let archived: String = connection
+            .query_row(
+                "SELECT archived_document FROM durable_job_keys WHERE job_id=?1",
+                [&finished_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let archived = jobs::decode(&archived).unwrap();
+        assert_eq!(archived.state, PersistentState::Succeeded);
+        assert_eq!(archived.state_version, finished.job.state_version);
+        assert_eq!(archived.public_result, finished.job.public_result);
+        assert_eq!(
+            archived.public_result,
+            Some(jobs::CompletedResult::SourceSync(jobs::SourceSyncResult {
+                synced: 1,
+                failed: 0,
+                results: vec![settlement(finished_source).result],
+                failures: vec![],
+            }))
+        );
+        let replay = sync.user(UserOperation::Enqueue {
+            key: "sync".into(),
+            payload_version: 1,
+            payload: Payload::Sync {
+                project_ids: Some(vec![finished_source as u64]),
+            },
+        });
+        assert_eq!(replay.job_id, finished_id);
+        assert_eq!(replay.public_result, finished.job.public_result);
+        let after = sync.snapshot();
+        assert_eq!(sync.owner.retain_jobs(1, 1).unwrap(), 0, "{shape}");
+        assert_eq!(sync.snapshot(), after);
+        assert_eq!(job_rows(&sync, &held_id), held_rows);
+        drop(connection);
+        let Fixture { owner, root, .. } = sync;
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn sync_reconciliation_uses_batch_owner() {
+    let sync = Fixture::new();
+    let first = sync.source("Owner First");
+    let second = sync.source("Owner Second");
+    let job_id = sync.enqueue(Some(vec![first as u64, second as u64]));
+    let mut lease = sync.open();
+    drop(local(sync.next(&mut lease)));
+    let effect = jobs::EffectIntent {
+        operation: jobs::EffectOperation::SourceRefresh,
+        basis_hash: "a".repeat(64),
+        content_hash: "b".repeat(64),
+        target: first.to_string(),
+    };
+    change_job(&sync, &job_id, |job| {
+        job.lease_until = Some(now() - 1);
+        job.state = PersistentState::EffectAdmitted;
+        job.effects.push(jobs::EffectReceipt {
+            intent: effect,
+            attempt: job.attempt,
+            generation: job.generation,
+            confirmed: false,
+            no_effect: false,
+            receipt: None,
+            checklist_completion: None,
+        });
+    });
+    assert!(sync.worker.claim_kind(JobKind::Sync).unwrap().is_none());
+    let held = sync.job(&job_id);
+    assert_eq!(held.state, PersistentState::ReconciliationRequired);
+    assert_eq!(
+        sync.batch(&job_id),
+        ("reconciliation_required".into(), None)
+    );
+    let before = sync.snapshot();
+    let receipt = jobs::ResultArtifact {
+        receipt_id: "sync-receipt".into(),
+        content_hash: "b".repeat(64),
+        target: first.to_string(),
+    };
+    for (decision, receipt) in [
+        (jobs::Decision::ConfirmSucceeded, Some(receipt)),
+        (jobs::Decision::ConfirmNoEffect, None),
+        (jobs::Decision::Abandon, None),
+    ] {
+        let error = sync
+            .owner
+            .jobs(policy())
+            .unwrap()
+            .submit(
+                Credential::Session(auth::Secret::new(sync.token.clone())),
+                UserOperation::Reconcile {
+                    job_id: job_id.clone(),
+                    expected_version: held.state_version,
+                    expected_generation: held.generation,
+                    effect_hash: "b".repeat(64),
+                    decision,
+                    receipt,
+                },
+                &AtomicBool::new(false),
+                Duration::from_secs(5),
+            )
+            .unwrap()
+            .receive()
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "Sync cannot use generic effect reconciliation"
+        );
+        assert_eq!(sync.snapshot(), before);
+    }
+    let reconciliations: i64 = sync
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM durable_job_reconciliations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reconciliations, 0);
+    let inspection = recovery(&sync, &job_id, held.state_version).unwrap();
+    assert_eq!(
+        inspection.state(),
+        SyncRecoveryState::ReconciliationRequired
+    );
+    assert_eq!(
+        inspection
+            .targets()
+            .iter()
+            .map(|target| (
+                target.requested_source_id(),
+                target.disposition(),
+                target.acknowledged()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                first as u64,
+                SyncRecoveryDisposition::ReconciliationRequired,
+                false
+            ),
+            (second as u64, SyncRecoveryDisposition::NotRun, false),
+        ]
+    );
+    assert_eq!(sync.owner.retain_jobs(1, 1).unwrap(), 0);
+    assert_eq!(sync.snapshot(), before);
+    let Fixture { owner, root, .. } = sync;
+    owner.shutdown().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

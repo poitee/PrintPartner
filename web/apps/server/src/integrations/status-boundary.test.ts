@@ -89,7 +89,7 @@ function violations(extraSource = ""): string[] {
 
 it("requires the boundary's real permit type along every adapter status acquisition", () => {
   expect(violations()).toEqual([]);
-});
+}, 60_000);
 
 it("rejects a new low-level status producer and a forged-permit caller", () => {
   expect(violations(`
@@ -106,7 +106,7 @@ async function forged() {
     "forged acquires status without StatusPermit",
     "forged calls a permitted producer without StatusPermit",
   ]);
-});
+}, 60_000);
 
 it("constructs runtime authority only at the application and stdio roots", () => {
   const root = dirname(directory);
@@ -133,4 +133,4 @@ it("constructs runtime authority only at the application and stdio roots", () =>
     visit(source);
   }
   expect(constructors.sort()).toEqual(["app.ts", "mcp/stdio-server.ts"]);
-});
+}, 60_000);

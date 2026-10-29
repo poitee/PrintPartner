@@ -423,7 +423,10 @@ export async function registerJobRoutes(
     const id = (request.params as { id: string }).id;
     const snap = await jobs.get(id, request.tenantId);
     if (!snap) {
-      reconcileMissingPrinterUploadJob(jobs.getRepo(), id);
+      // After cutover Rust runs printer uploads, so Node not knowing the job says nothing about the send.
+      if (!jobs.rustOwns("reconcile.reconcileMissingPrinterUploadJob")) {
+        reconcileMissingPrinterUploadJob(jobs.getRepo(), id);
+      }
       return reply.status(404).send({ detail: "Job not found" });
     }
     return snap;

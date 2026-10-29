@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,8 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createJobRunner } from "../services/job-runner.js";
+import { enqueuePrinterSend, loadPrinterSendQueue, updatePrinterSendQueueItem } from "../services/printer-send-queue-store.js";
+import { interruptPrinterUploadsOnShutdown, resetPrinterUploadHaltForTests } from "../services/printer-send-queue.js";
 import * as sourceManifestMigration from "../services/source-manifest-migration.js";
 import * as sourceWatcher from "../services/source-watcher.js";
 import {
@@ -36,6 +38,22 @@ const EXPORT_CHECKLIST_PARTICIPANTS = [
   "http.POST /jobs/export-checklist-html",
   "http.POST /api/v1/jobs/export-checklist-html",
   "job.export-checklist-html",
+];
+
+// Rust's manifest adds the HEAD twins of the GET routes.
+const PRINTER_SEND_QUEUE_PARTICIPANTS = [
+  "http.GET /printer-send-queue",
+  "http.HEAD /printer-send-queue",
+  "http.POST /printer-send-queue",
+  "http.POST /printer-send-queue/:id/dispatch",
+  "http.POST /printer-send-queue/drain",
+  "http.DELETE /printer-send-queue/:id",
+  "http.POST /jobs/printer-upload",
+  "job.printer-upload",
+  "reconcile.reconcilePrinterSendsAfterProcessStart",
+  "reconcile.reconcileMissingPrinterUploadJob",
+  "shutdown.interruptPrinterUploadsOnShutdown",
+  "migration.migrateLegacySelfHostExports",
 ];
 
 const PROFILE_SYNC_PARTICIPANTS = [
@@ -70,6 +88,7 @@ describe("operation cutover record at Node startup", () => {
     vi.mocked(sourceWatcher.startSourceWatcher).mockClear();
     vi.mocked(sourceManifestMigration.migrateLegacySourceManifestOverridesForTenant).mockClear();
     resetSourceSyncAdmissionSession();
+    resetPrinterUploadHaltForTests();
     for (const root of roots) rmSync(root, { recursive: true, force: true });
     roots.length = 0;
   });
@@ -216,6 +235,69 @@ describe("operation cutover record at Node startup", () => {
     });
   });
 
+  // A legacy upload waiting to move under tenant-default, queued and then
+  // left "sending" by a process that stopped mid-upload.
+  async function startWithSendingUpload(rustOwnsQueue: boolean) {
+    const dataDir = mkdtempSync(join(tmpdir(), "pp-operation-cutover-"));
+    roots.push(dataDir);
+    if (rustOwnsQueue) {
+      writeFileSync(join(dataDir, "operation-cutover.json"), record("printer.send-queue", PRINTER_SEND_QUEUE_PARTICIPANTS));
+    }
+    const legacyUpload = join(dataDir, "exports", "printer-uploads", "upload-1", "part.3mf");
+    mkdirSync(join(legacyUpload, ".."), { recursive: true });
+    writeFileSync(legacyUpload, "3mf");
+    const ports = createSelfHostPorts(dataDir);
+    await ports.db.connect();
+    const repo = ports.repository!;
+    const item = enqueuePrinterSend(repo, { filename: "part.3mf", artifact_path: legacyUpload, printer_id: "printer-1", start: false })!;
+    updatePrinterSendQueueItem(repo, item.id, { state: "sending", upload_job_id: "job-gone" });
+    try {
+      const app = await buildApp({ ...loadConfig(), dataDir, deployMode: "self-host" }, ports);
+      return { app, ports, dataDir, legacyUpload, queue: () => loadPrinterSendQueue(repo) };
+    } catch (error) {
+      ports.db.close();
+      throw error;
+    }
+  }
+
+  it("rewrites and interrupts a stale send at startup while Node owns the queue", async () => {
+    const { app, ports, legacyUpload, queue } = await startWithSendingUpload(false);
+    try {
+      expect(existsSync(legacyUpload)).toBe(false);
+      expect(queue()).toMatchObject([{ state: "error", artifact_path: expect.stringContaining("tenant-default") }]);
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
+  it("leaves every queue write to Rust after it takes the printer send queue", async () => {
+    const { app, ports, dataDir, legacyUpload, queue } = await startWithSendingUpload(true);
+    const untouched = [{ state: "sending", upload_job_id: "job-gone", artifact_path: legacyUpload }];
+    try {
+      // No startup reconcile and no legacy path rewrite.
+      expect(existsSync(legacyUpload)).toBe(true);
+      expect(queue()).toMatchObject(untouched);
+
+      // A job Node does not know is not a reason to fail Rust's send.
+      const lookup = await app.inject({ method: "GET", url: "/jobs/job-gone" });
+      expect(lookup.statusCode).toBe(404);
+      expect(queue()).toMatchObject(untouched);
+
+      expect(interruptPrinterUploadsOnShutdown(dataDir, { repository: ports.repository })).toEqual([]);
+      expect(queue()).toMatchObject(untouched);
+
+      await expect(createJobRunner(() => ports.repository!, dataDir).start("printer-upload", {})).rejects.toMatchObject({
+        code: "rust_owner",
+        statusCode: 503,
+        message: "Rust owns job.printer-upload; Node does not run it",
+      });
+    } finally {
+      await app.close();
+      ports.db.close();
+    }
+  });
+
   it("refuses to start when the record gives Rust only part of Source Sync", async () => {
     const partial = SOURCE_SYNC_PARTICIPANTS.filter((id) => id !== "worker.startSourceWatcher");
     expect(await startupError((dataDir) => {
@@ -226,8 +308,8 @@ describe("operation cutover record at Node startup", () => {
 
   it("refuses to start when Rust owns a participant Node cannot fence", async () => {
     expect(await startupError((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), record("job.printer-upload", ["job.printer-upload"]));
-    })).toBe("Operation cutover assigns job.printer-upload to Rust, but Node cannot fence it");
+      writeFileSync(join(dataDir, "operation-cutover.json"), record("startup.seedStockSlicerInstancesIfEmpty", ["startup.seedStockSlicerInstancesIfEmpty"]));
+    })).toBe("Operation cutover assigns startup.seedStockSlicerInstancesIfEmpty to Rust, but Node cannot fence it");
   });
 
   it("refuses to start on a malformed, oversized or symlinked record", async () => {

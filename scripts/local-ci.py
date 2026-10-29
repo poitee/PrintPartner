@@ -4,8 +4,9 @@
 Each step copies its command lines from the workflow step named in `ci`;
 scripts/test_local_ci.py fails when a copied line no longer matches the workflow.
 A step whose tool, pinned version or host is missing is reported as SKIP with the
-reason, never dropped silently. Usage: python3 scripts/local-ci.py [--list]
-[--only id,...] [--skip id,...]. See docs/development/ci.md.
+reason, never dropped silently. Usage: just ci [--list] [--only id,...]
+[--skip id,...], or python3 scripts/local-ci.py with the same flags. See
+docs/development/ci.md.
 """
 
 import argparse
@@ -91,14 +92,20 @@ STEPS = [
          (CROSS_OS + "Build desktop assets and generate measured manifest",),
          requires=(("node", "v24.21.0"), ("npm", None), ("python3", None)),
          env={"VITE_PRINT_PARTNER_DESKTOP": "1", "MANIFEST_PYTHON": "python3"}),
+    # After web-assets, which installs the parser it loads from web/node_modules, and
+    # before node-fixtures reinstalls them. Web CI runs it on Node 22.
+    Step("workaround-ratchet", "TODO, eslint-disable and Rust #[allow] ratchet (Node 22)",
+         ("node ../scripts/workaround-ratchet.mjs && node --test ../scripts/workaround-ratchet.test.mjs",),
+         ("web-ci.yml#Check workaround ratchet",),
+         requires=(("node", "v22.23.3"),), cwd="web", node22=True),
     cargo("clippy-off", "clippy, desktop_rebuild off", "clippy (desktop_rebuild off)",
           CARGO.format("clippy") + " --all-targets --keep-going -- -D warnings"),
     cargo("clippy-on", "clippy, desktop_rebuild on", "clippy (desktop_rebuild on)",
           CARGO.format("clippy") + " --all-targets --keep-going --features desktop_rebuild -- -D warnings"),
     cargo("nextest-off", "nextest, desktop_rebuild off", "nextest (desktop_rebuild off)",
-          CARGO.format("nextest run") + ' --no-fail-fast -E "$NEXTEST_FILTER"', NEXTEST),
+          CARGO.format("nextest run") + ' --no-fail-fast --no-tests=warn -E "$NEXTEST_FILTER"', NEXTEST),
     cargo("nextest-on", "nextest, desktop_rebuild on", "nextest (desktop_rebuild on)",
-          CARGO.format("nextest run") + ' --no-fail-fast -E "$NEXTEST_FILTER" --features desktop_rebuild', NEXTEST),
+          CARGO.format("nextest run") + ' --no-fail-fast --no-tests=warn -E "$NEXTEST_FILTER" --features desktop_rebuild', NEXTEST),
     cargo("doc-off", "doctests, desktop_rebuild off", "doctests (desktop_rebuild off)",
           CARGO.format("test") + " --no-fail-fast --doc"),
     cargo("doc-on", "doctests, desktop_rebuild on", "doctests (desktop_rebuild on)",

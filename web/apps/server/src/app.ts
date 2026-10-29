@@ -358,7 +358,8 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     // Rust owns a fenced operation's participants and every route alias; Node runs none of them.
     const rustOwned = rustOwnedNodeParticipants(config.dataDir);
     beginSourceSyncAdmission(config.dataDir, rustOwned);
-    if (config.deployMode === "self-host" && !mappedDesktopTenant()) {
+    // The migration rewrites queue paths, so it moves with the printer send queue.
+    if (config.deployMode === "self-host" && !mappedDesktopTenant() && !rustOwned.has("migration.migrateLegacySelfHostExports")) {
       migrateLegacySelfHostExports(config.dataDir, repository);
     }
     const backgroundTenantIds = () => configuredTenantIds(config, authStore);

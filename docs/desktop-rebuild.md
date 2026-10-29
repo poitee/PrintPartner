@@ -723,6 +723,23 @@ records each refusal's message. This change is web-only and adds no new Rust
 npm run test -w @print-partner/web -- src/pages/PartsPage.recovery.test.tsx src/components/CommandPalette.retry.test.tsx src/lib/planAuxiliarySaveIntent.test.ts src/components/PlanSpecialRequestField.test.tsx src/hooks/useKitManifestAutosave.test.ts
 ```
 
+### D29 draft lifecycle replay and cancelled selection
+
+GRE-816 adds regression proofs for behavior already on main; it changes no
+production code. `abandon` writes only the `plan_drafts` row and starts no
+Required-unit selection. Retrying it with the same lifecycle version returns
+the same `ready` identity, before and after a later Save, and writes nothing. A
+Save that still names the open draft refuses with `draft_changed` and writes
+nothing; a Save without a source publishes and leaves the abandoned draft as it
+was. When the selection after `edit` is cancelled, the edit stays committed
+and unselected, survives a writer restart, and a retry of the same edit only
+selects. Default builds omit the target.
+
+```sh
+cargo nextest run -p pp-storage --manifest-path rust/Cargo.toml --locked --features desktop_rebuild \
+  -E 'binary(working_draft_lifecycle_replay)'
+```
+
 ### D4 media reconciliation
 
 GRE-599 reconciles media already shipped in #131. The `pp-source` media library, the `pp-source-media` CLI, and all unconditional #131 exports remain available in the default build. This slice adds a historical audit and documentation. It adds no feature behavior, host, runtime API, or dependency.
@@ -1061,6 +1078,47 @@ else update time, and profile) and Node's newest-first order. Ties keep enqueue 
 Quarantined and unreadable rows are skipped. Turning HTTP query strings into
 `LegacyListFilter` is GRE-795 (`docs/gre-795-jobs-http.md`). Read-one HTTP at
 `/jobs/{id}` and `/api/v1/jobs/{id}` is GRE-796 (`docs/gre-796-jobs-http.md`).
+Job WebSocket admission at `/ws/jobs/{id}` is GRE-798 (`docs/gre-798-jobs-http.md`).
+Snapshot delivery and close reasons on that socket are GRE-799 (`docs/gre-799-jobs-http.md`).
+Reconnect after a lagged mailbox, and owner shutdown of live sockets, are GRE-800
+(`docs/gre-800-jobs-http.md`).
+Composing those routes on the opted-in rebuild router is GRE-821
+(`docs/gre-821-runtime-jobs.md`).
+The browser job row follows that socket snapshot when health reports
+`tenant_feature_toggles`, and keeps HTTP polling otherwise. That wiring is
+GRE-822 (`docs/gre-822-job-context.md`).
+The Plan review cache follows an open draft's revision when health reports
+that same capability and the draft base is current, and keeps the existing
+review query otherwise. That wiring is GRE-823
+(`docs/gre-823-workspace-reads.md`).
+A finished import scan refreshes that source's queries when health reports
+the same capability, and a finished plan publication refreshes that plan
+only. Without the capability, a finished source job still refreshes every
+source, profile, and plan review. That wiring is GRE-824
+(`docs/gre-824-job-invalidation.md`).
+GRE-825 runs that browser wiring against a disposable server. One Plan review,
+one draft Save, and one job reconnect run with the opt-in unset and again with
+`PP_DESKTOP_REBUILD` exactly `1`. The unset run keeps the existing review, Save,
+and socket plus `GET /jobs/{id}` poll. Optional feature controls stay absent.
+The opted-in run uses the same review and Save after health reports
+`tenant_feature_toggles`. Feature controls render and stay off. A dropped job
+socket is replaced by the next snapshot, and the row does not poll. The proof
+does not turn the flag on by default and does not cut production data over.
+
+```sh
+npm run build --prefix web
+node --test --test-concurrency=1 web/apps/web/test/browser/gre-825-desktop-rebuild.isolated.mjs
+```
+
+The command runs `desktop_rebuild_flag_off_keeps_existing_flow` and
+`desktop_rebuild_opt_in_save_and_reconnect`. Run it from the repository root
+after that build. `npm run test:browser` from `web/` runs the same file.
+
+A rebuild job row ends when its socket closes 1008 for a reason other than
+`Job not found`, including `Session expired` and `Session revoked`. Those
+session reasons also call `notifyEngineUnauthorized`. An ordinary drop still
+reconnects, and the flag-off poll stays. That close handling is GRE-1001
+(`docs/gre-1001-job-session.md`).
 
 `fixtures/parity/jobs-engine/generate.mjs` now also runs Node jobs to the end and
 records the finished snapshot and `listJobs` under each filter. The Rust test finishes
@@ -1236,8 +1294,11 @@ after step 2, so it can include that pass's repairs. An
 interrupted step leaves its input version intact, so each attempt takes a fresh copy
 rather than reusing an existing file. The legacy upgrade to 37 (35 without the
 feature) still reuses an existing backup, because its earlier migrations do not
-commit atomically. Upgrading from 35 therefore writes `pre-schema37.db`,
-`pre-schema38.db` and `pre-schema39.db`, and `SchemaReady.backup` names the first. A
+commit atomically. With the feature, that backup is named
+`pre-schema{from}-to-{current}.db`, as Node names its upgrade backups, so a
+database restored at another version gets its own copy. Upgrading from 35 therefore
+writes `pre-schema35-to-41.db`, `pre-schema38.db` and later step backups, and
+`SchemaReady.backup` names the first. A
 failed backup stops the upgrade before the step writes. Backups of a WAL database no
 longer leave the temporary copy's `-wal` and `-shm` files behind.
 
@@ -1400,6 +1461,13 @@ reads the journal and durable jobs only: it returns `Absent`,
 revalidated in the claim transaction against the admitted operation, inventory,
 captured job payload, and Source; a changed inventory or other mismatch refuses
 with `Captured import requires repair` and leaves queued job rows unchanged.
+
+GRE-772 also makes correlation verify the manifest digests before it reads the
+journal, so tampered bytes refuse with an error instead of returning `Absent`.
+`Absent` also requires the retained inventory to match the manifest. A changed
+inventory returns `MismatchRepairRequired`, so recovery does not re-admit a
+capture whose files changed. Correlation and refused claims leave journal rows,
+job rows, and the accounting epoch unchanged.
 
 ```sh
 cargo test --locked --manifest-path rust/Cargo.toml -p pp-storage --features desktop_rebuild --lib uploads::tests::capture_preflight
