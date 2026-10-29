@@ -2,6 +2,7 @@ use crate::DesktopRebuild;
 use anyhow::{Result, anyhow};
 use axum::Router;
 use pp_api::{
+    accepted::{AcceptedHttpConfig, accepted_router},
     auth::auth_router,
     builds::{BuildHttpConfig, build_router},
     catalog::{CatalogHttpConfig, admit_catalog_routes},
@@ -123,7 +124,8 @@ pub fn router(
     )))
 }
 
-/// Compose authenticated read routers (auth, Plan builds, catalog) from one
+/// Compose authenticated read routers (auth, Plan builds, catalog, Accepted
+/// Plan Checkoff) from one
 /// `WriterOwner` when the stored rebuild setting is on. Aliases share that
 /// owner. Returns `None` before creating clients or mounting when the setting
 /// is off. Does not cut over production gateway ownership (GRE-593).
@@ -141,16 +143,22 @@ pub fn read_router(
         return Ok(None);
     }
     let policy = auth.policy;
-    let RebuildHttpClients {
-        auth: auth_client,
-        drafts: _drafts,
-        builds: builds_client,
-    } = {
+    let (
+        RebuildHttpClients {
+            auth: auth_client,
+            drafts: _drafts,
+            builds: builds_client,
+        },
+        accepted_client,
+    ) = {
         let guard = owner
             .lock()
             .map_err(|_| anyhow!("rebuild owner lock poisoned"))?;
-        clients(rebuild, &guard, policy, auth.lifetimes)?
-            .ok_or_else(|| anyhow!("flag on constructs clients"))?
+        (
+            clients(rebuild, &guard, policy, auth.lifetimes)?
+                .ok_or_else(|| anyhow!("flag on constructs clients"))?,
+            guard.accepted_reads_with_policy(policy)?,
+        )
     };
     // `_drafts` is opened with the bundle for GRE-818 parity; draft HTTP uses
     // `draft_router` (GRE-820) from the same owner when composed separately.
@@ -162,8 +170,14 @@ pub fn read_router(
         CatalogHttpConfig::from_startup(origin, api_key_tenant, policy, Some("1"))?,
         Arc::clone(&owner),
     );
+    let accepted = accepted_router(
+        AcceptedHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
+        accepted_client,
+    );
     let auth_routes = auth_router(auth.http, auth_client, auth.providers, auth.mail);
-    Ok(Some(auth_routes.merge(builds).merge(catalog)))
+    Ok(Some(
+        auth_routes.merge(builds).merge(catalog).merge(accepted),
+    ))
 }
 
 /// Compose completed draft list/read/edit/abandon routers from one
