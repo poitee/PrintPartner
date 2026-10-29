@@ -1,12 +1,21 @@
 //! Pre-upgrade backup retention (T-8-archive). After an upgrade commits, keep
 //! every copy it wrote, including its rollback copy, plus the three newest
-//! verified `pre-schema*.db` copies left by earlier upgrades. Only this crate's own files are candidates: Node's pre-update and
-//! manual `.tar.gz` archives, temporary `.backup-*.db` files and SQLite
-//! sidecars are never touched. A file that fails verification is kept and
-//! reported, never deleted.
+//! verified `pre-schema*.db` copies left by earlier upgrades. The count is
+//! per file, not per upgrade.
+//!
+//! A `pre-schema{N}-to-{M}.db` copy is never pruned. It is written only for a
+//! database older than schema 37, so there are at most six, and after an
+//! upgrade interrupted between steps it can be the only copy the previous
+//! release opens, even though a later attempt pinned a newer rollback.
+//!
+//! Only this crate's own files are candidates: Node's pre-update and manual
+//! `.tar.gz` archives, temporary `.backup-*.db` files and SQLite sidecars are
+//! never touched. A copy that fails verification is kept and reported, never
+//! deleted.
 
 use rusqlite::{Connection, OpenFlags};
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -19,24 +28,42 @@ pub(crate) struct Pruned {
     pub warnings: Vec<String>,
 }
 
-/// `pre-schema{N}.db` or `pre-schema{N}-to-{M}.db`, nothing else.
-fn is_candidate(name: &str) -> bool {
-    let Some(versions) = name
-        .strip_prefix("pre-schema")
-        .and_then(|rest| rest.strip_suffix(".db"))
-    else {
-        return false;
+enum Name {
+    /// `pre-schema{N}.db`, the input to step N.
+    Step(u64),
+    /// `pre-schema{N}-to-{M}.db`, a database from before schema 37.
+    Legacy,
+}
+
+/// Parses exactly `pre-schema{N}.db` or `pre-schema{N}-to-{M}.db`.
+fn parse(name: &str) -> Option<Name> {
+    let versions = name.strip_prefix("pre-schema")?.strip_suffix(".db")?;
+    let number = |part: &str| {
+        (!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<u64>().ok())
+            .flatten()
     };
-    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
     match versions.split_once("-to-") {
-        Some((from, to)) => digits(from) && digits(to),
-        None => digits(versions),
+        Some((from, to)) => {
+            (number(from).is_some() && number(to).is_some()).then_some(Name::Legacy)
+        }
+        None => number(versions).map(Name::Step),
     }
 }
 
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
 /// Opens the copy as an immutable read-only URI, so verification creates no
-/// `-wal` or `-shm` file, and requires `integrity_check` to return `ok`.
+/// `-wal` or `-shm` file, and requires `integrity_check` to return `ok`. An
+/// immutable open ignores a `-wal`, so a copy that has one is not verified.
 fn verified(path: &Path) -> bool {
+    if sidecar(path, "-wal").symlink_metadata().is_ok() {
+        return false;
+    }
     let Some(text) = path.to_str() else {
         return false;
     };
@@ -57,17 +84,16 @@ fn verified(path: &Path) -> bool {
     .is_ok_and(|result| result == "ok")
 }
 
+/// Removes the sidecars first, so a failure never leaves one without its
+/// database.
 fn remove_with_sidecars(path: &Path) -> std::io::Result<()> {
-    std::fs::remove_file(path)?;
     for suffix in ["-wal", "-shm"] {
-        let mut sidecar = path.as_os_str().to_owned();
-        sidecar.push(suffix);
-        match std::fs::remove_file(PathBuf::from(sidecar)) {
+        match std::fs::remove_file(sidecar(path, suffix)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
             _ => {}
         }
     }
-    Ok(())
+    std::fs::remove_file(path)
 }
 
 /// Prunes the backups directory that holds `rollback`, the from-version copy
@@ -79,6 +105,11 @@ pub(crate) fn prune(rollback: &Path, written: &[PathBuf]) -> Pruned {
     let Some(directory) = rollback.parent() else {
         return pruned;
     };
+    // Every path names a file in `directory`, so file names identify them.
+    let protected: Vec<OsString> = std::iter::once(rollback)
+        .chain(written.iter().map(PathBuf::as_path))
+        .filter_map(|path| path.file_name().map(ToOwned::to_owned))
+        .collect();
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) => {
@@ -99,17 +130,18 @@ pub(crate) fn prune(rollback: &Path, written: &[PathBuf]) -> Pruned {
                 continue;
             }
         };
-        let path = entry.path();
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+        let file_name = entry.file_name();
+        let Some(Name::Step(step)) = file_name.to_str().and_then(parse) else {
             continue;
         };
-        if !is_candidate(&name) || path == rollback || written.contains(&path) {
+        if protected.contains(&file_name) {
             continue;
         }
+        let path = entry.path();
         match path.symlink_metadata() {
             Ok(metadata) if metadata.is_file() => {
                 let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                candidates.push((modified, name, path));
+                candidates.push((modified, step, path));
             }
             Ok(_) => {}
             Err(error) => pruned
@@ -117,8 +149,8 @@ pub(crate) fn prune(rollback: &Path, written: &[PathBuf]) -> Pruned {
                 .push(format!("Inspect {}: {error}", path.display())),
         }
     }
-    // Newest first; equal times fall back to the name so the result is stable.
-    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    // Newest first; equal times keep the higher step, so the result is stable.
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then(right.1.cmp(&left.1)));
     let mut kept = 0;
     for (_, _, path) in candidates {
         if !verified(&path) {
@@ -142,13 +174,13 @@ pub(crate) fn prune(rollback: &Path, written: &[PathBuf]) -> Pruned {
 
 #[cfg(test)]
 mod tests {
-    use super::is_candidate;
+    use super::{Name, parse};
 
     #[test]
     fn ticket_t_8_archive_retention_matches_only_pre_schema_copies() {
-        for name in ["pre-schema38.db", "pre-schema34-to-41.db"] {
-            assert!(is_candidate(name), "{name}");
-        }
+        assert!(matches!(parse("pre-schema38.db"), Some(Name::Step(38))));
+        assert!(matches!(parse("pre-schema100.db"), Some(Name::Step(100))));
+        assert!(matches!(parse("pre-schema34-to-41.db"), Some(Name::Legacy)));
         for name in [
             "pre-schema38.db-wal",
             "pre-schema38.db-shm",
@@ -161,7 +193,7 @@ mod tests {
             "print-partner-backup-2026-10-29T12-00-00-000Z.tar.gz",
             "PRE-SCHEMA38.db",
         ] {
-            assert!(!is_candidate(name), "{name}");
+            assert!(parse(name).is_none(), "{name}");
         }
     }
 }

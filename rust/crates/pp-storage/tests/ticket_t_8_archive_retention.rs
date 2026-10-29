@@ -90,8 +90,14 @@ fn ticket_t_8_archive_retention_keeps_rollback_this_upgrade_and_three_older() {
             hour(10 - index as u64),
         );
     }
-    // A WAL sidecar of a copy retention will remove goes with it.
+    // An immutable open would ignore a real WAL, so a copy with one is kept.
     std::fs::write(sidecar(&backups.join("pre-schema20.db"), "-wal"), b"stale").unwrap();
+    // A shared-memory sidecar of a copy retention removes goes with it.
+    std::fs::write(sidecar(&backups.join("pre-schema21.db"), "-shm"), b"stale").unwrap();
+    // The oldest verified copy is a pre-37 legacy copy. After an upgrade
+    // interrupted between steps it can be the only one the previous release
+    // opens, so it is never pruned.
+    verified_copy(&backups.join("pre-schema31-to-41.db"), hour(40));
     // The oldest file of all fails verification and is kept.
     std::fs::write(backups.join("pre-schema19.db"), b"not a database").unwrap();
     age_file(&backups.join("pre-schema19.db"), hour(20));
@@ -126,19 +132,17 @@ fn ticket_t_8_archive_retention_keeps_rollback_this_upgrade_and_three_older() {
     assert!(rollback.exists());
     assert_eq!(
         names(&ready.pruned_backups),
-        ["pre-schema20.db", "pre-schema21.db", "pre-schema22.db"]
+        ["pre-schema21.db", "pre-schema22.db"]
     );
     let after = contents(&backups);
-    for removed in [
-        "pre-schema20.db",
-        "pre-schema20.db-wal",
-        "pre-schema21.db",
-        "pre-schema22.db",
-    ] {
+    for removed in ["pre-schema21.db", "pre-schema21.db-shm", "pre-schema22.db"] {
         assert!(!after.contains_key(removed), "{removed} survived");
     }
     for kept in [
         "pre-schema19.db",
+        "pre-schema20.db",
+        "pre-schema20.db-wal",
+        "pre-schema31-to-41.db",
         "pre-schema23.db",
         "pre-schema24.db",
         "pre-schema25.db",
@@ -162,23 +166,31 @@ fn ticket_t_8_archive_retention_keeps_rollback_this_upgrade_and_three_older() {
         "{written:?}"
     );
     // Verification opened every kept copy without leaving sidecars.
-    assert!(
-        after
-            .keys()
-            .all(|name| !name.ends_with("-wal") && !name.ends_with("-shm")),
-        "{after:?}"
-    );
+    let sidecars: Vec<_> = after
+        .keys()
+        .filter(|name| name.ends_with("-wal") || name.ends_with("-shm"))
+        .collect();
+    assert_eq!(sidecars, ["pre-schema20.db-wal"]);
     assert_eq!(
         ready.backup_warnings.len(),
-        1,
+        2,
         "{:?}",
         ready.backup_warnings
     );
-    assert!(ready.backup_warnings[0].contains("pre-schema19.db"));
+    for name in ["pre-schema19.db", "pre-schema20.db"] {
+        assert!(
+            ready
+                .backup_warnings
+                .iter()
+                .any(|warning| warning.contains(name)),
+            "{name}: {:?}",
+            ready.backup_warnings
+        );
+    }
 }
 
 #[test]
-fn ticket_t_8_archive_retention_breaks_mtime_ties_by_name() {
+fn ticket_t_8_archive_retention_breaks_mtime_ties_by_step() {
     let data = Scratch::new("pp-t8-retention-ties");
     let backups = data.join("backups");
     std::fs::create_dir(&backups).unwrap();
@@ -197,7 +209,7 @@ fn ticket_t_8_archive_retention_breaks_mtime_ties_by_name() {
     let ready = upgrade(&data);
     assert_eq!(
         names(&ready.pruned_backups),
-        ["pre-schema23.db", "pre-schema24.db", "pre-schema25.db"]
+        ["pre-schema20.db", "pre-schema21.db", "pre-schema22.db"]
     );
 }
 
