@@ -7,6 +7,7 @@ mod auth_scheduler;
 #[cfg(feature = "desktop_rebuild")]
 use auth_scheduler::*;
 pub mod auth;
+mod backup_retention;
 #[cfg(feature = "desktop_rebuild")]
 pub mod build_graph;
 pub mod catalog;
