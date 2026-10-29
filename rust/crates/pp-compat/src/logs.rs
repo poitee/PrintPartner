@@ -1592,6 +1592,70 @@ mod tests {
     }
 
     #[test]
+    fn gre_1006_core_log_redacts_each_sensitive_field_kind() {
+        let scratch = Scratch::new();
+        let core = CoreLog::open(&scratch.0).unwrap();
+        let headers = std::collections::BTreeMap::from([
+            ("authorization", "token PLANTED_HDR_AUTH_01"),
+            ("cookie", "pp_session=PLANTED_HDR_COOKIE_02"),
+            ("x-api-key", "PLANTED_HDR_APIKEY_03"),
+        ]);
+        tracing::subscriber::with_default(core, || {
+            tracing::warn!(
+                password = "PLANTED_FIELD_PASSWORD",
+                token = "PLANTED_FIELD_TOKEN",
+                cookie = "PLANTED_FIELD_COOKIE",
+                authorization = "PLANTED_FIELD_AUTHZ",
+                webhook = "PLANTED_FIELD_WEBHOOK",
+                api_key = "PLANTED_FIELD_API_KEY",
+                github_pat = "PLANTED_FIELD_GITHUB_PAT",
+                api_keys_v1 = "PLANTED_FIELD_API_KEYS_V1",
+                discord_webhook_url = "PLANTED_FIELD_DISCORD_URL",
+                "fields"
+            );
+            tracing::warn!(
+                url = "https://discord.com/api/webhooks/1234/PLANTED_URL_WEBHOOK",
+                "POST https://u:PLANTED_URL_PASSWORD@host/x?token=PLANTED_URL_TOKEN&api_key=PLANTED_URL_API_KEY"
+            );
+            tracing::warn!(?headers, "upstream request");
+            tracing::warn!(
+                "Cookie: a=PLANTED_LINE_COOKIE; Authorization: Bearer PLANTED_LINE_BEARER"
+            );
+        });
+        let text = std::fs::read_to_string(scratch.0.join("logs/core.log")).unwrap();
+        assert_eq!(text.matches("PLANTED_").count(), 0, "secret leaked: {text}");
+        let rows = rows(&scratch.0.join("logs/core.log"));
+        assert_eq!(rows.len(), 4);
+        for name in [
+            "password",
+            "token",
+            "cookie",
+            "authorization",
+            "webhook",
+            "api_key",
+            "github_pat",
+            "api_keys_v1",
+            "discord_webhook_url",
+        ] {
+            assert_eq!(rows[0][name], redact::REDACTED, "{name}");
+        }
+        assert_eq!(rows[0]["message"], "fields");
+        assert_eq!(
+            rows[1]["url"],
+            "https://discord.com/api/webhooks/1234/[REDACTED]"
+        );
+        assert_eq!(
+            rows[1]["message"],
+            "POST https://[REDACTED]@host/x?token=[REDACTED]&api_key=[REDACTED]"
+        );
+        assert_eq!(
+            rows[2]["headers"],
+            r#"{"authorization": "[REDACTED]", "cookie": "[REDACTED]", "x-api-key": "[REDACTED]"}"#
+        );
+        assert_eq!(rows[3]["message"], "Cookie: [REDACTED]");
+    }
+
+    #[test]
     fn ticket_t_13_core_log_truncates_oversized_rows() {
         let scratch = Scratch::new();
         let core = CoreLog::open(&scratch.0).unwrap();
