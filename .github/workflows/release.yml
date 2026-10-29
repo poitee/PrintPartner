@@ -69,6 +69,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
       - name: Check for an existing candidate image
         id: candidate
         env:
@@ -141,6 +143,15 @@ jobs:
             candidate-manifest.json
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE@$DIGEST"
+
       - name: Render release identity asset
         env:
           TAG: ${{ steps.identity.outputs.tag }}
@@ -153,6 +164,15 @@ jobs:
             --digest "$DIGEST" \
             --output release-identity.json
 
+      - name: Sign release identity asset
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --new-bundle-format \
+            --bundle release-identity.json.sigstore.json release-identity.json
+
       - name: Create or verify GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -163,14 +183,26 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             test "$(gh release view "$TAG" --json tagName --jq .tagName)" = "$TAG"
             mkdir -p existing-release
-            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq release-identity.json; then
-              gh release download "$TAG" --pattern release-identity.json --dir existing-release
-              cmp --silent release-identity.json existing-release/release-identity.json
+            assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            for asset in release-identity.json cosign.pub; do
+              if grep -Fxq "$asset" <<< "$assets"; then
+                gh release download "$TAG" --pattern "$asset" --dir existing-release
+                cmp --silent "$asset" "existing-release/$asset"
+              else
+                gh release upload "$TAG" "$asset"
+              fi
+            done
+            # Every signing run writes a new bundle, so keep a published bundle that still verifies.
+            bundle=release-identity.json.sigstore.json
+            if grep -Fxq "$bundle" <<< "$assets"; then
+              gh release download "$TAG" --pattern "$bundle" --dir existing-release
+              cosign verify-blob --key cosign.pub --bundle "existing-release/$bundle" release-identity.json
+              cp "existing-release/$bundle" "$bundle"
             else
-              gh release upload "$TAG" release-identity.json
+              gh release upload "$TAG" "$bundle"
             fi
           else
-            gh release create "$TAG" release-identity.json \
+            gh release create "$TAG" release-identity.json release-identity.json.sigstore.json cosign.pub \
               --verify-tag \
               --target "$COMMIT" \
               --title "Print Partner $TAG" \
@@ -203,6 +235,14 @@ jobs:
           test "$(gh release view "$TAG" --json tagName,isDraft --jq 'select(.isDraft == false) | .tagName')" = "$TAG"
           test "$(jq -r .image.digest release-identity.json)" = "$DIGEST"
           test "$(docker buildx imagetools inspect "$IMAGE:$VERSION" | awk '/^Digest:/ { print $2; exit }')" = "$DIGEST"
+
+      - name: Verify signatures
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign verify --key cosign.pub "$IMAGE@$DIGEST" >/dev/null
+          cosign verify-blob --key cosign.pub --bundle release-identity.json.sigstore.json release-identity.json
 
       - name: Advance latest convenience alias
         env:
