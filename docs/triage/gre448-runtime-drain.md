@@ -985,3 +985,29 @@ Still open:
   have not switched, so it is not fenced here.
 - Fences for the other assistant actions and startup hooks (GRE-593), a live
   `CoreRuntime` cutover, and Mac logout (parent gate).
+
+## Live CoreRuntime cutover of the profile-sync worker
+
+`drain::ticket_t_3_drain_runtime_cutover_fences_profile_sync_worker` (pp-core
+`runtime_m0`, `desktop_rebuild`) commits `profile.sync` through a real
+`CoreRuntime` and the built Node backend, rather than only through the gateway.
+Node's profile-sync worker seeds the stock slicer instances while `buildApp`
+starts it, before Node reports ready, so the slicer instance list shows
+whether the worker ran.
+
+- First boot (control): the worker seeds three stock instances. The test
+  deletes them, then `shutdown_with_cutover("profile.sync", parity)` drains
+  cleanly and commits all three participants.
+- Two restarts: the slicer instance list stays empty (Node did not start the
+  worker), GET and HEAD `/ws/profile-sync` return 503
+  `rust_owner_unavailable`, a second cutover is refused as
+  `already_rust_owned`, the record bytes are unchanged, and each boot event
+  names `profile.sync`.
+
+Red control: removing the `rustOwned` check before `startManagedProfileSync`
+in a private `app.ts` build failed the test at "Node started the Rust-owned
+profile-sync worker". With the check restored, all 16 `drain::` runtime tests
+passed with `desktop_rebuild`.
+
+Still open: the remaining operation inventory and cutover (GRE-593, blocked by
+GRE-401), Plan Apply's queue remap, and actual Mac logout (parent gate).
