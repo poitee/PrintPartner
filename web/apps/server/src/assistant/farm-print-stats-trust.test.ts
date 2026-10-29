@@ -144,6 +144,25 @@ describe("GRE-1002 farm and print stats you can trust", () => {
     ]);
   });
 
+  it("2: a claimed print and the link the claim created count once", async () => {
+    saveFleet(repo, fleet);
+    saveUnattributedPrint(repo, {
+      id: randomUUID(), integration_id: "host-mk4", printer_id: "default", host_name: "mk4.local",
+      filename: "Plate_1.gcode", completed_at: daysAgo(1), gcode_objects: [], candidates: [],
+      claimed_at: daysAgo(1), claimed_profile_id: 1,
+    });
+    repo.setSetting("printer.checkoff_links", JSON.stringify([{
+      id: "claim", profile_id: 1, integration_id: "host-mk4", printer_id: "default", host_name: "mk4.local",
+      filename: "plate_1.gcode", units: [], saw_active: true, created_at: daysAgo(1), completed_at: daysAgo(1),
+      state: "awaiting_verify", host_outcome: "success",
+    }]));
+    const seen = (await call("get_print_stats", { hours: 48 })).prints_seen_on_printers;
+    expect(seen).toMatchObject({ total: 1, attached_to_plan: 1, not_attached_to_plan: 0 });
+    expect(seen.by_printer).toEqual([
+      { printer_id: "mk4", printer_name: "MK4", seen: 1, completed: 1, failed: 0, cancelled: 0 },
+    ]);
+  });
+
   it("2: failed and cancelled checkoff prints count as seen; still-watching ones do not", async () => {
     saveFleet(repo, fleet);
     const base = {

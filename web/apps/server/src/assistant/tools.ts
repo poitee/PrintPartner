@@ -2899,21 +2899,24 @@ export async function invokeAssistantTool(
 
         // Last activity per printer drives idle_since ("Prusa XL idle since 3am").
         // 7 days back so a machine idle all weekend still reports a real timestamp.
-        let lastActivity = new Map<string, string>();
+        let jobs: { printerId?: string | null; at: string; completedAt?: string | null }[] = [];
         try {
           const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+          jobs = ctx.repo.recentPrintJobs(since, 1000);
+        } catch {
+          // print_jobs unreadable — idle_since degrades to null, status still works.
+        }
+        try {
           const seen = printsSeenOnPrinters(
             loadPrinterCheckoffLinks(ctx.repo),
             listUnattributedPrints(ctx.repo),
             fleetPrinterResolver(fleet),
           );
-          lastActivity = lastActivityByPrinter([
-            ...ctx.repo.recentPrintJobs(since, 1000),
-            ...seen.filter((p) => p.finished_at_known).map((p) => ({ printerId: p.printer_id, at: p.at })),
-          ]);
+          jobs.push(...seen.filter((p) => p.finished_at_known).map((p) => ({ printerId: p.printer_id, at: p.at })));
         } catch {
-          // print_jobs unreadable — idle_since degrades to null, status still works.
+          // Checkoff history unreadable — idle_since falls back to print_jobs alone.
         }
+        const lastActivity = lastActivityByPrinter(jobs);
 
         const hostStatuses = await probeFleetHostStatus(ctx.repo, ctx.integrations, fleet);
         const printers = fleet.map((m, i) => {

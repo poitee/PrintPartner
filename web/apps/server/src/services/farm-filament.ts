@@ -21,6 +21,7 @@ import {
   type SpoolmanSpool,
 } from "../integrations/spoolman-client.js";
 import { readSpoolmanAccess } from "../lib/spoolman-access.js";
+import { normalizePrinterFilename } from "./printer-checkoff.js";
 import type { UnattributedPrint } from "./unattributed-print-store.js";
 
 /**
@@ -398,11 +399,11 @@ export function fleetPrinterResolver(
 
 type SeenLink = Pick<
   PrinterCheckoffLink,
-  "printer_id" | "integration_id" | "host_name" | "host_outcome" | "completed_at" | "created_at"
+  "printer_id" | "integration_id" | "host_name" | "filename" | "host_outcome" | "completed_at" | "created_at"
 >;
 type SeenUnattributed = Pick<
   UnattributedPrint,
-  "printer_id" | "integration_id" | "host_name" | "completed_at" | "claimed_profile_id"
+  "printer_id" | "integration_id" | "host_name" | "filename" | "completed_at" | "claimed_profile_id"
 >;
 
 export type SeenPrint = {
@@ -420,9 +421,9 @@ export type SeenPrint = {
 /**
  * Prints the printers reported finishing, failing or being cancelled, whether or
  * not a Plan owns them. Checkoff links belong to a Plan; unattributed prints
- * belong to one only once claimed. The poller stores an unattributed print only
- * when no link has that host and file, so the two lists do not overlap. Links
- * still printing are not counted.
+ * belong to one only once claimed. Claiming a print creates a link for the same
+ * host and file and keeps the claimed entry, so a claimed print with a matching
+ * link is counted once, as the link. Links still printing are not counted.
  */
 export function printsSeenOnPrinters(
   links: readonly SeenLink[],
@@ -434,6 +435,9 @@ export function printsSeenOnPrinters(
     const id = fleetPrinter?.id ?? (p.printer_id.trim() || "unassigned");
     return { printer_id: id, printer_name: fleetPrinter?.name ?? (p.host_name || id) };
   };
+  const fileKey = (p: { integration_id: string; filename: string }) =>
+    `${p.integration_id}\u0000${normalizePrinterFilename(p.filename)}`;
+  const linkedFiles = new Set(links.map(fileKey));
   const seen: SeenPrint[] = [];
   for (const link of links) {
     const outcome = link.host_outcome === "success" ? "completed"
@@ -450,6 +454,7 @@ export function printsSeenOnPrinters(
     });
   }
   for (const print of unattributed) {
+    if (print.claimed_profile_id != null && linkedFiles.has(fileKey(print))) continue;
     seen.push({
       ...printer(print),
       at: print.completed_at,
