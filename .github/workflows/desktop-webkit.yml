@@ -29,7 +29,7 @@ concurrency:
 jobs:
   webkit-stl:
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:desktop-smoke'))
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       CARGO_BUILD_JOBS: '3'
@@ -41,20 +41,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Configure sccache on pp-local
-        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
-        shell: bash
-        run: |
-          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
-          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
-      - name: Set up ephemeral Linux prerequisites
-        if: runner.environment == 'self-hosted'
-        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
-      - name: Set up Rust on ephemeral Linux
-        if: runner.environment == 'self-hosted'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: 1.99.0
       - name: Install WebKitGTK, WebDriver, Mesa and virtual display
         run: |
           sudo apt-get update
@@ -77,7 +63,6 @@ jobs:
       - name: Verify Node runtime
         run: test "$(node --version)" = "v24.21.0"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: runner.environment != 'self-hosted' || runner.os != 'Linux'
         with:
           workspaces: rust -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -113,8 +98,3 @@ jobs:
         env:
           ARTIFACT_URL: ${{ steps.proof.outputs.artifact-url }}
         run: echo "Screenshot and WebGL receipt $ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
-      - name: Show sccache stats
-        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
-        shell: bash
-        run: |
-          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi

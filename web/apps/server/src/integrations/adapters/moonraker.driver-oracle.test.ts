@@ -89,7 +89,65 @@ describe("Moonraker driver oracle", () => {
   it("unusable base URLs match node-oracle-bases.json", async () => {
     const { bases } = readJson<{ bases: string[] }>("bases.json");
     const out: Record<string, unknown> = {};
-    for (const base of bases) out[base] = await readCalls(base, [""]);
+    for (const base of bases) {
+      const upload = await moonrakerAdapter.uploadFile!(
+        { base_url: base },
+        new TextEncoder().encode("G28\n"),
+        "a.gcode",
+        { start: true },
+      );
+      out[base] = { ...(await readCalls(base, [""])), upload };
+    }
     checkOracle("node-oracle-bases.json", out);
+  });
+
+  it("uploads match node-oracle-upload.json", async () => {
+    type Scenario = {
+      name: string;
+      filename: string;
+      start: boolean;
+      replies: Record<string, [number, string]>;
+    };
+    const { file, scenarios } = readJson<{ file: string; scenarios: Scenario[] }>(
+      "upload-scenarios.json",
+    );
+    const out: Record<string, unknown> = {};
+    for (const scenario of scenarios) {
+      const requests: unknown[] = [];
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          // Boundaries are random on both sides; everything else is compared byte for byte.
+          const contentType = req.headers["content-type"] ?? null;
+          const boundary = contentType?.match(/boundary=(.+)$/)?.[1];
+          let body = Buffer.concat(chunks).toString("utf8");
+          if (boundary) body = body.replaceAll(boundary, "<BOUNDARY>");
+          requests.push({
+            line: `${req.method} ${req.url}`,
+            content_type: boundary ? contentType!.replace(boundary, "<BOUNDARY>") : contentType,
+            body,
+          });
+          const path = new URL(req.url ?? "/", "http://x").pathname;
+          const [status, reply] = scenario.replies[path] ?? [404, "{}"];
+          const headers = status >= 300 && status < 400 ? { location: "/elsewhere" } : {};
+          res.writeHead(status, headers).end(reply);
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+      try {
+        const result = await moonrakerAdapter.uploadFile!(
+          { base_url: `http://localhost:${port}` },
+          new TextEncoder().encode(file),
+          scenario.filename,
+          { start: scenario.start },
+        );
+        out[scenario.name] = { result, requests };
+      } finally {
+        server.close();
+      }
+    }
+    checkOracle("node-oracle-upload.json", out);
   });
 });

@@ -1,6 +1,6 @@
 # YAML block scalar parity
 
-`yaml-block-scalars-node.json` records the literal outputs of js-yaml 5.4.3 for 1,151 inputs around block scalar boundaries. A null expectation means js-yaml rejects the input. 163 cases are rejections.
+`yaml-block-scalars-node.json` records the literal outputs of js-yaml 5.5.0 for 1,151 inputs around block scalar boundaries. A null expectation means js-yaml rejects the input. 163 cases are rejections.
 
 ## Lines that end an explicit-indentation block scalar
 

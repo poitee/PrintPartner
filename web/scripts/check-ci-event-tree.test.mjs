@@ -79,8 +79,6 @@ for (const [name, mutate] of [
 }
 
 const step = (w, name) => w.jobs.parity.steps.find(s => s.name === name);
-const prerequisites = 'Set up ephemeral Linux prerequisites';
-const rustSetup = 'Set up Rust on ephemeral runners';
 const hostedOnly = "runner.environment == 'self-hosted'";
 
 const modify = change => directory => {
@@ -139,11 +137,7 @@ for (const [name, change] of [
   ['step failure ignored', w => { w.jobs.parity.steps[0]['continue-on-error'] = true; }],
   ['verification only on ephemeral runners', w => { step(w, 'Verify contracts and frozen corpus').if = hostedOnly; }],
   ['hosted Rust install only on ephemeral runners', w => { step(w, 'Install pinned Rust checks').if = hostedOnly; }],
-  ['verification disguised as bootstrap', w => { step(w, prerequisites).run += ' && npm run contracts:verify'; }],
-  ['bootstrap failure ignored', w => { step(w, prerequisites)['continue-on-error'] = true; }],
-  ['bootstrap with another condition', w => { step(w, prerequisites).if = `${hostedOnly} && false`; }],
-  ['Rust bootstrap with another action', w => { step(w, rustSetup).uses = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'; }],
-  ['Rust bootstrap with another toolchain', w => { step(w, rustSetup).with.toolchain = 'stable'; }],
+  ['self-hosted bootstrap step', w => { w.jobs.parity.steps.splice(1, 0, { name: 'Set up ephemeral Linux prerequisites', if: hostedOnly, run: 'bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"' }); }],
   ['verification removed', w => { w.jobs.parity.steps = w.jobs.parity.steps.filter(s => !s.run?.includes('npm run contracts:verify')); }],
 ]) {
   test(`event tree rejects disabled workflow ${name}`, t => {
@@ -155,10 +149,10 @@ for (const [name, change] of [
   });
 }
 
-test('event tree limits runner conditions to the two bootstrap steps', t => {
+test('event tree allows no runner-conditioned steps', t => {
   const workflow = YAML.parse(original);
   const conditioned = workflow.jobs.parity.steps.filter(s => s.if !== undefined && s.if !== 'always()');
-  assert.deepEqual(conditioned.map(s => [s.name, s.if]), [[prerequisites, hostedOnly], [rustSetup, hostedOnly]]);
+  assert.deepEqual(conditioned.map(s => [s.name, s.if]), []);
   const result = fixture(t).run();
   assert.equal(result.status, 0, result.stderr);
 });

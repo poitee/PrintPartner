@@ -20,9 +20,9 @@ PRs opened by `dependabot[bot]` skip the Evidence lint step; the job still repor
 The current workflow checks out the repository default branch with persisted
 credentials disabled. It uses pinned actions, Node 22.23.3, and read-only
 `contents` and `pull-requests` permissions. In the unchanged workflow,
-same-repository PRs select `self-hosted/linux/x64/pp-local`; other PRs select
-`ubuntu-latest`. The PR can also edit this routing expression. Runner access
-therefore depends on controls outside this YAML, including fork approval policy.
+every PR selects `ubuntu-latest`. The PR can also edit this routing expression.
+Runner access therefore depends on controls outside this YAML, including fork
+approval policy.
 This assessment does not attest to runner isolation or provision runners.
 
 The body enters the checker through `PR_BODY`, not shell interpolation. The

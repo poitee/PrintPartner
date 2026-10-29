@@ -141,6 +141,32 @@ fails, the server preserves the recovery workspace and reports the recovery
 errors. A process or host crash during activation still requires manual
 inspection because restore has no durable crash journal.
 
+## Verify a release
+
+Each release signs its image by digest and its `release-identity.json` asset with the Print Partner release key. The public key is [`cosign.pub`](cosign.pub) in this repository, and each GitHub Release carries a copy. Install [cosign](https://docs.sigstore.dev/cosign/system_config/installation/), then download `release-identity.json`, `release-identity.json.sigstore.json` and `cosign.pub` from the release:
+
+```bash
+TAG=v1.2.3
+gh release download "$TAG" -R poitee/PrintPartner \
+  --pattern release-identity.json --pattern release-identity.json.sigstore.json --pattern cosign.pub
+```
+
+Confirm the downloaded `cosign.pub` matches the one in the repository at that tag, then verify the identity asset:
+
+```bash
+cosign verify-blob --key cosign.pub \
+  --bundle release-identity.json.sigstore.json release-identity.json
+```
+
+The asset records the image digest. Verify the image by that digest, not by a tag:
+
+```bash
+DIGEST="$(jq -r .image.digest release-identity.json)"
+cosign verify --key cosign.pub "ghcr.io/poitee/print-partner@$DIGEST"
+```
+
+Both commands print `Verified OK` or a list of verified signatures and exit 0. A non-zero exit means the artifact was not signed by the release key. Do not run it.
+
 ## Update
 
 Read [CHANGELOG.md](CHANGELOG.md), then update:

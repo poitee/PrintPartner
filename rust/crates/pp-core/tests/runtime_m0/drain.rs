@@ -371,7 +371,12 @@ const OPERATION: &str = "http:GET /filaments/catalog current";
 
 #[cfg(feature = "desktop_rebuild")]
 fn parity() -> String {
-    json!({"schema":"pp-operation-parity-v1", "operation":OPERATION,
+    parity_for(OPERATION)
+}
+
+#[cfg(feature = "desktop_rebuild")]
+fn parity_for(operation: &str) -> String {
+    json!({"schema":"pp-operation-parity-v1", "operation":operation,
         "manifest_sha256":pp_gateway::ownership::manifest::admit_bundled_manifest().unwrap().digest(),
         "fixtures":1, "passed":1, "failed":0}).to_string()
 }
@@ -489,6 +494,134 @@ async fn ticket_t_3_drain_runtime_cutover_recovers_every_alias() {
     println!(
         "{}",
         json!({"case":"restart", "boots":boots, "authority_unchanged":true})
+    );
+}
+
+#[cfg(feature = "desktop_rebuild")]
+async fn slicer_instance_ids(runtime: &CoreRuntime, cookie: &str) -> Vec<String> {
+    let (status, _, body) = request(
+        runtime.origin(),
+        "/slicer-instances",
+        "GET",
+        Some(cookie),
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    body["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|instance| instance["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Node's profile-sync worker seeds the stock slicer instances while
+/// `buildApp` starts it, before Node reports ready. An empty list after a
+/// restart therefore shows that Node never started the worker.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test]
+async fn ticket_t_3_drain_runtime_cutover_fences_profile_sync_worker() {
+    const PROFILE_SYNC: &str = "profile.sync";
+    let Some(data) = isolated_case(
+        "ticket_t_3_drain_runtime_cutover_fences_profile_sync_worker",
+        true,
+    )
+    .await
+    else {
+        return;
+    };
+    let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+    let child = pid(&runtime);
+    let cookie = bootstrap(&mut runtime).await;
+    let seeded = slicer_instance_ids(&runtime, &cookie).await;
+    assert!(!seeded.is_empty(), "Node worker must seed before cutover");
+    for id in &seeded {
+        let path = format!("/slicer-instances/{id}");
+        let (status, _, _) = request(
+            runtime.origin(),
+            &path,
+            "DELETE",
+            Some(&cookie),
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{path}");
+    }
+    assert!(slicer_instance_ids(&runtime, &cookie).await.is_empty());
+    // The parity receipt is synthetic, as in the other runtime cutover tests.
+    // Rust has no profile-sync handler, so no real parity fixture exists; the
+    // receipt checks are in pp-gateway `ticket_t_3_drain_cutover_parity_refusals`.
+    let (shutdown, cutover) = runtime
+        .shutdown_with_cutover(PROFILE_SYNC, &parity_for(PROFILE_SYNC))
+        .await
+        .unwrap_or_else(|error| panic!("{:?}", error.1));
+    assert_clean(&shutdown, child);
+    assert!(matches!(
+        cutover,
+        pp_gateway::ownership::cutover::CutoverReceipt::Committed {
+            participants: 3,
+            ..
+        }
+    ));
+    let record = fs::read(data.join(CUTOVER_FILE)).unwrap();
+    println!(
+        "{}",
+        json!({"case":"profile_sync_commit", "seeded":seeded.len(), "shutdown":shutdown, "cutover":cutover})
+    );
+    for _ in 0..2 {
+        let mut runtime = CoreRuntime::start(launch(data.clone())).await.unwrap();
+        assert!(pp_core::process_group_absent(child));
+        let new_child = pid(&runtime);
+        assert_ne!(child, new_child);
+        let cookie = bootstrap(&mut runtime).await;
+        assert!(
+            slicer_instance_ids(&runtime, &cookie).await.is_empty(),
+            "Node started the Rust-owned profile-sync worker"
+        );
+        for method in ["GET", "HEAD"] {
+            let (status, _, body) = request(
+                runtime.origin(),
+                "/ws/profile-sync",
+                method,
+                Some(&cookie),
+                None,
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{method}");
+            if method == "GET" {
+                assert!(String::from_utf8_lossy(&body).contains("rust_owner_unavailable"));
+            }
+        }
+        let (runtime, refusal) = *runtime
+            .shutdown_with_cutover(PROFILE_SYNC, &parity_for(PROFILE_SYNC))
+            .await
+            .expect_err("already owned");
+        assert_eq!(refusal, CutoverRefusal::AlreadyRustOwned);
+        assert_clean(&runtime.shutdown().await, new_child);
+        assert_eq!(fs::read(data.join(CUTOVER_FILE)).unwrap(), record);
+    }
+    let boots: Vec<_> = events(&data)
+        .into_iter()
+        .filter(|event| event["event"] == "boot")
+        .collect();
+    assert_eq!(
+        boots,
+        vec![
+            json!({"event":"boot", "rust_operations":[PROFILE_SYNC], "abandoned_temporaries":0, "evidence_saved":true});
+            2
+        ]
+    );
+    println!(
+        "{}",
+        json!({"case":"profile_sync_restart", "boots":boots, "worker_started":false})
     );
 }
 

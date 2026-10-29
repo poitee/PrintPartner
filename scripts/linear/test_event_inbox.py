@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from event_inbox import CapacityExceeded, DeliveryConflict, EventInbox
-import reproduce_concurrent_writes as fake
+import test_concurrent_writes as fake
 from test_pr_status_sync import pr, ticket
 
 
@@ -255,7 +255,7 @@ class EventInboxTest(unittest.TestCase):
             ("No past ticket reference.", [], "In Review", [], []),
         ):
             with self.subTest(old_body=old_body, other_open=bool(others)):
-                store = fake.ConcurrentWriteReproduction()
+                store = fake.ConcurrentWriteTest()
                 store.setUp()
                 try:
                     store.issues = {"GRE-1": ticket(state="In Review", age=1)}
@@ -279,7 +279,7 @@ class EventInboxTest(unittest.TestCase):
                     if state == "In Progress":
                         def fail_update():
                             raise RuntimeError("application failed")
-                        store.before = ("retained", "issueUpdate(", fail_update)
+                        store.pause("retained", "issueUpdate(", fail_update)
                         with self.assertRaisesRegex(RuntimeError, "application failed"):
                             runner.apply_event(decoded["pr"], decoded["event"])
                         self.assertEqual(store.issues["GRE-1"]["state"]["name"], "In Review")

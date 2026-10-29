@@ -7,7 +7,7 @@
     "generator": "fixtures/parity/yaml-flow-properties/generate.mjs",
     "dependencyAnchor": "web/apps/server/package.json",
     "package": "js-yaml",
-    "version": "5.4.3",
+    "version": "5.5.0",
     "api": "yaml.load(input)",
     "options": "defaults",
     "nodeMajor": 22,
@@ -225,11 +225,9 @@
       "input": "a:\n  []\n\n: ]",
       "utf8Hex": "613a0a20205b5d0a0a3a205d",
       "outcome": {
-        "kind": "decoded",
-        "value": {
-          "a": [],
-          "null": "]"
-        }
+        "kind": "refused",
+        "class": "YAMLException",
+        "reason": "bad indentation of a mapping entry"
       }
     },
     {
@@ -239,11 +237,9 @@
       "input": "a:\r  []\r\r: ]",
       "utf8Hex": "613a0d20205b5d0d0d3a205d",
       "outcome": {
-        "kind": "decoded",
-        "value": {
-          "a": [],
-          "null": "]"
-        }
+        "kind": "refused",
+        "class": "YAMLException",
+        "reason": "bad indentation of a mapping entry"
       }
     },
     {
@@ -253,11 +249,9 @@
       "input": "a:\r\n  []\r\n\r\n: ]",
       "utf8Hex": "613a0d0a20205b5d0d0a0d0a3a205d",
       "outcome": {
-        "kind": "decoded",
-        "value": {
-          "a": [],
-          "null": "]"
-        }
+        "kind": "refused",
+        "class": "YAMLException",
+        "reason": "bad indentation of a mapping entry"
       }
     },
     {

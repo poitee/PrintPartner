@@ -17,6 +17,10 @@
       "": {
         "error": "base_url is required"
       }
+    },
+    "upload": {
+      "ok": false,
+      "message": "base_url is required"
     }
   },
   "printer.local": {
@@ -37,6 +41,10 @@
       "": {
         "error": "Invalid URL"
       }
+    },
+    "upload": {
+      "ok": false,
+      "message": "Invalid URL"
     }
   },
   "ftp://localhost:1": {
@@ -57,6 +65,10 @@
       "": {
         "error": "Unsupported URL protocol: ftp:"
       }
+    },
+    "upload": {
+      "ok": false,
+      "message": "Unsupported URL protocol: ftp:"
     }
   },
   "file:///etc/passwd": {
@@ -77,6 +89,10 @@
       "": {
         "error": "Unsupported URL protocol: file:"
       }
+    },
+    "upload": {
+      "ok": false,
+      "message": "Unsupported URL protocol: file:"
     }
   }
 }

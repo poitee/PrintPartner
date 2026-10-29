@@ -1,6 +1,6 @@
 # YAML quoted-continuation differential
 
-`yaml-quoted-continuations-node.jsonl` records js-yaml 5.4.3 outputs for 3,648 quoted flow scalars that continue onto a later line. Each line holds one block: a name, the source before the scalar body, the source after it, and `[body, expected]` cases. A null expectation means js-yaml rejects the input.
+`yaml-quoted-continuations-node.jsonl` records js-yaml 5.5.0 outputs for 3,648 quoted flow scalars that continue onto a later line. Each line holds one block: a name, the source before the scalar body, the source after it, and `[body, expected]` cases. A null expectation means js-yaml rejects the input.
 
 The generator enumerates every combination of:
 

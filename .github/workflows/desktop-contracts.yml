@@ -67,7 +67,7 @@ concurrency:
 jobs:
   parity:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 30 || 5 }}
     strategy:
       matrix:
@@ -79,22 +79,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Configure sccache on pp-local
-        shell: bash
-        run: |
-          if [ "$RUNNER_ENVIRONMENT" = self-hosted ] && [ "$RUNNER_OS" = Linux ] && [ "$RUNNER_ARCH" = X64 ]; then
-            printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
-            if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
-          fi
-      - name: Set up ephemeral Linux prerequisites
-        if: runner.environment == 'self-hosted'
-        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
-      - name: Set up Rust on ephemeral runners
-        if: runner.environment == 'self-hosted'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: '1.99.0'
-          components: rustfmt, clippy
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
@@ -156,10 +140,3 @@ jobs:
         with:
           name: contracts-node-${{ matrix.node }}
           path: ${{ runner.temp }}/contract-receipts/
-      - name: Show sccache stats
-        if: always()
-        shell: bash
-        run: |
-          if [ "$RUNNER_ENVIRONMENT" = self-hosted ] && [ "$RUNNER_OS" = Linux ] && [ "$RUNNER_ARCH" = X64 ]; then
-            if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
-          fi

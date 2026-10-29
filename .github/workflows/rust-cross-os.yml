@@ -2,15 +2,13 @@ name: Rust cross-OS
 
 # Relevant PRs test Rust on Linux and Windows. Ready PRs with the macos label also
 # test macOS. PR gate keeps clippy + doctests for both feature states (macOS PRs
-# still skip desktop_rebuild=on as before). nextest with desktop_rebuild on is
-# skipped on self-hosted Linux PR runners (pp-local ~67m monolithic). Windows PRs
-# (including pp-local-win) and hosted Linux PRs still run it. macOS PRs skip it.
+# still skip desktop_rebuild=on as before). Linux and Windows PRs run nextest with
+# desktop_rebuild on; macOS PRs skip it.
 # On PRs, nextest uses rdeps(=crate) for changed rust/crates/* (see
 # scripts/ci-affected-nextest-filter.py); shared inputs and non-PR events keep
 # all(). On main push, merge_group, and workflow_dispatch, Linux archives
-# desktop_rebuild nextest once and runs --partition slice:m/3 across the three
-# pp-local slots. Schedule keeps the in-job monolithic desktop_rebuild nextest
-# on ubuntu-latest.
+# desktop_rebuild nextest once and runs --partition slice:m/3 across three
+# runners. Schedule keeps the in-job monolithic desktop_rebuild nextest.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -73,19 +71,14 @@ jobs:
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
-    # Same-repo PRs, main push, merge_group, and manual dispatch use pp-local so a
-    # desktop_rebuild nextest archive matches the three partition runners. Schedule
-    # stays on ubuntu-latest with the in-job monolithic rebuild-on nextest.
-    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && fromJSON('["self-hosted","linux","x64","pp-local"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     env:
       RUST_OS: linux
       CARGO_SCOPE: --workspace
       # PRs: rdeps of changed crates (see scripts/ci-affected-nextest-filter.py).
       # Non-PR events always emit all() from the changes job.
       NEXTEST_FILTER: ${{ needs.changes.outputs.nextest_filter || 'all()' }}
-      NEXTEST_PROFILE: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && 'pp-local-linux' || 'default' }}
-    # PRs skip only nextest desktop_rebuild-on (~67m on #1021). Clippy/doctests
-    # still run both feature states (except macOS PRs, unchanged). 90m covers both.
+    # The hosted nightly runs every step, rebuild-on nextest included, in ~21m.
     timeout-minutes: 90
     steps: &rust-steps
       - name: Require successful input selection
@@ -95,45 +88,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Configure sccache on pp-local
-        if: runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
-        shell: bash
-        run: |
-          printf '%s\n' SCCACHE_DIR=/opt/sccache SCCACHE_CACHE_SIZE=20G CARGO_INCREMENTAL=0 SCCACHE_IDLE_TIMEOUT=0 >> "$GITHUB_ENV"
-          if [ -x /opt/sccache-bin/sccache ]; then echo RUSTC_WRAPPER=/opt/sccache-bin/sccache >> "$GITHUB_ENV"; fi
-      - name: Set up ephemeral Linux prerequisites
-        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
-        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
-      - name: Prepare Python tool cache for the VM user
-        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
-        run: |
-          sudo mkdir -p /Users/runner/hostedtoolcache
-          sudo chown "$(id -un):$(id -gn)" /Users/runner/hostedtoolcache
-      - name: Set up Python 3.12 on ephemeral macOS
-        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
-        id: py
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
-      - name: Verify macOS manifest Python
-        if: runner.environment == 'self-hosted' && runner.os == 'macOS'
-        env:
-          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path }}
-        run: |
-          "$MANIFEST_PYTHON" -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print(sys.executable, sys.version)'
-          python3 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest")'
-      - name: Verify preinstalled Python on ephemeral Windows
-        if: runner.environment == 'self-hosted' && runner.os == 'Windows'
-        id: py-windows
-        run: |
-          py -3.13 --version
-          py -3.13 -c 'import hashlib, sys; assert sys.version_info >= (3, 11); assert hasattr(hashlib, "file_digest"); print("python-path=" + sys.executable)' >> "$GITHUB_OUTPUT"
-      - name: Set up Rust on ephemeral runners
-        if: runner.environment == 'self-hosted'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
-        with:
-          toolchain: '1.99.0'
-          components: rustfmt, clippy
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
       - name: Install the pinned toolchain from rust-toolchain.toml
@@ -142,10 +96,7 @@ jobs:
           rustup toolchain install
           rustc --version
       # Only main saves; PRs and other refs restore main's entry when keys match.
-      # Linux skips it: pp-local uses its runner-local sccache, and the hosted nightly
-      # entry was evicted before the next run could restore it (GRE-662, GRE-975).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: runner.os != 'Linux'
         with:
           workspaces: rust -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -177,7 +128,7 @@ jobs:
         id: assets
         env:
           VITE_PRINT_PARTNER_DESKTOP: '1'
-          MANIFEST_PYTHON: ${{ steps.py.outputs.python-path || steps.py-windows.outputs.python-path || 'python3' }}
+          MANIFEST_PYTHON: python3
         run: |
           set -euo pipefail
           node_path=$(node -p process.execPath)
@@ -215,7 +166,7 @@ jobs:
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --no-tests=warn -E "$NEXTEST_FILTER"
       - name: Archive nextest (desktop_rebuild on)
         # Main push / merge_group / workflow_dispatch: build once for slice partitions.
-        # PRs never archive; they keep skipping the rebuild-on suite on pp-local.
+        # PRs never archive; they run the rebuild-on suite in-job.
         # zstd level 11 shrinks transfer vs default 0 (upload previously >17–33m).
         id: archive-rebuild
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') }}
@@ -288,12 +239,10 @@ jobs:
           rm -f nextest-archive-desktop-rebuild.tar.zst \
             desktop-release-assets.tar.zst desktop-release-assets.list
       - name: nextest (desktop_rebuild on)
-        # Bound self-hosted Linux PR runtime only (pp-local ~67m). Windows PRs
-        # keep rebuild-on nextest even when pp-local-win is self-hosted. Hosted
-        # Linux PRs keep it. macOS PRs still skip it. Linux main push / merge_group /
-        # workflow_dispatch use the archived slice partitions instead. Schedule keeps
-        # this in-job pass on ubuntu-latest.
-        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (github.event_name != 'pull_request' || env.RUST_OS == 'windows' || (env.RUST_OS == 'linux' && runner.environment != 'self-hosted')) && !(env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')) }}
+        # Linux and Windows PRs run it; macOS PRs still skip it. Linux main push /
+        # merge_group / workflow_dispatch use the archived slice partitions instead.
+        # Schedule keeps this in-job pass.
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && (github.event_name != 'pull_request' || env.RUST_OS != 'macos') && !(env.RUST_OS == 'linux' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')) }}
         timeout-minutes: 75
         run: cargo nextest run --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --no-tests=warn -E "$NEXTEST_FILTER" --features desktop_rebuild
       # nextest does not run doctests.
@@ -303,21 +252,16 @@ jobs:
       - name: doctests (desktop_rebuild on)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
         run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc --features desktop_rebuild
-      - name: Show sccache stats
-        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux' && runner.arch == 'X64'
-        shell: bash
-        run: |
-          if [ -x /opt/sccache-bin/sccache ]; then /opt/sccache-bin/sccache --show-stats; fi
 
-  # Three fleet Linux slots (see docs/development/ci.md). Only main push,
-  # merge_group, and workflow_dispatch; PRs keep skipping desktop_rebuild nextest.
+  # Three Linux partitions (see docs/development/ci.md). Only main push,
+  # merge_group, and workflow_dispatch; PRs run desktop_rebuild nextest in-job.
   rust-linux-rebuild:
     name: rust (linux) rebuild ${{ matrix.partition }}/3
     needs: [rust-linux-build]
     # Draft guard first (merge-group workflow tests). Event filter still keeps
     # partitions off pull_request; only push / merge_group / workflow_dispatch.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result == 'success' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'))
-    runs-on: ${{ fromJSON('["self-hosted","linux","x64","pp-local"]') }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -325,15 +269,12 @@ jobs:
     env:
       RUST_OS: linux
       NEXTEST_FILTER: all()
-      NEXTEST_PROFILE: pp-local-linux
     # Compressed archive download plus a full slice must stay under this budget.
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up ephemeral Linux prerequisites
-        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
@@ -403,7 +344,7 @@ jobs:
       - name: nextest desktop_rebuild partition
         timeout-minutes: 55
         # Remap the archived workspace root (rust/) onto this runner's checkout so
-        # partitions do not require identical absolute paths across pp-local slots.
+        # partitions do not require identical absolute paths across runners.
         run: cargo nextest run --archive-file nextest-archive-desktop-rebuild.tar.zst --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:${{ matrix.partition }}/3 --no-fail-fast -E "$NEXTEST_FILTER"
 
   # Preserve the required check name rust (linux). Partitions are skipped on PRs
@@ -448,7 +389,7 @@ jobs:
     concurrency:
       group: rust-macos-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macos","arm64","pp-local-mac"]') || 'macos-26' }}
+    runs-on: macos-26
     env:
       RUST_OS: macos
       CARGO_SCOPE: --workspace
@@ -461,7 +402,7 @@ jobs:
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.PP_LOCAL_WIN == 'true') && fromJSON('["self-hosted","windows","x64","pp-local-win"]') || 'windows-latest' }}
+    runs-on: windows-latest
     env:
       RUST_OS: windows
       # Unix-only crates; remove each exclusion when its port ticket is fixed.
