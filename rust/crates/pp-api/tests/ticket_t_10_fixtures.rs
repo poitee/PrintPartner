@@ -666,27 +666,25 @@ mod ticket_t_10_fixtures {
         cookie
     }
 
-    /// Seeds the two retained jobs Node's generator runs, in the same order:
-    /// a finished update check, then (a second later) a failed checklist export.
-    /// Returns the session cookie and the two job ids.
-    async fn seed_jobs(owner: &WriterOwner) -> (String, String, String) {
+    /// Enqueues one job as the session in `cookie` and returns its id.
+    fn enqueue(
+        owner: &WriterOwner,
+        cookie: &str,
+        key: &str,
+        payload: pp_storage::jobs::Payload,
+    ) -> String {
         use pp_storage::{
             auth::Secret,
-            jobs::{
-                CompletedResult, Credential, JobKind, Outcome, Payload, SourceUpdatesResult,
-                UserOperation, WorkerAdmission, WorkerOperation,
-            },
+            jobs::{Credential, Outcome, UserOperation},
         };
         use std::{sync::atomic::AtomicBool, time::Duration};
 
-        let policy = ACCOUNT_POLICY;
-        let cookie = register(owner, "jobs-http@example.test").await;
         let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
-
-        let jobs = owner.jobs(policy).unwrap();
-        let enqueue = |key: &str, payload: Payload| match jobs
+        match owner
+            .jobs(ACCOUNT_POLICY)
+            .unwrap()
             .submit(
-                Credential::Session(Secret::new(token.clone())),
+                Credential::Session(Secret::new(token)),
                 UserOperation::Enqueue {
                     key: key.into(),
                     payload_version: 1,
@@ -701,7 +699,37 @@ mod ticket_t_10_fixtures {
         {
             Outcome::Job(job, _) => job.job_id,
             _ => panic!("enqueued job expected"),
-        };
+        }
+    }
+
+    /// The finished update check's public result, empty as in Node's probe.
+    fn no_source_updates() -> pp_storage::jobs::WorkerOperation {
+        use pp_storage::jobs::{CompletedResult, SourceUpdatesResult, WorkerOperation};
+
+        WorkerOperation::FinishPublic {
+            artifact: None,
+            result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                checked: vec![],
+                skipped: vec![],
+                updates_available: 0,
+                checked_count: 0,
+            })),
+        }
+    }
+
+    /// Seeds the two retained jobs Node's generator runs, in the same order:
+    /// a finished update check, then (a second later) a failed checklist export.
+    /// Returns the session cookie, the two job ids and the worker, which is the
+    /// owner's only worker admission.
+    async fn seed_jobs(
+        owner: &WriterOwner,
+    ) -> (String, String, String, pp_storage::jobs::ServerWorkerClient) {
+        use pp_storage::jobs::{JobKind, Payload, WorkerAdmission, WorkerOperation};
+        use std::time::Duration;
+
+        let policy = ACCOUNT_POLICY;
+        let cookie = register(owner, "jobs-http@example.test").await;
+        let submit = |key: &str, payload: Payload| enqueue(owner, &cookie, key, payload);
         let worker = owner
             .job_worker_with_policy(
                 policy,
@@ -716,29 +744,16 @@ mod ticket_t_10_fixtures {
                 },
             )
             .unwrap();
-        let done = enqueue("check", Payload::CheckSourceUpdates {});
+        let done = submit("check", Payload::CheckSourceUpdates {});
         let mut lease = worker.claim().unwrap().unwrap().lease;
         assert_eq!(lease.job_id(), done);
-        worker
-            .update(
-                &mut lease,
-                WorkerOperation::FinishPublic {
-                    artifact: None,
-                    result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
-                        checked: vec![],
-                        skipped: vec![],
-                        updates_available: 0,
-                        checked_count: 0,
-                    })),
-                },
-            )
-            .unwrap();
+        worker.update(&mut lease, no_source_updates()).unwrap();
         tokio::time::sleep(Duration::from_millis(1100)).await;
-        let failed = enqueue("export", Payload::ExportChecklistHtml { profile_id: 7 });
+        let failed = submit("export", Payload::ExportChecklistHtml { profile_id: 7 });
         let mut lease = worker.claim().unwrap().unwrap().lease;
         assert_eq!(lease.job_id(), failed);
         worker.update(&mut lease, WorkerOperation::Fail).unwrap();
-        (cookie, done.to_string(), failed.to_string())
+        (cookie, done, failed, worker)
     }
 
     #[tokio::test]
@@ -753,7 +768,7 @@ mod ticket_t_10_fixtures {
         let owner = WriterOwner::open(sandbox.path(), Limits::default())
             .unwrap()
             .0;
-        let (cookie, done, failed) = seed_jobs(&owner).await;
+        let (cookie, done, failed, _) = seed_jobs(&owner).await;
         let jobs = owner.jobs(ACCOUNT_POLICY).unwrap();
         let served = Served::start(|origin| {
             jobs_router(
@@ -768,7 +783,10 @@ mod ticket_t_10_fixtures {
             // Rust's `created_at` has no Node counterpart; its own prefix keeps
             // the shared time labels independent of whole-second clock ticks.
             ("created", &["created_at"]),
-            ("time", &["started_at", "finished_at", "updated_at"]),
+            ("time", &["started_at", "finished_at"]),
+            // Node stamps `updated_at` with a second clock read, so its
+            // equality with `finished_at` is a millisecond race.
+            ("updated", &["updated_at"]),
         ]);
         let mut ledger = Ledger::new(jobs_corrections(&fixture)).unwrap();
         let before = StateGraph::capture(sandbox.path()).unwrap();
@@ -806,6 +824,276 @@ mod ticket_t_10_fixtures {
         print_report("jobs-http", &report);
         assert_eq!(report.matched, 5);
         assert_eq!(report.corrected.len(), 8);
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct JobsWsFixture {
+        generated: String,
+        sources: Vec<String>,
+        cases: Vec<JobsWsCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct JobsWsCase {
+        id: String,
+        path: String,
+        tenant: String,
+        node: Exchange,
+    }
+
+    fn jobs_ws_fixture() -> JobsWsFixture {
+        let fixture: JobsWsFixture = serde_json::from_str(include_str!(
+            "../../../../fixtures/parity/jobs-ws/node.json"
+        ))
+        .unwrap();
+        assert!(fixture.generated.contains("jobs-ws/generate.mjs"));
+        assert_eq!(fixture.sources.len(), 2);
+        assert_eq!(fixture.cases.len(), 5);
+        fixture
+    }
+
+    /// Node ends a finished stream with `socket.close()`, an empty close frame
+    /// the client reads as 1005. Rust sends 1000 with an empty reason, and its
+    /// frame is the durable snapshot (see `durable_snapshot`).
+    fn jobs_ws_corrections(fixture: &JobsWsFixture) -> Vec<Correction> {
+        fixture
+            .cases
+            .iter()
+            .filter(|case| case.node.body["close"]["code"] == 1005 && case.id != "ws_live")
+            .map(|case| {
+                let frames: Vec<Value> = case.node.body["frames"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(durable_snapshot)
+                    .collect();
+                Correction {
+                    case: case.id.clone().leak(),
+                    kind: CorrectionKind::WebSocket,
+                    reason: "a finished stream closes 1000 and sends the durable snapshot",
+                    rust: Exchange {
+                        status: 101,
+                        body: json!({"frames": frames, "close": {"code": 1000, "reason": ""}}),
+                        set_cookie: vec![],
+                    },
+                }
+            })
+            .chain([live_correction()])
+            .collect()
+    }
+
+    /// `ws_live` streams the durable model's wording, as docs/desktop-rebuild.md
+    /// and `jobs_engine_parity` record it: a queued job names worker admission,
+    /// a claimed job says "Running" with no progress, and every frame carries
+    /// `created_at` and `finished_at`. Node's live frames add `updated_at`,
+    /// which the read-one snapshot omits (GRE-797). The stream closes 1000.
+    fn live_correction() -> Correction {
+        let frame =
+            |status: &str, message: &str, progress: Value, result: Value, finished: Value| {
+                json!({
+                    "job_id": "job-3",
+                    "kind": "check-source-updates",
+                    "status": status,
+                    "message": message,
+                    "progress": progress,
+                    "result": result,
+                    "error": null,
+                    "created_at": "created-3",
+                    "finished_at": finished,
+                })
+            };
+        let result =
+            json!({"checked": [], "skipped": [], "updates_available": 0, "checked_count": 0});
+        Correction {
+            case: "ws_live",
+            kind: CorrectionKind::WebSocket,
+            reason: "live frames use the durable model's wording and close 1000",
+            rust: Exchange {
+                status: 101,
+                body: json!({
+                    "frames": [
+                        frame("pending", "Waiting for a compatible worker", json!(0), Value::Null, Value::Null),
+                        frame("running", "Running", Value::Null, Value::Null, Value::Null),
+                        frame("done", "Complete", json!(100), result, json!("time-3")),
+                    ],
+                    "close": {"code": 1000, "reason": ""},
+                }),
+                set_cookie: vec![],
+            },
+        }
+    }
+
+    /// Opens `path` as a WebSocket with `cookie` and reads every text message
+    /// until the server's close frame, calling `step(i)` after message `i`.
+    /// Fragmented text is joined, and ping and pong frames are skipped. An empty
+    /// close payload reads as 1005, as a browser or Node's `ws` client reports
+    /// it. A socket that has not closed within ten seconds fails the test.
+    async fn observe_socket(
+        served: &Served,
+        path: &str,
+        cookie: &str,
+        step: &mut dyn FnMut(usize),
+    ) -> Exchange {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            read_socket(served, path, cookie, step),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{path}: socket did not close within 10s"))
+    }
+
+    async fn read_socket(
+        served: &Served,
+        path: &str,
+        cookie: &str,
+        step: &mut dyn FnMut(usize),
+    ) -> Exchange {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let host = served.origin.trim_start_matches("http://");
+        let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: {cookie}\r\n\r\n",
+            origin = served.origin,
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.unwrap());
+        }
+        let head = String::from_utf8(head).unwrap();
+        let status = head[9..12].parse().unwrap();
+        assert_eq!(status, 101, "{path}: {head}");
+        let mut frames = Vec::new();
+        let mut text = Vec::new();
+        loop {
+            let first = stream.read_u8().await.unwrap();
+            let len = match stream.read_u8().await.unwrap() & 0x7f {
+                126 => usize::from(stream.read_u16().await.unwrap()),
+                127 => usize::try_from(stream.read_u64().await.unwrap()).unwrap(),
+                len => usize::from(len),
+            };
+            assert!(len <= 1 << 20, "{path}: frame over 1 MiB");
+            let mut payload = vec![0; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            let fin = first & 0x80 != 0;
+            match first & 0x0f {
+                0 | 1 => {
+                    text.extend_from_slice(&payload);
+                    if fin {
+                        frames.push(serde_json::from_slice::<Value>(&text).unwrap());
+                        text.clear();
+                        step(frames.len() - 1);
+                    }
+                }
+                9 | 10 => {}
+                8 => {
+                    let (code, reason) = match payload.as_slice() {
+                        [] => (1005, String::new()),
+                        [high, low, reason @ ..] => (
+                            u16::from_be_bytes([*high, *low]),
+                            String::from_utf8(reason.to_vec()).unwrap(),
+                        ),
+                        _ => panic!("{path}: one-byte close payload"),
+                    };
+                    return Exchange {
+                        status,
+                        body: json!({"frames": frames, "close": {"code": code, "reason": reason}}),
+                        set_cookie: vec![],
+                    };
+                }
+                opcode => panic!("{path}: unexpected opcode {opcode}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn job_socket_matches_node_and_writes_nothing() {
+        use pp_api::{
+            fixtures::Labels,
+            jobs::{JobsHttpConfig, jobs_router},
+        };
+
+        use pp_storage::jobs::Payload;
+
+        let fixture = jobs_ws_fixture();
+        let sandbox = Sandbox::new("t10-jobs-ws").unwrap();
+        let owner = WriterOwner::open(sandbox.path(), Limits::default())
+            .unwrap()
+            .0;
+        let (cookie, done, failed, worker) = seed_jobs(&owner).await;
+        // Node's `other` tenant is a second account, which has its own tenant.
+        let other = register(&owner, "jobs-ws-other@example.test").await;
+        // `ws_live` follows a queued update check that this worker claims after
+        // the first frame and finishes after the second, as Node's probe does.
+        // Rust's `created_at` has whole seconds, so the wait keeps its label
+        // apart from the failed job's.
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let live = enqueue(&owner, &cookie, "live", Payload::CheckSourceUpdates {});
+        let mut lease = None;
+        let mut live_step = |frame: usize| match frame {
+            0 => lease = Some(worker.claim().unwrap().unwrap().lease),
+            1 => {
+                let lease = lease.as_mut().unwrap();
+                assert_eq!(lease.job_id(), live);
+                worker.update(lease, no_source_updates()).unwrap();
+            }
+            _ => {}
+        };
+        let jobs = owner.jobs(ACCOUNT_POLICY).unwrap();
+        let served = Served::start(|origin| {
+            jobs_router(
+                JobsHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                jobs,
+            )
+        })
+        .await
+        .unwrap();
+        let mut labels = Labels::new(vec![
+            ("job", &["job_id"]),
+            ("created", &["created_at"]),
+            ("time", &["started_at", "finished_at"]),
+            ("updated", &["updated_at"]),
+        ]);
+        let mut ledger = Ledger::new(jobs_ws_corrections(&fixture)).unwrap();
+        let before = StateGraph::capture(sandbox.path()).unwrap();
+        for case in &fixture.cases {
+            let path = case
+                .path
+                .replace("{done}", &done)
+                .replace("{failed}", &failed)
+                .replace("{live}", &live);
+            let cookie = match case.tenant.as_str() {
+                "default" => &cookie,
+                "other" => &other,
+                tenant => panic!("unexpected tenant {tenant}"),
+            };
+            let mut actual = if case.id == "ws_live" {
+                // Only the worker writes from here on, so the sockets so far
+                // must have changed nothing.
+                let after = StateGraph::capture(sandbox.path()).unwrap();
+                assert_eq!(
+                    before.changed(&after),
+                    Vec::<String>::new(),
+                    "job sockets wrote state"
+                );
+                observe_socket(&served, &path, cookie, &mut live_step).await
+            } else {
+                observe_socket(&served, &path, cookie, &mut |_| {}).await
+            };
+            labels.scrub(&mut actual);
+            ledger
+                .compare(&case.id, &case.node, &actual)
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        let report = ledger.finish().unwrap();
+        print_report("jobs-ws", &report);
+        assert_eq!(report.matched, 2);
+        assert_eq!(report.corrected.len(), 3);
     }
 
     #[derive(Deserialize)]
