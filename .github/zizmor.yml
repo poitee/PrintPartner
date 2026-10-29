@@ -3,6 +3,11 @@ rules:
     ignore:
       # Linear sync runs trusted base/default-branch tooling for closed PRs.
       - linear-pr-sync.yml:4
+      # pp-score-verify must run on PR and comment events to post its check run.
+      # It checks out only .github/scripts from the default branch, never PR code,
+      # and passes no attacker-controlled text through an expression.
+      - pp-score-verify.yml:10
+      - pp-score-verify.yml:12
   self-repository:
     ignore:
       # actionlint 1.7.12 rejects the replacement $/ syntax. These local workflows

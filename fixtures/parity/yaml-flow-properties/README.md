@@ -10,7 +10,7 @@ Every seed has LF, CR, and CRLF variants. Seeds without internal line breaks als
 
 `generate.mjs` resolves the repository's installed `js-yaml` through `web/apps/server/package.json` and calls `yaml.load(input)` with default options. `node.json` contains the exact input text, UTF-8 bytes as hex, package version, source metadata, and the full decoded JSON value or exact exception class and reason. These inputs decode to JSON values without a lossy conversion. The generator excludes timestamps, absolute paths, and Node patch versions so repeated runs produce identical bytes.
 
-`verify.mjs` compares both the stored and freshly generated results with independent literal expectations. It then compares the complete stored file with the real Node run. Regenerating a changed result cannot update the verifier's expectations. Both scripts require Node 22 and js-yaml 5.4.3.
+`verify.mjs` compares both the stored and freshly generated results with independent literal expectations. It then compares the complete stored file with the real Node run. Regenerating a changed result cannot update the verifier's expectations. Both scripts require Node 22 and js-yaml 5.5.0.
 
 ## Check the corpus
 
@@ -23,7 +23,7 @@ node fixtures/parity/yaml-flow-properties/verify.mjs
 node fixtures/parity/yaml-flow-properties/verify.mjs --self-test
 ```
 
-The verifier checks 31 cases, including 28 decoded values and 3 refusals. The self-test runs eight CLI tests. One accepts the corpus. Seven reject disposable copies with a changed decoded result, lost one-key null semantics, changed refusal class, changed refusal reason, changed source bytes, a missing case, or a changed `source.version`. The tests remove their temporary files.
+The verifier checks 31 cases, including 25 decoded values and 6 refusals. The self-test runs eight CLI tests. One accepts the corpus. Seven reject disposable copies with a changed decoded result, lost one-key null semantics, changed refusal class, changed refusal reason, changed source bytes, a missing case, or a changed `source.version`. The tests remove their temporary files.
 
 To inspect a candidate fixture without replacing the checked-in corpus, pass its path to `verify.mjs`.
 

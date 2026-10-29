@@ -89,7 +89,15 @@ describe("Moonraker driver oracle", () => {
   it("unusable base URLs match node-oracle-bases.json", async () => {
     const { bases } = readJson<{ bases: string[] }>("bases.json");
     const out: Record<string, unknown> = {};
-    for (const base of bases) out[base] = await readCalls(base, [""]);
+    for (const base of bases) {
+      const upload = await moonrakerAdapter.uploadFile!(
+        { base_url: base },
+        new TextEncoder().encode("G28\n"),
+        "a.gcode",
+        { start: true },
+      );
+      out[base] = { ...(await readCalls(base, [""])), upload };
+    }
     checkOracle("node-oracle-bases.json", out);
   });
 

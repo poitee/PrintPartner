@@ -138,12 +138,17 @@ pub enum PostError {
     Unsent(anyhow::Error),
     /// The request was at least partly written; the printer may have acted on it.
     Unknown(anyhow::Error),
+    /// The body source failed or ended before its declared length, so the
+    /// printer never received a complete request.
+    SourceFailed(anyhow::Error),
 }
 
 impl std::fmt::Display for PostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unsent(error) | Self::Unknown(error) => write!(f, "{error:#}"),
+            Self::Unsent(error) | Self::Unknown(error) | Self::SourceFailed(error) => {
+                write!(f, "{error:#}")
+            }
         }
     }
 }
@@ -154,6 +159,7 @@ struct ReaderBody {
     reader: Pin<Box<dyn AsyncRead + Send>>,
     remaining: u64,
     buf: Box<[u8]>,
+    failed: Arc<AtomicBool>,
 }
 
 impl Body for ReaderBody {
@@ -173,10 +179,17 @@ impl Body for ReaderBody {
             .len()
             .min(usize::try_from(this.remaining).unwrap_or(usize::MAX));
         let mut read = ReadBuf::new(&mut this.buf[..limit]);
-        ready!(this.reader.as_mut().poll_read(cx, &mut read))?;
+        if let Err(error) = ready!(this.reader.as_mut().poll_read(cx, &mut read)) {
+            this.failed.store(true, Ordering::SeqCst);
+            return Poll::Ready(Some(Err(error)));
+        }
         let filled = read.filled();
         if filled.is_empty() {
-            return Poll::Ready(Some(Err(std::io::ErrorKind::UnexpectedEof.into())));
+            this.failed.store(true, Ordering::SeqCst);
+            return Poll::Ready(Some(Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "upload source ended before its declared length",
+            ))));
         }
         this.remaining -= filled.len() as u64;
         Poll::Ready(Some(Ok(Frame::data(Bytes::copy_from_slice(filled)))))
@@ -225,12 +238,14 @@ impl HttpGuard {
             return Err(PostError::Unsent(anyhow::anyhow!("Invalid deadline")));
         }
         let written = AtomicBool::new(false);
+        let failed = Arc::new(AtomicBool::new(false));
         let result = match body {
             Some(body) => {
                 let reader = ReaderBody {
                     reader: body.reader,
                     remaining: body.length,
                     buf: vec![0; 64 * 1024].into_boxed_slice(),
+                    failed: failed.clone(),
                 };
                 let header = Some((body.content_type, body.length));
                 let request = self.send("POST", url, api_key, header, reader, &written);
@@ -243,7 +258,9 @@ impl HttpGuard {
             }
         };
         result.map_err(|error| {
-            if written.load(Ordering::SeqCst) {
+            if failed.load(Ordering::SeqCst) {
+                PostError::SourceFailed(error)
+            } else if written.load(Ordering::SeqCst) {
                 PostError::Unknown(error)
             } else {
                 PostError::Unsent(error)
@@ -885,5 +902,43 @@ mod tests {
             assert!(request.contains(&format!("\r\n{header}\r\n")), "{request}");
         }
         assert!(!request.contains("transfer-encoding"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn ticket_t_21_post_short_source_is_source_failed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/server/files/upload",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 1024];
+            // Read until the client gives up on the short body and closes.
+            while let Ok(count) = socket.read(&mut chunk).await {
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            String::from_utf8(bytes).unwrap()
+        });
+        let guard = HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 100).unwrap();
+        let body = PostBody {
+            content_type: "text/plain".into(),
+            reader: Box::pin(&b"short"[..]),
+            length: 50,
+        };
+        let error = guard
+            .post(&url, None, Some(body), Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PostError::SourceFailed(_)), "{error}");
+        // hyper may drop the head along with the failed body; either way the
+        // printer never receives the 50 declared bytes.
+        let request = server.await.unwrap();
+        let body = request.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+        assert!(body.len() < 50, "{request:?}");
     }
 }

@@ -1,5 +1,8 @@
 # Cargo cache trust for same-repository PRs
 
+All CI jobs now run on GitHub-hosted runners, so no job shares a host Cargo
+cache volume. This assessment records the earlier local-runner configuration.
+
 Same-repository PR jobs share a Linux Cargo cache trust domain. A fresh runner
 does not make dependencies private when its host mounts persistent writable
 cache storage. Treat a later PR's dependency inputs as influenced by earlier

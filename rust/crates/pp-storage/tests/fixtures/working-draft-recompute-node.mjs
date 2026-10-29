@@ -26,6 +26,17 @@ const copyDraft = (key, lineage = 'NULL,NULL,NULL') => [
   'INSERT INTO plan_draft_inputs(tenant_id,draft_id,source_id,source_layer,layer_order,tracking_kind,source_revision_id,manifest_digest,effective_naming_digest) SELECT tenant_id,3,source_id,source_layer,layer_order,tracking_kind,source_revision_id,manifest_digest,effective_naming_digest FROM plan_draft_inputs WHERE draft_id=2',
   'INSERT INTO plan_draft_parts(tenant_id,draft_id,base_revision_part_id,part_key,relative_path,filename,source_layer,status,role_inferred,role_override,filament_color_id,filament_custom_hex,spoolman_spool_id,quantity_inferred,quantity_override,quantity_effective,included,notes,github_blob_url,geometry_same,requirement,option_group_id,manifest_source,artifact_digest) SELECT tenant_id,3,base_revision_part_id,part_key,relative_path,filename,source_layer,status,role_inferred,role_override,filament_color_id,filament_custom_hex,spoolman_spool_id,quantity_inferred,quantity_override,quantity_effective,included,notes,github_blob_url,geometry_same,requirement,option_group_id,manifest_source,artifact_digest FROM plan_draft_parts WHERE draft_id=2',
 ].join('; ');
+// Stands in for an accepted revision published with curated choices on its first Part.
+// The digest is Node's digestPlanRevisionParts over the curated Parts.
+const curated = [
+  'DROP TRIGGER trg_plan_revision_parts_immutable_update',
+  'DROP TRIGGER trg_plan_revisions_immutable_update',
+  "UPDATE plan_revision_parts SET role_override='accent',filament_color_id='color-7',filament_custom_hex='#ff8800',spoolman_spool_id='42',notes='curated by hand' WHERE id=1",
+  "UPDATE plan_revisions SET snapshot_digest='962e1c1f53ada097c6cbfdd39dbffaa417812c1c0db5127244bec3f299df6cf5' WHERE id=1",
+  // The legacy projection Part carries the same choices; its update trigger clears the accepted revision.
+  "UPDATE parts SET role='accent',filament_color_id='color-7',filament_custom_hex='#ff8800',spoolman_spool_id='42',notes='curated by hand' WHERE id=1",
+  'UPDATE build_profiles SET accepted_plan_revision_id=1 WHERE id=1',
+].join('; ');
 const rebased = `UPDATE plan_drafts SET state='abandoned',lifecycle_version=1 WHERE id=2; ${copyDraft('rebased', '2,1,snapshot_digest')}`;
 const cases = [
   { name: 'created-then-replayed', calls: [recompute('first'), recompute(' \ufefffirst\n')] },
@@ -33,6 +44,8 @@ const cases = [
   { name: 'rebased-key-conflicts', setup: [rebased], calls: [recompute('rebased')] },
   { name: 'edits-carry-quantity', calls: [edited, recompute('first')] },
   { name: 'edits-carry-inclusion', calls: [edited, recompute('first', false)] },
+  { name: 'accepted-overrides-survive-recompute', setup: [curated], calls: [recompute('first')] },
+  { name: 'accepted-overrides-survive-kept-recompute', setup: [curated], calls: [recompute('first', false)] },
   { name: 'missing-profile-and-blank-key', calls: [recompute('first', true, null, 999), recompute(' \t\ufeff ')] },
   { name: 'baseline-required', setup: ['UPDATE build_profiles SET accepted_plan_revision_id=NULL,accepted_plan_version=0 WHERE id=1'], calls: [recompute('first')] },
   { name: 'baseline-required-after-prepare', calls: [recompute('first', true, 'UPDATE build_profiles SET accepted_plan_revision_id=NULL,accepted_plan_version=0 WHERE id=1')] },

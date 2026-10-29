@@ -1,6 +1,6 @@
 # YAML flow-key parity
 
-`yaml-flow-keys-node.json` records js-yaml 5.4.3 for the GRE-841 flow-key, flow-colon, and verbatim-tag forms that this slice matches. A null expectation means js-yaml rejects the input.
+`yaml-flow-keys-node.json` records js-yaml 5.5.0 for the GRE-841 flow-key, flow-colon, and verbatim-tag forms that this slice matches. A null expectation means js-yaml rejects the input.
 
 js-yaml reads an explicit empty flow key as a null key, so `[? ]` loads as `[{"null":null}]`. A flow `?` with no space before `,`, `]`, or `}` is not a key, and js-yaml rejects it. A colon with no space before a tab or a nested collection is a value separator at the root of a flow collection, as in `[:[]]` and `{a:\tx}`. The same tab after a block colon is a separator for a plain value, as in `a:\tx`, and is not a separator for a flow value, as in `a:\t[]`.
 

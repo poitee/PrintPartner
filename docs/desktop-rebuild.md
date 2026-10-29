@@ -182,8 +182,6 @@ Rust refuses these documents. js-yaml accepts them:
   `[a:[]]`, and a multi-line quoted flow key followed by a tab.
 - A verbatim tag with no space before the following text, such as
   `!<tag:yaml.org,2002:str>b c1`.
-- A block `:` line after a flow value. One shape is the key `a`, a flow
-  list on the next line, a blank line, and then `: ]`.
 - A line-broken empty tagged flow entry. The text `k: [!!str`, a line
   break, and `]` loads in js-yaml as `{"k":[""]}`.
 - A property on the line after a flow mapping, then a colon. One shape
@@ -568,6 +566,12 @@ the first STL scan starts. After that scan, preparation still reads settings,
 Source rows, and whether the Plan exists. Only the hidden-Plan case changes one
 of those, and it only turns off Spoolman defaults, which the fixture does not
 set. Both sides therefore prepare the same Parts.
+Two cases (GRE-479) start from an accepted Part with curated choices: a role
+override, filament color, custom hex, Spoolman spool and notes, on top of the
+fixture's quantity override and exclusion. Their setup rewrites the accepted
+revision's Part, its digest (Node's `digestPlanRevisionParts`) and its legacy
+projection Part, so the revision still validates. A recompute that applies the
+manifest and one that keeps the draft both copy every choice to the new draft.
 Rust-only tests cover cancellation, a budget refusal, open drafts whose Parts,
 selected reconciliation or any loaded column exceed the budget when their edits
 are carried, a cancelled or unauthenticated request, a client without

@@ -1,0 +1,86 @@
+name: Release signing check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    paths:
+      - cosign.pub
+      - .github/workflows/release.yml
+      - .github/workflows/release-signing-check.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  unsigned-rejected:
+    name: release key rejects unsigned artifacts
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      registry:
+        image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+        ports:
+          - 5000:5000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+
+      - name: Verify against cosign.pub fails for artifacts the release key never signed
+        run: |
+          set -euo pipefail
+          key="$GITHUB_WORKSPACE/cosign.pub"
+          # A malformed key would also make verify fail, so prove the committed key parses first.
+          openssl pkey -pubin -in "$key" -noout
+          work="$RUNNER_TEMP/signing-check"
+          mkdir -p "$work/image"
+          cd "$work"
+
+          must_reject() {
+            local expected="$1"
+            shift
+            if "$@" >/dev/null 2>verify.err; then
+              echo "::error::verification unexpectedly passed: $*"
+              exit 1
+            fi
+            cat verify.err
+            grep -Fq "$expected" verify.err
+          }
+
+          # Throwaway image in the job's own registry, never signed with the release key.
+          head -c 32 /dev/urandom > image/payload
+          printf 'FROM scratch\nCOPY payload /payload\n' > image/Dockerfile
+          docker build --quiet --tag localhost:5000/throwaway:check image
+          docker push --quiet localhost:5000/throwaway:check
+          digest="$(docker buildx imagetools inspect localhost:5000/throwaway:check | awk '/^Digest:/ { print $2; exit }')"
+          test -n "$digest"
+          ref="localhost:5000/throwaway@$digest"
+          must_reject "no signatures found" cosign verify --key "$key" "$ref"
+
+          # Sign the image and a blob with a throwaway key. The throwaway key verifies them,
+          # which proves the commands work, and the release key must still refuse them.
+          COSIGN_PASSWORD="" cosign generate-key-pair --output-key-prefix throwaway
+          head -c 64 /dev/urandom > release-identity.json
+          COSIGN_PASSWORD="" cosign sign-blob --yes --key throwaway.key --new-bundle-format \
+            --tlog-upload=false --bundle release-identity.json.sigstore.json release-identity.json
+          COSIGN_PASSWORD="" cosign sign --yes --key throwaway.key --tlog-upload=false "$ref"
+
+          cosign verify-blob --key throwaway.pub --insecure-ignore-tlog \
+            --bundle release-identity.json.sigstore.json release-identity.json
+          cosign verify --key throwaway.pub --insecure-ignore-tlog "$ref" >/dev/null
+
+          must_reject "invalid signature" cosign verify-blob --key "$key" --insecure-ignore-tlog \
+            --bundle release-identity.json.sigstore.json release-identity.json
+          must_reject "no matching signatures" cosign verify --key "$key" --insecure-ignore-tlog "$ref"
+          # The release workflow's own commands, with transparency log checks on.
+          must_reject "error during command execution" cosign verify-blob --key "$key" \
+            --bundle release-identity.json.sigstore.json release-identity.json
+          must_reject "error during command execution" cosign verify --key "$key" "$ref"
+          echo "cosign.pub rejected every artifact the release key did not sign."

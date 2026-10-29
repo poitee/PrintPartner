@@ -321,3 +321,22 @@ async fn ticket_t_21_unreachable_printer_is_a_plain_failure() {
         json!({ "ok": false, "message": "base_url is required" })
     );
 }
+
+#[tokio::test]
+async fn ticket_t_21_bad_base_is_refused_before_the_source_opens() {
+    let missing = UploadSource::Path("/nonexistent/pp-t21/a.gcode".into());
+    let result = driver("ftp://localhost:1")
+        .upload_file(missing, "a.gcode", true)
+        .await;
+    assert_eq!(
+        (result.ok, result.outcome_unknown, result.message.as_str()),
+        (false, false, "Unsupported URL protocol: ftp:")
+    );
+    let https = driver("https://localhost:1")
+        .upload_file(UploadSource::Bytes(Vec::new()), "a.gcode", false)
+        .await;
+    assert_eq!(
+        https.message,
+        "HTTPS Moonraker hosts are not supported until GRE-359"
+    );
+}

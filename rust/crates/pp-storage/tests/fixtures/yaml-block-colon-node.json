@@ -2,42 +2,27 @@
   {
     "name": "block-colon",
     "source": "a:\n  []\n\n: ]",
-    "expected": {
-      "a": [],
-      "null": "]"
-    }
+    "expected": null
   },
   {
     "name": "block-colon-crlf",
     "source": "a:\r\n  []\r\n\r\n: ]",
-    "expected": {
-      "a": [],
-      "null": "]"
-    }
+    "expected": null
   },
   {
     "name": "block-colon-cr",
     "source": "a:\r  []\r\r: ]",
-    "expected": {
-      "a": [],
-      "null": "]"
-    }
+    "expected": null
   },
   {
     "name": "block-colon-map",
     "source": "a:\n  {}\n\n: }",
-    "expected": {
-      "a": {},
-      "null": "}"
-    }
+    "expected": null
   },
   {
     "name": "block-colon-comma",
     "source": "a:\n  []\n\n: ,",
-    "expected": {
-      "a": [],
-      "null": ","
-    }
+    "expected": null
   },
   {
     "name": "block-colon-plain",
@@ -50,144 +35,102 @@
   {
     "name": "same-line",
     "source": "a: ]",
-    "expected": {
-      "a": "]"
-    }
+    "expected": null
   },
   {
     "name": "empty-key",
     "source": ": ]",
-    "expected": {
-      "null": "]"
-    }
+    "expected": null
   },
   {
     "name": "root",
     "source": "]",
-    "expected": "]"
+    "expected": null
   },
   {
     "name": "sequence",
     "source": "- ]",
-    "expected": [
-      "]"
-    ]
+    "expected": null
   },
   {
     "name": "sequence-colon",
     "source": "- ] : x",
-    "expected": [
-      {
-        "]": "x"
-      }
-    ]
+    "expected": null
   },
   {
     "name": "key",
     "source": "]: x",
-    "expected": {
-      "]": "x"
-    }
+    "expected": null
   },
   {
     "name": "comment",
     "source": "a: ] # c",
-    "expected": {
-      "a": "]"
-    }
+    "expected": null
   },
   {
     "name": "hash-glued",
     "source": "a: ]#c",
-    "expected": {
-      "a": "]#c"
-    }
+    "expected": null
   },
   {
     "name": "quote",
     "source": "a: ]\"b",
-    "expected": {
-      "a": "]\"b"
-    }
+    "expected": null
   },
   {
     "name": "backslash",
     "source": "a: ]\\b",
-    "expected": {
-      "a": "]\\b"
-    }
+    "expected": null
   },
   {
     "name": "sentinel",
     "source": "a: ]",
-    "expected": {
-      "a": "]"
-    }
+    "expected": null
   },
   {
     "name": "multiline",
     "source": "a: ]\n  more",
-    "expected": {
-      "a": "] more"
-    }
+    "expected": null
   },
   {
     "name": "multiline-blank",
     "source": "a: ]\n\n  more",
-    "expected": {
-      "a": "]\nmore"
-    }
+    "expected": null
   },
   {
     "name": "multiline-key",
     "source": "a: ]\n  more\nb: 1",
-    "expected": {
-      "a": "] more",
-      "b": 1
-    }
+    "expected": null
   },
   {
     "name": "folded-colon-text",
     "source": "a: ]\n  more:x",
-    "expected": {
-      "a": "] more:x"
-    }
+    "expected": null
   },
   {
     "name": "explicit",
     "source": "? ]\n: x",
-    "expected": {
-      "]": "x"
-    }
+    "expected": null
   },
   {
     "name": "explicit-more",
     "source": "? ]\n  more\n: x",
-    "expected": {
-      "] more": "x"
-    }
+    "expected": null
   },
   {
     "name": "nested",
     "source": "a:\n  b: ]\n    more\n  c: 1",
-    "expected": {
-      "a": {
-        "b": "] more",
-        "c": 1
-      }
-    }
+    "expected": null
   },
   {
     "name": "tab-after-colon",
     "source": "a:\t]",
-    "expected": {
-      "a": "]"
-    }
+    "expected": null
   },
   {
     "name": "tag-str",
     "source": "!!str ]",
-    "expected": "]"
+    "expected": null
   },
   {
     "name": "flow-close",
@@ -238,5 +181,98 @@
     "name": "explicit-same-line",
     "source": "? ] : x",
     "expected": null
+  },
+  {
+    "name": "comment-line-close",
+    "source": "a:\n# c\n  ]",
+    "expected": null
+  },
+  {
+    "name": "comment-indented-brace",
+    "source": "a:\n # c\n  }",
+    "expected": null
+  },
+  {
+    "name": "comment-line-comma",
+    "source": "a:\n# c\n  , y]",
+    "expected": null
+  },
+  {
+    "name": "comment-line-trailing",
+    "source": "a:\n# c\n  ] # d",
+    "expected": null
+  },
+  {
+    "name": "comment-line-open",
+    "source": "a:\n# c\n  [",
+    "expected": null
+  },
+  {
+    "name": "comment-line-plain",
+    "source": "a:\n# c\n  x]",
+    "expected": {
+      "a": "x]"
+    }
+  },
+  {
+    "name": "next-line",
+    "source": "a:\n  ]",
+    "expected": null
+  },
+  {
+    "name": "next-line-more",
+    "source": "a:\n  ]\n  x",
+    "expected": null
+  },
+  {
+    "name": "same-line-brace",
+    "source": "a: }",
+    "expected": null
+  },
+  {
+    "name": "same-line-comma",
+    "source": "a: , b",
+    "expected": null
+  },
+  {
+    "name": "sequence-comma",
+    "source": "- ,",
+    "expected": null
+  },
+  {
+    "name": "nested-sequence",
+    "source": "a:\n  - ]",
+    "expected": null
+  },
+  {
+    "name": "key-brace",
+    "source": "}: b",
+    "expected": null
+  },
+  {
+    "name": "key-comma",
+    "source": ",: b",
+    "expected": null
+  },
+  {
+    "name": "inner-close",
+    "source": "a: x]",
+    "expected": {
+      "a": "x]"
+    }
+  },
+  {
+    "name": "inner-brace-comma",
+    "source": "a: x,y}",
+    "expected": {
+      "a": "x,y}"
+    }
+  },
+  {
+    "name": "quoted-close",
+    "source": "a: \"]\"",
+    "expected": {
+      "a": "]"
+    }
   }
 ]

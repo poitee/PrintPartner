@@ -1,4 +1,4 @@
 {
-  "note": "Base URLs that fail before any request. Each runs every read call.",
+  "note": "Base URLs that fail before any request. Each runs every read call and one upload.",
   "bases": ["  ", "printer.local", "ftp://localhost:1", "file:///etc/passwd"]
 }

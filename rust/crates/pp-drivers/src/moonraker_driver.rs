@@ -110,17 +110,21 @@ impl Driver {
         Ok(base)
     }
 
-    async fn fetch(&self, path: &str) -> Result<Reply> {
+    /// `{base}{path}`, refused with Node's messages when Node would not fetch it.
+    fn url(&self, path: &str) -> Result<String> {
         let url = format!("{}{path}", self.base()?);
-        // Node's messages for a URL it will not fetch.
         match Url::parse(&url)
             .map_err(|_| anyhow!("Invalid URL"))?
             .scheme()
         {
-            "http" => {}
+            "http" => Ok(url),
             "https" => bail!("HTTPS Moonraker hosts are not supported until GRE-359"),
             other => bail!("Unsupported URL protocol: {other}:"),
         }
+    }
+
+    async fn fetch(&self, path: &str) -> Result<Reply> {
+        let url = self.url(path)?;
         let reply = self
             .guard
             .get(&url, self.api_key.as_deref().map(str::trim))
@@ -368,29 +372,37 @@ impl Driver {
         filename: &str,
         start: bool,
     ) -> UploadResult {
-        let base = match self.base() {
-            Ok(base) => base,
-            Err(error) => return UploadResult::failed(error.to_string(), false),
-        };
         let replaced = filename.replace(['/', '\\'], "_");
         let name = match js_trim(&replaced) {
             "" => "print.gcode",
             name => name,
         }
         .to_owned();
+        // Check the base before opening the source.
+        let start_path = format!(
+            "/printer/print/start?filename={}",
+            encode_uri_component(&name)
+        );
+        let urls = self
+            .url("/server/files/upload")
+            .and_then(|upload| Ok((upload, self.url(&start_path)?)));
+        let (upload, start_url) = match urls {
+            Ok(urls) => urls,
+            Err(error) => return UploadResult::failed(error.to_string(), false),
+        };
         let body = match multipart(source, &name).await {
             Ok(body) => body,
             Err(error) => return UploadResult::failed(error.to_string(), false),
         };
         let api_key = self.api_key.as_deref().map(str::trim);
-        let upload = format!("{base}/server/files/upload");
         let reply = match self
             .guard
             .post(&upload, api_key, Some(body), UPLOAD_DEADLINE)
             .await
         {
             Ok(reply) => reply,
-            Err(PostError::Unsent(error)) => {
+            // A source that ended early cannot have produced a complete upload.
+            Err(PostError::Unsent(error) | PostError::SourceFailed(error)) => {
                 return UploadResult::failed(format!("{error:#}"), false);
             }
             Err(PostError::Unknown(error)) => {
@@ -409,11 +421,11 @@ impl Driver {
         let (started, message, outcome_unknown) = if !start {
             (false, format!("Uploaded {name}"), false)
         } else {
-            let url = format!(
-                "{base}/printer/print/start?filename={}",
-                encode_uri_component(&name)
-            );
-            match self.guard.post(&url, api_key, None, START_DEADLINE).await {
+            match self
+                .guard
+                .post(&start_url, api_key, None, START_DEADLINE)
+                .await
+            {
                 Ok(reply) if (200..300).contains(&reply.status) => {
                     (true, format!("Uploaded and started {name}"), false)
                 }
@@ -428,7 +440,7 @@ impl Driver {
                 ),
                 // Node reports a start transport error as a failed upload. The
                 // file is on the printer, so this reports the upload as done.
-                Err(PostError::Unsent(error)) => (
+                Err(PostError::Unsent(error) | PostError::SourceFailed(error)) => (
                     false,
                     format!("Uploaded, but start failed: {error:#}"),
                     false,
@@ -499,14 +511,20 @@ fn error_text(body: &[u8]) -> String {
     }
     let text = String::from_utf8_lossy(body);
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let mut cut = String::new();
     let mut units = 0;
-    let cut: String = text
-        .chars()
-        .take_while(|c| {
-            units += c.len_utf16();
-            units <= 200
-        })
-        .collect();
+    for c in text.chars() {
+        units += c.len_utf16();
+        if units > 200 {
+            // `slice(0, 200)` keeps the high half of a pair cut at unit 200. A
+            // Rust string cannot hold a lone surrogate, so it becomes U+FFFD.
+            if units == 201 && c.len_utf16() == 2 {
+                cut.push('\u{fffd}');
+            }
+            break;
+        }
+        cut.push(c);
+    }
     if cut.is_empty() {
         String::new()
     } else {
@@ -673,6 +691,19 @@ mod tests {
         assert_eq!(modified_at(Some(&serde_json::json!("1"))).unwrap(), None);
         let error = modified_at(Some(&serde_json::json!(8.64e12 + 0.001))).unwrap_err();
         assert_eq!(error.to_string(), "Invalid time value");
+    }
+
+    #[test]
+    fn ticket_t_21_error_text_cuts_at_200_utf16_units() {
+        let a = "a".repeat(199);
+        assert_eq!(error_text(format!("{a}bc").as_bytes()), format!(": {a}b"));
+        assert_eq!(
+            error_text(format!("{a}😀z").as_bytes()),
+            format!(": {a}\u{fffd}")
+        );
+        assert_eq!(error_text(format!("{a}b😀").as_bytes()), format!(": {a}b"));
+        assert_eq!(error_text("\u{feff}".as_bytes()), "");
+        assert_eq!(error_text(&vec![b'x'; MAX_ERROR_TEXT_BYTES + 1]), "");
     }
 
     #[test]

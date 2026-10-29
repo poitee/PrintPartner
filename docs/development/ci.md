@@ -27,12 +27,11 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 | `rust (macos)` | `macos-26` | The whole workspace | All except [macOS exclusions](#macos-exclusions) |
 | `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
 
-`rust (linux) build` uses `[self-hosted, linux, x64, pp-local]` for same-repository PRs, pushes to `main`, merge groups, and manual dispatch. The nightly schedule keeps `ubuntu-latest`.
+`rust (linux) build` and its rebuild partitions use `ubuntu-latest` for every event.
 
 Build caching and linking differ by OS:
 
-- Linux does not use the GitHub Actions cache for Rust builds. On `pp-local`, sccache caches compiler output on the runner fleet. The hosted nightly run builds without a cache.
-- macOS and Windows restore and save `Swatinem/rust-cache`. Only `main` saves.
+- Every OS restores and saves `Swatinem/rust-cache`. Only `main` saves.
 - Linux installs `mold` and links with it through `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold`. macOS and Windows keep their default linkers.
 - All jobs set `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to `line-tables-only`. Panic locations keep their file and line, and the build output is smaller.
 
@@ -49,15 +48,15 @@ Each job runs these steps in order:
 9. `cargo test --doc`, with `desktop_rebuild` off. nextest does not run doctests.
 10. `cargo test --doc`, with `desktop_rebuild` on.
 
-On self-hosted Linux pull requests, step 8 (`nextest` with `desktop_rebuild` on) is skipped so the long rebuild-on suite does not saturate `pp-local` runners. Windows PRs (including self-hosted `pp-local-win`) and hosted Linux PRs still run step 8. Steps 6 and 10 still run on Linux and Windows PRs; macOS PRs skip steps 6, 8 and 10 as before.
+Linux and Windows PRs run steps 6, 8 and 10; macOS PRs skip them.
 
-On `push` to `main`, `merge_group`, and `workflow_dispatch`, Linux replaces the in-job step 8 with a nextest archive built once on `pp-local` (`--zstd-level 11`), then three `rust (linux) rebuild m/3` jobs that run `cargo nextest run --archive-file … --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:m/3` on the three fleet Linux slots. The build job also uploads a zstd-compressed pack of the measured desktop trees (`rust/bundle-manifest.json` and the web `dist` outputs). Artifact uploads set `compression-level: 0` so GitHub does not re-gzip already-compressed archives. Atomic package builds publish `dist/current` as a symlink to `dist/releases/<id>`; the dependency inventory records that link and the files under the release path. The pack step therefore archives each package's full `dist/` tree **without** `tar -h`, asserts the `current` symlink and a release-path file (for example `desktop-resolution.js`) are in the archive, and each partition restores those trees so the symlink topology still matches. Packing only `dist/current` with `-h` flattens the link and fails dependency inventory checks. Each partition runs `npm ci` only — it must not rebuild web assets or regenerate the manifest, because the archived binaries embed those digests at compile time. The required check `rust (linux)` is an aggregate that needs the Linux build and those partitions: on push / merge_group / workflow_dispatch it requires rebuild `success`; on PRs and schedule rebuild may be `skipped`. The schedule keeps the monolithic in-job step 8 on `ubuntu-latest`. PRs never enable rebuild-on nextest on `pp-local`. Each such non-PR Linux path uses four `pp-local` slot-runs (one build plus three partitions) instead of a single hosted runner.
+On `push` to `main`, `merge_group`, and `workflow_dispatch`, Linux replaces the in-job step 8 with a nextest archive built once (`--zstd-level 11`), then three `rust (linux) rebuild m/3` jobs that run `cargo nextest run --archive-file … --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:m/3` on three `ubuntu-latest` runners. The build job also uploads a zstd-compressed pack of the measured desktop trees (`rust/bundle-manifest.json` and the web `dist` outputs). Artifact uploads set `compression-level: 0` so GitHub does not re-gzip already-compressed archives. Atomic package builds publish `dist/current` as a symlink to `dist/releases/<id>`; the dependency inventory records that link and the files under the release path. The pack step therefore archives each package's full `dist/` tree **without** `tar -h`, asserts the `current` symlink and a release-path file (for example `desktop-resolution.js`) are in the archive, and each partition restores those trees so the symlink topology still matches. Packing only `dist/current` with `-h` flattens the link and fails dependency inventory checks. Each partition runs `npm ci` only — it must not rebuild web assets or regenerate the manifest, because the archived binaries embed those digests at compile time. The required check `rust (linux)` is an aggregate that needs the Linux build and those partitions: on push / merge_group / workflow_dispatch it requires rebuild `success`; on PRs and schedule rebuild may be `skipped`. The schedule keeps the monolithic in-job step 8.
 
 The macOS volume exists because the default macOS `TMPDIR` breaks three kinds of test. Its paths are too long for Unix socket names, it is under the `/var` symbolic link that no-follow opens refuse, and it treats `Straße.stl` and `STRASSE.stl` as one name.
 
 Steps 4 to 10 run even when an earlier one of them fails, so one run reports every failure. Clippy uses `--keep-going`, so it reports errors in every crate whose dependencies compile.
 
-Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, and its test filter in `NEXTEST_FILTER` (from the `changes` job output, defaulting to `all()`). The three jobs share the same anchored steps. They have no matrix, so GitHub reports their exact required names both when running and when skipped. To use a self-hosted runner, change `runs-on`. The Linux rebuild partitions always use `all()` because they only run on non-PR events.
+Each job declares its runner in `runs-on`, its package scope in `CARGO_SCOPE`, and its test filter in `NEXTEST_FILTER` (from the `changes` job output, defaulting to `all()`). The three jobs share the same anchored steps. They have no matrix, so GitHub reports their exact required names both when running and when skipped. The Linux rebuild partitions always use `all()` because they only run on non-PR events.
 
 `rust (linux)` and `rust (windows)` are required checks on `main`; `rust (macos)` is advisory. [Settings for Chad](ci-controls.md#settings-for-chad) lists the full ruleset.
 
@@ -93,8 +92,8 @@ Except where noted below, each step runs the command lines of its workflow step 
 - It does not install tools. If a tool is not on `PATH`, or if its version is not the version that CI pins, the step is reported as `SKIP` with the reason. The pinned versions are Node 24.21.0, ast-grep 0.50.0, actionlint 1.7.12 and zizmor 1.31.1. The `workaround-ratchet` and `node-fixtures` steps are also skipped when `PP_SCHEMA_PARITY_NODE` does not point to Node 22.23.3.
 - `ast-grep` fetches `origin/main` without `--depth=1`, because a shallow fetch would make a full clone shallow.
 - It does not set the CI-only `CARGO_PROFILE_*_DEBUG` and mold `RUSTFLAGS` values. They change debug info and the linker, not test results, and setting them would invalidate your local build cache.
-- `nextest-on` always runs. CI skips it on self-hosted Linux PRs, but the merge queue runs it. Use `--skip nextest-on` for a shorter run.
-- The nextest profile is `default` unless you set `NEXTEST_PROFILE`. Pull requests on `pp-local` use `pp-local-linux`.
+- `nextest-on` always runs. Use `--skip nextest-on` for a shorter run.
+- The nextest profile is `default` unless you set `NEXTEST_PROFILE`. CI uses `default`.
 - `node-fixtures` runs `npm ci` with Node 22, so `web/node_modules` ends with Node 22 native modules. The next run's `web-assets` step installs them again with Node 24.
 
 The command does not cover these checks:
@@ -208,72 +207,15 @@ Required Rust and lint jobs fail if their input-selection job fails, so a broken
 
 ## Ephemeral PR runners
 
-Same-repository `pull_request` jobs use `[self-hosted, linux, x64, pp-local]`
-for Rust Linux, ast-grep, web checks, WebKit STL smoke, PR evidence lint, desktop contracts, desktop runtime,
-source artifacts, embedded-driver smoke, and the native
-macOS Linux precheck. ARM64 native macOS jobs and cross-OS macOS use
-`[self-hosted, macos, arm64, pp-local-mac]` when the PR has the `macos` label and is not a draft.
-Each runner accepts one job and is destroyed afterward. Linux has three slots with
-3 vCPU and 8 GB each; macOS has two fresh Tart VM slots.
-Routing matches registration labels, not ephemeral runner names. Live PR jobs
-have used `pp-linux-*` registrations with the `pp-local` label. Runner join
-configuration belongs to the runner host and is not supplied through workflow env.
+Every job runs on a GitHub-hosted runner (`ubuntu-latest`, `ubuntu-24.04`,
+`macos-26`, `macos-26-intel`, `macos-latest` or `windows-latest`), for PRs, forks
+and non-PR events alike. Each job gets a fresh VM. No workflow uses a
+self-hosted label, a runner-local sccache, or `scripts/setup-ci-linux.sh`;
+hosted images already ship those prerequisites.
 
-PR evidence lint uses `pull_request`, including body edits, and checks out trusted
-default-branch tooling. Same-repository PRs use the Linux fleet; forks retain
-`ubuntu-latest`. The required check remains `Lint Evidence block`.
+Rust jobs cache with `Swatinem/rust-cache`, saved only from `main`. The
+repository's Actions cache is limited to 10 GB, so older entries are evicted
+first when it fills.
 
-Rust Linux selects the `pp-local-linux` nextest profile for same-repository PRs.
-The real-Node `runtime_m0` suite and compatibility-process package reserve all
-three nextest slots while running. Their assertions and deadlines are unchanged.
-The local job has a 120-minute budget for this schedule. Hosted Rust Linux keeps
-the default profile and 90-minute job budget.
-
-Local Linux uses the host-managed Cargo cache volume. It skips `Swatinem/rust-cache`
-because that action's post-job cleanup deletes registry source directories that
-another container may still be compiling. Hosted runners, macOS and Windows keep
-the action cache. Each job's target directory remains in its own workspace.
-
-Fork PRs use each job's existing GitHub-hosted label. Schedules and releases keep
-their existing hosted runners. Linux Rust on pushes to `main`, merge groups, and
-manual dispatches uses the `pp-local` fleet so desktop_rebuild nextest can archive
-once and partition across the three slots; other non-PR workflows stay hosted.
-Docker image jobs, service-container jobs and cargo-deny stay hosted because the
-Linux runner containers have no Docker socket. Selector and result-only jobs stay
-hosted. WebKit STL smoke uses the Linux fleet after a fresh-image proof rendered
-the production STL canvas with Mesa llvmpipe under Xvfb:
-[run 39110024828](https://github.com/poitee/PrintPartner/actions/runs/39110024828).
-Its fork and manual-dispatch fallback remains `ubuntu-24.04`.
-Rust verification stays hosted
-because its iptables LAN guard requires privileges absent from the containers.
-No job routed to the local fleet references `secrets.`.
-
-The `scripts/setup-ci-linux.sh` script installs build tools, Python and the GitHub CLI through
-`sudo apt-get`. Setup actions install Node, Rust and Chrome explicitly. Rust uses
-1.99.0 with rustfmt and clippy. Changes to the setup script trigger every
-path-filtered consumer, including Rust input selection. The local web validation
-job has a 45-minute limit after two runs reached the hosted 20-minute limit while
-still executing tests. Fork PRs and non-PR runs retain the 20-minute limit.
-
-Rust Windows jobs select `[self-hosted, windows, x64, pp-local-win]` only when
-`PP_LOCAL_WIN` is `true` and the event is a same-repository PR. The switch defaults
-off; it is now enabled after the full local Rust job passed:
-[Windows Rust smoke](https://github.com/poitee/PrintPartner/actions/runs/39079477016).
-Fork PRs and non-PR events retain `windows-latest`. The runner image supplies Git
-Bash, PowerShell 7 and Python 3.13. The job verifies Python's version and hashing
-API and passes its exact executable path to manifest generation. It avoids the
-setup-python Windows installer, which requires administrator privileges.
-The `ci/runner-smoke-win` branch remains for Chad to remove.
-
-Local macOS jobs install Python 3.12 through pinned `actions/setup-python` before
-building manifests, which require `hashlib.file_digest`. They create the action's
-required `/Users/runner/hostedtoolcache` prefix and give the actual VM user ownership,
-including when that user is `admin`. The action sets PATH and Python discovery
-variables to the installed interpreter. A required step checks the version and API;
-cross-OS manifest generation uses the action's exact interpreter path. Historical
-schema trees missing from a shallow checkout are fetched together in one Git
-operation, then every pinned tree and the required archive are checked.
-
-Linux and macOS label smoke passed before this change:
-[run 39072361760](https://github.com/poitee/PrintPartner/actions/runs/39072361760).
-The temporary `ci/runner-smoke` branch was deleted after both jobs succeeded.
+The web validation job keeps its 45-minute limit on same-repository PRs; fork
+PRs and non-PR runs keep 20 minutes.
