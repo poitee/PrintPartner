@@ -1445,12 +1445,14 @@ export async function invokeAssistantTool(
           (!state || link.state === state) &&
           (!integrationId || link.integration_id === integrationId),
         );
+        const { printerNames } = await import("../services/farm-filament.js");
+        const names = printerNames((await import("../services/printer-fleet.js")).loadFleet(ctx.repo));
         const unattributed = listUnattributedPrints(ctx.repo).filter((print) =>
           !print.dismissed && (planId == null || print.claimed_profile_id === planId),
-        );
+        ).map((print) => ({ ...print, host_name: names.get(print.printer_id) ?? print.host_name }));
         return {
           content: JSON.stringify({
-            links,
+            links: links.map((link) => ({ ...link, host_name: names.get(link.printer_id) ?? link.host_name })),
             unattributed,
             pending_verification: links.filter((link) => link.state === "awaiting_verify").length,
           }),
@@ -2882,8 +2884,10 @@ export async function invokeAssistantTool(
           return { content: JSON.stringify({ error: access.error, code: access.code }) };
         }
         const fleet = (await import("../services/printer-fleet.js")).loadFleet(ctx.repo);
-        const { buildSpoolLookup, printerFilamentStatus, idleSinceFor, lastActivityByPrinter } =
-          await import("../services/farm-filament.js");
+        const {
+          buildSpoolLookup, printerFilamentStatus, idleSinceFor, lastActivityByPrinter,
+          farmStateFor, farmStateCounts, idleForLabel, printsSeenOnPrinters,
+        } = await import("../services/farm-filament.js");
 
         // One Spoolman fetch per referenced integration for the whole fleet.
         const lookupSpools = await buildSpoolLookup(
@@ -2896,7 +2900,11 @@ export async function invokeAssistantTool(
         let lastActivity = new Map<string, string>();
         try {
           const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
-          lastActivity = lastActivityByPrinter(ctx.repo.recentPrintJobs(since, 1000));
+          const seen = printsSeenOnPrinters(loadPrinterCheckoffLinks(ctx.repo), listUnattributedPrints(ctx.repo));
+          lastActivity = lastActivityByPrinter([
+            ...ctx.repo.recentPrintJobs(since, 1000),
+            ...seen.map((p) => ({ printerId: p.printer_id, at: p.at })),
+          ]);
         } catch {
           // print_jobs unreadable — idle_since degrades to null, status still works.
         }
@@ -2904,19 +2912,22 @@ export async function invokeAssistantTool(
         const hostStatuses = await probeFleetHostStatus(ctx.repo, ctx.integrations, fleet);
         const printers = fleet.map((m, i) => {
           const hostStatus = hostStatuses[i] ?? null;
-          const state = hostStatus?.state ?? "unknown";
+          const { state, not_connected_reason } = farmStateFor(m, hostStatus);
           const filament = printerFilamentStatus(m, lookupSpools, hostStatus);
+          const idleSince = idleSinceFor(state, m.id, lastActivity);
 
           return {
             id: m.id,
             name: m.name,
             state,
+            not_connected_reason,
             active_job: hostStatus?.filename ?? null,
             progress: typeof hostStatus?.progress === "number" ? hostStatus.progress : null,
             eta_seconds: typeof hostStatus?.eta_seconds === "number" ? hostStatus.eta_seconds : null,
             message: hostStatus?.message ?? null,
             integration_id: m.integration_id ?? null,
-            idle_since: idleSinceFor(state, m.id, lastActivity),
+            idle_since: idleSince,
+            idle_for: state === "idle" ? idleForLabel(idleSince) : null,
             filament_slots: filament.slots,
             filament_remaining_g: filament.filament_remaining_g,
             needs_filament_swap: filament.needs_filament_swap,
@@ -2927,9 +2938,7 @@ export async function invokeAssistantTool(
           content: JSON.stringify({
             printer_count: fleet.length,
             printers,
-            idle: printers.filter((p) => p.state === "idle" || p.state === "complete").length,
-            printing: printers.filter((p) => p.state === "printing" || p.state === "paused").length,
-            offline: printers.filter((p) => p.state === "offline" || p.state === "unknown").length,
+            state_counts: farmStateCounts(printers.map((p) => p.state)),
             needs_filament_swap: printers
               .filter((p) => p.needs_filament_swap)
               .map((p) => ({
@@ -2979,7 +2988,14 @@ export async function invokeAssistantTool(
         const failed = recentJobs.filter((j) => j.status === "failed").length;
         const filamentG = recentJobs.reduce((s, j) => s + (j.filamentConsumedG ?? 0), 0);
 
-        const { completionRate, printStatsByPrinter } = await import("../services/farm-filament.js");
+        const { completionRate, printStatsByPrinter, printerNames, printsSeenOnPrinters, printsSeenSummary } =
+          await import("../services/farm-filament.js");
+        const names = printerNames((await import("../services/printer-fleet.js")).loadFleet(ctx.repo));
+        const printsSeen = printsSeenSummary(
+          printsSeenOnPrinters(loadPrinterCheckoffLinks(ctx.repo), listUnattributedPrints(ctx.repo)),
+          since,
+          names,
+        );
 
         let activePlans:
           | {
@@ -3017,6 +3033,9 @@ export async function invokeAssistantTool(
           content: JSON.stringify({
             window_hours: hours,
             since,
+            ...(sent === 0 && printsSeen.total === 0
+              ? { empty_window: `No plates sent and no prints seen on printers since ${since}.` }
+              : {}),
             plates_sent: sent,
             plates_completed: completed,
             plates_failed: failed,
@@ -3025,7 +3044,11 @@ export async function invokeAssistantTool(
             // not read as a failure.
             completion_rate: completionRate(completed, failed),
             filament_consumed_g: filamentG,
-            by_printer: printStatsByPrinter(recentJobs),
+            by_printer: printStatsByPrinter(recentJobs).map((row) => ({
+              ...row,
+              printer_name: names.get(row.printer_id) ?? row.printer_id,
+            })),
+            prints_seen_on_printers: printsSeen,
             active_plans: activePlans,
           }),
         };
