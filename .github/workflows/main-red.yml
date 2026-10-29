@@ -3,6 +3,7 @@ name: Main red
 on:
   # No checkout and no artifacts: the job only reads run metadata and calls gh.
   workflow_run: # zizmor: ignore[dangerous-triggers]
+    # Keep in sync by hand with the CI workflows that run on pushes to main.
     workflows:
       - Actionlint
       - Auth admission freshness
@@ -50,11 +51,18 @@ jobs:
         run: gh run rerun "$RUN_ID" --failed
 
       - name: Open or update the main-red issue
-        if: github.event.workflow_run.run_attempt >= 2
+        # Attempt 2 is the rerun from attempt 1. Later attempts are manual reruns.
+        if: github.event.workflow_run.run_attempt == 2
         run: |
           set -euo pipefail
-          failing=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
-            --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"')
+          first=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/1" --jq .conclusion)
+          if [ "$first" != "failure" ]; then
+            echo "Attempt 1 ended $first; this is a manual rerun, not ours."
+            exit 0
+          fi
+
+          jobs=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" --paginate --slurp)
+          failing=$(jq -r '[.[].jobs[]] | unique_by(.id)[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"' <<<"$jobs")
           body=$(printf '%s\n' \
             "**Workflow:** $WORKFLOW_NAME" \
             "**Run:** $RUN_URL (attempt $RUN_ATTEMPT)" \
@@ -63,25 +71,41 @@ jobs:
             "**Failing jobs:**" \
             "${failing:-- (none reported)}")
 
-          has_label=$(gh label list --search main-red --json name --jq '[.[] | select(.name == "main-red")] | length')
-          if [ "$has_label" -gt 0 ]; then
-            issue=$(gh issue list --state open --label main-red --limit 1 --json number --jq '.[0].number // empty')
+          # One open issue for every workflow: the oldest open one wins.
+          labels=$(gh label list --search main-red --limit 100 --json name)
+          if jq -e 'any(.[]; .name == "main-red")' <<<"$labels" >/dev/null; then
+            find_open() {
+              gh issue list --state open --label main-red --limit 100 --json number \
+                | jq -r 'map(.number) | sort | .[]'
+            }
+            create_args=(--label main-red)
           else
-            issue=$(gh issue list --state open --search '"[main-red]" in:title' --limit 20 --json number,title \
-              --jq '[.[] | select(.title | startswith("[main-red]"))][0].number // empty')
+            find_open() {
+              gh issue list --state open --search '"[main-red]" in:title' --limit 100 --json number,title \
+                | jq -r 'map(select(.title | startswith("[main-red]")) | .number) | sort | .[]'
+            }
+            create_args=()
           fi
 
-          if [ -n "$issue" ]; then
-            # Later manual reruns of the same run land here too; post once per run.
-            seen=$(gh issue view "$issue" --json body,comments \
-              | jq --arg u "$RUN_URL" '[.body, .comments[].body] | map(select(contains($u))) | length')
-            if [ "$seen" -gt 0 ]; then
-              echo "Issue #$issue already covers $RUN_URL"
+          open=$(find_open)
+          issue=$(head -n1 <<<"$open")
+          if [ -z "$issue" ]; then
+            url=$(gh issue create --title "[main-red] main is failing" "${create_args[@]}" --body "$body")
+            created=${url##*/}
+            # Another workflow may have opened one at the same moment; keep the oldest.
+            issue=$(find_open | head -n1)
+            issue=${issue:-$created}
+            if [ "$issue" = "$created" ]; then
               exit 0
             fi
-            gh issue comment "$issue" --body "$body"
-          elif [ "$has_label" -gt 0 ]; then
-            gh issue create --title "[main-red] main is failing" --label main-red --body "$body"
-          else
-            gh issue create --title "[main-red] main is failing" --body "$body"
+            gh issue close "$created" --reason "not planned" --comment "Duplicate of #$issue."
           fi
+
+          # Post once per run, even if this attempt's event is delivered twice.
+          seen=$(gh issue view "$issue" --json body,comments \
+            | jq --arg u "$RUN_URL" '[.body, .comments[].body] | map(select(contains($u))) | length')
+          if [ "$seen" -gt 0 ]; then
+            echo "Issue #$issue already covers $RUN_URL"
+            exit 0
+          fi
+          gh issue comment "$issue" --body "$body"

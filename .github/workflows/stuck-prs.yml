@@ -36,17 +36,20 @@ jobs:
           for pr in $prs; do
             j=$(printf '%s' "$pr" | base64 -d)
             num=$(jq -r .number <<<"$j")
-            title=$(jq -r '.title | gsub("\\|"; "\\|")' <<<"$j")
+            # Escape Markdown so a title can't break the table or add links.
+            title=$(jq -r '.title | gsub("(?<c>[\\\\`*_<>\\[\\]|])"; "\\\(.c)")' <<<"$j")
             url=$(jq -r .url <<<"$j")
             sha=$(jq -r .headRefOid <<<"$j")
             merge=$(jq -r .mergeStateStatus <<<"$j")
             reasons=""
 
-            # gh exits non-zero while checks pend or fail; the JSON is still printed.
+            # gh exits 1 when a check failed and 8 while one pends; both still print JSON.
             # With no JSON, tell "no required checks configured" apart from an API error.
             err=$(mktemp)
-            buckets=$(gh pr checks "$num" --required --json bucket --jq '[.[].bucket]' 2>"$err" || true)
-            if jq -e 'type == "array" and length > 0' <<<"${buckets:-null}" >/dev/null 2>&1; then
+            rc=0
+            buckets=$(gh pr checks "$num" --required --json bucket --jq '[.[].bucket]' 2>"$err") || rc=$?
+            if { [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ] || [ "$rc" -eq 8 ]; } \
+              && jq -e 'type == "array" and length > 0' <<<"${buckets:-null}" >/dev/null 2>&1; then
               if jq -e 'all(.[]; . == "pass" or . == "skipping")' <<<"$buckets" >/dev/null; then
                 # Fork heads and API errors must not abort the whole report.
                 if score=$(gh api "repos/$GH_REPO/commits/$sha/status" \
@@ -79,9 +82,11 @@ jobs:
           done
 
           # One tracking issue for good: the newest one with this exact title, open or closed.
-          read -r issue issue_state < <(gh issue list --state all --search "\"$TITLE\" in:title" --limit 20 \
-            --json number,title,state,createdAt \
-            | jq -r --arg t "$TITLE" '[.[] | select(.title == $t)] | sort_by(.createdAt) | last // empty | "\(.number) \(.state)"') || true
+          # A failed lookup must stop the run, or it would open a duplicate.
+          found=$(gh issue list --state all --search "\"$TITLE\" in:title" --limit 20 \
+            --json number,title,state,createdAt)
+          issue=$(jq -r --arg t "$TITLE" '[.[] | select(.title == $t)] | sort_by(.createdAt) | last | .number // empty' <<<"$found")
+          issue_state=$(jq -r --arg t "$TITLE" '[.[] | select(.title == $t)] | sort_by(.createdAt) | last | .state // empty' <<<"$found")
 
           if [ -z "$rows" ]; then
             if [ "${issue_state:-}" = "OPEN" ]; then
