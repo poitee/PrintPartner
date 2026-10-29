@@ -1,6 +1,6 @@
 # YAML flow-collection parity
 
-`yaml-flow-collections-node.json` records the literal outputs of js-yaml 5.4.3 for 686 inputs. A null expectation means js-yaml rejects the input.
+`yaml-flow-collections-node.json` records the literal outputs of js-yaml 5.5.0 for 686 inputs. A null expectation means js-yaml rejects the input.
 
 92 refusals cover four forms that saphyr-parser accepts and js-yaml rejects:
 

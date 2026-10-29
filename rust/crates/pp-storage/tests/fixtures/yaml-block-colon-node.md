@@ -1,8 +1,8 @@
 # YAML block-colon parity
 
-`yaml-block-colon-node.json` records js-yaml 5.4.3 for a block colon after a flow value and the block plain scalars that start with `]`, `}`, or `,`. A null expectation means js-yaml rejects the input.
+`yaml-block-colon-node.json` records js-yaml 5.5.0 for a block colon after a flow value and the block plain scalars that start with `]`, `}`, or `,`. A null expectation means js-yaml rejects the input.
 
-js-yaml reads `a:`, a flow list on the next line, a blank line, and `: ]` as the key `a` with an empty list and a null key whose value is `"]"`. The same colon reads `}`, `,`, and a longer plain scalar. A value can continue on a deeper line, so `a: ]` followed by `  more` loads as `"] more"`. A multiline scalar that stops at `:` on a later line is rejected. A flow `]` still closes the collection.
+js-yaml 5.5.0 starts no plain scalar with a flow indicator, in block context or in a flow. So `a: ]`, `- ,`, `]: x`, and `a:`, a comment line, then `  ]` are all rejected, as is the null key with value `]` in `a:`, a flow list on the next line, a blank line, and `: ]`. js-yaml 5.4.3 read those as block plain scalars. The same block colon still loads a plain value, so `: x` there is a null key whose value is `"x"`. An indicator after the first character, as in `a: x]`, and a quoted `"]"` still load.
 
 Regenerate from the repository root after `npm --prefix web ci`:
 

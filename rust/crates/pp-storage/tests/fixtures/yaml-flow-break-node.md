@@ -1,6 +1,6 @@
 # YAML flow-break parity
 
-`yaml-flow-break-node.json` records js-yaml 5.4.3 for a flow tag or anchor at the end of a line. A null expectation means js-yaml rejects the input.
+`yaml-flow-break-node.json` records js-yaml 5.5.0 for a flow tag or anchor at the end of a line. A null expectation means js-yaml rejects the input.
 
 js-yaml reads `k:` then `[!!str` and `]` on the next line as `{"k":[""]}`. The same empty node is a key when the next line is `:x`, so `- - {a: "a` / `   b", !!str` / `:x}` loads as `[[{"a":"a b","":"x"}]]`. A block parent may leave that closer or colon above the collection. `!!seq` and `!!map` load as an empty collection. `!!int`, `!!bool`, and `!!float` do not. A quoted continuation one column short of the collection is rejected, and so is a colon that does not separate a mapping key.
 

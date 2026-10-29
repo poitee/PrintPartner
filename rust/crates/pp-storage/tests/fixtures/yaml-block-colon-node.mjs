@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(new URL("../../../../../web/package.json", import.meta.url));
 const { version } = require("js-yaml/package.json");
-if (version !== "5.4.3") throw new Error(`Expected js-yaml 5.4.3, got ${version}`);
+if (version !== "5.5.0") throw new Error(`Expected js-yaml 5.5.0, got ${version}`);
 const { load } = require("js-yaml");
 
 const cases = [
@@ -42,6 +42,24 @@ const cases = [
   ["second-document", "]\n---\n]"],
   ["tag-int", "!!int ]"],
   ["explicit-same-line", "? ] : x"],
+  // GRE-963 class 1: the indicator after a comment line, and its controls.
+  ["comment-line-close", "a:\n# c\n  ]"],
+  ["comment-indented-brace", "a:\n # c\n  }"],
+  ["comment-line-comma", "a:\n# c\n  , y]"],
+  ["comment-line-trailing", "a:\n# c\n  ] # d"],
+  ["comment-line-open", "a:\n# c\n  ["],
+  ["comment-line-plain", "a:\n# c\n  x]"],
+  ["next-line", "a:\n  ]"],
+  ["next-line-more", "a:\n  ]\n  x"],
+  ["same-line-brace", "a: }"],
+  ["same-line-comma", "a: , b"],
+  ["sequence-comma", "- ,"],
+  ["nested-sequence", "a:\n  - ]"],
+  ["key-brace", "}: b"],
+  ["key-comma", ",: b"],
+  ["inner-close", "a: x]"],
+  ["inner-brace-comma", "a: x,y}"],
+  ["quoted-close", 'a: "]"'],
 ];
 
 const encoded = cases.map(([name, source]) => {

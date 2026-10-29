@@ -1,6 +1,6 @@
 # YAML line-break parity
 
-`yaml-line-breaks-node.json` records the literal outputs of js-yaml 5.4.3 for 443 inputs. CR, CRLF, and LF each cover plain, single-quoted, double-quoted, literal block, and folded block scalars. The corpus also covers blank lines, comments, dedented nodes, and verbatim string tags.
+`yaml-line-breaks-node.json` records the literal outputs of js-yaml 5.5.0 for 443 inputs. CR, CRLF, and LF each cover plain, single-quoted, double-quoted, literal block, and folded block scalars. The corpus also covers blank lines, comments, dedented nodes, and verbatim string tags.
 
 The five reviewer regressions are included unchanged. Eight tab/space combinations cover plain, flow, and block scalars with each line ending, including trailing whitespace at EOF. A null expectation means js-yaml rejects the input.
 

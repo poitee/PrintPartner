@@ -22,7 +22,7 @@ const seeds = [
 
 export function generate() {
   assert.equal(process.versions.node.split(".")[0], "22", "Run with Node 22");
-  assert.equal(version, "5.4.3", "Review literal outcomes before changing js-yaml versions");
+  assert.equal(version, "5.5.0", "Review literal outcomes before changing js-yaml versions");
   const cases = seeds.flatMap(([name, family, text]) => {
     const endings = text.includes("\n")
       ? [["lf", "\n"], ["cr", "\r"], ["crlf", "\r\n"]]
