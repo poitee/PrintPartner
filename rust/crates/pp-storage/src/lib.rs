@@ -1,6 +1,7 @@
 #[cfg(feature = "desktop_rebuild")]
 pub mod production;
 
+pub mod archive;
 #[cfg(feature = "desktop_rebuild")]
 mod auth_scheduler;
 #[cfg(feature = "desktop_rebuild")]
@@ -93,6 +94,7 @@ const READER_DRAIN: Duration = Duration::from_secs(5);
 enum Work {
     Setting(SettingCommand),
     Backup(PathBuf),
+    Archive(Box<archive::Job>),
 }
 enum WriterControl {
     PageCount,
@@ -285,6 +287,14 @@ fn execute(
         Work::Setting(command) => command,
         Work::Backup(path) => {
             schema::backup(connection, &path, false)?;
+            return Ok(true);
+        }
+        Work::Archive(job) => {
+            // Holding the write lock freezes every SQLite writer, in this
+            // process or another, until the last root entry is written.
+            let tx = writer_admission::begin_immediate(connection, admission)?;
+            archive::write(&tx, &job)?;
+            tx.rollback()?;
             return Ok(true);
         }
     };
@@ -835,7 +845,7 @@ impl WriterOwner {
             .recv()
             .map_err(|_| anyhow!("Writer stopped without disk quota result"))?
     }
-    pub fn backup(&self, destination: &Path) -> Result<()> {
+    fn checked_destination(&self, destination: &Path) -> Result<(PathBuf, PathBuf)> {
         let lease = self
             .lease
             .as_ref()
@@ -863,15 +873,38 @@ impl WriterOwner {
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
             "Backup destination must be a new file"
         );
-        let reply = self.client.enqueue(
-            Work::Backup(destination.to_owned()),
-            &AtomicBool::new(false),
-            Duration::from_secs(5),
-        )?;
+        Ok((destination, lease.data_dir().to_owned()))
+    }
+    fn run_backup(&self, work: Work) -> Result<()> {
+        let reply = self
+            .client
+            .enqueue(work, &AtomicBool::new(false), Duration::from_secs(5))?;
         reply
             .recv()
             .map_err(|_| anyhow!("Writer stopped without backup result"))??;
         Ok(())
+    }
+    pub fn backup(&self, destination: &Path) -> Result<()> {
+        let (destination, _) = self.checked_destination(destination)?;
+        self.run_backup(Work::Backup(destination))
+    }
+    /// Writes a validated app backup archive (Node's format 2) outside
+    /// managed storage. The database snapshot and every included root are
+    /// read while the writer holds the SQLite write lock.
+    pub fn create_archive(
+        &self,
+        destination: &Path,
+        request: archive::Request,
+    ) -> Result<archive::Metadata> {
+        let (destination, data_dir) = self.checked_destination(destination)?;
+        let metadata = archive::Metadata::new(&request.app_version, request.scope);
+        self.run_backup(Work::Archive(Box::new(archive::Job {
+            destination,
+            data_dir,
+            metadata: metadata.clone(),
+            request,
+        })))?;
+        Ok(metadata)
     }
     fn close(&mut self) -> Result<()> {
         if self.join.is_none() && self.lease.is_none() {
