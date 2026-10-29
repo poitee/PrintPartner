@@ -16,6 +16,7 @@ not repaired.
 | --- | --- |
 | Ready or empty | `200` `{profile_id, summary, parts}` |
 | Missing, cross-tenant, or an id that cannot name a Plan | `404` `Profile not found` |
+| An included Part names a custom or Spoolman filament | `503` `filament_lookup_unavailable` |
 | Compatibility dirty | `409` `Accepted Plan requires compatibility repair` |
 | Uninitialized | `409` `Accepted Plan operational state is not initialized` |
 | Integrity failure | `500` `Accepted Plan data is inconsistent` |
@@ -23,9 +24,16 @@ not repaired.
 | Writer queue full or storage stopped | `503` `Service temporarily unavailable` |
 | Anything else | `500` `Internal Server Error` |
 
-Filament labels come from the colour catalog only. Configured Spoolman
-enrichment, Review, Build Workflow and `/parts/{id}/assembled` are not part of
-this surface yet.
+The id is read with JavaScript `Number()` rules, as Node reads it, so `1.0`,
+`1e0`, `0x1` and ` 1 ` all name Plan 1.
+
+Filament labels come from the colour catalog only. Node also reads custom
+filaments from the data dir and Spoolman filaments over the network. Rust has
+neither reader yet, so a Plan whose included Parts name any filament id outside
+the catalog answers `503` instead of labels that may differ from Node's. That
+includes ids Node also leaves blank (deleted custom filaments, Spoolman turned
+off or unreachable). Review, Build Workflow and `/parts/{id}/assembled` are not
+part of this route yet.
 
 ```sh
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core \

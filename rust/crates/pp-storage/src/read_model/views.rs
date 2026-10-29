@@ -38,6 +38,22 @@ pub fn catalog_color(id: &str) -> Option<&'static Color> {
         .iter()
         .find(|c| c.id == id)
 }
+/// JavaScript `String.prototype.trim`: Node trims ids with this whitespace set,
+/// which differs from Rust's `str::trim` (U+0085, U+FEFF).
+pub fn js_trim(text: &str) -> &str {
+    const JS_SPACE: &[char] = &[
+        '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{a0}', '\u{1680}', '\u{2000}', '\u{2001}',
+        '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
+        '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+        '\u{feff}',
+    ];
+    text.trim_matches(JS_SPACE)
+}
+/// The built-in catalog colour a Part's filament id names, as Node's
+/// `resolveFilamentDisplaySync` finds it.
+pub fn part_catalog_color(filament_color_id: Option<&str>) -> Option<&'static Color> {
+    filament_color_id.and_then(|id| catalog_color(js_trim(id)))
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SpoolSummary {
     pub remaining_g: f64,
@@ -79,23 +95,19 @@ fn filament(
     part: &Part,
     provider: &dyn FilamentLookup,
 ) -> Result<(String, Option<String>, Vec<SpoolSummary>)> {
+    // Node resolves a trimmed catalog id before any provider, and its hex
+    // wins over the Part's custom hex.
+    if let Some(color) = part_catalog_color(part.filament_color_id.as_deref()) {
+        return Ok((color.label(), Some(color.hex.clone()), vec![]));
+    }
     let resolved = provider.for_part(
         part.filament_color_id.as_deref(),
         part.spoolman_spool_id.as_deref(),
     )?;
-    let catalog = part.filament_color_id.as_deref().and_then(catalog_color);
-    let fallback_hex = part
-        .filament_custom_hex
-        .clone()
-        .filter(|s| !s.is_empty())
-        .or_else(|| catalog.map(|c| c.hex.clone()));
+    let fallback_hex = part.filament_custom_hex.clone().filter(|s| !s.is_empty());
     Ok(match resolved {
         Some(value) => (value.combo_label, value.hex.or(fallback_hex), value.spools),
-        None => (
-            catalog.map(Color::label).unwrap_or_default(),
-            fallback_hex,
-            vec![],
-        ),
+        None => (String::new(), fallback_hex, vec![]),
     })
 }
 fn badge(spools: &[SpoolSummary]) -> String {

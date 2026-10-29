@@ -17,7 +17,7 @@ use axum::{
 use pp_storage::{
     auth::AuthFailure,
     read_model::{
-        ReadClient,
+        AcceptedRead, ReadClient,
         views::{self, CatalogOnly},
     },
 };
@@ -65,8 +65,8 @@ struct App {
 
 /// Mounts Accepted Plan Checkoff GET+HEAD at `/`, `/api/v1`, and `/api/v2`
 /// when `PP_DESKTOP_REBUILD` was exactly `1` or `true`; otherwise nothing.
-/// Filament labels come from the colour catalog only; configured Spoolman
-/// enrichment is not part of this surface yet.
+/// Filament labels come from the colour catalog only; Plans that name custom
+/// or Spoolman filaments answer 503 until those lookups are ported.
 pub fn accepted_router(config: AcceptedHttpConfig, client: ReadClient) -> Router {
     if !config.enabled {
         return Router::new();
@@ -141,6 +141,9 @@ async fn checkoff(
         let ids = profile.as_slice();
         let batch = client.read(presented.into_credential(), ids, &cancelled, wait)?;
         Ok::<_, anyhow::Error>(match batch.builds.first() {
+            Some(build) if needs_filament_lookup(&build.accepted) => {
+                Some(json!({"kind":"filament_lookup_unavailable"}))
+            }
             Some(build) => Some(views::checkoff(
                 build.profile_id,
                 &build.accepted,
@@ -163,13 +166,7 @@ async fn checkoff(
 /// exponent and `0x`/`0o`/`0b` forms are numbers. Only a safe positive integer
 /// can name a Plan.
 fn plan_id(raw: &str) -> Option<i64> {
-    const JS_SPACE: &[char] = &[
-        '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{a0}', '\u{1680}', '\u{2000}', '\u{2001}',
-        '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
-        '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
-        '\u{feff}',
-    ];
-    let text = raw.trim_matches(JS_SPACE);
+    let text = views::js_trim(raw);
     let radix = |digits: &str, radix: u32| {
         (!digits.is_empty() && digits.chars().all(|c| c.is_digit(radix)))
             .then(|| u64::from_str_radix(digits, radix).ok())
@@ -184,6 +181,26 @@ fn plan_id(raw: &str) -> Option<i64> {
         _ => text.parse::<f64>().ok(),
     }?;
     (value.fract() == 0.0 && (1.0..=MAX_SAFE_ID as f64).contains(&value)).then_some(value as i64)
+}
+
+/// Node also resolves custom filaments from the data dir and Spoolman
+/// filaments, which this server cannot read yet. A Plan whose included Parts
+/// name any non-catalog filament is refused rather than answered with labels
+/// that may differ from Node's.
+fn needs_filament_lookup(read: &AcceptedRead) -> bool {
+    let AcceptedRead::Ready { snapshot } = read else {
+        return false;
+    };
+    snapshot
+        .parts
+        .iter()
+        .filter(|part| part.included)
+        .any(|part| {
+            part.filament_color_id
+                .as_deref()
+                .is_some_and(|id| !views::js_trim(id).is_empty())
+                && views::part_catalog_color(part.filament_color_id.as_deref()).is_none()
+        })
 }
 
 /// Maps a `views::checkoff` result to Node's `/plans/:id/checkoff` responses.
@@ -202,6 +219,14 @@ fn present(view: Value, head: bool) -> Response {
         Some("integrity_failure") => failure(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Accepted Plan data is inconsistent",
+        ),
+        Some("filament_lookup_unavailable") => json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &json!({
+                "detail": "Custom and Spoolman filament details are not available on this server yet",
+                "code": "filament_lookup_unavailable",
+            }),
+            false,
         ),
         _ => failure(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
     }
@@ -303,6 +328,14 @@ mod tests {
                 500,
                 json!({"detail":"Accepted Plan data is inconsistent"}),
             ),
+            (
+                json!({"kind":"filament_lookup_unavailable"}),
+                503,
+                json!({
+                    "detail": "Custom and Spoolman filament details are not available on this server yet",
+                    "code": "filament_lookup_unavailable",
+                }),
+            ),
         ] {
             assert_eq!(body(present(view, false)).await, (status, expected));
         }
@@ -362,5 +395,87 @@ mod tests {
                 (status, json!({ "detail": detail }))
             );
         }
+    }
+
+    /// The Node-produced fixture's Ready snapshot: Part 2 is included, the
+    /// other Part is excluded.
+    fn ready() -> AcceptedRead {
+        use pp_storage::{Limits, WriterOwner, auth::Secret, read_model::Credential};
+        let directory = crate::scratch::Scratch::new("pp-accepted-unit-");
+        std::fs::create_dir_all(directory.join("repos/1/revisions/accepted")).unwrap();
+        std::fs::write(
+            directory.join("print-partner.db"),
+            include_bytes!("../../pp-storage/tests/fixtures/accepted-plan-node.db"),
+        )
+        .unwrap();
+        let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
+        let mut batch = owner
+            .accepted_reads()
+            .unwrap()
+            .read(
+                Credential::Session(Secret::new("read-fixture-secret".into())),
+                &[1],
+                &AtomicBool::new(false),
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        owner.shutdown().unwrap();
+        batch.builds.remove(0).accepted
+    }
+
+    fn with_filament(color: Option<&str>, hex: Option<&str>, included: bool) -> AcceptedRead {
+        let mut read = ready();
+        let AcceptedRead::Ready { snapshot } = &mut read else {
+            panic!("fixture is ready")
+        };
+        let part = snapshot
+            .parts
+            .iter_mut()
+            .find(|part| part.included == included)
+            .unwrap();
+        part.filament_color_id = color.map(Into::into);
+        part.filament_custom_hex = hex.map(Into::into);
+        read
+    }
+
+    #[test]
+    fn ticket_t_61_read_model_http_refuses_filaments_it_cannot_resolve() {
+        const CATALOG: &str = "abs-matte::black-pantone-7c";
+        for (color, included, refused) in [
+            (None, true, false),
+            (Some(""), true, false),
+            (Some(" \u{a0}\t"), true, false),
+            (Some(CATALOG), true, false),
+            (Some("\u{feff} abs-matte::black-pantone-7c \n"), true, false),
+            (Some("custom-ocean-blue"), true, true),
+            (Some("spoolman:shop:filament:3"), true, true),
+            (Some("custom-ocean-blue"), false, false),
+            (Some("spoolman:shop:filament:3"), false, false),
+        ] {
+            assert_eq!(
+                needs_filament_lookup(&with_filament(color, None, included)),
+                refused,
+                "{color:?} included={included}"
+            );
+        }
+        for read in [AcceptedRead::Missing, AcceptedRead::CompatibilityDirty] {
+            assert!(!needs_filament_lookup(&read));
+        }
+    }
+
+    #[test]
+    fn ticket_t_61_read_model_http_catalog_hex_wins_like_node() {
+        // Node's `filamentContext.resolve` trims the id and returns the
+        // catalog colour, so `resolved.hex` wins over the Part's custom hex.
+        let read = with_filament(Some(" abs-matte::black-pantone-7c "), Some("#123456"), true);
+        let part = &views::checkoff(1, &read, &CatalogOnly).unwrap()["body"]["parts"][0];
+        assert_eq!(part["filament_display"], "ABS Matte · Black (Pantone 7C)");
+        assert_eq!(part["filament_hex"], "#c0afa1");
+        // Without a filament id, Node's `resolvePartFilamentHex` uses the
+        // custom hex and the label stays empty.
+        let read = with_filament(None, Some("#123456"), true);
+        let part = &views::checkoff(1, &read, &CatalogOnly).unwrap()["body"]["parts"][0];
+        assert_eq!(part["filament_display"], "");
+        assert_eq!(part["filament_hex"], "#123456");
     }
 }
