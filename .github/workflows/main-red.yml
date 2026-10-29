@@ -12,6 +12,8 @@ on:
       - Desktop runtime
       - Desktop WebKitGTK WebGL smoke
       - Native macOS bundle
+      - Optional integration smoke
+      - pages
       - PR evidence tests
       - Rust cross-OS
       - Validate manifests

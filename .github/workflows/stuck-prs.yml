@@ -45,9 +45,11 @@ jobs:
             reasons=""
 
             # gh exits non-zero while checks pend or fail; the JSON is still printed.
+            # No JSON at all means an API error or no required checks: report it, don't drop the PR.
             buckets=$(gh pr checks "$num" --required --json bucket --jq '[.[].bucket]' 2>/dev/null || true)
-            green=$(jq -r 'if (. // []) | length > 0 then all(.[]; . == "pass" or . == "skipping") else false end' <<<"${buckets:-[]}" 2>/dev/null || echo false)
-            if [ "$green" = "true" ]; then
+            if ! jq -e 'type == "array" and length > 0' <<<"${buckets:-null}" >/dev/null 2>&1; then
+              reasons="required checks unreadable"
+            elif jq -e 'all(.[]; . == "pass" or . == "skipping")' <<<"$buckets" >/dev/null; then
               score=$(gh api "repos/$GH_REPO/commits/$sha/status" \
                 --jq '[.statuses[] | select(.context == "pp/score" and .state == "success")] | length')
               if [ "$score" -eq 0 ]; then
