@@ -8,7 +8,7 @@ PP_DEV_NODE=/absolute/path/to/node bash rust/scripts/desktop-dev.sh
 
 The command builds the trusted React assets and real compatibility server, creates a new stage, embeds its measured inventory, and starts one native window with isolated temporary data. Set `PP_DEV_DATA` to an existing development directory to keep that directory across runs. Set `PP_DEV_STAGE` to a new directory to retain its staged files. The stage command refuses to overwrite an existing directory.
 
-Closing the window hides it while core continues. The tray has Show, service status, a guarded Restart service action, and Quit. Quit and supported OS exits wait for the consuming core shutdown before the process returns. Navigation stays at the exact core origin and popups are denied. The enabled rebuild shell can show a plain notice when a saved port was busy, restore the three portable browser preferences on that new address, and open the Sponsor action. Both need `desktop_rebuild` at build time and `PP_DESKTOP_REBUILD` set to `1` or `true`. Other external handoff flows still need a validated native UX.
+Closing the window hides it while core continues. The tray has Show, service status, a guarded Restart service action, and Quit. Quit and supported OS exits wait for the consuming core shutdown before the process returns. Navigation stays at the exact core origin and popups are denied. The enabled rebuild shell can show a plain notice when a saved port was busy, restore the three portable browser preferences on that new address, and open the Sponsor action. Both need `desktop_rebuild` at build time and `PP_DESKTOP_REBUILD` set to `1` or `true`. Downloads are covered under "Verify downloads" below. Other external handoff flows still need a validated native UX.
 
 Set `PP_DESKTOP_RECOVERY_UI=1` to add View logs and Open data folder to the native tray. This partial recovery UI defaults to off. View logs reads a bounded recent history and removes unknown events and fields before display. It remains available when the compatibility service stops. Restart service admits one request per crash-guard episode. Local crash records retain only known failure categories and numeric exit codes or signals. They contain no backend messages, paths, credentials, or panic payloads.
 
@@ -97,3 +97,21 @@ dbus-run-session -- xvfb-run -a python3 rust/tests/native_sponsor.py \
 ```
 
 The verifier records the browser handoff through an isolated `xdg-open` shim, so verification does not launch an external browser.
+
+## Verify downloads
+
+Every build of the shell handles webview downloads itself; no feature or runtime gate is involved. The `main` webview may download only from the exact core origin, or from a `blob:` URL that origin created. Each file goes to the user's Downloads directory. Only the last component of the webview's proposed path is kept, and characters or names that Windows, macOS or Linux treat specially are removed. A name that any existing path uses, including a dangling symlink, or that an earlier download in this session took, gets the next free ` (n)` suffix. Without a Downloads directory, the shell refuses the download. Logs record only the URL scheme and the outcome.
+
+The check sees the request URL, so a same-origin response that redirects elsewhere is not checked again. The shell does not restrict file types or check file contents. On Linux, WebKitGTK sends an `<a download>` click through the navigation check first. That check rejects `blob:` documents, so blob downloads save nothing there.
+
+Run the unit checks, then the native verifier on Linux with WebKitWebDriver and Xvfb:
+
+```sh
+PP_DESKTOP_RELEASE_MANIFEST=/absolute/path/to/stage/bundle-manifest.json \
+  cargo test --locked --manifest-path rust/Cargo.toml -p pp-desktop --lib downloads
+dbus-run-session -- xvfb-run -a python3 rust/tests/native_downloads.py \
+  --binary rust/target/debug/pp-desktop \
+  --stage /absolute/path/to/stage --output /tmp/gre353-downloads-proof
+```
+
+The verifier plants a dangling `escape.json` symlink in an isolated Downloads directory. It then requires two same-origin downloads to land as `escape (1).json` and `escape (2).json`, the symlink target to stay absent, and `data:` and `blob:` clicks to save nothing.
