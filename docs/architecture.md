@@ -54,7 +54,7 @@ The workspace is `rust/Cargo.toml`. A dependency marked "flagged" compiles only 
 | `pp-api-types` | Wire DTOs, validation and parsers, such as autosave and printer status. | `pp-domain` |
 | `pp-contracts` | Contract facade over `pp-api-types` for parity tooling and external consumers. | `pp-api-types` |
 | `pp-net` | Checked outbound connections and target canonicalization. | none |
-| `pp-drivers` | Printer adapters. Moonraker status today. | `pp-net`, `pp-api-types` |
+| `pp-drivers` | Printer adapters. Moonraker status today, plus unrouted Moonraker driver reads. | `pp-net`, `pp-api-types` |
 | `pp-services` | Native Orca and Bambu slicer discovery. | none |
 | `pp-storage` | SQLite owner: migrations, settings, read model, jobs, catalog, storage lease and backups. | `pp-domain`, `pp-contracts` (both flagged) |
 | `pp-source` | Immutable Source snapshots and bounded ZIP extraction. | none |

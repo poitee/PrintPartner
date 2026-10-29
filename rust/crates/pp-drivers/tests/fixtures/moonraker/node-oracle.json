@@ -1,0 +1,275 @@
+{
+  "recorded": {
+    "test_connection": {
+      "ok": true,
+      "message": "Connected (klippy: ready)"
+    },
+    "status": {
+      "state": "printing",
+      "progress": 43,
+      "filename": "bracket.gcode",
+      "ip_address": "localhost",
+      "uptime_seconds": 86401,
+      "nozzle_temperature_c": 210.2,
+      "nozzle_target_c": 215,
+      "bed_temperature_c": 59.8,
+      "bed_target_c": 60,
+      "message": "Printing bracket.gcode"
+    },
+    "filament_used": 1234.5678,
+    "object_list": [
+      "BRACKET_ID_0_COPY_0",
+      "lid.stl",
+      "BRACKET_ID_0_COPY_1"
+    ],
+    "cameras": {
+      "ok": [
+        {
+          "id": "55d3b9f7-3c2b-4f6e-9a8e-1c1f2b7a0e01",
+          "name": "Nozzle cam",
+          "view": "mjpeg",
+          "service": "mjpegstreamer-adaptive",
+          "aspect_ratio": "16:9"
+        },
+        {
+          "id": "7b1f0c2e-0000-4000-8000-000000000002",
+          "name": "Bed cam",
+          "view": "snapshot",
+          "service": "webrtc-camerastreamer",
+          "aspect_ratio": "4:3"
+        },
+        {
+          "id": "camera-4",
+          "name": "Camera 5",
+          "view": "mjpeg",
+          "service": "ustreamer"
+        },
+        {
+          "id": "camera-7",
+          "name": "Legacy",
+          "view": "mjpeg"
+        }
+      ]
+    },
+    "browse": {
+      "": {
+        "ok": {
+          "path": "",
+          "entries": [
+            {
+              "kind": "directory",
+              "path": "plates",
+              "name": "plates",
+              "modified_at": "2024-10-01T12:00:00.123Z"
+            },
+            {
+              "kind": "directory",
+              "path": "Lid & Base #2",
+              "name": "Lid & Base #2"
+            },
+            {
+              "kind": "file",
+              "path": "bracket.gcode",
+              "name": "bracket.gcode",
+              "size_bytes": 1048576,
+              "modified_at": "2024-10-02T12:00:00.500Z"
+            },
+            {
+              "kind": "file",
+              "path": "no-stamp.gcode",
+              "name": "no-stamp.gcode"
+            },
+            {
+              "kind": "file",
+              "path": "strings.txt",
+              "name": "strings.txt"
+            }
+          ]
+        }
+      },
+      "/plates/": {
+        "ok": {
+          "path": "plates",
+          "entries": [
+            {
+              "kind": "directory",
+              "path": "plates/plates",
+              "name": "plates",
+              "modified_at": "2024-10-01T12:00:00.123Z"
+            },
+            {
+              "kind": "directory",
+              "path": "plates/Lid & Base #2",
+              "name": "Lid & Base #2"
+            },
+            {
+              "kind": "file",
+              "path": "plates/bracket.gcode",
+              "name": "bracket.gcode",
+              "size_bytes": 1048576,
+              "modified_at": "2024-10-02T12:00:00.500Z"
+            },
+            {
+              "kind": "file",
+              "path": "plates/no-stamp.gcode",
+              "name": "no-stamp.gcode"
+            },
+            {
+              "kind": "file",
+              "path": "plates/strings.txt",
+              "name": "strings.txt"
+            }
+          ]
+        }
+      },
+      "Lid & Base #2": {
+        "ok": {
+          "path": "Lid & Base #2",
+          "entries": [
+            {
+              "kind": "directory",
+              "path": "Lid & Base #2/plates",
+              "name": "plates",
+              "modified_at": "2024-10-01T12:00:00.123Z"
+            },
+            {
+              "kind": "directory",
+              "path": "Lid & Base #2/Lid & Base #2",
+              "name": "Lid & Base #2"
+            },
+            {
+              "kind": "file",
+              "path": "Lid & Base #2/bracket.gcode",
+              "name": "bracket.gcode",
+              "size_bytes": 1048576,
+              "modified_at": "2024-10-02T12:00:00.500Z"
+            },
+            {
+              "kind": "file",
+              "path": "Lid & Base #2/no-stamp.gcode",
+              "name": "no-stamp.gcode"
+            },
+            {
+              "kind": "file",
+              "path": "Lid & Base #2/strings.txt",
+              "name": "strings.txt"
+            }
+          ]
+        }
+      },
+      "missing": {
+        "error": "Moonraker directory listing returned HTTP 404"
+      },
+      "../escape": {
+        "error": "Invalid Moonraker print-file path"
+      },
+      "a\\b": {
+        "error": "Invalid Moonraker print-file path"
+      }
+    },
+    "requests": [
+      "GET /server/info",
+      "GET /printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed",
+      "GET /machine/proc_stats",
+      "GET /printer/objects/query?print_stats",
+      "GET /printer/objects/query?exclude_object",
+      "GET /server/webcams/list",
+      "GET /server/files/directory?path=gcodes&extended=true",
+      "GET /server/files/directory?path=gcodes/plates&extended=true",
+      "GET /server/files/directory?path=gcodes/Lid%20%26%20Base%20%232&extended=true",
+      "GET /server/files/directory?path=gcodes/missing&extended=true"
+    ]
+  },
+  "http-500": {
+    "test_connection": {
+      "ok": false,
+      "message": "Moonraker returned HTTP 500"
+    },
+    "status": {
+      "state": "offline",
+      "message": "Moonraker returned HTTP 500"
+    },
+    "filament_used": null,
+    "object_list": [],
+    "cameras": {
+      "error": "Moonraker webcam list returned HTTP 500"
+    },
+    "browse": {
+      "": {
+        "error": "Moonraker directory listing returned HTTP 500"
+      },
+      "/plates/": {
+        "error": "Moonraker directory listing returned HTTP 500"
+      },
+      "Lid & Base #2": {
+        "error": "Moonraker directory listing returned HTTP 500"
+      },
+      "missing": {
+        "error": "Moonraker directory listing returned HTTP 500"
+      },
+      "../escape": {
+        "error": "Invalid Moonraker print-file path"
+      },
+      "a\\b": {
+        "error": "Invalid Moonraker print-file path"
+      }
+    },
+    "requests": [
+      "GET /server/info",
+      "GET /printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed",
+      "GET /printer/objects/query?print_stats",
+      "GET /printer/objects/query?exclude_object",
+      "GET /server/webcams/list",
+      "GET /server/files/directory?path=gcodes&extended=true",
+      "GET /server/files/directory?path=gcodes/plates&extended=true",
+      "GET /server/files/directory?path=gcodes/Lid%20%26%20Base%20%232&extended=true",
+      "GET /server/files/directory?path=gcodes/missing&extended=true"
+    ]
+  },
+  "http-404": {
+    "test_connection": {
+      "ok": false,
+      "message": "Moonraker returned HTTP 404"
+    },
+    "status": {
+      "state": "offline",
+      "message": "Moonraker returned HTTP 404"
+    },
+    "filament_used": null,
+    "object_list": [],
+    "cameras": {
+      "ok": []
+    },
+    "browse": {
+      "": {
+        "error": "Moonraker directory listing returned HTTP 404"
+      },
+      "/plates/": {
+        "error": "Moonraker directory listing returned HTTP 404"
+      },
+      "Lid & Base #2": {
+        "error": "Moonraker directory listing returned HTTP 404"
+      },
+      "missing": {
+        "error": "Moonraker directory listing returned HTTP 404"
+      },
+      "../escape": {
+        "error": "Invalid Moonraker print-file path"
+      },
+      "a\\b": {
+        "error": "Invalid Moonraker print-file path"
+      }
+    },
+    "requests": [
+      "GET /server/info",
+      "GET /printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed",
+      "GET /printer/objects/query?print_stats",
+      "GET /printer/objects/query?exclude_object",
+      "GET /server/webcams/list",
+      "GET /server/files/directory?path=gcodes&extended=true",
+      "GET /server/files/directory?path=gcodes/plates&extended=true",
+      "GET /server/files/directory?path=gcodes/Lid%20%26%20Base%20%232&extended=true",
+      "GET /server/files/directory?path=gcodes/missing&extended=true"
+    ]
+  }
+}
