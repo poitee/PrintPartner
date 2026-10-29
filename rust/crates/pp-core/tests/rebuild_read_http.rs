@@ -293,6 +293,15 @@ mod with_feature {
                 "{path}"
             );
         }
+        // The same router answers Part assembled reads, which an empty Plan
+        // has none of.
+        for path in ["/parts/1/assembled", "/api/v1/parts/1/assembled"] {
+            assert_eq!(
+                server.json(Method::GET, path, &headers, None).await,
+                (404, json!({"detail": "Part not found"})),
+                "{path}"
+            );
+        }
 
         let (status, created) = server
             .json(
