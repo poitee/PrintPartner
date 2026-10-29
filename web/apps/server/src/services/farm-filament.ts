@@ -372,18 +372,47 @@ export function idleForLabel(idleSince: string | null, now: number = Date.now())
   return `${mins}m`;
 }
 
-/** Fleet display name per printer id, so every tool names a printer the same way. */
-export function printerNames(fleet: readonly Pick<PrinterMachine, "id" | "name">[]): Map<string, string> {
-  return new Map(fleet.map((m) => [m.id, m.name]));
+/** A fleet printer's id and display name, as every tool should report it. */
+export type FleetPrinter = { id: string; name: string };
+
+/**
+ * Maps a stored print's printer_id and integration_id to its fleet printer, so
+ * every tool names a printer the same way. Stored printer ids are not always
+ * fleet ids (discovered prints use "default"), so a host linked to exactly one
+ * fleet printer also identifies it. Unknown printers keep their stored id.
+ */
+export function fleetPrinterResolver(
+  fleet: readonly Pick<PrinterMachine, "id" | "name" | "integration_id">[],
+): (printerId: string, integrationId?: string | null) => FleetPrinter | null {
+  const byId = new Map(fleet.map((m) => [m.id, m]));
+  const byHost = new Map<string, (typeof fleet)[number] | null>();
+  for (const m of fleet) {
+    if (!m.integration_id) continue;
+    byHost.set(m.integration_id, byHost.has(m.integration_id) ? null : m);
+  }
+  return (printerId, integrationId) => {
+    const m = byId.get(printerId) ?? (integrationId ? byHost.get(integrationId) : undefined);
+    return m ? { id: m.id, name: m.name } : null;
+  };
 }
 
-type SeenLink = Pick<PrinterCheckoffLink, "printer_id" | "host_name" | "host_outcome" | "completed_at" | "created_at">;
-type SeenUnattributed = Pick<UnattributedPrint, "printer_id" | "host_name" | "completed_at" | "claimed_profile_id">;
+type SeenLink = Pick<
+  PrinterCheckoffLink,
+  "printer_id" | "integration_id" | "host_name" | "host_outcome" | "completed_at" | "created_at"
+>;
+type SeenUnattributed = Pick<
+  UnattributedPrint,
+  "printer_id" | "integration_id" | "host_name" | "completed_at" | "claimed_profile_id"
+>;
 
 export type SeenPrint = {
+  /** Fleet printer id when known, else the stored printer_id. */
   printer_id: string;
-  host_name: string;
+  printer_name: string;
+  /** When the host finished the print, or when the link was made if no finish time was stored. */
   at: string;
+  /** True when `at` is the host's finish time, so it can drive idle_since. */
+  finished_at_known: boolean;
   outcome: "completed" | "failed" | "cancelled";
   attached_to_plan: boolean;
 };
@@ -391,12 +420,20 @@ export type SeenPrint = {
 /**
  * Prints the printers reported finishing, failing or being cancelled, whether or
  * not a Plan owns them. Checkoff links belong to a Plan; unattributed prints
- * belong to one only once claimed. Links still printing are not counted.
+ * belong to one only once claimed. The poller stores an unattributed print only
+ * when no link has that host and file, so the two lists do not overlap. Links
+ * still printing are not counted.
  */
 export function printsSeenOnPrinters(
   links: readonly SeenLink[],
   unattributed: readonly SeenUnattributed[],
+  resolve: ReturnType<typeof fleetPrinterResolver>,
 ): SeenPrint[] {
+  const printer = (p: { printer_id: string; integration_id: string; host_name: string }) => {
+    const fleetPrinter = resolve(p.printer_id, p.integration_id);
+    const id = fleetPrinter?.id ?? (p.printer_id.trim() || "unassigned");
+    return { printer_id: id, printer_name: fleetPrinter?.name ?? (p.host_name || id) };
+  };
   const seen: SeenPrint[] = [];
   for (const link of links) {
     const outcome = link.host_outcome === "success" ? "completed"
@@ -405,18 +442,18 @@ export function printsSeenOnPrinters(
       : null;
     if (!outcome) continue;
     seen.push({
-      printer_id: link.printer_id,
-      host_name: link.host_name,
+      ...printer(link),
       at: link.completed_at ?? link.created_at,
+      finished_at_known: link.completed_at != null,
       outcome,
       attached_to_plan: true,
     });
   }
   for (const print of unattributed) {
     seen.push({
-      printer_id: print.printer_id,
-      host_name: print.host_name,
+      ...printer(print),
       at: print.completed_at,
+      finished_at_known: true,
       outcome: "completed",
       attached_to_plan: print.claimed_profile_id != null,
     });
@@ -425,17 +462,16 @@ export function printsSeenOnPrinters(
 }
 
 /** Totals and a per-printer list for prints seen at or after `since`. */
-export function printsSeenSummary(seen: readonly SeenPrint[], since: string, names: Map<string, string>) {
+export function printsSeenSummary(seen: readonly SeenPrint[], since: string) {
   const inWindow = seen.filter((p) => p.at >= since);
   const byPrinter = new Map<string, {
     printer_id: string; printer_name: string; seen: number; completed: number; failed: number; cancelled: number;
   }>();
   for (const print of inWindow) {
-    const id = print.printer_id.trim() || "unassigned";
-    let row = byPrinter.get(id);
+    let row = byPrinter.get(print.printer_id);
     if (!row) {
-      row = { printer_id: id, printer_name: names.get(id) ?? (print.host_name || id), seen: 0, completed: 0, failed: 0, cancelled: 0 };
-      byPrinter.set(id, row);
+      row = { printer_id: print.printer_id, printer_name: print.printer_name, seen: 0, completed: 0, failed: 0, cancelled: 0 };
+      byPrinter.set(print.printer_id, row);
     }
     row.seen += 1;
     row[print.outcome] += 1;

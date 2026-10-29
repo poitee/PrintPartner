@@ -79,13 +79,15 @@ describe("GRE-1002 farm and print stats you can trust", () => {
   function seedShop(): void {
     saveFleet(repo, fleet);
     // 16 completed prints attached to no plan, 8 per printer, 17 to 46 days ago.
+    // Stored like the checkoff poller stores them: printer_id "default" and the
+    // host's own name, so only the integration id ties them to a fleet printer.
     for (let i = 0; i < 16; i += 1) {
       const trident = i % 2 === 0;
       saveUnattributedPrint(repo, {
         id: randomUUID(),
         integration_id: trident ? "host-trident" : "host-redoubt",
-        printer_id: trident ? "trident" : "redoubt",
-        host_name: trident ? "Trident" : "Redoubt",
+        printer_id: "default",
+        host_name: trident ? "trident.local" : "redoubt.local",
         filename: `plate-${i}.gcode`,
         completed_at: daysAgo(17 + i * 2),
         gcode_objects: [],
@@ -128,6 +130,18 @@ describe("GRE-1002 farm and print stats you can trust", () => {
     expect(byId.redoubt.seen).toBeGreaterThanOrEqual(8);
     expect(byId.trident).toMatchObject({ printer_name: "Trident", completed: 8, failed: 0, cancelled: 0 });
     expect(stats.empty_window).toBeUndefined();
+  });
+
+  it("1: prints on a host shared by two fleet printers keep their stored id instead of guessing", async () => {
+    saveFleet(repo, [machine("a", "A", "shared-host"), machine("b", "B", "shared-host")]);
+    saveUnattributedPrint(repo, {
+      id: randomUUID(), integration_id: "shared-host", printer_id: "default", host_name: "shared.local",
+      filename: "x.gcode", completed_at: daysAgo(1), gcode_objects: [], candidates: [],
+    });
+    const seen = (await call("get_print_stats", { hours: 48 })).prints_seen_on_printers;
+    expect(seen.by_printer).toEqual([
+      { printer_id: "default", printer_name: "shared.local", seen: 1, completed: 1, failed: 0, cancelled: 0 },
+    ]);
   });
 
   it("2: failed and cancelled checkoff prints count as seen; still-watching ones do not", async () => {
@@ -186,6 +200,17 @@ describe("GRE-1002 farm and print stats you can trust", () => {
     }
   });
 
+  it("6: a failed print with no finish time does not set idle_since", async () => {
+    saveFleet(repo, [machine("coreone", "CoreOne", "host-coreone")]);
+    repo.setSetting("printer.checkoff_links", JSON.stringify([{
+      id: "f", profile_id: 1, integration_id: "host-coreone", printer_id: "coreone", host_name: "CoreOne",
+      filename: "x.gcode", units: [], saw_active: true, created_at: daysAgo(3), state: "host_failed",
+      host_outcome: "failed",
+    }]));
+    const farm = await call("get_farm_status", {}, integrationPort({ "host-coreone": { state: "idle" } }));
+    expect(farm.printers[0]).toMatchObject({ state: "idle", idle_since: null, idle_for: "unknown" });
+  });
+
   it("6: idle_for formats days, hours and minutes", () => {
     const now = Date.parse("2026-10-29T12:00:00Z");
     expect(idleForLabel(null, now)).toBe("unknown");
@@ -210,8 +235,8 @@ describe("GRE-1002 farm and print stats you can trust", () => {
         .map((l: { host_name: string }) => l.host_name),
     ]);
     expect([...names]).toEqual(["Bambu H2D"]);
-    expect(checkoff.unattributed.find((u: { printer_id: string }) => u.printer_id === "trident").host_name)
-      .toBe("Trident");
+    expect(new Set(checkoff.unattributed.map((u: { host_name: string }) => u.host_name)))
+      .toEqual(new Set(["Trident", "Redoubt"]));
   });
 
   it("8: an empty window says so in words and names the window start", async () => {
