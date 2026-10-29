@@ -153,7 +153,19 @@ impl Driver {
                     reply.status
                 )));
             }
-            let mut status = recorded_status(&reply.body, self.base()?)?;
+            let base = self.base()?;
+            let mut status = match recorded_status(&reply.body, base) {
+                Ok(status) => status,
+                // Node reports JSON without `result.status` as unknown; the
+                // watcher fails closed on it instead.
+                Err(_) if serde_json::from_slice::<Value>(&reply.body).is_ok() => {
+                    let mut status = Status::unknown("");
+                    status.message = None;
+                    status.ip_address = Url::parse(base)?.host_str().map(str::to_owned);
+                    status
+                }
+                Err(error) => return Err(error),
+            };
             status.uptime_seconds = self.uptime().await;
             Ok::<_, anyhow::Error>(status)
         }
@@ -272,17 +284,22 @@ impl Driver {
         } else {
             format!("{requested}/")
         };
-        let directories = rows("dirs").filter_map(|row| {
-            let name = entry_name(row.get("dirname"))?;
-            Some(StorageEntry::Directory {
+        let mut entries = Vec::new();
+        for row in rows("dirs") {
+            let Some(name) = entry_name(row.get("dirname")) else {
+                continue;
+            };
+            entries.push(StorageEntry::Directory {
                 path: format!("{prefix}{name}"),
                 name,
-                modified_at: modified_at(row.get("modified")),
-            })
-        });
-        let files = rows("files").filter_map(|row| {
-            let name = entry_name(row.get("filename"))?;
-            Some(StorageEntry::File {
+                modified_at: modified_at(row.get("modified"))?,
+            });
+        }
+        for row in rows("files") {
+            let Some(name) = entry_name(row.get("filename")) else {
+                continue;
+            };
+            entries.push(StorageEntry::File {
                 path: format!("{prefix}{name}"),
                 name,
                 size_bytes: row
@@ -290,12 +307,12 @@ impl Driver {
                     .and_then(Value::as_f64)
                     .filter(|v| v.is_finite() && *v >= 0.0)
                     .map(|v| v.round() as u64),
-                modified_at: modified_at(row.get("modified")),
-            })
-        });
+                modified_at: modified_at(row.get("modified"))?,
+            });
+        }
         Ok(StorageListing {
             path: requested,
-            entries: directories.chain(files).collect(),
+            entries,
         })
     }
 }
@@ -395,13 +412,17 @@ fn encode_uri_component(segment: &str) -> String {
 }
 
 /// Moonraker reports `modified: 0` when it has no timestamp; that stays absent.
-/// Node's `toISOString()` throws past year 9999; such values are omitted here.
-fn modified_at(raw: Option<&Value>) -> Option<String> {
-    let seconds = raw?.as_f64().filter(|v| v.is_finite() && *v > 0.0)?;
+/// Matches `new Date(seconds * 1000).toISOString()`: years past 9999 print as
+/// `+YYYYYY`, and a time past the ECMAScript limit fails the whole listing.
+fn modified_at(raw: Option<&Value>) -> Result<Option<String>> {
+    let Some(seconds) = raw
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+    else {
+        return Ok(None);
+    };
     let millis = (seconds * 1000.0).trunc();
-    if millis >= 253_402_300_800_000.0 {
-        return None;
-    }
+    ensure!(millis <= 8.64e15, "Invalid time value");
     let millis = millis as i64;
     let (days, rest) = (millis / 86_400_000, millis % 86_400_000);
     // Howard Hinnant's civil_from_days, for days since 1970-01-01 (non-negative).
@@ -414,13 +435,18 @@ fn modified_at(raw: Option<&Value>) -> Option<String> {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    Some(format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+    let year = if year > 9999 {
+        format!("+{year:06}")
+    } else {
+        format!("{year:04}")
+    };
+    Ok(Some(format!(
+        "{year}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
         rest / 3_600_000,
         rest / 60_000 % 60,
         rest / 1000 % 60,
         rest % 1000
-    ))
+    )))
 }
 
 #[cfg(test)]
@@ -434,17 +460,22 @@ mod tests {
             (951_782_400.0, Some("2000-02-29T00:00:00.000Z")),
             (1_727_784_000.123_9, Some("2024-10-01T12:00:00.123Z")),
             (253_402_300_799.999, Some("9999-12-31T23:59:59.999Z")),
-            (253_402_300_800.0, None),
+            (253_402_300_800.0, Some("+010000-01-01T00:00:00.000Z")),
+            (8.64e12, Some("+275760-09-13T00:00:00.000Z")),
             (0.0, None),
             (-1.0, None),
         ] {
             assert_eq!(
-                modified_at(Some(&serde_json::json!(seconds))).as_deref(),
+                modified_at(Some(&serde_json::json!(seconds)))
+                    .unwrap()
+                    .as_deref(),
                 expected,
                 "{seconds}"
             );
         }
-        assert_eq!(modified_at(Some(&serde_json::json!("1"))), None);
+        assert_eq!(modified_at(Some(&serde_json::json!("1"))).unwrap(), None);
+        let error = modified_at(Some(&serde_json::json!(8.64e12 + 0.001))).unwrap_err();
+        assert_eq!(error.to_string(), "Invalid time value");
     }
 
     #[test]

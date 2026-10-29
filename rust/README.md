@@ -111,7 +111,10 @@ only. `tests/ticket_t_21_moonraker_driver.rs` replays the fixtures in
 `fixtures/drivers/moonraker/driver` and checks results and the exact request
 list against oracle files. `moonraker.driver-oracle.test.ts` in the web server
 checks that the Node adapter still produces those files. A base URL with a
-query or fragment is refused; Node would append the path into it. Not yet ported: upload with the start flag, file download, the
+query or fragment is refused; Node would append the path into it. A status reply
+without `result.status` is reported as `unknown`, as Node does; the watcher
+fails closed on it. `ticket_t_21_status_matches_shared_corpus` runs the GRE-449
+status corpus through the driver. Not yet ported: upload with the start flag, file download, the
 camera proxy and route ownership. Until GRE-359, redirects are not followed,
 HTTPS is refused and replies are capped at 2 MiB (Node allows 8 MiB for
 directory listings). Nothing routes to the driver yet.

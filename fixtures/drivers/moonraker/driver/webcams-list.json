@@ -22,5 +22,6 @@
 {"name": "Tab in backslash", "service": "mjpegstreamer", "stream_url": "\\\t\\169.254.169.254/?action=stream", "uid": "tab-backslash"},
 {"name": "Dotdot backslash", "service": "mjpegstreamer", "stream_url": "/..\\..\\webcam/?action=stream", "uid": "dotdot-backslash"},
 {"name": "Absolute origin", "service": "mjpegstreamer", "stream_url": "{ORIGIN}/?action=stream", "uid": "absolute-origin"},
-{"name": "Mapped metadata", "service": "", "snapshot_url": "http://[::ffff:169.254.169.254]/snap", "uid": "mapped-metadata"}
+{"name": "Mapped metadata", "service": "", "snapshot_url": "http://[::ffff:169.254.169.254]/snap", "uid": "mapped-metadata"},
+{"name": "﻿ BOM cam ﻿", "service": "mjpegstreamer", "stream_url": "/bom/?action=stream", "uid": "﻿bom-uid﻿"}
 ]}}

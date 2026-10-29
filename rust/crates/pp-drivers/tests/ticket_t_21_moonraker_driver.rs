@@ -2,7 +2,7 @@
 //! Moonraker driver and compares every result and the exact request transcript
 //! with `node-oracle.json`. `moonraker.driver-oracle.test.ts` in the web server
 //! checks that the Node adapter produces the same file.
-use pp_drivers::moonraker_driver::Driver;
+use pp_drivers::{moonraker::QUERY, moonraker_driver::Driver};
 use pp_net::outbound::{HttpGuard, SystemResolver};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -31,6 +31,15 @@ struct Routes {
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(Path::new(FIXTURES).join(name)).unwrap()
+}
+
+/// Request target to reply body, read from the fixture files `routes.json` names.
+fn bodies(routes: &Routes) -> BTreeMap<String, String> {
+    routes
+        .routes
+        .iter()
+        .map(|(target, name)| (target.clone(), String::from_utf8(fixture(name)).unwrap()))
+        .collect()
 }
 
 struct Simulator {
@@ -79,12 +88,7 @@ async fn simulator(routes: BTreeMap<String, String>, forced: Option<u16>) -> Sim
             let target = head.split(' ').nth(1).unwrap().to_owned();
             log.lock().unwrap().push(head);
             let (status, body) = match (forced, routes.get(&target)) {
-                (None, Some(name)) => (
-                    200,
-                    String::from_utf8(fixture(name))
-                        .unwrap()
-                        .replace("{ORIGIN}", &served),
-                ),
+                (None, Some(body)) => (200, body.replace("{ORIGIN}", &served)),
                 (forced, _) => (forced.unwrap_or(404), "{}".into()),
             };
             let reply = format!(
@@ -163,7 +167,7 @@ async fn ticket_t_21_read_contracts_match_node_oracle() {
             "recorded" => None,
             other => Some(other.trim_start_matches("http-").parse().unwrap()),
         };
-        let simulator = simulator(routes.routes.clone(), forced).await;
+        let simulator = simulator(bodies(&routes), forced).await;
         let driver = driver(&format!("{}/", simulator.origin), None);
         let mut actual = read_calls(&driver, &routes.browse).await;
         actual.insert("requests".into(), json!(simulator.requests()));
@@ -178,7 +182,7 @@ async fn ticket_t_21_read_contracts_match_node_oracle() {
 #[tokio::test]
 async fn ticket_t_21_reads_are_get_only_and_send_the_api_key() {
     let routes: Routes = serde_json::from_slice(&fixture("routes.json")).unwrap();
-    let simulator = simulator(routes.routes, None).await;
+    let simulator = simulator(bodies(&routes), None).await;
     let driver = driver(&simulator.origin, Some(" key-123 "));
     assert!(driver.test_connection().await.ok);
     driver.status().await;
@@ -241,4 +245,76 @@ async fn ticket_t_21_base_with_query_or_fragment_is_refused() {
             "Invalid base_url"
         );
     }
+}
+
+#[derive(Deserialize)]
+struct StatusCase {
+    name: String,
+    fixture: Option<String>,
+    body: Option<Value>,
+    expected: Value,
+}
+
+#[derive(Deserialize)]
+struct StatusCorpus {
+    cases: Vec<StatusCase>,
+}
+
+/// The shared GRE-449 status corpus through the driver, including the case the
+/// watcher rejects: Node reports a reply without `result.status` as unknown.
+/// The driver runs against the simulator, so the expected host is `localhost`.
+#[tokio::test]
+async fn ticket_t_21_status_matches_shared_corpus() {
+    let corpus: StatusCorpus = serde_json::from_slice(&fixture("../status-parity.json")).unwrap();
+    assert!(corpus.cases.len() >= 21);
+    for case in corpus.cases {
+        let body = match (case.fixture, case.body) {
+            (Some(name), None) => String::from_utf8(fixture(&format!("../{name}"))).unwrap(),
+            (None, Some(body)) => body.to_string(),
+            _ => panic!("{}: set exactly one of fixture or body", case.name),
+        };
+        let routes = BTreeMap::from([(QUERY.to_owned(), body)]);
+        let simulator = simulator(routes, None).await;
+        let status = driver(&simulator.origin, None).status().await;
+        let mut expected = case.expected;
+        expected["ip_address"] = json!("localhost");
+        assert_eq!(
+            integral(serde_json::to_value(status).unwrap()),
+            integral(expected),
+            "{}",
+            case.name
+        );
+        // proc_stats answers 404 here, as in the Node corpus test.
+        assert_eq!(
+            simulator.requests(),
+            [format!("GET {QUERY}"), "GET /machine/proc_stats".to_owned()],
+            "{}",
+            case.name
+        );
+    }
+}
+
+/// Until GRE-359: HTTPS is refused before any request, and replies over the
+/// guard's 2 MiB limit fail. Node allows 8 MiB for a directory listing.
+#[tokio::test]
+async fn ticket_t_21_https_and_oversized_listing_are_refused() {
+    let https = driver("https://localhost:1", None);
+    let message = "HTTPS Moonraker hosts are not supported until GRE-359";
+    assert_eq!(https.test_connection().await.message, message);
+    assert_eq!(https.browse("").await.unwrap_err().to_string(), message);
+
+    let row =
+        r#"{"modified":1727870400,"size":1,"permissions":"rw","filename":"part-0000000.gcode"},"#;
+    let mut listing = String::from(r#"{"result":{"dirs":[],"files":["#);
+    while listing.len() <= 2 * 1024 * 1024 {
+        listing.push_str(row);
+    }
+    listing.push_str(r#"{"filename":"last.gcode"}]}}"#);
+    let target = "/server/files/directory?path=gcodes&extended=true";
+    let simulator = simulator(BTreeMap::from([(target.to_owned(), listing)]), None).await;
+    let error = driver(&simulator.origin, None)
+        .browse("")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("oversized"), "{error}");
 }
