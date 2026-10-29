@@ -132,7 +132,7 @@ STEPS = [
           CONTRACTS + "Verify builder glob Node fixtures", CONTRACTS + "Verify golden Node HTTP route inventory"),
          requires=(("node", "v22.23.3"), ("npm", None)), cwd="web", node22=True),
     Step("rust-windows", "rust (windows) (required check)",
-         host_only="needs a Windows runner; CI runs it on windows-latest or pp-local-win"),
+         host_only="needs a Windows runner; CI runs it on windows-latest"),
     Step("rust-macos", "rust (macos) (advisory check)",
          host_only="needs a macOS runner with a case-sensitive TMPDIR; add the macos label to run it in CI"),
     Step("pr-evidence", "Lint Evidence block (required check)",
