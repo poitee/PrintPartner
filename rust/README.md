@@ -126,8 +126,11 @@ lost start request as a failed upload. Rust reports the upload as done and the
 start outcome as unknown.
 
 `HttpGuard::post` in `pp-net` shares one connection path with `get`, takes a
-per-call deadline of at most 120 seconds, and returns `PostError::Unsent` or
-`PostError::Unknown`. Not yet ported: file download, the camera proxy and
+per-call deadline of at most 120 seconds, and returns `PostError::Unsent`,
+`PostError::Unknown` or `PostError::SourceFailed`. A source that fails or ends
+before its declared length cannot produce a complete upload, so the driver
+reports it as a plain failure. `upload_file` checks the base URL, with Node's
+messages, before it opens the source. Not yet ported: file download, the camera proxy and
 route ownership. Nothing routes to the driver yet. Until GRE-359, redirects are
 not followed, HTTPS is refused and replies are capped at 2 MiB (Node allows
 8 MiB for directory listings).
