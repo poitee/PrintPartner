@@ -1,5 +1,6 @@
-// Replays routes.json through the Node Moonraker adapter and writes node-oracle.json,
-// the expected output for rust/crates/pp-drivers/tests/ticket_t_21_moonraker_driver.rs.
+// Replays routes.json and upload-scenarios.json through the Node Moonraker adapter and
+// writes node-oracle.json and node-oracle-upload.json, the expected output for
+// rust/crates/pp-drivers/tests/ticket_t_21_moonraker_driver.rs and ticket_t_21_moonraker_upload.rs.
 // From the repo root: (cd web/apps/server && npx tsx ../../../rust/crates/pp-drivers/tests/fixtures/moonraker/capture-node-oracle.mts)
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -57,3 +58,47 @@ for (const [name, forced] of Object.entries(scenarios)) {
   out[name] = { ...JSON.parse(JSON.stringify(result)), requests };
 }
 writeFileSync(new URL("node-oracle.json", here), `${JSON.stringify(out, null, 2)}\n`);
+
+type UploadScenario = {
+  name: string;
+  filename: string;
+  start: boolean;
+  replies: Record<string, [number, string]>;
+};
+const uploads = JSON.parse(readFileSync(new URL("upload-scenarios.json", here), "utf8")) as {
+  file: string;
+  scenarios: UploadScenario[];
+};
+const uploadOut: Record<string, unknown> = {};
+for (const scenario of uploads.scenarios) {
+  const requests: unknown[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      // Boundaries are random on both sides; compare everything else byte for byte.
+      const contentType = req.headers["content-type"] ?? null;
+      const boundary = contentType?.match(/boundary=(.+)$/)?.[1];
+      let body = Buffer.concat(chunks).toString("utf8");
+      if (boundary) body = body.replaceAll(boundary, "<BOUNDARY>");
+      requests.push({
+        line: `${req.method} ${req.url}`,
+        content_type: boundary ? contentType!.replace(boundary, "<BOUNDARY>") : contentType,
+        body,
+      });
+      const [status, reply] = scenario.replies[new URL(req.url ?? "/", "http://x").pathname] ?? [404, "{}"];
+      res.writeHead(status, status >= 300 && status < 400 ? { location: "/elsewhere" } : {}).end(reply);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  const result = await moonrakerAdapter.uploadFile!(
+    { base_url: `http://localhost:${port}` },
+    new TextEncoder().encode(uploads.file),
+    scenario.filename,
+    { start: scenario.start },
+  );
+  server.close();
+  uploadOut[scenario.name] = { result, requests };
+}
+writeFileSync(new URL("node-oracle-upload.json", here), `${JSON.stringify(uploadOut, null, 2)}\n`);
