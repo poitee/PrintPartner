@@ -554,6 +554,9 @@ async fn ticket_t_3_drain_runtime_cutover_fences_profile_sync_worker() {
         assert_eq!(status, StatusCode::NO_CONTENT, "{path}");
     }
     assert!(slicer_instance_ids(&runtime, &cookie).await.is_empty());
+    // The parity receipt is synthetic, as in the other runtime cutover tests.
+    // Rust has no profile-sync handler, so no real parity fixture exists; the
+    // receipt checks are in pp-gateway `ticket_t_3_drain_cutover_parity_refusals`.
     let (shutdown, cutover) = runtime
         .shutdown_with_cutover(PROFILE_SYNC, &parity_for(PROFILE_SYNC))
         .await

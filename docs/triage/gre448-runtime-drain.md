@@ -1004,10 +1004,20 @@ whether the worker ran.
   `already_rust_owned`, the record bytes are unchanged, and each boot event
   names `profile.sync`.
 
+The parity receipt is synthetic (`fixtures: 1, passed: 1`), as in the other
+runtime cutover tests. Rust has no profile-sync handler, so no real parity
+fixture exists yet. The receipt checks themselves are in pp-gateway
+`ticket_t_3_drain_cutover_parity_refusals`. This test covers the
+`profile.sync` operation only. The other operations stay with GRE-593.
+
 Red control: removing the `rustOwned` check before `startManagedProfileSync`
-in a private `app.ts` build failed the test at "Node started the Rust-owned
-profile-sync worker". With the check restored, all 16 `drain::` runtime tests
-passed with `desktop_rebuild`.
+in a private `app.ts` build failed the test at `drain.rs:583`, "Node started
+the Rust-owned profile-sync worker". With the check restored, the ticket
+command with the feature,
+`cargo nextest run --locked --workspace --features pp-core/desktop_rebuild
+--no-tests=fail -E 'test(ticket_t_3_drain)'`, ran 83 tests and all passed.
+Of those, 16 are `runtime_m0` `drain::` tests: 13 in `drain.rs`, 2 in its
+`compression` module and 1 in `ticket_t_3_drain_repeated_upload.rs`.
 
 Still open: the remaining operation inventory and cutover (GRE-593, blocked by
 GRE-401), Plan Apply's queue remap, and actual Mac logout (parent gate).
