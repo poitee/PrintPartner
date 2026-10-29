@@ -126,7 +126,7 @@ fn exited_true_pid() -> u32 {
 }
 
 pub(super) fn directory(name: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
+    let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
         "pp-storage-{name}-{}",
         hex::encode(rand::random::<[u8; 8]>())
     ));
