@@ -1,0 +1,92 @@
+name: Stuck PRs
+
+on:
+  schedule:
+    - cron: '17 13 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: stuck-prs
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: read
+      statuses: read
+      checks: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: Stuck PRs (daily)
+    steps:
+      - name: Find stuck PRs and update the issue
+        run: |
+          set -euo pipefail
+          now=$(date -u +%s)
+          rows=""
+          prs=$(gh pr list --state open --limit 200 \
+            --json number,title,url,isDraft,headRefOid,mergeStateStatus \
+            --jq '.[] | select(.isDraft | not) | @base64')
+
+          for pr in $prs; do
+            j=$(printf '%s' "$pr" | base64 -d)
+            num=$(jq -r .number <<<"$j")
+            title=$(jq -r '.title | gsub("\\|"; "\\|")' <<<"$j")
+            url=$(jq -r .url <<<"$j")
+            sha=$(jq -r .headRefOid <<<"$j")
+            merge=$(jq -r .mergeStateStatus <<<"$j")
+            reasons=""
+
+            # gh exits non-zero while checks pend or fail; the JSON is still printed.
+            buckets=$(gh pr checks "$num" --required --json bucket --jq '[.[].bucket]' 2>/dev/null || true)
+            green=$(jq -r 'if (. // []) | length > 0 then all(.[]; . == "pass" or . == "skipping") else false end' <<<"${buckets:-[]}" 2>/dev/null || echo false)
+            if [ "$green" = "true" ]; then
+              score=$(gh api "repos/$GH_REPO/commits/$sha/status" \
+                --jq '[.statuses[] | select(.context == "pp/score" and .state == "success")] | length')
+              if [ "$score" -eq 0 ]; then
+                reasons="required checks green, no pp/score success"
+              fi
+            fi
+
+            committed=$(gh api "repos/$GH_REPO/commits/$sha" --jq .commit.committer.date)
+            age_h=$(( (now - $(date -u -d "$committed" +%s)) / 3600 ))
+            if [ "$age_h" -gt 24 ]; then
+              reasons="${reasons:+$reasons; }no commit in ${age_h}h"
+            fi
+            if [ "$merge" = "BEHIND" ] || [ "$merge" = "DIRTY" ]; then
+              reasons="${reasons:+$reasons; }merge state $merge"
+            fi
+
+            if [ -n "$reasons" ]; then
+              rows+="| [#$num]($url) | $title | \`${sha:0:12}\` | $merge | $reasons |"$'\n'
+            fi
+          done
+
+          issue=$(gh issue list --state open --search "\"$TITLE\" in:title" --limit 20 --json number,title \
+            | jq -r --arg t "$TITLE" '[.[] | select(.title == $t)][0].number // empty')
+
+          if [ -z "$rows" ]; then
+            if [ -n "$issue" ]; then
+              gh issue close "$issue" --comment "Nothing is stuck as of $(date -u +%FT%TZ)."
+            fi
+            exit 0
+          fi
+
+          body=$(printf '%s\n' \
+            "Updated $(date -u +%FT%TZ)." \
+            "" \
+            "| PR | Title | Head | Merge state | Why |" \
+            "| --- | --- | --- | --- | --- |" \
+            "$rows")
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
