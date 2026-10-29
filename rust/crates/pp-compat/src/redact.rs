@@ -66,6 +66,7 @@ pub fn sensitive_name(name: &str) -> bool {
             | "pat"
             | "webhook"
             | "webhook_url"
+            | "webhookurl"
             | "credential"
             | "credentials"
             | "session"
@@ -397,7 +398,7 @@ mod tests {
         assert_eq!(scrub(ordinary), ordinary);
         let mut value = serde_json::json!({
             "github_pat": "x", "api_keys_v1": ["x"], "webhookUrl": "x", "webhook": "x",
-            "githubPat": "x", "apiKeysV1": {"k": "x"}, "api_key": 12345,
+            "githubPat": "x", "apiKeysV1": {"k": "x"}, "api_key": 12345, "webhookurl": "x",
             "schema_v2": "kept", "version": "v1"
         });
         Scrubber::default().json(&mut value);
@@ -409,6 +410,7 @@ mod tests {
             "githubPat",
             "apiKeysV1",
             "api_key",
+            "webhookurl",
         ] {
             assert_eq!(value[name], REDACTED, "{name}");
         }
