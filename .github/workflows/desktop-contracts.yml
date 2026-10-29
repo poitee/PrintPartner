@@ -142,8 +142,12 @@ jobs:
       # PR CI skips the desktop_rebuild nextest on self-hosted Linux, so the
       # GRE-451 replay of these goldens runs here, once per run.
       - name: Replay GRE-451 parity fixtures against Rust
-        if: matrix.node == '22.23.3'
-        run: cargo test --locked --manifest-path ../rust/Cargo.toml -p pp-api --features desktop_rebuild --test ticket_t_10_fixtures
+        run: |
+          case "$(node --version)" in
+            v22.*)
+              cargo test --locked --manifest-path ../rust/Cargo.toml -p pp-api --features desktop_rebuild --test ticket_t_10_fixtures
+              ;;
+          esac
       - name: Verify contracts and frozen corpus
         run: npm run contracts:verify -- "${RUNNER_TEMP}/contract-receipts" && npm run test:desktop-parity
       - name: Retain per-run parity evidence
