@@ -768,7 +768,10 @@ mod ticket_t_10_fixtures {
             // Rust's `created_at` has no Node counterpart; its own prefix keeps
             // the shared time labels independent of whole-second clock ticks.
             ("created", &["created_at"]),
-            ("time", &["started_at", "finished_at", "updated_at"]),
+            ("time", &["started_at", "finished_at"]),
+            // Node stamps `updated_at` with a second clock read, so its
+            // equality with `finished_at` is a millisecond race.
+            ("updated", &["updated_at"]),
         ]);
         let mut ledger = Ledger::new(jobs_corrections(&fixture)).unwrap();
         let before = StateGraph::capture(sandbox.path()).unwrap();

@@ -5,7 +5,9 @@
 //   node fixtures/parity/jobs-http/generate.mjs --check  # verify, no writes
 // Job ids and timestamps are random or clock-bound, so each distinct value is
 // replaced by a label numbered in first-seen order across the whole capture
-// (`job-1`, `time-1`). Equal values keep equal labels.
+// (`job-1`, `time-1`). Equal values keep equal labels. `updated_at` has its own
+// `updated` labels: Node stamps it with a second clock read after
+// `finished_at`, so whether the two are equal depends on a millisecond tick.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -21,7 +23,7 @@ const sources = [
   "web/apps/server/src/routes/api-v1-extensions.ts",
   "web/apps/server/src/services/job-runner.ts",
 ];
-const TIME_KEYS = new Set(["created_at", "started_at", "finished_at", "updated_at"]);
+const TIME_KEYS = new Set(["created_at", "started_at", "finished_at"]);
 
 if (process.argv.includes("--probe")) {
   const load = (source) => import(pathToFileURL(join(root, source)).href);
@@ -107,6 +109,7 @@ if (process.argv.includes("--probe")) {
       return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrub(v, k)]));
     }
     if (key === "job_id" && typeof value === "string") return label("job", value);
+    if (key === "updated_at" && typeof value === "string") return label("updated", value);
     if (TIME_KEYS.has(key) && typeof value === "string") return label("time", value);
     return value;
   };
