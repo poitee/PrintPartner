@@ -130,13 +130,9 @@ async fn checkoff(
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     let head = *request.method() == Method::HEAD;
-    // Node reads the id with `Number()`; an id that cannot name a Plan is
-    // "Profile not found" once the credential is proven (an empty batch).
-    let profile = id
-        .parse::<u64>()
-        .ok()
-        .filter(|id| (1..=MAX_SAFE_ID).contains(id))
-        .map(|id| id as i64);
+    // An id that cannot name a Plan is "Profile not found" once the
+    // credential is proven (an empty batch).
+    let profile = plan_id(&id);
     let client = app.client.clone();
     let wait = app.config.wait;
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -161,6 +157,33 @@ async fn checkoff(
         Ok(Err(error)) => read_error(&error),
         Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
     }
+}
+
+/// Node reads the id with `Number()`: JS whitespace is trimmed, and decimal,
+/// exponent and `0x`/`0o`/`0b` forms are numbers. Only a safe positive integer
+/// can name a Plan.
+fn plan_id(raw: &str) -> Option<i64> {
+    const JS_SPACE: &[char] = &[
+        '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{a0}', '\u{1680}', '\u{2000}', '\u{2001}',
+        '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
+        '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+        '\u{feff}',
+    ];
+    let text = raw.trim_matches(JS_SPACE);
+    let radix = |digits: &str, radix: u32| {
+        (!digits.is_empty() && digits.chars().all(|c| c.is_digit(radix)))
+            .then(|| u64::from_str_radix(digits, radix).ok())
+            .flatten()
+            .map(|value| value as f64)
+    };
+    let value = match text.get(..2) {
+        Some("0x" | "0X") => radix(&text[2..], 16),
+        Some("0o" | "0O") => radix(&text[2..], 8),
+        Some("0b" | "0B") => radix(&text[2..], 2),
+        // Rust also reads `inf` and `nan`; neither is a safe integer.
+        _ => text.parse::<f64>().ok(),
+    }?;
+    (value.fract() == 0.0 && (1.0..=MAX_SAFE_ID as f64).contains(&value)).then_some(value as i64)
 }
 
 /// Maps a `views::checkoff` result to Node's `/plans/:id/checkoff` responses.
@@ -200,11 +223,20 @@ fn read_error(error: &anyhow::Error) -> Response {
                 "Explicit account owner mapping is required",
             );
         }
+        Some(AuthFailure::QueueFull | AuthFailure::Stopped | AuthFailure::Storage) => {
+            return failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Service temporarily unavailable",
+            );
+        }
         _ => {}
     }
     match error.to_string().as_str() {
         "Authentication required" => failure(StatusCode::UNAUTHORIZED, "Authentication required"),
-        "Writer queue full" | "Storage stopped" | "Cancelled before admission" => failure(
+        "Writer queue full"
+        | "Storage stopped"
+        | "Storage stopped without read result"
+        | "Cancelled before admission" => failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "Service temporarily unavailable",
         ),
@@ -296,6 +328,26 @@ mod tests {
             ),
             (
                 anyhow::anyhow!("Writer queue full"),
+                503,
+                "Service temporarily unavailable",
+            ),
+            (
+                anyhow::anyhow!("Storage stopped without read result"),
+                503,
+                "Service temporarily unavailable",
+            ),
+            (
+                anyhow::anyhow!(AuthFailure::QueueFull),
+                503,
+                "Service temporarily unavailable",
+            ),
+            (
+                anyhow::anyhow!(AuthFailure::Stopped),
+                503,
+                "Service temporarily unavailable",
+            ),
+            (
+                anyhow::anyhow!(AuthFailure::Storage),
                 503,
                 "Service temporarily unavailable",
             ),

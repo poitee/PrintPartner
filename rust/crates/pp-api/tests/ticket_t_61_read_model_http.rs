@@ -48,6 +48,10 @@ impl Fixture {
         if let Some(sql) = mutation {
             mutate(&directory, sql);
         }
+        Self::serve(directory, flag).await
+    }
+
+    async fn serve(directory: Scratch, flag: Option<&str>) -> Self {
         let owner = WriterOwner::open(&directory, Limits::default()).unwrap().0;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -75,6 +79,14 @@ impl Fixture {
             task: Some(task),
             directory,
         }
+    }
+
+    /// Stops the server and storage owner, then serves the same store again.
+    async fn restart(mut self) -> Self {
+        self.close().await;
+        let directory = Scratch::new("pp-accepted-http-unused-");
+        let directory = std::mem::replace(&mut self.directory, directory);
+        Self::serve(directory, Some("1")).await
     }
 
     async fn get(&self, path: &str, headers: &[(&str, &str)]) -> (u16, Value) {
@@ -144,7 +156,7 @@ impl Fixture {
         out
     }
 
-    async fn stop(mut self) {
+    async fn close(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -152,6 +164,10 @@ impl Fixture {
             task.await.unwrap();
         }
         self.owner.take().unwrap().shutdown().unwrap();
+    }
+
+    async fn stop(mut self) {
+        self.close().await;
     }
 }
 
@@ -308,15 +324,71 @@ async fn ticket_t_61_read_model_http_flag_off_mounts_nothing() {
     for flag in [None, Some("0"), Some("TRUE")] {
         let f = Fixture::new(None, flag).await;
         for alias in ALIASES {
-            let (status, _) = f
-                .send(
-                    Method::GET,
-                    &format!("{alias}/plans/1/checkoff"),
-                    &[("Cookie", SESSION)],
-                )
-                .await;
-            assert_eq!(status, 404, "{flag:?} {alias}");
+            let path = format!("{alias}/plans/1/checkoff");
+            // Mounted, this valid session reads Plan 1 (200) and a POST is
+            // refused as 405. Unmounted, both reach the empty fallback 404.
+            for method in [Method::GET, Method::POST] {
+                let (status, body) = f.send(method.clone(), &path, &[("Cookie", SESSION)]).await;
+                assert_eq!((status, body.len()), (404, 0), "{flag:?} {method} {path}");
+            }
         }
         f.stop().await;
     }
+}
+
+#[tokio::test]
+async fn ticket_t_61_read_model_http_checkoff_reads_ids_like_node_number() {
+    let f = Fixture::new(None, Some("1")).await;
+    let expected = f.direct()["body"].clone();
+    // Fastify hands `Number()` the decoded segment: whitespace is trimmed, and
+    // decimal, exponent, sign and radix forms all name Plan 1.
+    for id in [
+        "1", "1.0", "1e0", "+1", "0x1", "0b1", "0o1", "%201%20", "1.", "%091%0A",
+    ] {
+        for alias in ALIASES {
+            let path = format!("{alias}/plans/{id}/checkoff");
+            assert_eq!(
+                f.get(&path, &[("Cookie", SESSION)]).await,
+                (200, expected.clone()),
+                "{path}"
+            );
+        }
+    }
+    for id in [
+        "1.5",
+        "-1",
+        "-0x1",
+        "1e400",
+        "Infinity",
+        "NaN",
+        "0x",
+        "1_0",
+        "%20",
+        "9007199254740993",
+    ] {
+        assert_eq!(
+            f.get(&format!("/plans/{id}/checkoff"), &[("Cookie", SESSION)])
+                .await,
+            (404, json!({"detail":"Profile not found"})),
+            "{id}"
+        );
+    }
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn ticket_t_61_read_model_http_checkoff_survives_restart() {
+    let f = Fixture::new(None, Some("1")).await;
+    let (status, before) = f.get("/plans/1/checkoff", &[("Cookie", SESSION)]).await;
+    assert_eq!(status, 200);
+    let dump = f.dump();
+    let f = f.restart().await;
+    assert_eq!(
+        f.get("/api/v2/plans/1/checkoff", &[("Cookie", SESSION)])
+            .await,
+        (200, before),
+        "a reopened store serves the same snapshot"
+    );
+    assert_eq!(dump, f.dump(), "neither run wrote to the store");
+    f.stop().await;
 }
