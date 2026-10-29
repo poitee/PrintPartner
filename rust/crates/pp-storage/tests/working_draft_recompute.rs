@@ -403,6 +403,14 @@ node_case!(
     "edits-carry-inclusion"
 );
 node_case!(
+    accepted_part_overrides_survive_a_recompute,
+    "accepted-overrides-survive-recompute"
+);
+node_case!(
+    accepted_part_overrides_survive_a_kept_draft_recompute,
+    "accepted-overrides-survive-kept-recompute"
+);
+node_case!(
     missing_profile_and_blank_key_are_refused,
     "missing-profile-and-blank-key"
 );
