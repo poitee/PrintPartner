@@ -1,19 +1,30 @@
-//! Moonraker driver reads (T-21): connection test, status, filament used,
-//! `object_list`, cameras and print-file browse, ported from the Node adapter.
-//! Guarded GET only. Upload/start, file download and the camera proxy follow.
+//! Moonraker driver (T-21), ported from the Node adapter: connection test,
+//! status, filament used, `object_list`, cameras, print-file browse, and upload
+//! with the start flag. File download and the camera proxy follow.
 //! Until GRE-359, redirects are not followed (a 3xx is a non-OK reply), HTTPS
 //! is refused, and replies are bounded by the guard's 2 MiB body limit.
 use crate::moonraker::{QUERY, recorded_status};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use pp_api_types::printer_status::PrinterHostStatus as Status;
-use pp_net::outbound::HttpGuard;
+use pp_net::outbound::{HttpGuard, PostBody, PostError};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use std::{
+    hash::{BuildHasher, RandomState},
+    io::Cursor,
+    path::PathBuf,
+    pin::Pin,
+    time::Duration,
+};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use url::Url;
 
 /// Moonraker's print-file root. Every browsable path is relative to it.
 const GCODES_ROOT: &str = "gcodes";
 const INVALID_PATH: &str = "Invalid Moonraker print-file path";
+const UPLOAD_DEADLINE: Duration = Duration::from_secs(120);
+const START_DEADLINE: Duration = Duration::from_secs(15);
+const MAX_ERROR_TEXT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct TestResult {
@@ -314,6 +325,192 @@ impl Driver {
             path: requested,
             entries,
         })
+    }
+}
+
+pub enum UploadSource {
+    Bytes(Vec<u8>),
+    Path(PathBuf),
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+pub struct UploadResult {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started: Option<bool>,
+    pub message: String,
+    /// The printer may have accepted the upload, or started the print, without
+    /// replying. Reconcile instead of resending. Not part of the Node JSON.
+    #[serde(skip)]
+    pub outcome_unknown: bool,
+}
+
+impl UploadResult {
+    fn failed(message: String, outcome_unknown: bool) -> Self {
+        Self {
+            ok: false,
+            remote_path: None,
+            started: None,
+            message,
+            outcome_unknown,
+        }
+    }
+}
+
+impl Driver {
+    /// Upload into `gcodes`, then POST `/printer/print/start` only when `start`
+    /// is true and the upload returned 2xx. Each request is sent once.
+    pub async fn upload_file(
+        &self,
+        source: UploadSource,
+        filename: &str,
+        start: bool,
+    ) -> UploadResult {
+        let base = match self.base() {
+            Ok(base) => base,
+            Err(error) => return UploadResult::failed(error.to_string(), false),
+        };
+        let replaced = filename.replace(['/', '\\'], "_");
+        let name = match js_trim(&replaced) {
+            "" => "print.gcode",
+            name => name,
+        }
+        .to_owned();
+        let body = match multipart(source, &name).await {
+            Ok(body) => body,
+            Err(error) => return UploadResult::failed(error.to_string(), false),
+        };
+        let api_key = self.api_key.as_deref().map(str::trim);
+        let upload = format!("{base}/server/files/upload");
+        let reply = match self
+            .guard
+            .post(&upload, api_key, Some(body), UPLOAD_DEADLINE)
+            .await
+        {
+            Ok(reply) => reply,
+            Err(PostError::Unsent(error)) => {
+                return UploadResult::failed(format!("{error:#}"), false);
+            }
+            Err(PostError::Unknown(error)) => {
+                let message = format!("Upload outcome unknown: {error:#}");
+                return UploadResult::failed(message, true);
+            }
+        };
+        if !(200..300).contains(&reply.status) {
+            let message = format!(
+                "Upload failed (HTTP {}){}",
+                reply.status,
+                error_text(&reply.body)
+            );
+            return UploadResult::failed(message, false);
+        }
+        let (started, message, outcome_unknown) = if !start {
+            (false, format!("Uploaded {name}"), false)
+        } else {
+            let url = format!(
+                "{base}/printer/print/start?filename={}",
+                encode_uri_component(&name)
+            );
+            match self.guard.post(&url, api_key, None, START_DEADLINE).await {
+                Ok(reply) if (200..300).contains(&reply.status) => {
+                    (true, format!("Uploaded and started {name}"), false)
+                }
+                Ok(reply) => (
+                    false,
+                    format!(
+                        "Uploaded, but start failed (HTTP {}){}",
+                        reply.status,
+                        error_text(&reply.body)
+                    ),
+                    false,
+                ),
+                // Node reports a start transport error as a failed upload. The
+                // file is on the printer, so this reports the upload as done.
+                Err(PostError::Unsent(error)) => (
+                    false,
+                    format!("Uploaded, but start failed: {error:#}"),
+                    false,
+                ),
+                Err(PostError::Unknown(error)) => (
+                    false,
+                    format!("Uploaded, but start outcome unknown: {error:#}"),
+                    true,
+                ),
+            }
+        };
+        UploadResult {
+            ok: true,
+            remote_path: Some(name),
+            started: Some(started),
+            message,
+            outcome_unknown,
+        }
+    }
+}
+
+/// The `multipart/form-data` body undici's `FormData` sends: the file part, then `root`.
+async fn multipart(source: UploadSource, name: &str) -> Result<PostBody> {
+    let state = RandomState::new();
+    let boundary = format!(
+        "----pp-moonraker-{:016x}{:016x}",
+        state.hash_one(1u8),
+        state.hash_one(2u8)
+    );
+    // WHATWG form encoding escapes LF, CR and `"` in filenames.
+    let escaped = name
+        .replace('\n', "%0A")
+        .replace('\r', "%0D")
+        .replace('"', "%22");
+    let head = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{escaped}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    );
+    let tail = format!(
+        "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"root\"\r\n\r\n{GCODES_ROOT}\r\n--{boundary}--\r\n"
+    );
+    let (file, file_length): (Pin<Box<dyn AsyncRead + Send>>, u64) = match source {
+        UploadSource::Bytes(bytes) => {
+            let length = bytes.len() as u64;
+            (Box::pin(Cursor::new(bytes)), length)
+        }
+        UploadSource::Path(path) => {
+            let file = tokio::fs::File::open(&path).await?;
+            let length = file.metadata().await?.len();
+            (Box::pin(file), length)
+        }
+    };
+    let length = head.len() as u64 + file_length + tail.len() as u64;
+    let reader = Cursor::new(head.into_bytes())
+        .chain(file)
+        .chain(Cursor::new(tail.into_bytes()));
+    Ok(PostBody {
+        content_type: format!("multipart/form-data; boundary={boundary}"),
+        reader: Box::pin(reader),
+        length,
+    })
+}
+
+/// `: <first 200 UTF-16 units>` of an error reply, as Node formats it. Node
+/// drops text over 64 KiB, and `TextDecoder` strips a leading BOM.
+fn error_text(body: &[u8]) -> String {
+    if body.len() > MAX_ERROR_TEXT_BYTES {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(body);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let mut units = 0;
+    let cut: String = text
+        .chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units <= 200
+        })
+        .collect();
+    if cut.is_empty() {
+        String::new()
+    } else {
+        format!(": {cut}")
     }
 }
 

@@ -101,23 +101,36 @@ The loopback document carries `frame-src 'none'; object-src 'none'; base-uri 'se
 
 Browser interaction, native window permissions, macOS WebKit cookies, signed/notarized packaging and installed-app process behavior remain separate acceptance requirements. Job WebSocket path/reconnect work is owned by another worker; the gateway supports upgrade relay but that journey is not proved by these tests. Slow-consumer stress, steady-health three-failure timing and broader operation admission remain follow-up verification work.
 
-## Moonraker driver reads (GRE-360, partial)
+## Moonraker driver (GRE-360, partial)
 
-`pp_drivers::moonraker_driver::Driver` ports the Node adapter's read contracts:
+`pp_drivers::moonraker_driver::Driver` ports the Node adapter's contracts:
 `test_connection` (`/server/info`), `status` (the watcher query plus uptime from
-`/machine/proc_stats`), `filament_used`, `object_list`, `cameras` (list only)
-and `browse` (`/server/files/directory` under `gcodes`). It sends guarded GETs
-only. `tests/ticket_t_21_moonraker_driver.rs` replays the fixtures in
-`fixtures/drivers/moonraker/driver` and checks results and the exact request
-list against oracle files. `moonraker.driver-oracle.test.ts` in the web server
-checks that the Node adapter still produces those files. A base URL with a
-query or fragment is refused; Node would append the path into it. A status reply
-without `result.status` is reported as `unknown`, as Node does; the watcher
-fails closed on it. `ticket_t_21_status_matches_shared_corpus` runs the GRE-449
-status corpus through the driver. Not yet ported: upload with the start flag, file download, the
-camera proxy and route ownership. Until GRE-359, redirects are not followed,
-HTTPS is refused and replies are capped at 2 MiB (Node allows 8 MiB for
-directory listings). Nothing routes to the driver yet.
+`/machine/proc_stats`), `filament_used`, `object_list`, `cameras` (list only),
+`browse` (`/server/files/directory` under `gcodes`) and `upload_file`.
+`tests/ticket_t_21_moonraker_driver.rs` and `tests/ticket_t_21_moonraker_upload.rs`
+replay the fixtures in `fixtures/drivers/moonraker/driver` and check results
+and the exact requests, multipart bytes included, against oracle files.
+`moonraker.driver-oracle.test.ts` in the web server checks that the Node adapter
+still produces those files. A base URL with a query or fragment is refused;
+Node would append the path into it. A status reply without
+`result.status` is reported as `unknown`, as Node does; the watcher fails
+closed on it. `ticket_t_21_status_matches_shared_corpus` runs the GRE-449
+status corpus through the driver.
+
+`upload_file` sends one multipart POST to `/server/files/upload` with an exact
+`Content-Length`. It sends `POST /printer/print/start` only when the caller asks
+to start and the upload returned 2xx. Neither request is retried. When the
+connection drops after the request was written, the result sets
+`outcome_unknown` so a caller reconciles instead of resending. Node reports a
+lost start request as a failed upload. Rust reports the upload as done and the
+start outcome as unknown.
+
+`HttpGuard::post` in `pp-net` shares one connection path with `get`, takes a
+per-call deadline of at most 120 seconds, and returns `PostError::Unsent` or
+`PostError::Unknown`. Not yet ported: file download, the camera proxy and
+route ownership. Nothing routes to the driver yet. Until GRE-359, redirects are
+not followed, HTTPS is refused and replies are capped at 2 MiB (Node allows
+8 MiB for directory listings).
 
 ## Moonraker status seed (GRE-335)
 
