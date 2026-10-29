@@ -810,6 +810,176 @@ mod ticket_t_10_fixtures {
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
+    struct JobsWsFixture {
+        generated: String,
+        sources: Vec<String>,
+        cases: Vec<JobsWsCase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct JobsWsCase {
+        id: String,
+        path: String,
+        tenant: String,
+        node: Exchange,
+    }
+
+    fn jobs_ws_fixture() -> JobsWsFixture {
+        let fixture: JobsWsFixture = serde_json::from_str(include_str!(
+            "../../../../fixtures/parity/jobs-ws/node.json"
+        ))
+        .unwrap();
+        assert!(fixture.generated.contains("jobs-ws/generate.mjs"));
+        assert_eq!(fixture.sources.len(), 2);
+        assert_eq!(fixture.cases.len(), 4);
+        fixture
+    }
+
+    /// Node ends a finished stream with `socket.close()`, an empty close frame
+    /// the client reads as 1005. Rust sends 1000 with an empty reason, and its
+    /// frame is the durable snapshot (see `durable_snapshot`).
+    fn jobs_ws_corrections(fixture: &JobsWsFixture) -> Vec<Correction> {
+        fixture
+            .cases
+            .iter()
+            .filter(|case| case.node.body["close"]["code"] == 1005)
+            .map(|case| {
+                let frames: Vec<Value> = case.node.body["frames"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(durable_snapshot)
+                    .collect();
+                Correction {
+                    case: case.id.clone().leak(),
+                    kind: CorrectionKind::WebSocket,
+                    reason: "a finished stream closes 1000 and sends the durable snapshot",
+                    rust: Exchange {
+                        status: 101,
+                        body: json!({"frames": frames, "close": {"code": 1000, "reason": ""}}),
+                        set_cookie: vec![],
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Opens `path` as a WebSocket with `cookie` and reads every text frame
+    /// until the server's close frame. An empty close payload reads as 1005,
+    /// as a browser or Node's `ws` client reports it.
+    async fn observe_socket(served: &Served, path: &str, cookie: &str) -> Exchange {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let host = served.origin.trim_start_matches("http://");
+        let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: {cookie}\r\n\r\n",
+            origin = served.origin,
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.unwrap());
+        }
+        let head = String::from_utf8(head).unwrap();
+        let status = head[9..12].parse().unwrap();
+        assert_eq!(status, 101, "{path}: {head}");
+        let mut frames = Vec::new();
+        loop {
+            let first = stream.read_u8().await.unwrap();
+            let len = match stream.read_u8().await.unwrap() & 0x7f {
+                126 => usize::from(stream.read_u16().await.unwrap()),
+                127 => panic!("{path}: frame over 64KiB"),
+                len => usize::from(len),
+            };
+            let mut payload = vec![0; len];
+            stream.read_exact(&mut payload).await.unwrap();
+            match first & 0x0f {
+                1 => frames.push(serde_json::from_slice::<Value>(&payload).unwrap()),
+                8 => {
+                    let (code, reason) = match payload.as_slice() {
+                        [] => (1005, String::new()),
+                        [high, low, reason @ ..] => (
+                            u16::from_be_bytes([*high, *low]),
+                            String::from_utf8(reason.to_vec()).unwrap(),
+                        ),
+                        _ => panic!("{path}: one-byte close payload"),
+                    };
+                    return Exchange {
+                        status,
+                        body: json!({"frames": frames, "close": {"code": code, "reason": reason}}),
+                        set_cookie: vec![],
+                    };
+                }
+                opcode => panic!("{path}: unexpected opcode {opcode}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn job_socket_matches_node_and_writes_nothing() {
+        use pp_api::{
+            fixtures::Labels,
+            jobs::{JobsHttpConfig, jobs_router},
+        };
+
+        let fixture = jobs_ws_fixture();
+        let sandbox = Sandbox::new("t10-jobs-ws").unwrap();
+        let owner = WriterOwner::open(sandbox.path(), Limits::default())
+            .unwrap()
+            .0;
+        let (cookie, done, failed) = seed_jobs(&owner).await;
+        // Node's `other` tenant is a second account, which has its own tenant.
+        let other = register(&owner, "jobs-ws-other@example.test").await;
+        let jobs = owner.jobs(ACCOUNT_POLICY).unwrap();
+        let served = Served::start(|origin| {
+            jobs_router(
+                JobsHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                jobs,
+            )
+        })
+        .await
+        .unwrap();
+        let mut labels = Labels::new(vec![
+            ("job", &["job_id"]),
+            ("created", &["created_at"]),
+            ("time", &["started_at", "finished_at", "updated_at"]),
+        ]);
+        let mut ledger = Ledger::new(jobs_ws_corrections(&fixture)).unwrap();
+        let before = StateGraph::capture(sandbox.path()).unwrap();
+        for case in &fixture.cases {
+            let path = case
+                .path
+                .replace("{done}", &done)
+                .replace("{failed}", &failed);
+            let cookie = match case.tenant.as_str() {
+                "default" => &cookie,
+                "other" => &other,
+                tenant => panic!("unexpected tenant {tenant}"),
+            };
+            let mut actual = observe_socket(&served, &path, cookie).await;
+            labels.scrub(&mut actual);
+            ledger
+                .compare(&case.id, &case.node, &actual)
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+        let after = StateGraph::capture(sandbox.path()).unwrap();
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        assert_eq!(
+            before.changed(&after),
+            Vec::<String>::new(),
+            "job sockets wrote state"
+        );
+        let report = ledger.finish().unwrap();
+        print_report("jobs-ws", &report);
+        assert_eq!(report.matched, 2);
+        assert_eq!(report.corrected.len(), 2);
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct PlansFixture {
         generated: String,
         sources: Vec<String>,

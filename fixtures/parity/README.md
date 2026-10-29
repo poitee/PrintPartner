@@ -6,7 +6,7 @@ Golden data captured from the TypeScript app, used as the reference for the Rust
 
 `pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security, WebSocket, or durable-store) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
 
-`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http` and `catalog-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `jobs-ws`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http` and `catalog-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
 
 ## jobs-http/node.json (GRE-451)
 
@@ -17,6 +17,18 @@ Golden data captured from the TypeScript app, used as the reference for the Rust
 ```sh
 node fixtures/parity/jobs-http/generate.mjs --check
 ```
+
+## jobs-ws/node.json (GRE-451)
+
+`generate.mjs` registers Node's real job socket (`registerJobWebSocket`, with `PP_DESKTOP_REBUILD=1`) over the same two retained jobs as `jobs-http`, listens on loopback and opens `/ws/jobs/:jobId` with a `ws` client. Each case records every text frame and the close code and reason the client saw: the finished job, the failed job, an unknown id, and the finished job read by another tenant. Node mounts the socket only at the root, so there is no `/api/v1` case.
+
+`ticket_t_10_fixtures` opens the same paths on `jobs_router` with the owning session, or a second account's session for the other tenant, and reads frames off the raw socket. An unknown or foreign job matches exactly: no frame, then 1008 "Job not found". The two finished jobs have declared WebSocket corrections. Node ends them with `socket.close()`, an empty close frame the client reads as 1005; Rust sends 1000. Rust's frame is also the durable snapshot that `jobs-http` corrects (`created_at`, and "Job failed" with no progress). The sockets change no table or file. Live progress frames are not captured: Node's runner has no handler that the probe can hold open.
+
+```sh
+node fixtures/parity/jobs-ws/generate.mjs --check
+```
+
+CI runs every GRE-451 generator with `--check` in the Desktop contracts workflow ("Verify GRE-451 parity Node fixtures"), and `scripts/local-ci.py` runs the same commands.
 
 ## plans-http/node.json (GRE-451)
 
