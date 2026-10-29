@@ -15,7 +15,7 @@
 //! [`KEEP_VERIFIED`] such copies: they are then the newest, assuming the
 //! clock does not go back between attempts, so the first one survives. A
 //! compile-time assert below holds that bound; a step past 41 needs a run
-//! marker first.
+//! marker or a larger [`KEEP_VERIFIED`] first.
 //!
 //! Only this crate's own files are candidates: Node's pre-update and manual
 //! `.tar.gz` archives, temporary `.backup-*.db` files and SQLite sidecars are
@@ -32,9 +32,9 @@ use std::{
 
 pub(crate) const KEEP_VERIFIED: usize = 3;
 
-// Steps 38 through CURRENT_VERSION each write a copy, and every interrupted
-// attempt commits one more step, so a resumed upgrade leaves at most
-// CURRENT_VERSION - 38 interrupted copies before the run that commits.
+// A step copy gets a new name only after the previous step commits, so the
+// interrupted attempts of one upgrade leave at most CURRENT_VERSION - 38
+// copies before the run that commits.
 #[cfg(feature = "desktop_rebuild")]
 const _: () = assert!(crate::schema::CURRENT_VERSION - 38 <= KEEP_VERIFIED as u64);
 
@@ -117,9 +117,9 @@ fn remove_with_sidecars(path: &Path) -> std::io::Result<()> {
 }
 
 /// Prunes the backups directory that holds `rollback`, the copy of the
-/// database as this run opened it (`SchemaReady.backup`). `written` lists the
-/// step copies this run wrote; they are kept too. Errors become warnings; they never fail
-/// startup.
+/// database as this run opened it (`SchemaReady.backup`). `written` lists
+/// the step copies this run wrote; they are kept too. Errors become
+/// warnings; they never fail startup.
 pub(crate) fn prune(rollback: &Path, written: &[PathBuf]) -> Pruned {
     let mut pruned = Pruned::default();
     let Some(directory) = rollback.parent() else {
