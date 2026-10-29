@@ -12,7 +12,9 @@ const literals = [
   ["tag-adjacent", "verbatim-tag-adjacency", "!<tag:yaml.org,2002:str>b c1", { kind: "decoded", value: "b c1" }],
   ["implicit-sequence", "flow-empty-key", "[:[]]", { kind: "decoded", value: [{ null: [] }] }],
   ["implicit-map-tab", "flow-empty-key", "{:\ta\n }", { kind: "decoded", value: { null: "a" } }],
-  ["block-colon", "block-colon-after-flow", "a:\n  []\n\n: ]", { kind: "decoded", value: { a: [], null: "]" } }],
+  ["block-colon", "block-colon-after-flow", "a:\n  []\n\n: ]", {
+    kind: "refused", class: "YAMLException", reason: "bad indentation of a mapping entry",
+  }],
   ["quoted-tab", "quoted-multiline-flow-key-tab", 'a:\n  {"a\n b":\ta\\}', { kind: "decoded", value: { a: { "a b": "a\\" } } }],
   ["comment-adjacent", "comment-after-key-colon", '{"q":# c\n}', {
     kind: "refused", class: "YAMLException", reason: "missed comma between flow collection entries",
@@ -90,5 +92,5 @@ if (process.argv[2] === "--self-test") {
   selfTest();
 } else {
   const count = verify(process.argv[2] ?? goldenPath);
-  console.log(`Verified ${count} literal YAML outcomes against repository js-yaml 5.4.3. Rust parity is not asserted.`);
+  console.log(`Verified ${count} literal YAML outcomes against repository js-yaml 5.5.0. Rust parity is not asserted.`);
 }
