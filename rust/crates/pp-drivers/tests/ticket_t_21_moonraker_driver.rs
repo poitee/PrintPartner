@@ -17,7 +17,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/moonraker");
+const FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/drivers/moonraker/driver"
+);
 
 #[derive(Deserialize)]
 struct Routes {
@@ -127,14 +130,33 @@ fn settle<T: serde::Serialize>(result: anyhow::Result<T>) -> Value {
     }
 }
 
+/// Every read call, shaped like the Node oracle test's `readCalls`.
+async fn read_calls(driver: &Driver, paths: &[String]) -> Map<String, Value> {
+    let mut browse = Map::new();
+    let mut calls = Map::new();
+    calls.insert(
+        "test_connection".into(),
+        json!(driver.test_connection().await),
+    );
+    calls.insert("status".into(), json!(driver.status().await));
+    calls.insert("filament_used".into(), json!(driver.filament_used().await));
+    calls.insert("object_list".into(), json!(driver.object_list().await));
+    calls.insert("cameras".into(), settle(driver.cameras().await));
+    for path in paths {
+        browse.insert(path.clone(), settle(driver.browse(path).await));
+    }
+    calls.insert("browse".into(), Value::Object(browse));
+    calls
+}
+
 #[tokio::test]
 async fn ticket_t_21_read_contracts_match_node_oracle() {
     let routes: Routes = serde_json::from_slice(&fixture("routes.json")).unwrap();
     let oracle: Map<String, Value> = serde_json::from_slice(&fixture("node-oracle.json")).unwrap();
-    assert_eq!(
-        oracle.keys().collect::<Vec<_>>(),
-        ["http-404", "http-500", "recorded"]
-    );
+    // serde_json keeps file order when another workspace crate enables `preserve_order`.
+    let mut scenarios: Vec<_> = oracle.keys().collect();
+    scenarios.sort();
+    assert_eq!(scenarios, ["http-404", "http-500", "recorded"]);
     for (scenario, expected) in &oracle {
         let forced = match scenario.as_str() {
             "recorded" => None,
@@ -142,25 +164,13 @@ async fn ticket_t_21_read_contracts_match_node_oracle() {
         };
         let simulator = simulator(routes.routes.clone(), forced).await;
         let driver = driver(&format!("{}/", simulator.origin), None);
-        let mut browse = Map::new();
-        let test_connection = driver.test_connection().await;
-        let status = driver.status().await;
-        let filament_used = driver.filament_used().await;
-        let object_list = driver.object_list().await;
-        let cameras = settle(driver.cameras().await);
-        for path in &routes.browse {
-            browse.insert(path.clone(), settle(driver.browse(path).await));
-        }
-        let actual = json!({
-            "test_connection": test_connection,
-            "status": status,
-            "filament_used": filament_used,
-            "object_list": object_list,
-            "cameras": cameras,
-            "browse": browse,
-            "requests": simulator.requests(),
-        });
-        assert_eq!(integral(actual), integral(expected.clone()), "{scenario}");
+        let mut actual = read_calls(&driver, &routes.browse).await;
+        actual.insert("requests".into(), json!(simulator.requests()));
+        assert_eq!(
+            integral(Value::Object(actual)),
+            integral(expected.clone()),
+            "{scenario}"
+        );
     }
 }
 
@@ -188,21 +198,46 @@ async fn ticket_t_21_reads_are_get_only_and_send_the_api_key() {
     }
 }
 
+#[derive(Deserialize)]
+struct Bases {
+    bases: Vec<String>,
+}
+
 #[tokio::test]
-async fn ticket_t_21_missing_or_unusable_base_url_fails_like_node() {
-    for (base, message) in [
-        ("  ", "base_url is required"),
-        ("http://printer.test/?x=1", "Invalid base_url"),
-    ] {
+async fn ticket_t_21_unusable_base_urls_match_node_oracle() {
+    let bases: Bases = serde_json::from_slice(&fixture("bases.json")).unwrap();
+    let oracle: Map<String, Value> =
+        serde_json::from_slice(&fixture("node-oracle-bases.json")).unwrap();
+    assert_eq!(oracle.len(), bases.bases.len());
+    for base in &bases.bases {
+        let actual = read_calls(&driver(base, None), &[String::new()]).await;
+        assert_eq!(Value::Object(actual), oracle[base], "{base:?}");
+    }
+}
+
+/// Deliberate difference: Node appends the path into a query or drops it with
+/// a fragment. Rust refuses the base before any request, like the watcher.
+#[tokio::test]
+async fn ticket_t_21_base_with_query_or_fragment_is_refused() {
+    for base in ["http://printer.test/?x=1", "http://printer.test/#frag"] {
         let driver = driver(base, None);
         let tested = driver.test_connection().await;
-        assert!(!tested.ok);
-        assert_eq!(tested.message, message);
+        assert_eq!(
+            (tested.ok, tested.message.as_str()),
+            (false, "Invalid base_url")
+        );
         let status = serde_json::to_value(driver.status().await).unwrap();
-        assert_eq!(status, json!({ "state": "offline", "message": message }));
-        assert_eq!(driver.filament_used().await, None);
-        assert!(driver.object_list().await.is_empty());
-        assert_eq!(driver.cameras().await.unwrap_err().to_string(), message);
-        assert_eq!(driver.browse("").await.unwrap_err().to_string(), message);
+        assert_eq!(
+            status,
+            json!({ "state": "offline", "message": "Invalid base_url" })
+        );
+        assert_eq!(
+            driver.cameras().await.unwrap_err().to_string(),
+            "Invalid base_url"
+        );
+        assert_eq!(
+            driver.browse("").await.unwrap_err().to_string(),
+            "Invalid base_url"
+        );
     }
 }

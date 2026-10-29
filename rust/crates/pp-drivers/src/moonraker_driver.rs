@@ -4,7 +4,7 @@
 //! Until GRE-359, redirects are not followed (a 3xx is a non-OK reply), HTTPS
 //! is refused, and replies are bounded by the guard's 2 MiB body limit.
 use crate::moonraker::{QUERY, recorded_status};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use pp_api_types::printer_status::PrinterHostStatus as Status;
 use pp_net::outbound::{HttpGuard, PostBody, PostError};
 use serde::Serialize;
@@ -104,13 +104,23 @@ impl Driver {
     fn base(&self) -> Result<&str> {
         let base = self.base_url.trim().trim_end_matches('/');
         ensure!(!base.is_empty(), "base_url is required");
-        // Same rule as the watcher: never append a path to a query or fragment.
+        // Deliberate difference from Node, which appends the path into the query
+        // or drops it with the fragment. The watcher refuses these bases too.
         ensure!(!base.contains(['?', '#']), "Invalid base_url");
         Ok(base)
     }
 
     async fn fetch(&self, path: &str) -> Result<Reply> {
         let url = format!("{}{path}", self.base()?);
+        // Node's messages for a URL it will not fetch.
+        match Url::parse(&url)
+            .map_err(|_| anyhow!("Invalid URL"))?
+            .scheme()
+        {
+            "http" => {}
+            "https" => bail!("HTTPS Moonraker hosts are not supported until GRE-359"),
+            other => bail!("Unsupported URL protocol: {other}:"),
+        }
         let reply = self
             .guard
             .get(&url, self.api_key.as_deref().map(str::trim))

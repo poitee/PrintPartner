@@ -1,6 +1,6 @@
-//! Replays `fixtures/moonraker/upload-scenarios.json` through `Driver::upload_file`
-//! and compares the result and every recorded request, multipart bytes included,
-//! with `node-oracle-upload.json` from the Node adapter. The remaining tests cover
+//! Replays `fixtures/drivers/moonraker/driver/upload-scenarios.json` through
+//! `Driver::upload_file` and compares the result and every recorded request,
+//! multipart bytes included, with `node-oracle-upload.json` from the Node adapter. The remaining tests cover
 //! lost connections, where Rust deliberately reports an unknown outcome.
 use pp_drivers::moonraker_driver::{Driver, UploadResult, UploadSource};
 use pp_net::outbound::{HttpGuard, SystemResolver};
@@ -18,7 +18,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/moonraker");
+const FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/drivers/moonraker/driver"
+);
 const UPLOAD: &str = "/server/files/upload";
 const START: &str = "/printer/print/start";
 

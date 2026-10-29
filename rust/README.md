@@ -108,8 +108,11 @@ Browser interaction, native window permissions, macOS WebKit cookies, signed/not
 `/machine/proc_stats`), `filament_used`, `object_list`, `cameras` (list only),
 `browse` (`/server/files/directory` under `gcodes`) and `upload_file`.
 `tests/ticket_t_21_moonraker_driver.rs` and `tests/ticket_t_21_moonraker_upload.rs`
-replay recorded fixtures and check results and the exact requests, multipart
-bytes included, against output captured from the Node adapter.
+replay the fixtures in `fixtures/drivers/moonraker/driver` and check results
+and the exact requests, multipart bytes included, against oracle files.
+`moonraker.driver-oracle.test.ts` in the web server checks that the Node adapter
+still produces those files. A base URL with a query or fragment is refused;
+Node would append the path into it.
 
 `upload_file` sends one multipart POST to `/server/files/upload` with an exact
 `Content-Length`. It sends `POST /printer/print/start` only when the caller asks
