@@ -1,7 +1,8 @@
 name: Dependabot score status
 
-# Dependabot PRs have no model score, so this posts the pp/score status that
-# the main ruleset requires. The required CI checks still gate every merge.
+# Dependabot PRs have no model score, so this posts a pp/score status so they
+# pass if the ruleset later requires it. The ruleset does not require pp/score
+# today. The required CI checks still gate every merge.
 # A Dependabot pull_request run gets a read-only token by default; the job's
 # permissions key raises it to statuses: write. It checks out nothing.
 
