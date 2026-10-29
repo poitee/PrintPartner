@@ -6,14 +6,13 @@ use pp_storage::{
     Limits, Setting, SettingCommand, SettingSnapshot, WriterOwner,
     archive::{self, MetadataScope, Request, Scope},
 };
-use rusqlite::{Connection, ErrorCode};
+use rusqlite::Connection;
 use std::{
     io::Read,
     os::unix::fs::symlink,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tar::{EntryType, Header};
 
@@ -192,6 +191,64 @@ fn ticket_t_8_archive_snapshots_database_and_roots_in_node_format() {
             value: "works".into()
         }
     );
+
+    // After a restart the data is intact and a second archive succeeds.
+    owner.shutdown().unwrap();
+    let owner = open(&data);
+    for (key, value) in [("before", "committed"), ("after", "works")] {
+        assert_eq!(
+            owner
+                .client()
+                .reader(Duration::ZERO)
+                .unwrap()
+                .snapshot("test", key)
+                .unwrap(),
+            SettingSnapshot::Stored {
+                value: value.into()
+            }
+        );
+    }
+    let second = out.join("after-restart.tar.gz");
+    owner
+        .create_archive(&second, Request::new("3.9.0", Scope::Full))
+        .unwrap();
+    let restored = out.join("restored-after-restart.db");
+    std::fs::write(&restored, read_entry(&second, "print-partner.db")).unwrap();
+    assert_eq!(stored(&restored, "after").as_deref(), Some("works"));
+    owner.shutdown().unwrap();
+}
+
+#[test]
+fn ticket_t_8_archive_stops_walking_at_the_entry_limit() {
+    use std::os::unix::fs::PermissionsExt;
+    let data = Scratch::new("pp-t8-archive-data");
+    let out = Scratch::new("pp-t8-archive-out");
+    let owner = open(&data);
+    for index in 0..10 {
+        std::fs::write(data.join(format!("repos/a{index}")), b"x").unwrap();
+    }
+    // A walk that ran past the limit would fail on this unreadable directory
+    // with a different error.
+    std::fs::create_dir(data.join("repos/z-unreadable")).unwrap();
+    std::fs::set_permissions(
+        data.join("repos/z-unreadable"),
+        std::fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let mut request = Request::new("3.9.0", Scope::Full);
+    // Metadata, database, `repos`, `repos/a0` and `repos/a1`.
+    request.limits.max_entries = 5;
+    let error = owner
+        .create_archive(&out.join("capped.tar.gz"), request)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("entry limit exceeded (5)"), "{error}");
+    assert!(residue(&out).is_empty());
+    std::fs::set_permissions(
+        data.join("repos/z-unreadable"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
     owner.shutdown().unwrap();
 }
 
@@ -216,75 +273,6 @@ fn ticket_t_8_archive_database_only_scope_omits_roots() {
         MetadataScope::DatabaseOnly
     );
     owner.shutdown().unwrap();
-}
-
-#[test]
-fn ticket_t_8_archive_freezes_other_sqlite_writers_until_done() {
-    let data = Scratch::new("pp-t8-archive-data");
-    let out = Scratch::new("pp-t8-archive-out");
-    let owner = open(&data);
-    // An incompressible root keeps the archive busy long enough to observe.
-    std::fs::create_dir_all(data.join("sources")).unwrap();
-    let noise: Vec<u8> = (0..8 * 1024 * 1024).map(|_| rand_byte()).collect();
-    std::fs::write(data.join("sources/large.bin"), noise).unwrap();
-
-    // A second process's writer that holds the lock first delays the archive,
-    // and its commit is in the snapshot.
-    let external = Connection::open(data.join("print-partner.db")).unwrap();
-    external.execute_batch("BEGIN IMMEDIATE").unwrap();
-    external
-        .execute(
-            "INSERT INTO app_settings(tenant_id,key,value) VALUES('test','external','first')",
-            [],
-        )
-        .unwrap();
-    let target = out.join("frozen.tar.gz");
-    let archive_thread = thread::scope(|scope| {
-        let handle =
-            scope.spawn(|| owner.create_archive(&target, Request::new("3.9.0", Scope::Full)));
-        thread::sleep(Duration::from_millis(200));
-        assert!(
-            !target.exists(),
-            "archive ran while another writer held the lock"
-        );
-        external.execute_batch("COMMIT").unwrap();
-
-        // While the archive is in progress, no other writer can begin.
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !residue(&out).iter().any(|name| name.contains(".work-")) {
-            assert!(
-                Instant::now() < deadline,
-                "archive work directory never appeared"
-            );
-            thread::sleep(Duration::from_millis(1));
-        }
-        external.busy_timeout(Duration::ZERO).unwrap();
-        let blocked = external.execute_batch("BEGIN IMMEDIATE").unwrap_err();
-        assert_eq!(blocked.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
-        handle.join().unwrap()
-    });
-    archive_thread.unwrap();
-    external.busy_timeout(Duration::from_secs(5)).unwrap();
-    external.execute_batch("BEGIN IMMEDIATE; COMMIT").unwrap();
-
-    let restored = out.join("restored.db");
-    std::fs::write(&restored, read_entry(&target, "print-partner.db")).unwrap();
-    assert_eq!(stored(&restored, "external").as_deref(), Some("first"));
-    drop(external);
-    owner.shutdown().unwrap();
-}
-
-fn rand_byte() -> u8 {
-    use std::cell::Cell;
-    thread_local!(static STATE: Cell<u64> = const { Cell::new(0x9e37_79b9_7f4a_7c15) });
-    STATE.with(|state| {
-        let mut x = state.get();
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        state.set(x);
-        (x >> 32) as u8
-    })
 }
 
 #[test]
@@ -614,6 +602,12 @@ fn ticket_t_8_archive_validation_rejects_traversal_links_and_bad_metadata() {
         Crafted::new().base(&full, b"not a database at all"),
         "invalid SQLite database",
     );
+    // Shorter than the 16-byte header: a short read is a refusal, not an I/O error.
+    check(
+        "tiny-sqlite",
+        Crafted::new().base(&full, b"SQLi"),
+        "invalid SQLite database",
+    );
     let mut corrupt = main.clone();
     corrupt[100..].iter_mut().for_each(|byte| *byte = 0xff);
     check(
@@ -701,25 +695,120 @@ fn ticket_t_8_archive_node_validates_rust_archives() {
         ),
     )
     .unwrap();
+    let stdout = run_node(
+        &script,
+        &[&out.join("full.tar.gz"), &out.join("db-only.tar.gz")],
+    );
+    assert_eq!(stdout, "full 11\ndatabase-only 0\n");
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
+}
+
+fn backup_service() -> String {
+    repo_root()
+        .join("web/apps/server/src/services/backup-restore.ts")
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// Runs a TypeScript script with the pinned parity Node and tsx.
+fn run_node(script: &Path, args: &[&Path]) -> String {
+    let root = repo_root();
     let node = std::env::var_os("PP_SCHEMA_PARITY_NODE").unwrap_or_else(|| "node".into());
     let output = child_process::command(&node)
         .current_dir(&root)
         .arg("--conditions=development")
         .arg("--import")
         .arg(root.join("web/node_modules/tsx/dist/loader.mjs"))
-        .arg(&script)
-        .arg(out.join("full.tar.gz"))
-        .arg(out.join("db-only.tar.gz"))
+        .arg(script)
+        .args(args)
         .output()
-        .expect("run Node validateBackup");
+        .expect("run Node");
     assert!(
         output.status.success(),
-        "Node rejected a Rust archive.\nstdout:\n{}\nstderr:\n{}",
+        "Node script failed.\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "full 11\ndatabase-only 0\n"
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn ticket_t_8_archive_validates_archives_from_node_create_backup() {
+    let dir = Scratch::new("pp-t8-archive-node-create");
+    let data = dir.join("data");
+    std::fs::create_dir(&data).unwrap();
+    let output = dir.join("node.tar.gz");
+    let script = dir.join("create.mts");
+    // A path over 100 bytes makes node-tar write a PAX header.
+    let long = format!("repos/{}/{}/part.stl", "a".repeat(60), "b".repeat(60));
+    std::fs::write(
+        &script,
+        format!(
+            r#"import {{ createRequire }} from "node:module";
+import {{ mkdirSync, writeFileSync }} from "node:fs";
+import {{ dirname, join }} from "node:path";
+import {{ createBackup }} from {service:?};
+const Database = createRequire({service:?})("better-sqlite3");
+const [dataDir, output] = process.argv.slice(2);
+const dbPath = join(dataDir, "print-partner.db");
+const sqlite = new Database(dbPath);
+sqlite.pragma("journal_mode = WAL");
+sqlite.exec("CREATE TABLE app_settings(tenant_id TEXT, key TEXT, value TEXT); INSERT INTO app_settings VALUES('test', 'node', 'wrote this')");
+const long = join(dataDir, {long:?});
+mkdirSync(dirname(long), {{ recursive: true }});
+writeFileSync(long, "solid node");
+mkdirSync(join(dataDir, "manifests"));
+writeFileSync(join(dataDir, "manifests", "plan.yaml"), "plates: []");
+writeFileSync(join(dataDir, "custom_filaments.json"), "[]");
+await createBackup(
+  {{
+    dbPath,
+    ping: () => sqlite.prepare("SELECT 1").get() !== undefined,
+    backupToFile: (destination) => sqlite.backup(destination).then(() => undefined),
+  }},
+  dataDir,
+  "3.8.0",
+  output,
+);
+sqlite.close();
+console.log("created");
+"#,
+            service = backup_service(),
+        ),
+    )
+    .unwrap();
+    assert_eq!(run_node(&script, &[&data, &output]), "created\n");
+
+    let metadata = archive::validate(&output, archive::Limits::default()).unwrap();
+    assert_eq!(metadata.scope, MetadataScope::Full);
+    assert_eq!(metadata.format_version, 2);
+    assert_eq!(metadata.app_version, "3.8.0");
+    let entries = listing(&output);
+    assert!(
+        entries
+            .iter()
+            .all(|(_, kind)| matches!(kind, EntryType::Regular | EntryType::Directory)),
+        "{entries:?}"
     );
+    for expected in [
+        "print-partner.db",
+        "backup-metadata.json",
+        "repos",
+        long.as_str(),
+        "manifests/plan.yaml",
+        "custom_filaments.json",
+    ] {
+        assert!(
+            entries.iter().any(|(name, _)| name == expected),
+            "{expected} missing from {entries:?}"
+        );
+    }
+    assert_eq!(read_entry(&output, &long), b"solid node");
+    let restored = dir.join("restored.db");
+    std::fs::write(&restored, read_entry(&output, "print-partner.db")).unwrap();
+    assert_eq!(stored(&restored, "node").as_deref(), Some("wrote this"));
 }

@@ -280,11 +280,28 @@ fn random_name(prefix: &str) -> String {
     format!("{prefix}{}", hex::encode(rand::random::<[u8; 12]>()))
 }
 
+/// The metadata and database entries every archive holds.
+const CORE_ENTRIES: u64 = 2;
+
+fn push(items: &mut Vec<Item>, item: Item, max_entries: u64) -> Result<()> {
+    ensure!(
+        items.len() as u64 + CORE_ENTRIES < max_entries,
+        "Backup archive entry limit exceeded ({max_entries})"
+    );
+    items.push(item);
+    Ok(())
+}
+
 /// Lists every root entry Node's `tar.c` filter keeps: regular files and
 /// directories, never following a symlink. A root itself must not be a
-/// symlink or the wrong type; a missing root is omitted.
-fn plan(data_dir: &Path, scope: Scope) -> Result<Vec<Item>> {
+/// symlink or the wrong type; a missing root is omitted. The walk stops as
+/// soon as the archive would exceed `max_entries`.
+fn plan(data_dir: &Path, scope: Scope, max_entries: u64) -> Result<Vec<Item>> {
     let mut items = Vec::new();
+    ensure!(
+        CORE_ENTRIES <= max_entries,
+        "Backup archive entry limit exceeded ({max_entries})"
+    );
     if scope == Scope::DatabaseOnly {
         return Ok(items);
     }
@@ -300,18 +317,22 @@ fn plan(data_dir: &Path, scope: Scope) -> Result<Vec<Item>> {
             "Backup root cannot be a symbolic link: {root}"
         );
         match kind {
-            RootKind::File if metadata.is_file() => {
-                items.push(Item::File(root.into(), path, metadata.len()))
+            RootKind::File if metadata.is_file() => push(
+                &mut items,
+                Item::File(root.into(), path, metadata.len()),
+                max_entries,
+            )?,
+            RootKind::Directory if metadata.is_dir() => {
+                walk(&path, root.into(), &mut items, max_entries)?
             }
-            RootKind::Directory if metadata.is_dir() => walk(&path, root.into(), &mut items)?,
             _ => bail!("Backup root has the wrong file type: {root}"),
         }
     }
     Ok(items)
 }
 
-fn walk(directory: &Path, name: String, items: &mut Vec<Item>) -> Result<()> {
-    items.push(Item::Directory(name.clone()));
+fn walk(directory: &Path, name: String, items: &mut Vec<Item>, max_entries: u64) -> Result<()> {
+    push(items, Item::Directory(name.clone()), max_entries)?;
     let mut children = std::fs::read_dir(directory)
         .with_context(|| format!("Read backup directory {name}"))?
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -324,9 +345,13 @@ fn walk(directory: &Path, name: String, items: &mut Vec<Item>) -> Result<()> {
         let metadata = child.path().symlink_metadata()?;
         let child_name = format!("{name}/{file_name}");
         if metadata.is_dir() {
-            walk(&child.path(), child_name, items)?;
+            walk(&child.path(), child_name, items, max_entries)?;
         } else if metadata.is_file() {
-            items.push(Item::File(child_name, child.path(), metadata.len()));
+            push(
+                items,
+                Item::File(child_name, child.path(), metadata.len()),
+                max_entries,
+            )?;
         }
     }
     Ok(())
@@ -383,7 +408,7 @@ pub(crate) fn write(connection: &Connection, job: &Job) -> Result<()> {
         .and_then(|name| name.to_str())
         .ok_or_else(|| anyhow!("Backup file name missing"))?;
     let limits = job.request.limits.tightened();
-    let items = plan(&job.data_dir, job.request.scope)?;
+    let items = plan(&job.data_dir, job.request.scope, limits.max_entries)?;
     let page_bytes: i64 = connection.query_row(
         "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
         [],
@@ -397,11 +422,6 @@ pub(crate) fn write(connection: &Connection, job: &Job) -> Result<()> {
             Item::Directory(_) => 0,
         })
         .sum();
-    ensure!(
-        items.len() as u64 + 2 <= limits.max_entries,
-        "Backup archive entry limit exceeded ({})",
-        limits.max_entries
-    );
     ensure!(
         page_bytes + root_bytes <= limits.max_total_bytes,
         "Backup archive decompressed byte limit exceeded ({})",
@@ -479,15 +499,39 @@ pub(crate) fn write(connection: &Connection, job: &Job) -> Result<()> {
             .into_inner()
             .map_err(|error| error.into_error())?
             .sync_all()?;
+        #[cfg(all(test, unix))]
+        tests::hold_freeze(&job.destination);
         validate(&temporary, limits)?;
-        std::fs::hard_link(&temporary, &job.destination)
-            .context("Backup destination must be a new file")?;
+        publish(&temporary, &job.destination)?;
         File::open(parent)?.sync_all()?;
         Ok(())
     })();
     let _ = std::fs::remove_file(&temporary);
     let _ = std::fs::remove_dir_all(&work);
     result
+}
+
+/// Publishes `temporary` as the new file `destination`. An exclusive create
+/// reserves the name, then a rename replaces the empty reservation. Unlike a
+/// hard link, this works on exFAT, FAT32 and SMB backup drives.
+fn publish(temporary: &Path, destination: &Path) -> Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .with_context(|| {
+            format!(
+                "Backup destination must be a new file: {}",
+                destination.display()
+            )
+        })?;
+    std::fs::rename(temporary, destination).map_err(|error| {
+        let _ = std::fs::remove_file(destination);
+        anyhow::Error::new(error).context(format!(
+            "Publish backup archive to {}",
+            destination.display()
+        ))
+    })
 }
 
 /// Node's archive entry guard: the path is relative, `/`-separated, has no
@@ -635,9 +679,13 @@ fn validate_into(
     }
     let database = scratch.join(DATABASE_FILE);
     let mut header = [0u8; 16];
-    let read = File::open(&database)?.read(&mut header)?;
+    match File::open(&database)?.read_exact(&mut header) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {}
+        Err(error) => return Err(error.into()),
+    }
     ensure!(
-        read == SQLITE_HEADER.len() && header == SQLITE_HEADER,
+        header == SQLITE_HEADER,
         "Backup contains an invalid SQLite database"
     );
     let integrity = (|| -> rusqlite::Result<String> {
@@ -652,3 +700,6 @@ fn validate_into(
     );
     Ok(metadata)
 }
+
+#[cfg(all(test, unix))]
+mod tests;
