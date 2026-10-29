@@ -1,6 +1,7 @@
-//! Replays `fixtures/moonraker/routes.json` through the Rust Moonraker driver and
-//! compares every result and the exact request transcript with `node-oracle.json`,
-//! which `capture-node-oracle.mts` records from the Node adapter.
+//! Replays `fixtures/drivers/moonraker/driver/routes.json` through the Rust
+//! Moonraker driver and compares every result and the exact request transcript
+//! with `node-oracle.json`. `moonraker.driver-oracle.test.ts` in the web server
+//! checks that the Node adapter produces the same file.
 use pp_drivers::moonraker_driver::Driver;
 use pp_net::outbound::{HttpGuard, SystemResolver};
 use serde::Deserialize;
