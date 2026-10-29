@@ -9,7 +9,16 @@
     "/server/webcams/list": "webcams-list.json",
     "/server/files/directory?path=gcodes&extended=true": "directory.json",
     "/server/files/directory?path=gcodes/plates&extended=true": "directory.json",
-    "/server/files/directory?path=gcodes/Lid%20%26%20Base%20%232&extended=true": "directory.json"
+    "/server/files/directory?path=gcodes/Lid%20%26%20Base%20%232&extended=true": "directory.json",
+    "/server/files/directory?path=gcodes/far-future&extended=true": "directory-far-future.json"
   },
-  "browse": ["", "/plates/", "Lid & Base #2", "missing", "../escape", "a\\b"]
+  "browse": [
+    "",
+    "/plates/",
+    "Lid & Base #2",
+    "missing",
+    "../escape",
+    "far-future",
+    "a\\b"
+  ]
 }

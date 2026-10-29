@@ -112,7 +112,10 @@ replay the fixtures in `fixtures/drivers/moonraker/driver` and check results
 and the exact requests, multipart bytes included, against oracle files.
 `moonraker.driver-oracle.test.ts` in the web server checks that the Node adapter
 still produces those files. A base URL with a query or fragment is refused;
-Node would append the path into it.
+Node would append the path into it. A status reply without
+`result.status` is reported as `unknown`, as Node does; the watcher fails
+closed on it. `ticket_t_21_status_matches_shared_corpus` runs the GRE-449
+status corpus through the driver.
 
 `upload_file` sends one multipart POST to `/server/files/upload` with an exact
 `Content-Length`. It sends `POST /printer/print/start` only when the caller asks

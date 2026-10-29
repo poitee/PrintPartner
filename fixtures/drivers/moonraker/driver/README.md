@@ -5,6 +5,8 @@ not hardware captures.
 
 - `routes.json` maps each request target to a body; unlisted requests get 404.
   `{ORIGIN}` in a body becomes the simulator origin.
+  `directory-far-future.json` holds a timestamp past the ECMAScript date limit,
+  which fails the whole listing on both sides.
 - `node-oracle.json` is what the Node adapter returns, plus every request it
   sends, for the `recorded`, `http-500` and `http-404` scenarios.
 - `bases.json` lists base URLs that fail before any request.
