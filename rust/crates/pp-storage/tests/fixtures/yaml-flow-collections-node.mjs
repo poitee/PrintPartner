@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(new URL('../../../../../web/package.json', import.meta.url));
 const { version } = require('js-yaml/package.json');
-if (version !== '5.4.3') throw new Error(`Expected js-yaml 5.4.3, got ${version}`);
+if (version !== '5.5.0') throw new Error(`Expected js-yaml 5.5.0, got ${version}`);
 const { load } = require('js-yaml');
 const refusals = [
   ['block-literal-in-seq', 'project: [|]'],

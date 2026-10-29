@@ -1,6 +1,6 @@
 # YAML tab-line parity
 
-`yaml-tab-lines-node.json` records the literal outputs of js-yaml 5.4.3 for 233 inputs that put a tab in an otherwise blank line or at the start of a comment line. A null expectation means js-yaml rejects the input.
+`yaml-tab-lines-node.json` records the literal outputs of js-yaml 5.5.0 for 233 inputs that put a tab in an otherwise blank line or at the start of a comment line. A null expectation means js-yaml rejects the input.
 
 ## Whitespace-only lines in quoted scalars
 
