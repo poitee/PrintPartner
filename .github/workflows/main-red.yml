@@ -53,7 +53,7 @@ jobs:
         if: github.event.workflow_run.run_attempt >= 2
         run: |
           set -euo pipefail
-          failing=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs" --paginate \
+          failing=$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
             --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"')
           body=$(printf '%s\n' \
             "**Workflow:** $WORKFLOW_NAME" \
@@ -72,6 +72,13 @@ jobs:
           fi
 
           if [ -n "$issue" ]; then
+            # Later manual reruns of the same run land here too; post once per run.
+            seen=$(gh issue view "$issue" --json body,comments \
+              | jq --arg u "$RUN_URL" '[.body, .comments[].body] | map(select(contains($u))) | length')
+            if [ "$seen" -gt 0 ]; then
+              echo "Issue #$issue already covers $RUN_URL"
+              exit 0
+            fi
             gh issue comment "$issue" --body "$body"
           elif [ "$has_label" -gt 0 ]; then
             gh issue create --title "[main-red] main is failing" --label main-red --body "$body"

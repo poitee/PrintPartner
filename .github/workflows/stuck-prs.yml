@@ -15,12 +15,10 @@ jobs:
   report:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The repo is public, so commit, status and check reads need no extra scopes.
     permissions:
       issues: write
       pull-requests: read
-      statuses: read
-      checks: read
-      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -45,22 +43,31 @@ jobs:
             reasons=""
 
             # gh exits non-zero while checks pend or fail; the JSON is still printed.
-            # No JSON at all means an API error or no required checks: report it, don't drop the PR.
-            buckets=$(gh pr checks "$num" --required --json bucket --jq '[.[].bucket]' 2>/dev/null || true)
-            if ! jq -e 'type == "array" and length > 0' <<<"${buckets:-null}" >/dev/null 2>&1; then
-              reasons="required checks unreadable"
-            elif jq -e 'all(.[]; . == "pass" or . == "skipping")' <<<"$buckets" >/dev/null; then
-              score=$(gh api "repos/$GH_REPO/commits/$sha/status" \
-                --jq '[.statuses[] | select(.context == "pp/score" and .state == "success")] | length')
-              if [ "$score" -eq 0 ]; then
-                reasons="required checks green, no pp/score success"
+            # With no JSON, tell "no required checks configured" apart from an API error.
+            err=$(mktemp)
+            buckets=$(gh pr checks "$num" --required --json bucket --jq '[.[].bucket]' 2>"$err" || true)
+            if jq -e 'type == "array" and length > 0' <<<"${buckets:-null}" >/dev/null 2>&1; then
+              if jq -e 'all(.[]; . == "pass" or . == "skipping")' <<<"$buckets" >/dev/null; then
+                # Fork heads and API errors must not abort the whole report.
+                if score=$(gh api "repos/$GH_REPO/commits/$sha/status" \
+                  --jq '[.statuses[] | select(.context == "pp/score" and .state == "success")] | length' 2>/dev/null); then
+                  [ "$score" -gt 0 ] || reasons="required checks green, no pp/score success"
+                else
+                  reasons="required checks green, pp/score unreadable"
+                fi
               fi
+            elif ! grep -qE 'no (required )?checks reported' "$err"; then
+              reasons="required checks unreadable"
             fi
+            rm -f "$err"
 
-            committed=$(gh api "repos/$GH_REPO/commits/$sha" --jq .commit.committer.date)
-            age_h=$(( (now - $(date -u -d "$committed" +%s)) / 3600 ))
-            if [ "$age_h" -gt 24 ]; then
-              reasons="${reasons:+$reasons; }no commit in ${age_h}h"
+            if committed=$(gh api "repos/$GH_REPO/commits/$sha" --jq .commit.committer.date 2>/dev/null); then
+              age_h=$(( (now - $(date -u -d "$committed" +%s)) / 3600 ))
+              if [ "$age_h" -gt 24 ]; then
+                reasons="${reasons:+$reasons; }no commit in ${age_h}h"
+              fi
+            else
+              reasons="${reasons:+$reasons; }head commit unreadable"
             fi
             if [ "$merge" = "BEHIND" ] || [ "$merge" = "DIRTY" ]; then
               reasons="${reasons:+$reasons; }merge state $merge"
@@ -71,11 +78,13 @@ jobs:
             fi
           done
 
-          issue=$(gh issue list --state open --search "\"$TITLE\" in:title" --limit 20 --json number,title \
-            | jq -r --arg t "$TITLE" '[.[] | select(.title == $t)][0].number // empty')
+          # One tracking issue for good: the newest one with this exact title, open or closed.
+          read -r issue issue_state < <(gh issue list --state all --search "\"$TITLE\" in:title" --limit 20 \
+            --json number,title,state,createdAt \
+            | jq -r --arg t "$TITLE" '[.[] | select(.title == $t)] | sort_by(.createdAt) | last // empty | "\(.number) \(.state)"') || true
 
           if [ -z "$rows" ]; then
-            if [ -n "$issue" ]; then
+            if [ "${issue_state:-}" = "OPEN" ]; then
               gh issue close "$issue" --comment "Nothing is stuck as of $(date -u +%FT%TZ)."
             fi
             exit 0
@@ -87,8 +96,11 @@ jobs:
             "| PR | Title | Head | Merge state | Why |" \
             "| --- | --- | --- | --- | --- |" \
             "$rows")
-          if [ -n "$issue" ]; then
-            gh issue edit "$issue" --body "$body"
-          else
+          if [ -z "${issue:-}" ]; then
             gh issue create --title "$TITLE" --body "$body"
+            exit 0
           fi
+          if [ "$issue_state" = "CLOSED" ]; then
+            gh issue reopen "$issue"
+          fi
+          gh issue edit "$issue" --body "$body"
