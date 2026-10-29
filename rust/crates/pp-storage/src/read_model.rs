@@ -13,7 +13,7 @@ use crate::{
     auth::{self, Secret},
 };
 use anyhow::{Result, anyhow, ensure};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -76,9 +76,15 @@ pub struct ReadClient {
 }
 pub(super) struct Command {
     credential: Credential,
-    profile_ids: Vec<i64>,
+    target: Target,
     repos: PathBuf,
     policy: auth::AuthPolicy,
+}
+enum Target {
+    Profiles(Vec<i64>),
+    /// The Plan that owns this tenant's projection Part, resolved in the same
+    /// transaction as the read. No Part reads no Plan.
+    Part(i64),
 }
 
 impl WriterOwner {
@@ -126,6 +132,32 @@ impl ReadClient {
                 "Accepted Plan Progress batches contain at most 64 Plans"
             );
         }
+        self.submit(credential, Target::Profiles(ids), cancelled, wait)
+    }
+
+    /// Reads the Accepted Plan that owns projection Part `part_id`. The batch
+    /// is empty when the caller's tenant has no such Part.
+    pub fn read_part(
+        &self,
+        credential: Credential,
+        part_id: i64,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<Batch> {
+        ensure!(
+            part_id > 0 && part_id <= 9_007_199_254_740_991,
+            "Accepted Part IDs must be positive safe integers"
+        );
+        self.submit(credential, Target::Part(part_id), cancelled, wait)
+    }
+
+    fn submit(
+        &self,
+        credential: Credential,
+        target: Target,
+        cancelled: &AtomicBool,
+        wait: Duration,
+    ) -> Result<Batch> {
         let deadline = Instant::now() + wait;
         let mut queue = self
             .shared
@@ -153,7 +185,7 @@ impl ReadClient {
         queue.pending.push_back(Envelope::Read {
             command: Command {
                 credential,
-                profile_ids: ids,
+                target,
                 repos: self.repos.clone(),
                 policy: self.policy,
             },
@@ -175,9 +207,21 @@ pub(super) fn execute(connection: &mut Connection, command: Command) -> Result<B
             secret,
         } => auth::read_key_tenant(&tx, &routed_tenant, &secret)?,
     };
+    let profile_ids = match command.target {
+        Target::Profiles(ids) => ids,
+        Target::Part(part) => tx
+            .query_row(
+                "SELECT profile_id FROM parts WHERE tenant_id=?1 AND id=?2",
+                rusqlite::params![tenant, part],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .into_iter()
+            .collect(),
+    };
     let mut builds = Vec::new();
     let mut budget = graph::Budget::default();
-    for profile_id in command.profile_ids {
+    for profile_id in profile_ids {
         let accepted = match graph::read(&tx, &tenant, profile_id, &command.repos, &mut budget) {
             Ok(read) => read,
             Err(error) => match error.downcast_ref::<graph::Integrity>() {
