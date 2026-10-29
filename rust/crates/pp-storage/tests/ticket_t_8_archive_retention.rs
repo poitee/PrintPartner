@@ -220,17 +220,17 @@ fn ticket_t_8_archive_retention_never_deletes_below_three_verified_or_without_an
     std::fs::create_dir(&backups).unwrap();
     verified_copy(&backups.join("pre-schema20.db"), hour(3));
     verified_copy(&backups.join("pre-schema21.db"), hour(2));
-    for version in 22..=24 {
+    for version in 22..=23 {
         let path = backups.join(format!("pre-schema{version}.db"));
         std::fs::write(&path, b"corrupt copy").unwrap();
         age_file(&path, hour(1));
     }
-    // An unreadable copy is kept too.
-    std::fs::set_permissions(
-        backups.join("pre-schema24.db"),
-        std::fs::Permissions::from_mode(0o000),
-    )
-    .unwrap();
+    // A valid copy nobody can read is kept too. Root reads it anyway, and
+    // then it counts as the third verified copy, which is also kept.
+    let unreadable = backups.join("pre-schema24.db");
+    verified_copy(&unreadable, hour(1));
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let root = unsafe { libc::geteuid() } == 0;
     let ready = upgrade(&data);
     assert!(
         ready.pruned_backups.is_empty(),
@@ -239,7 +239,7 @@ fn ticket_t_8_archive_retention_never_deletes_below_three_verified_or_without_an
     );
     assert_eq!(
         ready.backup_warnings.len(),
-        3,
+        if root { 2 } else { 3 },
         "{:?}",
         ready.backup_warnings
     );

@@ -9,10 +9,19 @@
 //! copy the previous release opens, even though a later attempt pinned a
 //! newer rollback.
 //!
+//! A step copy written by an attempt that was interrupted before the upgrade
+//! committed is an ordinary candidate, because step names carry no run
+//! marker. That is safe while an interrupted run can leave at most
+//! [`KEEP_VERIFIED`] such copies: they are then the newest, assuming the
+//! clock does not go back between attempts, so the first one survives. A
+//! compile-time assert below holds that bound; a step past 41 needs a run
+//! marker first.
+//!
 //! Only this crate's own files are candidates: Node's pre-update and manual
 //! `.tar.gz` archives, temporary `.backup-*.db` files and SQLite sidecars are
 //! never touched. A copy that fails verification is kept and reported, never
-//! deleted.
+//! deleted. A path that is not UTF-8 cannot be verified, so nothing is
+//! pruned there.
 
 use rusqlite::{Connection, OpenFlags};
 use std::{
@@ -22,6 +31,12 @@ use std::{
 };
 
 pub(crate) const KEEP_VERIFIED: usize = 3;
+
+// Steps 38 through CURRENT_VERSION each write a copy, and every interrupted
+// attempt commits one more step, so a resumed upgrade leaves at most
+// CURRENT_VERSION - 38 interrupted copies before the run that commits.
+#[cfg(feature = "desktop_rebuild")]
+const _: () = assert!(crate::schema::CURRENT_VERSION - 38 <= KEEP_VERIFIED as u64);
 
 #[derive(Debug, Default)]
 pub(crate) struct Pruned {
@@ -60,9 +75,13 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 
 /// Opens the copy as an immutable read-only URI, so verification creates no
 /// `-wal` or `-shm` file, and requires `integrity_check` to return `ok`. An
-/// immutable open ignores a `-wal`, so a copy that has one is not verified.
+/// immutable open ignores a `-wal` or `-journal`, so a copy that has either
+/// is not verified.
 fn verified(path: &Path) -> bool {
-    if sidecar(path, "-wal").symlink_metadata().is_ok() {
+    if ["-wal", "-journal"]
+        .iter()
+        .any(|suffix| sidecar(path, suffix).symlink_metadata().is_ok())
+    {
         return false;
     }
     let Some(text) = path.to_str() else {
@@ -88,7 +107,7 @@ fn verified(path: &Path) -> bool {
 /// Removes the sidecars first, so a failure never leaves one without its
 /// database.
 fn remove_with_sidecars(path: &Path) -> std::io::Result<()> {
-    for suffix in ["-wal", "-shm"] {
+    for suffix in ["-wal", "-journal", "-shm"] {
         match std::fs::remove_file(sidecar(path, suffix)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
             _ => {}
@@ -97,9 +116,9 @@ fn remove_with_sidecars(path: &Path) -> std::io::Result<()> {
     std::fs::remove_file(path)
 }
 
-/// Prunes the backups directory that holds `rollback`, the from-version copy
-/// of the upgrade that just committed. `written` lists the step copies that
-/// upgrade wrote; they are kept too. Errors become warnings; they never fail
+/// Prunes the backups directory that holds `rollback`, the copy of the
+/// database as this run opened it (`SchemaReady.backup`). `written` lists the
+/// step copies this run wrote; they are kept too. Errors become warnings; they never fail
 /// startup.
 pub(crate) fn prune(rollback: &Path, written: &[PathBuf]) -> Pruned {
     let mut pruned = Pruned::default();
