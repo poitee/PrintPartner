@@ -2,7 +2,8 @@
 
 Each runner is a separate copy of pr_status_sync.py, as separate workflow runs are.
 They share one fake Linear workspace and one fake GitHub repository. A pause runs
-another writer to completion at a chosen request of the paused runner.
+another writer to completion at a chosen request of the paused runner. The fake
+Linear has no issue history, so no test depends on it.
 """
 import copy
 import datetime as dt
@@ -11,7 +12,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from test_pr_status_sync import pr, ticket
+from test_pr_status_sync import github, pr, ticket
 
 
 class ConcurrentWriteTest(unittest.TestCase):
@@ -19,11 +20,9 @@ class ConcurrentWriteTest(unittest.TestCase):
         self.issues = {"GRE-1": ticket()}
         self.comments = []  # read by older diagnostics; the sync posts no comments
         self.github = []
-        self.history = []
         self.queries = []
         self.writes = []
         self.pauses = []
-        self.fetches = []
         for target in ("urllib.request.urlopen", "subprocess.check_output"):
             guard = patch(target, side_effect=AssertionError("Unexpected external API call"))
             guard.start()
@@ -39,8 +38,7 @@ class ConcurrentWriteTest(unittest.TestCase):
         module.STALE_HOURS = 48
         module._prs = copy.deepcopy(prs)
         module.gql = lambda query, variables: self.linear(name, query, variables)
-        module.gh = lambda *args: self.fetches.append(name) or [{"data": {"repository": {"pullRequests": {
-            "nodes": copy.deepcopy(self.github)}}}}]
+        module.gh = github(lambda: self.github)
         return module
 
     def pause(self, runner, marker, callback, skip=0):
@@ -64,20 +62,11 @@ class ConcurrentWriteTest(unittest.TestCase):
                 {"id": name, "name": name} for name in ("Backlog", "In Progress", "In Review", "Done")
             ]}}]}}
         if "issueUpdate(" in query:
-            issue = self.issues[f"GRE-{variables['id']}"]
-            before, issue["state"] = issue["state"], {
-                "name": variables["s"], "type": "completed" if variables["s"] == "Done" else "started"}
-            issue["updatedAt"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(
-                seconds=len(self.writes) + 1)).isoformat()
-            if before != issue["state"]:  # Linear records no history entry for an unchanged state
-                self.history.append({"id": str(len(self.history)), "issueId": variables["id"],
-                                     "createdAt": issue["updatedAt"], "fromState": before,
-                                     "toState": issue["state"]})
+            self.issues[f"GRE-{variables['id']}"].update(state={
+                "name": variables["s"], "type": "completed" if variables["s"] == "Done" else "started"},
+                updatedAt=(dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=len(self.writes) + 1)).isoformat())
             self.writes.append((runner, variables["s"]))
             return {"issueUpdate": {"success": True}}
-        if "history(" in query:
-            nodes = copy.deepcopy([h for h in self.history if h["issueId"] == variables["id"]])
-            return {"issue": {"a": {"nodes": nodes[:25]}, "b": {"nodes": nodes[-25:]}}}
         if "issues(first:250," in query:
             return {"issues": {"nodes": copy.deepcopy([
                 issue for issue in self.issues.values() if issue["state"]["name"] in {"In Progress", "In Review"}
@@ -101,13 +90,14 @@ class ConcurrentWriteTest(unittest.TestCase):
         self.assertEqual(self.writes, [("other", "Done"), ("event", "In Review"), ("event", "Done")])
         self.assertEqual(self.state(), "Done")
 
-    def test_stale_write_after_two_other_writes_restores_the_latest(self):
+    def test_stale_write_after_two_other_writes_restores_done(self):
         opened = pr(number=10)
         merged = pr(number=11, state="MERGED", body="Fixes GRE-1")
         reconcile, event, merge = self.runner("reconcile"), self.runner("event"), self.runner("merge")
         def open_then_merge():
-            self.github = [opened, merged]
+            self.github.append(opened)
             event.apply_event(opened, {"action": "opened"})
+            self.github.append(merged)
             merge.apply_event(merged, {"action": "closed"})
         self.pause("reconcile", "issueUpdate(", open_then_merge)
         reconcile.reconcile(3)
@@ -157,8 +147,37 @@ class ConcurrentWriteTest(unittest.TestCase):
         self.assertEqual(self.writes, [("event", "In Review"), ("reconcile", "Backlog"),
                                        ("reconcile", "In Review")])
         self.assertEqual(self.state(), "In Review")
-        self.assertEqual(self.fetches, ["reconcile", "reconcile"])  # repeated decision reads GitHub again
         self.assert_no_comments()
+
+    def test_stale_backlog_write_over_silent_open_event_is_reverted(self):
+        self.issues["GRE-1"] = ticket(state="In Review")
+        opened = pr()
+        reconcile, event = self.runner("reconcile"), self.runner("event")
+        def open_pr():
+            # The issue is already In Review, so this run writes nothing to Linear.
+            self.github.append(opened)
+            event.apply_event(opened, {"action": "opened"})
+        self.pause("reconcile", "issueUpdate(", open_pr)
+        reconcile.reconcile(3)
+        self.assertEqual(self.pauses, [])
+        self.assertEqual(self.writes, [("reconcile", "Backlog"), ("reconcile", "In Review")])
+        self.assertEqual(self.state(), "In Review")
+
+    def test_slice_merge_over_silent_open_event_is_reverted(self):
+        self.issues["GRE-1"] = ticket(state="In Review")
+        merged = pr(state="MERGED")
+        self.github = [merged]
+        merge, event = self.runner("merge"), self.runner("event")
+        second = pr(number=2)
+        def open_second():
+            self.github.append(second)
+            event.apply_event(second, {"action": "opened"})
+        # The merge run decided In Progress from a snapshot without PR 2.
+        self.pause("merge", "issues(first:1,", open_second, skip=1)
+        merge.apply_event(merged, {"action": "closed"})
+        self.assertEqual(self.pauses, [])
+        self.assertEqual(self.writes, [("merge", "In Progress"), ("merge", "In Review")])
+        self.assertEqual(self.state(), "In Review")
 
     def test_stale_reconcile_listing_rejects_backlog_write(self):
         opened = pr()

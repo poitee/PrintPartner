@@ -33,6 +33,17 @@ def pr(number=1, state="OPEN", body="Refs GRE-1", age=0):
             "closedAt": timestamp if state != "OPEN" else None}
 
 
+def github(world):
+    """Fake gh api graphql over world(), in the page shapes fetch_prs reads."""
+    def call(*args):
+        query = next(arg for arg in args if arg.startswith("query="))
+        nodes = [p for p in copy.deepcopy(world()) if "states:OPEN" not in query or p["state"] == "OPEN"]
+        page = {"data": {"repository": {"pullRequests": {
+            "nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}
+        return [page] if "--paginate" in args else page
+    return call
+
+
 class HttpTest(unittest.TestCase):
     def setUp(self):
         patch.dict(sync.os.environ, {"LINEAR_API_KEY": "secret-test-key"}).start()
@@ -239,11 +250,10 @@ class SyncTest(unittest.TestCase):
         sync._prs = []
         self.issues = {"GRE-1": ticket()}
         self.comments = []
-        self.history = []
         self.fail_update = False
         self.pages = None
         self.api = patch.object(sync, "gql", side_effect=self.linear).start()
-        patch.object(sync, "gh", side_effect=AssertionError("Unexpected GitHub call")).start()
+        self.gh = patch.object(sync, "gh", side_effect=github(lambda: sync._prs or [])).start()
         patch("builtins.print").start()
         self.addCleanup(patch.stopall)
 
@@ -260,17 +270,9 @@ class SyncTest(unittest.TestCase):
             return {"commentCreate": {"success": True}}
         if "issueUpdate(" in query:
             if not self.fail_update:
-                iss = self.issues[f"GRE-{variables['id']}"]
-                before, iss["state"] = iss["state"], {
-                    "name": variables["s"], "type": "completed" if variables["s"] == "Done" else "started"}
-                iss["updatedAt"] = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(
-                    seconds=len(self.history) + 1)).isoformat()
-                self.history.append({"id": str(len(self.history)), "issueId": variables["id"],
-                                     "createdAt": iss["updatedAt"], "fromState": before, "toState": iss["state"]})
+                self.issues[f"GRE-{variables['id']}"].update(updatedAt=ticket(age=0)["updatedAt"], state={
+                    "name": variables["s"], "type": "completed" if variables["s"] == "Done" else "started"})
             return {"issueUpdate": {"success": not self.fail_update}}
-        if "history(" in query:
-            nodes = [h for h in self.history if h["issueId"] == variables["id"]]
-            return {"issue": {"a": {"nodes": nodes[::-1][:25]}, "b": {"nodes": nodes[-25:]}}}
         if "issues(first:" in query:
             offset = int(variables["after"] or 0)
             pages = self.pages or [list(copy.deepcopy(self.issues).values())]
@@ -448,9 +450,8 @@ class SyncTest(unittest.TestCase):
         fork["isCrossRepository"] = True
         trusted = pr(number=2, body="Refs GRE-2")
         self.issues["GRE-2"] = ticket(2)
-        pages = [{"data": {"repository": {"pullRequests": {"nodes": [fork, trusted]}}}}]
-        with patch.object(sync, "gh", return_value=pages):
-            sync.reconcile(3)
+        self.gh.side_effect = github(lambda: [fork, trusted])
+        sync.reconcile(3)
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Backlog")
         self.assertEqual(self.issues["GRE-2"]["state"]["name"], "In Review")
 
@@ -474,13 +475,14 @@ class SyncTest(unittest.TestCase):
     def test_open_pr_on_later_github_page_prevents_demotion(self):
         sync._prs = None
         sync.REPO = "poitee/PrintPartner"
-        pages = [{"data": {"repository": {"pullRequests": {"nodes": nodes}}}}
-                 for nodes in ([pr(number=n, body="Refs GRE-99") for n in range(1, 201)], [pr(number=201)])]
-        with patch.object(sync, "gh", return_value=pages) as gh:
-            sync.apply_pr(pr(state="MERGED"))
+        pages = [{"data": {"repository": {"pullRequests": {"nodes": nodes, "pageInfo": {"hasNextPage": more}}}}}
+                 for nodes, more in (([pr(number=n, body="Refs GRE-99") for n in range(1, 201)], True),
+                                     ([pr(number=201)], False))]
+        self.gh.side_effect = lambda *args: pages if "--paginate" in args else pages[0]
+        sync.apply_pr(pr(state="MERGED"))
         self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Review")
-        self.assertIn("--paginate", gh.call_args.args)
-        self.assertIn("--slurp", gh.call_args.args)
+        self.assertIn("--paginate", self.gh.call_args_list[0].args)
+        self.assertIn("--slurp", self.gh.call_args_list[0].args)
 
     def test_stall_sweep_reads_every_linear_page(self):
         self.issues = {f"GRE-{n}": ticket(n) for n in range(1, 252)}
@@ -511,7 +513,6 @@ class SyncTest(unittest.TestCase):
     def test_edit_returns_removed_ticket_to_in_progress(self):
         for field in ("title", "body"):
             with self.subTest(field=field):
-                self.history = []
                 self.issues["GRE-1"] = ticket(state="In Review")
                 current = pr(body="Refs GRE-2")
                 self.issues["GRE-2"] = ticket(2)
