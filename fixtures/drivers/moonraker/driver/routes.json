@@ -1,0 +1,24 @@
+{
+  "note": "Request path and query -> fixture body. Unlisted requests answer 404. {ORIGIN} in a body becomes the simulator origin.",
+  "routes": {
+    "/server/info": "server-info.json",
+    "/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed": "../moonraker-success.json",
+    "/machine/proc_stats": "proc-stats.json",
+    "/printer/objects/query?print_stats": "print-stats.json",
+    "/printer/objects/query?exclude_object": "exclude-object.json",
+    "/server/webcams/list": "webcams-list.json",
+    "/server/files/directory?path=gcodes&extended=true": "directory.json",
+    "/server/files/directory?path=gcodes/plates&extended=true": "directory.json",
+    "/server/files/directory?path=gcodes/Lid%20%26%20Base%20%232&extended=true": "directory.json",
+    "/server/files/directory?path=gcodes/far-future&extended=true": "directory-far-future.json"
+  },
+  "browse": [
+    "",
+    "/plates/",
+    "Lid & Base #2",
+    "missing",
+    "../escape",
+    "far-future",
+    "a\\b"
+  ]
+}
