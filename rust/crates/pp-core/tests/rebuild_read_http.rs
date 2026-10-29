@@ -276,6 +276,24 @@ mod with_feature {
         summary.insert("total_units".into(), json!(0));
         assert_eq!(plans[1], legacy);
 
+        // Accepted Plan Checkoff reads the same owner on every alias, with
+        // Node's body for a Plan that has no accepted revision yet.
+        for prefix in ["", "/api/v1", "/api/v2"] {
+            let path = format!("{prefix}/plans/{id}/checkoff");
+            assert_eq!(
+                server.json(Method::GET, &path, &headers, None).await,
+                (
+                    200,
+                    json!({
+                        "profile_id": id,
+                        "summary": "0/0 parts fully printed · 0/0 units",
+                        "parts": [],
+                    })
+                ),
+                "{path}"
+            );
+        }
+
         let (status, created) = server
             .json(
                 Method::POST,
