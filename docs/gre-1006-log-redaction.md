@@ -4,9 +4,10 @@
 
 GRE-1006 adds the secrets that the prod inventory found in `app_settings`:
 
-- Field names `webhook`, `webhook_url`, `webhookUrl`, `pat`, `api_keys` and any name ending in `_webhook`, `_webhook_url`, `_pat` or `_keys`.
+- Field names `webhook`, `webhook_url`, `pat`, `api_keys` and any name ending in `_webhook`, `_webhook_url`, `_pat` or `_keys`.
+- camelCase names split into words before matching, so `webhookUrl`, `githubPat` and `accessToken` match like `webhook_url`, `github_pat` and `access_token`.
 - A trailing version suffix is ignored, so `api_keys_v1` matches `api_keys`.
-- Webhook URLs keep their host and id but lose the token: `https://discord.com/api/webhooks/1234/[REDACTED]`. Slack `hooks.slack.com/services/...` paths are redacted the same way.
+- Webhook URLs keep their host and id but lose the token: `https://discord.com/api/webhooks/1234/[REDACTED]`. Slack `hooks.slack.com/services/...` paths are redacted the same way. The token runs to the next whitespace, `?`, `#`, quote or `<>`.
 
 Existing rules still cover `password`, `token`, `cookie`, `authorization`, `api_key`, URL userinfo, query parameters, header lines and known token shapes (`ghp_`, `github_pat_`, JWTs, `sk_live_`).
 
