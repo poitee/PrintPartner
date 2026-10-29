@@ -1,19 +1,30 @@
-//! Status-only HTTP: resolve once, check every answer, connect only to checked IPs.
+//! Printer HTTP: resolve once, check every answer, connect only to checked IPs.
 //! LAN/loopback printers are intentional; metadata/link-local, unspecified,
 //! multicast and reserved targets are forbidden. No proxy, redirects or TLS downgrade.
+//! `post` sends one attempt and never retries.
 use anyhow::{Context, Result, ensure};
 use axum::http::{Request, Uri};
 use http_body_util::{BodyExt, Empty, Limited};
-use hyper::body::Bytes;
+use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper_util::rt::TokioIo;
 use std::{
     future::Future,
     net::{IpAddr, SocketAddr},
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::{Context as TaskContext, Poll, ready},
     time::{Duration, SystemTime},
 };
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncRead, ReadBuf},
+    net::TcpStream,
+};
+
+/// Uploads take longer than status reads; this caps `HttpGuard::post`.
+pub const MAX_POST_DEADLINE: Duration = Duration::from_secs(120);
 
 pub type Resolution = Pin<Box<dyn Future<Output = Result<Vec<IpAddr>>> + Send>>;
 pub trait Resolver: Send + Sync {
@@ -112,6 +123,73 @@ pub struct HttpReply {
     pub status: u16,
     pub body: Vec<u8>,
 }
+
+/// A POST body of exactly `length` bytes, sent with that `Content-Length`.
+pub struct PostBody {
+    pub content_type: String,
+    pub reader: Pin<Box<dyn AsyncRead + Send>>,
+    pub length: u64,
+}
+
+/// Whether a failed POST may have reached the printer.
+#[derive(Debug)]
+pub enum PostError {
+    /// Failed before any request byte was written.
+    Unsent(anyhow::Error),
+    /// The request was at least partly written; the printer may have acted on it.
+    Unknown(anyhow::Error),
+}
+
+impl std::fmt::Display for PostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsent(error) | Self::Unknown(error) => write!(f, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for PostError {}
+
+struct ReaderBody {
+    reader: Pin<Box<dyn AsyncRead + Send>>,
+    remaining: u64,
+    buf: Box<[u8]>,
+}
+
+impl Body for ReaderBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, std::io::Error>>> {
+        let this = self.get_mut();
+        if this.remaining == 0 {
+            return Poll::Ready(None);
+        }
+        let limit = this
+            .buf
+            .len()
+            .min(usize::try_from(this.remaining).unwrap_or(usize::MAX));
+        let mut read = ReadBuf::new(&mut this.buf[..limit]);
+        ready!(this.reader.as_mut().poll_read(cx, &mut read))?;
+        let filled = read.filled();
+        if filled.is_empty() {
+            return Poll::Ready(Some(Err(std::io::ErrorKind::UnexpectedEof.into())));
+        }
+        this.remaining -= filled.len() as u64;
+        Poll::Ready(Some(Ok(Frame::data(Bytes::copy_from_slice(filled)))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.remaining == 0
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.remaining)
+    }
+}
 impl HttpGuard {
     pub fn new(resolver: Arc<dyn Resolver>, deadline: Duration, max_body: usize) -> Result<Self> {
         ensure!(
@@ -130,7 +208,55 @@ impl HttpGuard {
         })
     }
     pub async fn get(&self, url: &str, api_key: Option<&str>) -> Result<HttpReply> {
-        let deadline = self.clock.now() + self.deadline;
+        let written = AtomicBool::new(false);
+        let request = self.send("GET", url, api_key, None, Empty::<Bytes>::new(), &written);
+        self.bounded(self.deadline, request).await
+    }
+
+    /// One POST attempt. `body: None` sends an empty body.
+    pub async fn post(
+        &self,
+        url: &str,
+        api_key: Option<&str>,
+        body: Option<PostBody>,
+        deadline: Duration,
+    ) -> Result<HttpReply, PostError> {
+        if deadline.is_zero() || deadline > MAX_POST_DEADLINE {
+            return Err(PostError::Unsent(anyhow::anyhow!("Invalid deadline")));
+        }
+        let written = AtomicBool::new(false);
+        let result = match body {
+            Some(body) => {
+                let reader = ReaderBody {
+                    reader: body.reader,
+                    remaining: body.length,
+                    buf: vec![0; 64 * 1024].into_boxed_slice(),
+                };
+                let header = Some((body.content_type, body.length));
+                let request = self.send("POST", url, api_key, header, reader, &written);
+                self.bounded(deadline, request).await
+            }
+            None => {
+                let request =
+                    self.send("POST", url, api_key, None, Empty::<Bytes>::new(), &written);
+                self.bounded(deadline, request).await
+            }
+        };
+        result.map_err(|error| {
+            if written.load(Ordering::SeqCst) {
+                PostError::Unknown(error)
+            } else {
+                PostError::Unsent(error)
+            }
+        })
+    }
+
+    async fn bounded(
+        &self,
+        timeout: Duration,
+        request: impl Future<Output = Result<HttpReply>>,
+    ) -> Result<HttpReply> {
+        let deadline = self.clock.now() + timeout;
         // Tokio's monotonic clock may pause during system sleep. Also bound wall
         // time, so resumed requests are dropped instead of publishing stale data.
         let wall_timeout = async {
@@ -138,13 +264,13 @@ impl HttpGuard {
                 if self.clock.now() >= deadline {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(50).min(self.deadline)).await;
+                tokio::time::sleep(Duration::from_millis(50).min(timeout)).await;
             }
         };
-        let result = tokio::time::timeout(self.deadline, async {
+        let result = tokio::time::timeout(timeout, async {
             tokio::select! { biased;
                 _=wall_timeout=>anyhow::bail!("HTTP wall deadline"),
-                result=self.get_inner(url,api_key)=>result,
+                result=request=>result,
             }
         })
         .await
@@ -153,7 +279,20 @@ impl HttpGuard {
         result
     }
 
-    async fn get_inner(&self, url: &str, api_key: Option<&str>) -> Result<HttpReply> {
+    /// `written` turns true just before the request is handed to the connection.
+    async fn send<B>(
+        &self,
+        method: &str,
+        url: &str,
+        api_key: Option<&str>,
+        content: Option<(String, u64)>,
+        body: B,
+        written: &AtomicBool,
+    ) -> Result<HttpReply>
+    where
+        B: Body<Data = Bytes> + Send + 'static,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
         let uri: Uri = url.parse()?;
         ensure!(
             uri.scheme_str() == Some("http"),
@@ -197,7 +336,7 @@ impl HttpGuard {
         )
         .await?;
         let (mut sender, connection) =
-            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+            hyper::client::conn::http1::handshake::<_, B>(TokioIo::new(stream)).await?;
         let task = tokio::spawn(connection);
         // Abort on body/read timeout, cancellation, errors, and successful completion.
         struct Connection(tokio::task::JoinHandle<Result<(), hyper::Error>>);
@@ -208,7 +347,7 @@ impl HttpGuard {
         }
         let _connection = Connection(task);
         let mut builder = Request::builder()
-            .method("GET")
+            .method(method)
             .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
             .header("host", authority.as_str())
             .header("connection", "close");
@@ -226,9 +365,16 @@ impl HttpGuard {
                 builder.header("x-api-key", key)
             };
         }
-        let response = sender
-            .send_request(builder.body(Empty::<Bytes>::new())?)
-            .await?;
+        if let Some((content_type, length)) = content {
+            builder = builder
+                .header("content-type", content_type)
+                .header("content-length", length);
+        } else if method == "POST" {
+            builder = builder.header("content-length", 0);
+        }
+        let request = builder.body(body)?;
+        written.store(true, Ordering::SeqCst);
+        let response = sender.send_request(request).await?;
         let status = response.status().as_u16();
         if response.status().is_redirection() {
             return Ok(HttpReply {
@@ -657,5 +803,87 @@ mod tests {
         assert!(guard.get(&url, None).await.is_err());
         assert!(started.elapsed() < Duration::from_millis(250));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ticket_t_21_post_deadline_and_policy_failures_are_unsent() {
+        let guard = HttpGuard::new(
+            Arc::new(Fake {
+                calls: Arc::default(),
+                answers: vec!["169.254.169.254".parse().unwrap()],
+            }),
+            Duration::from_secs(1),
+            100,
+        )
+        .unwrap();
+        for deadline in [Duration::ZERO, MAX_POST_DEADLINE + Duration::from_millis(1)] {
+            let error = guard
+                .post("http://127.0.0.1:1/", None, None, deadline)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, PostError::Unsent(_)), "{error}");
+        }
+        for url in [
+            "http://printer.test/upload",
+            "https://printer.test/upload",
+            "http://user:pw@printer.test/upload",
+        ] {
+            let error = guard
+                .post(url, None, None, MAX_POST_DEADLINE)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, PostError::Unsent(_)), "{url}: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ticket_t_21_post_streams_exact_length_once() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/server/files/upload",
+            listener.local_addr().unwrap()
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"hello") {
+                let mut chunk = [0; 1024];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\n\r\n{}")
+                .await
+                .unwrap();
+            // A second request on any socket would be a resend.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_err()
+            );
+            String::from_utf8(bytes).unwrap()
+        });
+        let guard = HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 100).unwrap();
+        let body = PostBody {
+            content_type: "text/plain".into(),
+            reader: Box::pin(&b"hello and bytes past the declared length"[..]),
+            length: 5,
+        };
+        let reply = guard
+            .post(&url, Some("key"), Some(body), Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!((reply.status, reply.body), (201, b"{}".to_vec()));
+        let request = server.await.unwrap();
+        assert!(request.starts_with("POST /server/files/upload HTTP/1.1\r\n"));
+        for header in [
+            "content-type: text/plain",
+            "content-length: 5",
+            "x-api-key: key",
+        ] {
+            assert!(request.contains(&format!("\r\n{header}\r\n")), "{request}");
+        }
+        assert!(!request.contains("transfer-encoding"), "{request}");
     }
 }

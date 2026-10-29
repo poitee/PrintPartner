@@ -6,7 +6,7 @@ use tauri::{
     Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    webview::NewWindowResponse,
+    webview::{DownloadEvent, NewWindowResponse},
 };
 mod recovery;
 
@@ -231,6 +231,10 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         if let Some(capability) = origin_bridge.capability() {
             app.add_capability(capability)?;
         }
+        let downloads = pp_desktop::downloads::DownloadPolicy::new(
+            origin.clone(),
+            app.path().download_dir().ok(),
+        );
         let builder = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(url));
         #[cfg(feature = "desktop_rebuild")]
         let builder = {
@@ -254,6 +258,26 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
             .min_inner_size(900.0, 650.0)
             .on_navigation(move |url| origin.admits(url))
             .on_new_window(|_, _| NewWindowResponse::Deny)
+            .on_download(move |webview, event| match event {
+                DownloadEvent::Requested { url, destination } => {
+                    match downloads.place(webview.label(), &url, destination) {
+                        Ok(path) => {
+                            *destination = path;
+                            tracing::info!(scheme = url.scheme(), "download_admitted");
+                            true
+                        }
+                        Err(denied) => {
+                            tracing::warn!(scheme = url.scheme(), "{}", denied.code());
+                            false
+                        }
+                    }
+                }
+                DownloadEvent::Finished { url, success, .. } => {
+                    tracing::info!(scheme = url.scheme(), success, "download_finished");
+                    true
+                }
+                _ => false,
+            })
             .build()
             .context("Native window initialization failed")?;
         let hide = window.clone();

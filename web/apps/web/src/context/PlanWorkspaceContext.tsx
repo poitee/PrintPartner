@@ -909,17 +909,20 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       await replayRetainedOrdinarySave(options);
       return;
     }
-    if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId)) {
-      await flushFileChoices(selectedProfileId);
-      return;
-    }
     const pending =
       selectedProfileId == null ? null : pendingSaveByBuild.current.get(selectedProfileId) ?? null;
     const failed =
       selectedProfileId == null
         ? null
         : failedOrdinarySaveByBuild.current.get(selectedProfileId) ?? null;
-    if (pending == null && failed?.certainty === "definitive") {
+    const refused = pending == null && failed?.certainty === "definitive";
+    // Desktop rebuild: a refused file choice stays pending, so flushing it here would resend
+    // the refusal on every Plan page mount. Flag-off keeps the earlier flush.
+    if (selectedProfileId != null && hasPendingFileChoices(selectedProfileId) && !(rebuildReads && refused)) {
+      await flushFileChoices(selectedProfileId);
+      return;
+    }
+    if (refused) {
       const message =
         (selectedProfileId != null
           ? draftUiByBuildRef.current.get(selectedProfileId)?.draftMutationError
@@ -938,6 +941,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
     flushFileChoices,
     hasPendingFileChoices,
     prepareCurrentPlan,
+    rebuildReads,
     replayRetainedOrdinarySave,
     selectedProfileId,
   ]);

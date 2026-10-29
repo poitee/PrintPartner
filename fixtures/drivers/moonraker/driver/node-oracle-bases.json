@@ -1,0 +1,82 @@
+{
+  "  ": {
+    "test_connection": {
+      "ok": false,
+      "message": "base_url is required"
+    },
+    "status": {
+      "state": "offline",
+      "message": "base_url is required"
+    },
+    "filament_used": null,
+    "object_list": [],
+    "cameras": {
+      "error": "base_url is required"
+    },
+    "browse": {
+      "": {
+        "error": "base_url is required"
+      }
+    }
+  },
+  "printer.local": {
+    "test_connection": {
+      "ok": false,
+      "message": "Invalid URL"
+    },
+    "status": {
+      "state": "offline",
+      "message": "Invalid URL"
+    },
+    "filament_used": null,
+    "object_list": [],
+    "cameras": {
+      "error": "Invalid URL"
+    },
+    "browse": {
+      "": {
+        "error": "Invalid URL"
+      }
+    }
+  },
+  "ftp://localhost:1": {
+    "test_connection": {
+      "ok": false,
+      "message": "Unsupported URL protocol: ftp:"
+    },
+    "status": {
+      "state": "offline",
+      "message": "Unsupported URL protocol: ftp:"
+    },
+    "filament_used": null,
+    "object_list": [],
+    "cameras": {
+      "error": "Unsupported URL protocol: ftp:"
+    },
+    "browse": {
+      "": {
+        "error": "Unsupported URL protocol: ftp:"
+      }
+    }
+  },
+  "file:///etc/passwd": {
+    "test_connection": {
+      "ok": false,
+      "message": "Unsupported URL protocol: file:"
+    },
+    "status": {
+      "state": "offline",
+      "message": "Unsupported URL protocol: file:"
+    },
+    "filament_used": null,
+    "object_list": [],
+    "cameras": {
+      "error": "Unsupported URL protocol: file:"
+    },
+    "browse": {
+      "": {
+        "error": "Unsupported URL protocol: file:"
+      }
+    }
+  }
+}

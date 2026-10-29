@@ -6,16 +6,45 @@ Golden data captured from the TypeScript app, used as the reference for the Rust
 
 `pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security, WebSocket, or durable-store) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
 
-`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http` and `catalog-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `jobs-ws`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http` and `catalog-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
 
 ## jobs-http/node.json (GRE-451)
 
-`generate.mjs` registers Node's real job read routes, flat and under `/api/v1`, over an `InProcessJobRunner` that has finished an update check and, a second later, failed a checklist export for profile 7. It records 13 complete responses: the `/api/v1/jobs` list under each filter, both jobs on both read-one aliases, and an unknown id on both aliases. Job ids and timestamps become labels numbered in first-seen order (`job-1`, `time-1`); `pp_api::fixtures::Labels` labels the Rust responses the same way.
+`generate.mjs` registers Node's real job read routes, flat and under `/api/v1`, over an `InProcessJobRunner` that has finished an update check and, a second later, failed a checklist export for profile 7. It records 13 complete responses: the `/api/v1/jobs` list under each filter, both jobs on both read-one aliases, and an unknown id on both aliases. Job ids and timestamps become labels numbered in first-seen order (`job-1`, `time-1`); `pp_api::fixtures::Labels` labels the Rust responses the same way. `updated_at` gets its own `updated-N` labels, because Node stamps it with a second clock read after `finished_at` and their equality depends on a millisecond tick.
 
 `ticket_t_10_fixtures` replays the cases against `jobs_router`, with 5 exact matches and 8 declared durable-store corrections: Rust snapshots add `created_at`, and a failed durable job reports "Job failed" and its last progress instead of the handler's in-memory error (both documented for GRE-609 in `docs/desktop-rebuild.md`). The reads change no table or file. Node's read-one returns the stored snapshot without `updated_at`, which only its list adds; Rust's read-one now does the same.
 
 ```sh
 node fixtures/parity/jobs-http/generate.mjs --check
+```
+
+## jobs-ws/node.json (GRE-451)
+
+`generate.mjs` registers Node's real job socket (`registerJobWebSocket`, with `PP_DESKTOP_REBUILD=1`) over the same two retained jobs as `jobs-http`, listens on loopback and opens `/ws/jobs/:jobId` with a `ws` client. Each case records every text frame plus the close code and reason the client saw. The five cases are the finished job, the failed job, an unknown id, the finished job read by another tenant, and a live job (`ws_live`). Node mounts the socket only at the root, so there is no `/api/v1` case.
+
+Two parts of the probe are stubs, not Node's app:
+
+- The probe mounts no auth. Node's app sets `request.tenantId` from the session; here an `x-parity-tenant` header sets it. The runner's own owner check still decides who reads a job, so the foreign case exercises Node's tenant refusal but not its session lookup.
+- `ws_live` follows a third update check. The probe replaces `runner.runJob` so the job stays queued, then sends the two patches `runJob` emits (running at 10%, then done) through the runner's own `emit`, one after each frame. Node's handlers have nothing a probe can hold open without network access.
+
+A socket that has not closed within 10 seconds fails the capture. Node stamps `updated_at` with its own clock read, so it gets `updated-N` labels, and the probe spaces the live steps 5 ms apart so each frame's stamp is distinct.
+
+`ticket_t_10_fixtures` opens the same paths on `jobs_router` with the owning session, or a second account's session for the other tenant. It reads frames off the raw socket, joins fragmented text, skips ping and pong frames, and fails if a socket stays open for 10 seconds. For `ws_live`, the seeded worker claims the job after the first frame and finishes it after the second. The results are 2 exact matches and 3 declared WebSocket corrections:
+
+- An unknown or foreign job matches exactly. Each gets no frame, then 1008 "Job not found".
+- For the finished and failed jobs, Node ends the stream with `socket.close()`, an empty close frame the client reads as 1005, and Rust sends 1000. Rust's frame is the durable snapshot that `jobs-http` corrects (`created_at`, and "Job failed" with no progress).
+- In `ws_live`, Rust streams the durable model's wording, as `docs/desktop-rebuild.md` and `jobs_engine_parity` record. The queued frame says "Waiting for a compatible worker" instead of "Queued", and the running frame says "Running" with no progress instead of "Running…" at 10. Every frame carries `created_at` and `finished_at`, and none carries `updated_at`, which Node adds only to live frames. The stream closes 1000.
+
+No socket changes a table or file. The test checks this just before the live case. After that, only the worker writes.
+
+```sh
+node fixtures/parity/jobs-ws/generate.mjs --check
+```
+
+CI runs every GRE-451 generator with `--check` in the Desktop contracts workflow ("Verify GRE-451 parity Node fixtures"), and `scripts/local-ci.py` runs the same commands. PR CI skips the `desktop_rebuild` nextest on self-hosted Linux, so the same workflow also replays the goldens against Rust on the Node 22 leg ("Replay GRE-451 parity fixtures against Rust"):
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml -p pp-api --features desktop_rebuild --test ticket_t_10_fixtures
 ```
 
 ## plans-http/node.json (GRE-451)
