@@ -1,0 +1,30 @@
+{
+  "pr": {
+    "headRefOid": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090",
+    "body": "Fixes GRE-1\n\nAuthor-Vendor: anthropic\n\n## Evidence\nok\n",
+    "userContentEdits": {
+      "nodes": []
+    }
+  },
+  "comments": [
+    {
+      "id": 1,
+      "html_url": "https://github.com/poitee/PrintPartner/pull/1#issuecomment-1",
+      "user": {
+        "login": "poitee",
+        "type": "User"
+      },
+      "body": "### Defects\nmerge\nnone found\n\nScore: 7/10 from gemini-3.8-flash-high on head 3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090",
+      "created_at": "2026-10-29T15:00:00Z",
+      "updated_at": "2026-10-29T15:00:00Z"
+    }
+  ],
+  "degraded": true,
+  "expect": {
+    "conclusion": "failure",
+    "vendors": [],
+    "summary_contains": [
+      "below 8"
+    ]
+  }
+}
