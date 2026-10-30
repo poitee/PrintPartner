@@ -146,6 +146,19 @@ From `web/`, after `npm ci`, with Node 22.23.3 or 24.21.0:
 TMPDIR=<scratch> node --conditions=development --import tsx ../fixtures/parity/required-unit-decisions/generate.mjs [--check]
 ```
 
+## kit-bundle/kit-bundle.json (GRE-425)
+
+`generate.mjs` runs Node's `export-kit.ts` and `kit-bundle-share.ts` and records 57 kit uploads (raw `kit.json` and zips) with what `parseKitBundleBuffer` returned or threw, 13 bundles through `collectKitBundleSourceRefs` and the unmatched, patch and export records built from each reference, 13 project rows through `kitSourceRefFromProject`, and one editable bundle as `JSON.stringify(data, null, 2)` and as an fflate zip. Inputs over 1 MiB are recipes that both sides build; results over 1 MiB are a SHA-256 of their JSON text.
+
+`rust/crates/pp-services/tests/ticket_t_58_kit.rs` replays the file against `pp_services::kit`. Successes and refusal messages must match exactly. Rust reports its own text for JSON syntax errors (V8 wording), archive errors (adm-zip wording) and non-iterable `sources` or `layers` (a V8 `TypeError` naming the source expression); the test checks only that the refusal is the same kind. Two project cases are declared differences. Node looks the lowercased role up on a plain object, so `constructor` and `__proto__` resolve to members of `Object.prototype`: the export drops `category` (or writes `{}`) and the patch writes that metadata. Rust reads both as unknown roles, category `unassigned`. Other prototype names (`toString`, `valueOf`, `__defineGetter__`) are lowercased past the prototype and match exactly. A number literal past f64 range parses to `null` in Rust; Node holds `Infinity` and writes it as `null`.
+
+From the repo root, after `npm --prefix web ci`:
+
+```sh
+node fixtures/parity/kit-bundle/generate.mjs [--check]
+cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_58_kit)'
+```
+
 ## profile-sync/node.json (GRE-437)
 
 `generate.mjs` runs Node's real `startProfileSyncWatcher` over the three slicer trees in `roots/` (Orca, Bambu Studio and PrusaSlicer, laid out as `defaultWatchDirs` expects), with a repository that records each upsert. It calls `syncAll()` once and stops the watcher. Each outcome is either the table and complete upsert input plus the broadcast event, or `failed` when Node logged a parse failure. Paths are relative to this directory.

@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+desktop_rebuild = ["dep:zip", "dep:ryu-js", "dep:crc32fast"]
+
 [dependencies]
 icu_collator = "=2.3.1"
 plist = "=1.10.1"
@@ -15,8 +19,14 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 unicode-normalization = "=0.1.25"
 url = "=2.5.8"
+zip = { version = "=9.0.4", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+ryu-js = { version = "=1.0.2", optional = true }
+crc32fast = { version = "=1.5.2", optional = true }
 
 [dev-dependencies]
 regex.workspace = true
 tempfile = "=3.27.0"
 tokio.workspace = true
+hex.workspace = true
+sha2.workspace = true
+zip = { version = "=9.0.4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
