@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.import_guide_notes", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.import_guide_notes", "tool.propose_add_source", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1013,7 +1013,7 @@ function sourceCategoryProposal(type: CategoryTool, planId: number, label: strin
   };
 }
 
-async function traceCategory(tool: CategoryTool | SourceProposalTool | SourceRefTool | "list_sources" | "list_source_categories" | "import_guide_notes", input: Record<string, unknown>, tables: string[], options: {
+async function traceCategory(tool: CategoryTool | SourceProposalTool | SourceRefTool | "list_sources" | "list_source_categories" | "import_guide_notes" | "propose_add_source", input: Record<string, unknown>, tables: string[], options: {
   repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
 } = {}) {
   const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
@@ -1254,6 +1254,60 @@ for (const isolated of [false, true]) {
     const dismissed = { error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: decisionFingerprint(tool, params()), action_type: tool };
     expect(await traceCategory(tool, { ...valid, plan_id: plan.id }, GUIDE_NOTES_TABLES, { repository, files })).toEqual(dismissed);
     expect(await traceCategory(tool, valid, ["table:plan_decisions", ...sources], { repository, files, activePlanId: plan.id })).toEqual(dismissed);
+    expect([...unions.get(tool) ?? []].sort()).toEqual(isolated ? ["file:source-workspace", ...GUIDE_NOTES_TABLES] : GUIDE_NOTES_TABLES);
+    const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...GUIDE_NOTES_TABLES]);
+  });
+}
+
+for (const isolated of [false, true]) {
+  it(`traces propose_add_source duplicates, URL rules, local paths, plans, dismissals and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files } = categoryTraceFixture(isolated);
+    const tool = "propose_add_source";
+    const sources = ["table:projects", "table:source_docs"];
+    const plan = repo.createProfile("Add source");
+    const name = "Voron Trident";
+    const added = (planId = 0, params: Record<string, unknown> = { name, source_kind: "github" }, summary = `Create github source \u201c${name}\u201d. Sync after Apply before attaching as base/addon.`) => ({
+      status: "proposed", note: "Not applied yet \u2014 user must confirm via Apply in the UI.",
+      action: { type: tool, plan_id: planId, label: `Add source ${name}`, summary, params } });
+    const trace = (input: Record<string, unknown>, tables: string[], options: { files?: CategoryProbe[]; tenantId?: string; activePlanId?: number } = {}) => traceCategory(tool, input, tables, { repository, files, ...options });
+    for (const input of [{}, { name: " " }, { name: 7 }]) expect(await trace({ ...input, plan_id: plan.id }, [], { files: [] })).toEqual({ error: "name required" });
+    for (const existing of [" Fixture ", "FIXTURE", "Fixture R2-0"]) {
+      expect(await trace({ name: existing, plan_id: plan.id }, sources)).toEqual({ error: "Source already exists: Fixture", hint: "Use set_base / add_addon / set_source_git_ref instead." });
+    }
+    expect(await trace({ name: ` ${name} ` }, sources)).toEqual(added());
+    expect(await trace({ name, source_kind: " Thingiverse " }, sources)).toEqual(added());
+    for (const source_kind of ["printables", "makerworld"]) expect(await trace({ name, source_kind }, sources)).toEqual({ error: `url required for source_kind=${source_kind}` });
+    expect(await trace({ name, url: "not a url" }, sources)).toEqual({ error: "Invalid url: not a url", hint: "Pass a GitHub / Printables / Makerworld URL, or use ingest_guide_url for product/docs pages." });
+    expect(await trace({ name, url: "https://shop.example/kit" }, sources)).toEqual({ error: "Not a GitHub source URL (host=shop.example). Product/storefront pages are not STL repos.", hint: "Call ingest_guide_url with that page for kit constraints, then detect_build_decisions on the plan's existing base. Do not invent a GitHub repo name for a storefront vendor." });
+    expect(await trace({ name, source_kind: "printables", url: "https://github.com/a/b" }, sources)).toEqual({ error: "url host github.com does not match source_kind=printables" });
+    expect(await trace({ name, source_kind: "local", url: "https://shop.example/kit" }, sources)).toEqual({ error: "Storefront/product URLs cannot be local sources.", hint: "Use ingest_guide_url for kit product pages." });
+    const pinned = { name, source_kind: "github", url: "https://github.com/a/b", tag: "v2", branch: "main", role: "base" };
+    expect(await trace({ ...pinned, url: " https://github.com/a/b ", tag: " v2 ", role: " base " }, sources)).toEqual(added(0, pinned, `Create github source \u201c${name}\u201d from https://github.com/a/b @v2. Sync after Apply before attaching as base/addon.`));
+    expect(await trace({ name, source_kind: "makerworld", url: "https://makerworld.com/m/1", rationale: "  Needed for the skirt.  " }, sources)).toEqual(added(0, { name, source_kind: "makerworld", url: "https://makerworld.com/m/1" }, "Needed for the skirt."));
+    const localPath = join(dataDir, "elsewhere");
+    expect(await trace({ name, source_kind: "local", local_path: ` ${localPath} ` }, sources)).toEqual(isolated
+      ? { error: "local_path is unavailable in multi-user and SaaS deployments" }
+      : added(0, { name, source_kind: "local", local_path: localPath }, `Create local source \u201c${name}\u201d. Sync after Apply before attaching as base/addon.`));
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.9`]) expect(await trace({ name, plan_id }, GUIDE_NOTES_TABLES)).toEqual(added(plan.id));
+    expect(await trace({ name }, ["table:plan_decisions", ...sources], { activePlanId: plan.id })).toEqual(added(plan.id));
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign add source"));
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await trace({ name, plan_id }, ["table:build_profiles", ...sources])).toEqual(added());
+      expect(await trace({ name, plan_id }, GUIDE_NOTES_TABLES, { activePlanId: plan.id })).toEqual(added(plan.id));
+    }
+    expect(await trace({ name: "Fixture", plan_id: plan.id }, ["table:build_profiles", ...sources], { files: [], tenantId: "other" })).toEqual({ status: "proposed", note: "Not applied yet \u2014 user must confirm via Apply in the UI.",
+      action: { type: tool, plan_id: 0, label: "Add source Fixture", summary: "Create github source \u201cFixture\u201d. Sync after Apply before attaching as base/addon.", params: { name: "Fixture", source_kind: "github" } } });
+    const elsewhere = repo.createProfile("Add source dismissed elsewhere");
+    repo.createPlanDecision({ planId: elsewhere.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { name, source_kind: "github" } });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "import_guide_notes", params: { name, source_kind: "github" } });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { name, source_kind: "github", tag: "v1" } });
+    expect(await trace({ name, plan_id: plan.id }, GUIDE_NOTES_TABLES)).toEqual(added(plan.id));
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { name: "Other", source_kind: "github" } });
+    const dismissed = { error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: decisionFingerprint(tool, { name, source_kind: "github" }), action_type: tool };
+    expect(await trace({ name, plan_id: plan.id }, GUIDE_NOTES_TABLES)).toEqual(dismissed);
+    expect(await trace({ name, tag: "v2", plan_id: plan.id }, GUIDE_NOTES_TABLES)).toEqual(added(plan.id, { name, source_kind: "github", tag: "v2" }, `Create github source \u201c${name}\u201d @v2. Sync after Apply before attaching as base/addon.`));
     expect([...unions.get(tool) ?? []].sort()).toEqual(isolated ? ["file:source-workspace", ...GUIDE_NOTES_TABLES] : GUIDE_NOTES_TABLES);
     const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
     if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);

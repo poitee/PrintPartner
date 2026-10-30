@@ -1703,6 +1703,16 @@
           {"kind": "table", "name": "source_docs"},
           {"kind": "file", "name": "source-workspace"}
         ]
+      },
+      {
+        "operation": "tool.propose_add_source",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "table", "name": "source_docs"},
+          {"kind": "file", "name": "source-workspace"}
+        ]
       }
     ],
     "unresolved": [
@@ -2052,7 +2062,6 @@
       "tool.ingest_guide_text",
       "tool.ingest_guide_url",
       "tool.inspect_repo_tree",
-      "tool.propose_add_source",
       "tool.propose_import_build_inputs",
       "tool.start_sync",
       "tool.suggest_source_contributions"

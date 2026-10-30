@@ -949,6 +949,25 @@ fn ticket_t_7_ownership_import_guide_notes_proposal_refuses_invalid_admission_be
 }
 
 #[test]
+fn ticket_t_7_ownership_add_source_proposal_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_add_source",
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_add_source_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_add_source");
+}
+
+#[test]
 fn ticket_t_7_ownership_apply_stack_preset_proposal_refuses_invalid_admission_before_effects() {
     assert_tool_invalid_admission("tool.apply_stack_preset");
 }
@@ -1335,6 +1354,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.propose_edit_plan_draft_parts",
         "tool.archive_plan",
         "tool.import_guide_notes",
+        "tool.propose_add_source",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1362,8 +1382,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 79);
-    assert_eq!(unresolved.len(), 350);
+    assert_eq!(reviewed.len(), 80);
+    assert_eq!(unresolved.len(), 349);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1676,6 +1696,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.propose_edit_plan_draft_parts",
         "tool.archive_plan",
         "tool.import_guide_notes",
+        "tool.propose_add_source",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1865,6 +1886,7 @@ fn reviewed_participants_cannot_swap_operations() {
         ),
         ("tool.propose_edit_plan_draft_parts", "tool.archive_plan"),
         ("tool.archive_plan", "tool.import_guide_notes"),
+        ("tool.import_guide_notes", "tool.propose_add_source"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),

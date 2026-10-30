@@ -174,6 +174,8 @@ enum ReviewedEntry {
     ArchivePlan { resources: Vec<ResourceId> },
     #[serde(rename = "tool.import_guide_notes")]
     ImportGuideNotes { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_add_source")]
+    ProposeAddSource { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -731,6 +733,19 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            // `sourceByName` refuses an existing name, then the same plan ownership check and
+            // dismissal lookup as `tool.import_guide_notes`.
+            Self::ProposeAddSource { resources } => (
+                "tool.propose_add_source",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -1053,6 +1068,7 @@ impl Declarations {
             "tool.propose_edit_plan_draft_parts",
             "tool.archive_plan",
             "tool.import_guide_notes",
+            "tool.propose_add_source",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
