@@ -168,6 +168,8 @@ enum ReviewedEntry {
     ProposeAddBuildChecklistItems { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_source_mapping")]
     ProposeSourceMapping { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_edit_plan_draft_parts")]
+    ProposeEditPlanDraftParts { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -690,6 +692,22 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            // The brief lookup, then `getPlanDraft`: the visible-profile check, the draft row,
+            // its inputs and parts, and any selected Required-unit reconciliation.
+            Self::ProposeEditPlanDraftParts { resources } => (
+                "tool.propose_edit_plan_draft_parts",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDrafts),
+                    Table(PlanDraftInputs),
+                    Table(PlanDraftParts),
+                    Table(PlanDraftRequiredUnitReconciliations),
+                    Table(PlanDraftRequiredUnitDecisions),
+                    Table(PlanDraftRequiredUnitAssignments),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -1009,6 +1027,7 @@ impl Declarations {
             "tool.apply_stack_preset",
             "tool.propose_add_build_checklist_items",
             "tool.propose_source_mapping",
+            "tool.propose_edit_plan_draft_parts",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
