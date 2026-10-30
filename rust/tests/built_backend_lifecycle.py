@@ -235,7 +235,8 @@ def run_cycles(node, evidence, suppress_eof=False):
     completed = []
     receipts = []
     env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}
-    env.update(PP_STORAGE_CORE_LOCK="1", PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1", DEPLOY_MODE="self-host")
+    env.update(PP_STORAGE_CORE_LOCK="1", PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1",
+               NODE_ENV="production", DEPLOY_MODE="self-host")
     with (data / "printpartner.lock").open("w+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         for cycle in range(1 if suppress_eof else 3):

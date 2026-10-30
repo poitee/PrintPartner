@@ -1690,24 +1690,38 @@ fn quarantine(tx: &Transaction<'_>, id: &str) -> Result<()> {
     }
     Ok(())
 }
-fn recover_attempt(tx: &Transaction<'_>, mut job: JobRecord) -> Result<()> {
+/// The state an interrupted attempt recovers to, and the recovery detail.
+/// A recorded effect always needs reconciliation and is never re-queued;
+/// the job kind's [`RecoveryPolicy`] names why.
+fn recovery_decision(job: &JobRecord) -> (PersistentState, Option<&'static str>) {
     let owner_cleanup = job.awaits_owner_cleanup();
-    let detail = if job.effects.iter().any(|effect| !effect.confirmed) {
-        job.state = PersistentState::ReconciliationRequired;
-        Some("Inspect effect receipts and reconcile explicitly")
+    let never_resend = job.kind.recovery_policy() == RecoveryPolicy::NeverResendAfterEffect;
+    if job.effects.iter().any(|effect| !effect.confirmed) {
+        let detail = if never_resend {
+            "The send may have reached the printer; it is never resent automatically. Inspect and reconcile"
+        } else {
+            "Inspect effect receipts and reconcile explicitly"
+        };
+        (PersistentState::ReconciliationRequired, Some(detail))
     } else if !job.effects.is_empty() {
-        job.state = PersistentState::ReconciliationRequired;
-        Some("Resume from confirmed receipts requires handler reconciliation")
+        let detail = if never_resend {
+            "The printer accepted the send; it is never resent automatically. Reconcile to finish"
+        } else {
+            "Resume from confirmed receipts requires handler reconciliation"
+        };
+        (PersistentState::ReconciliationRequired, Some(detail))
     } else if job.cancel_requested && !owner_cleanup {
-        job.state = PersistentState::Cancelled;
-        None
+        (PersistentState::Cancelled, None)
     } else if job.attempt >= 100 && !owner_cleanup {
-        job.state = PersistentState::Failed;
-        Some("Attempt limit reached")
+        (PersistentState::Failed, Some("Attempt limit reached"))
     } else {
-        job.state = PersistentState::Queued;
-        None
-    };
+        (PersistentState::Queued, None)
+    }
+}
+
+fn recover_attempt(tx: &Transaction<'_>, mut job: JobRecord) -> Result<()> {
+    let (state, detail) = recovery_decision(&job);
+    job.state = state;
     #[cfg(feature = "desktop_rebuild")]
     if job.kind == JobKind::Sync {
         let halt = if job.state == PersistentState::Cancelled {
@@ -4498,5 +4512,158 @@ mod tests {
         assert_eq!(tables, 0);
         owner.shutdown().unwrap();
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod ticket_t_28_recovery {
+    use super::*;
+
+    fn interrupted(kind: JobKind) -> JobRecord {
+        JobRecord {
+            job_id: "interrupted".into(),
+            tenant: "default".into(),
+            kind,
+            payload_version: 1,
+            payload: Payload::CheckSourceUpdates {},
+            state: PersistentState::Running,
+            state_version: 3,
+            attempt: 1,
+            generation: 1,
+            lease_until: None,
+            created_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: false,
+            progress: None,
+            effects: vec![],
+            result: None,
+            #[cfg(feature = "desktop_rebuild")]
+            public_result: None,
+            recovery: None,
+            #[cfg(feature = "desktop_rebuild")]
+            authority: None,
+            #[cfg(feature = "desktop_rebuild")]
+            authority_disposition: AuthorityDisposition::PhysicalOwner,
+            #[cfg(feature = "desktop_rebuild")]
+            authority_refusal: None,
+            fence: None,
+            worker: None,
+        }
+    }
+
+    fn admitted(operation: EffectOperation, confirmed: bool) -> EffectReceipt {
+        EffectReceipt {
+            intent: EffectIntent {
+                operation,
+                basis_hash: "basis".into(),
+                content_hash: "content".into(),
+                target: "printer-a".into(),
+            },
+            attempt: 1,
+            generation: 1,
+            confirmed,
+            no_effect: false,
+            receipt: None,
+            #[cfg(feature = "desktop_rebuild")]
+            checklist_completion: None,
+        }
+    }
+
+    #[test]
+    fn every_job_kind_has_a_named_recovery_policy() {
+        for kind in JobKind::ALL {
+            let policy = kind.recovery_policy();
+            assert!(!policy.name().is_empty(), "{kind:?}");
+            let expected = match kind.effect_class() {
+                EffectClass::UncertainExternal => RecoveryPolicy::NeverResendAfterEffect,
+                EffectClass::RecoverableExternal => RecoveryPolicy::RequeueUntilEffect,
+                _ => RecoveryPolicy::RequeueLocal,
+            };
+            assert_eq!(policy, expected, "{kind:?}");
+        }
+        assert_eq!(
+            JobKind::PrinterUpload.recovery_policy(),
+            RecoveryPolicy::NeverResendAfterEffect
+        );
+        assert_eq!(
+            JobKind::CheckSourceUpdates.recovery_policy(),
+            RecoveryPolicy::RequeueUntilEffect
+        );
+        assert_eq!(
+            JobKind::ExportStlPack.recovery_policy(),
+            RecoveryPolicy::RequeueLocal
+        );
+        assert_eq!(
+            serde_json::to_value(RecoveryPolicy::NeverResendAfterEffect).unwrap(),
+            serde_json::json!("never_resend_after_effect")
+        );
+    }
+
+    #[test]
+    fn printer_send_with_an_admitted_effect_is_never_requeued() {
+        for confirmed in [false, true] {
+            let mut job = interrupted(JobKind::PrinterUpload);
+            job.effects
+                .push(admitted(EffectOperation::PrinterUpload, confirmed));
+            let (state, detail) = recovery_decision(&job);
+            assert_eq!(
+                state,
+                PersistentState::ReconciliationRequired,
+                "{confirmed}"
+            );
+            assert!(
+                detail.unwrap().contains("never resent automatically"),
+                "{detail:?}"
+            );
+            // Even a job at the attempt limit or with cancel requested stays
+            // uncertain: the remote effect cannot be undone or assumed absent.
+            job.attempt = 100;
+            job.cancel_requested = true;
+            assert_eq!(
+                recovery_decision(&job).0,
+                PersistentState::ReconciliationRequired
+            );
+        }
+    }
+
+    #[test]
+    fn printer_send_interrupted_before_its_intent_is_requeued() {
+        // No admitted intent means nothing was sent, so the attempt is safe to repeat.
+        let job = interrupted(JobKind::PrinterUpload);
+        assert_eq!(recovery_decision(&job), (PersistentState::Queued, None));
+    }
+
+    #[test]
+    fn local_and_read_jobs_requeue_and_keep_the_generic_reconcile_detail() {
+        for kind in [JobKind::ExportStlPack, JobKind::CheckSourceUpdates] {
+            assert_eq!(
+                recovery_decision(&interrupted(kind)),
+                (PersistentState::Queued, None),
+                "{kind:?}"
+            );
+        }
+        let mut read = interrupted(JobKind::CheckSourceUpdates);
+        read.effects
+            .push(admitted(EffectOperation::PrinterUpload, false));
+        assert_eq!(
+            recovery_decision(&read),
+            (
+                PersistentState::ReconciliationRequired,
+                Some("Inspect effect receipts and reconcile explicitly")
+            )
+        );
+        let mut cancelled = interrupted(JobKind::ExportStlPack);
+        cancelled.cancel_requested = true;
+        assert_eq!(
+            recovery_decision(&cancelled),
+            (PersistentState::Cancelled, None)
+        );
+        let mut exhausted = interrupted(JobKind::ExportStlPack);
+        exhausted.attempt = 100;
+        assert_eq!(
+            recovery_decision(&exhausted),
+            (PersistentState::Failed, Some("Attempt limit reached"))
+        );
     }
 }

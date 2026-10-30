@@ -247,7 +247,8 @@ class Backend:
 def backend(node, root, data, lock, output):
     output.mkdir()
     env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}
-    env.update(PP_STORAGE_CORE_LOCK="1", PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1", DEPLOY_MODE="self-host")
+    env.update(PP_STORAGE_CORE_LOCK="1", PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1",
+               NODE_ENV="production", DEPLOY_MODE="self-host")
     with tempfile.TemporaryDirectory(prefix="pp-upload-") as runtime:
         socket_path = Path(runtime) / "backend.sock"
         events = output / "events.jsonl"

@@ -7,15 +7,15 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
-fn cases() -> Vec<Value> {
+pub(super) fn cases() -> Vec<Value> {
     include_str!("../../tests/fixtures/working-draft-preparation-node.jsonl")
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }
-struct FixtureRoot(std::path::PathBuf);
+pub(super) struct FixtureRoot(std::path::PathBuf);
 impl FixtureRoot {
-    fn path(&self) -> &std::path::Path {
+    pub(super) fn path(&self) -> &std::path::Path {
         &self.0
     }
 }
@@ -24,7 +24,7 @@ impl Drop for FixtureRoot {
         std::fs::remove_dir_all(&self.0).unwrap();
     }
 }
-fn database(case: &Value) -> (FixtureRoot, Connection) {
+pub(super) fn database(case: &Value) -> (FixtureRoot, Connection) {
     let root =
         FixtureRoot(std::env::temp_dir().join(format!("pp-preparation-{}", rand::random::<u64>())));
     std::fs::create_dir_all(root.path().join("repos/1/revisions/accepted")).unwrap();
@@ -178,7 +178,7 @@ impl StlInventory for Inventory {
         })
     }
 }
-fn options(case: &Value) -> PreparationOptions {
+pub(super) fn options(case: &Value) -> PreparationOptions {
     let o = &case["options"];
     PreparationOptions {
         apply_manifest: o["applyManifest"].as_bool().unwrap_or(true),
@@ -188,7 +188,7 @@ fn options(case: &Value) -> PreparationOptions {
         part_choices_by_source_id: serde_json::from_value(o["choices"].clone()).unwrap(),
     }
 }
-fn projection(prepared: PreparedDraftSnapshot) -> Value {
+pub(super) fn projection(prepared: PreparedDraftSnapshot) -> Value {
     let fields = [
         vec!["baseRevisionPartId"],
         crate::required_units::model::PART_FIELDS.to_vec(),

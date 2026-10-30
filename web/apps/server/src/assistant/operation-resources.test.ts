@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.import_guide_notes", "tool.propose_add_source", "tool.audit_build_coverage", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1013,7 +1013,7 @@ function sourceCategoryProposal(type: CategoryTool, planId: number, label: strin
   };
 }
 
-async function traceCategory(tool: CategoryTool | SourceProposalTool | SourceRefTool | "list_sources" | "list_source_categories", input: Record<string, unknown>, tables: string[], options: {
+async function traceCategory(tool: CategoryTool | SourceProposalTool | SourceRefTool | "list_sources" | "list_source_categories" | "import_guide_notes" | "propose_add_source", input: Record<string, unknown>, tables: string[], options: {
   repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
 } = {}) {
   const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
@@ -1213,6 +1213,105 @@ for (const isolated of [false, true]) {
     expect(repo.getSourceCategories()).toEqual(CATEGORY_SAVED);
     expect(repo.getSource(sourceId)?.category).toBe("Printers/Core");
     expect(repo.listPlanDecisions(plan.id).map((d) => d.kind)).toEqual(["dismissed_action"]);
+  });
+}
+
+const GUIDE_NOTES_TABLES = ["table:build_profiles", "table:plan_decisions", "table:projects", "table:source_docs"];
+
+for (const isolated of [false, true]) {
+  it(`traces import_guide_notes source lookup, plan selection, dismissals and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files } = categoryTraceFixture(isolated);
+    const tool = "import_guide_notes";
+    const sources = ["table:projects", "table:source_docs"];
+    const plan = repo.createProfile("Guide notes");
+    const valid = { source_name: "Fixture", body_markdown: " Use M3 screws. " };
+    const params = (title = "Guide: Fixture", body = "Use M3 screws.") => ({ source_name: "Fixture", title, body_markdown: body });
+    const note = (planId = 0, title?: string, body?: string) => ({ status: "proposed", note: "Not applied yet \u2014 user must confirm via Apply in the UI.",
+      action: { type: tool, plan_id: planId, label: `Save note \u201c${title ?? "Guide: Fixture"}\u201d`, summary: "Persist guide extract notes on source \u201cFixture\u201d (untrusted evidence).", params: params(title, body) } });
+    for (const input of [{}, { source_name: "Fixture" }, { body_markdown: "Notes" }, { source_name: " ", body_markdown: "Notes" }, { source_name: "Fixture", body_markdown: " " }, { source_name: 7, body_markdown: "Notes" }, { source_name: "Fixture", body_markdown: ["Notes"] }]) {
+      expect(await traceCategory(tool, { ...input, plan_id: plan.id }, [], { repository })).toEqual({ error: "source_name and body_markdown required" });
+    }
+    expect(await traceCategory(tool, { ...valid, source_name: "absent", plan_id: plan.id }, sources, { repository, files: [...files, ...files] })).toEqual({ error: 'Source not found: "absent". Call list_sources first.' });
+    for (const source_name of [" Fixture ", "FIXTURE", "Fixture R2-0"]) expect(await traceCategory(tool, { ...valid, source_name }, sources, { repository, files })).toEqual(note());
+    expect(await traceCategory(tool, { ...valid, title: "  Wiring  " }, sources, { repository, files })).toEqual(note(0, "Wiring"));
+    expect(await traceCategory(tool, { ...valid, title: 7 }, sources, { repository, files })).toEqual(note());
+    expect(await traceCategory(tool, { ...valid, body_markdown: ` ${"x".repeat(20_001)} ` }, sources, { repository, files })).toEqual(note(0, undefined, "x".repeat(20_000)));
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.9`]) expect(await traceCategory(tool, { ...valid, plan_id }, GUIDE_NOTES_TABLES, { repository, files })).toEqual(note(plan.id));
+    expect(await traceCategory(tool, valid, ["table:plan_decisions", ...sources], { repository, files, activePlanId: plan.id })).toEqual(note(plan.id));
+    expect(await traceCategory(tool, { ...valid, plan_id: "invalid" }, ["table:plan_decisions", ...sources], { repository, files, activePlanId: plan.id })).toEqual(note(plan.id));
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign guide notes"));
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceCategory(tool, { ...valid, plan_id }, ["table:build_profiles", ...sources], { repository, files })).toEqual(note());
+      expect(await traceCategory(tool, { ...valid, plan_id }, GUIDE_NOTES_TABLES, { repository, files, activePlanId: plan.id })).toEqual(note(plan.id));
+    }
+    expect(await traceCategory(tool, { ...valid, plan_id: plan.id }, sources, { repository, tenantId: "other" })).toEqual({ error: 'Source not found: "Fixture". Call list_sources first.' });
+    const elsewhere = repo.createProfile("Guide notes dismissed elsewhere");
+    repo.createPlanDecision({ planId: elsewhere.id, actor: "user", kind: "dismissed_action", actionType: tool, params: params() });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "propose_set_source_category", params: params() });
+    repo.createPlanDecision({ planId: plan.id, actor: "assistant", kind: "applied_action", actionType: tool, params: params() });
+    expect(await traceCategory(tool, { ...valid, plan_id: plan.id }, GUIDE_NOTES_TABLES, { repository, files })).toEqual(note(plan.id));
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: params("Other title", "Other body") });
+    const dismissed = { error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: decisionFingerprint(tool, params()), action_type: tool };
+    expect(await traceCategory(tool, { ...valid, plan_id: plan.id }, GUIDE_NOTES_TABLES, { repository, files })).toEqual(dismissed);
+    expect(await traceCategory(tool, valid, ["table:plan_decisions", ...sources], { repository, files, activePlanId: plan.id })).toEqual(dismissed);
+    expect([...unions.get(tool) ?? []].sort()).toEqual(isolated ? ["file:source-workspace", ...GUIDE_NOTES_TABLES] : GUIDE_NOTES_TABLES);
+    const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...GUIDE_NOTES_TABLES]);
+  });
+}
+
+for (const isolated of [false, true]) {
+  it(`traces propose_add_source duplicates, URL rules, local paths, plans, dismissals and tenants under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files } = categoryTraceFixture(isolated);
+    const tool = "propose_add_source";
+    const sources = ["table:projects", "table:source_docs"];
+    const plan = repo.createProfile("Add source");
+    const name = "Voron Trident";
+    const added = (planId = 0, params: Record<string, unknown> = { name, source_kind: "github" }, summary = `Create github source \u201c${name}\u201d. Sync after Apply before attaching as base/addon.`) => ({
+      status: "proposed", note: "Not applied yet \u2014 user must confirm via Apply in the UI.",
+      action: { type: tool, plan_id: planId, label: `Add source ${name}`, summary, params } });
+    const trace = (input: Record<string, unknown>, tables: string[], options: { files?: CategoryProbe[]; tenantId?: string; activePlanId?: number } = {}) => traceCategory(tool, input, tables, { repository, files, ...options });
+    for (const input of [{}, { name: " " }, { name: 7 }]) expect(await trace({ ...input, plan_id: plan.id }, [], { files: [] })).toEqual({ error: "name required" });
+    for (const existing of [" Fixture ", "FIXTURE", "Fixture R2-0"]) {
+      expect(await trace({ name: existing, plan_id: plan.id }, sources)).toEqual({ error: "Source already exists: Fixture", hint: "Use set_base / add_addon / set_source_git_ref instead." });
+    }
+    expect(await trace({ name: ` ${name} ` }, sources)).toEqual(added());
+    expect(await trace({ name, source_kind: " Thingiverse " }, sources)).toEqual(added());
+    for (const source_kind of ["printables", "makerworld"]) expect(await trace({ name, source_kind }, sources)).toEqual({ error: `url required for source_kind=${source_kind}` });
+    expect(await trace({ name, url: "not a url" }, sources)).toEqual({ error: "Invalid url: not a url", hint: "Pass a GitHub / Printables / Makerworld URL, or use ingest_guide_url for product/docs pages." });
+    expect(await trace({ name, url: "https://shop.example/kit" }, sources)).toEqual({ error: "Not a GitHub source URL (host=shop.example). Product/storefront pages are not STL repos.", hint: "Call ingest_guide_url with that page for kit constraints, then detect_build_decisions on the plan's existing base. Do not invent a GitHub repo name for a storefront vendor." });
+    expect(await trace({ name, source_kind: "printables", url: "https://github.com/a/b" }, sources)).toEqual({ error: "url host github.com does not match source_kind=printables" });
+    expect(await trace({ name, source_kind: "local", url: "https://shop.example/kit" }, sources)).toEqual({ error: "Storefront/product URLs cannot be local sources.", hint: "Use ingest_guide_url for kit product pages." });
+    const pinned = { name, source_kind: "github", url: "https://github.com/a/b", tag: "v2", branch: "main", role: "base" };
+    expect(await trace({ ...pinned, url: " https://github.com/a/b ", tag: " v2 ", role: " base " }, sources)).toEqual(added(0, pinned, `Create github source \u201c${name}\u201d from https://github.com/a/b @v2. Sync after Apply before attaching as base/addon.`));
+    expect(await trace({ name, source_kind: "makerworld", url: "https://makerworld.com/m/1", rationale: "  Needed for the skirt.  " }, sources)).toEqual(added(0, { name, source_kind: "makerworld", url: "https://makerworld.com/m/1" }, "Needed for the skirt."));
+    const localPath = join(dataDir, "elsewhere");
+    expect(await trace({ name, source_kind: "local", local_path: ` ${localPath} ` }, sources)).toEqual(isolated
+      ? { error: "local_path is unavailable in multi-user and SaaS deployments" }
+      : added(0, { name, source_kind: "local", local_path: localPath }, `Create local source \u201c${name}\u201d. Sync after Apply before attaching as base/addon.`));
+    for (const plan_id of [plan.id, String(plan.id), `${plan.id}.9`]) expect(await trace({ name, plan_id }, GUIDE_NOTES_TABLES)).toEqual(added(plan.id));
+    expect(await trace({ name }, ["table:plan_decisions", ...sources], { activePlanId: plan.id })).toEqual(added(plan.id));
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign add source"));
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await trace({ name, plan_id }, ["table:build_profiles", ...sources])).toEqual(added());
+      expect(await trace({ name, plan_id }, GUIDE_NOTES_TABLES, { activePlanId: plan.id })).toEqual(added(plan.id));
+    }
+    expect(await trace({ name: "Fixture", plan_id: plan.id }, ["table:build_profiles", ...sources], { files: [], tenantId: "other" })).toEqual({ status: "proposed", note: "Not applied yet \u2014 user must confirm via Apply in the UI.",
+      action: { type: tool, plan_id: 0, label: "Add source Fixture", summary: "Create github source \u201cFixture\u201d. Sync after Apply before attaching as base/addon.", params: { name: "Fixture", source_kind: "github" } } });
+    const elsewhere = repo.createProfile("Add source dismissed elsewhere");
+    repo.createPlanDecision({ planId: elsewhere.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { name, source_kind: "github" } });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "import_guide_notes", params: { name, source_kind: "github" } });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { name, source_kind: "github", tag: "v1" } });
+    expect(await trace({ name, plan_id: plan.id }, GUIDE_NOTES_TABLES)).toEqual(added(plan.id));
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { name: "Other", source_kind: "github" } });
+    const dismissed = { error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: decisionFingerprint(tool, { name, source_kind: "github" }), action_type: tool };
+    expect(await trace({ name, plan_id: plan.id }, GUIDE_NOTES_TABLES)).toEqual(dismissed);
+    expect(await trace({ name, tag: "v2", plan_id: plan.id }, GUIDE_NOTES_TABLES)).toEqual(added(plan.id, { name, source_kind: "github", tag: "v2" }, `Create github source \u201c${name}\u201d @v2. Sync after Apply before attaching as base/addon.`));
+    expect([...unions.get(tool) ?? []].sort()).toEqual(isolated ? ["file:source-workspace", ...GUIDE_NOTES_TABLES] : GUIDE_NOTES_TABLES);
+    const entry = manifest.resources.reviewed.find((entry) => entry.operation === `tool.${tool}`);
+    if (!entry || entry.operation === "source.sync") throw new Error(`Missing ${tool} declaration`);
+    expect(entry.resources.map(({ kind, name }) => `${kind}:${name}`).sort()).toEqual(["file:source-workspace", ...GUIDE_NOTES_TABLES]);
   });
 }
 
@@ -4256,12 +4355,13 @@ it.each(SOURCE_PROPOSAL_TOOLS)("traces %s isolated rejected workspace paths with
 
 const IDLE_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revisions"].map((table) => `table:${table}`);
 const REFUSED_SNAPSHOT_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revisions", "projects", "source_revisions"].map((table) => `table:${table}`);
-type AcceptedPlanTool = "propose_set_plan_progress" | "propose_set_plan_assembly";
+type AcceptedPlanTool = "propose_set_plan_progress" | "propose_set_plan_assembly" | "archive_plan";
 const ACCEPTED_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revision_required_unit_sets", "plan_revision_required_units", "plan_revisions", "print_progress", "projects", "required_units", "source_revisions"].map((table) => `table:${table}`);
 
-function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = false): string[] {
+function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = false, decisions = false): string[] {
   const sql = z.string().parse(statement);
   if (["BEGIN DEFERRED", "COMMIT", "ROLLBACK"].includes(sql)) return [];
+  if (decisions && sql.includes(' from "plan_decisions" ')) return [tableForObservedSelect(sql, tenantId)];
   if (sql.startsWith('select "id", "name", "order_number", "archived_at" from "build_profiles"')) return [tableForObservedSelect(sql, tenantId)];
   const match = /^select (?:(?!\bfrom\b).)+ from "([a-z_]+)" where (?:(?!\bfrom\b|\bjoin\b).)+$/.exec(sql);
   if (match?.[1] === "source_docs") {
@@ -4275,9 +4375,9 @@ function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = f
 type CheckoffReadTool = "get_plan_checkoff" | "get_remaining" | "get_printer_checkoff" | "propose_import_3mf_checkoff";
 
 async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printer_checkoff" | CheckoffReadTool, input: Record<string, unknown>, tables: string[], options: {
-  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number; sourceDocs?: boolean; scratch?: boolean;
+  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number; sourceDocs?: boolean; decisions?: boolean; scratch?: boolean;
 } = {}) {
-  const { repository = repo, files = [], tenantId = "default", activePlanId, sourceDocs = false, scratch = false } = options;
+  const { repository = repo, files = [], tenantId = "default", activePlanId, sourceDocs = false, decisions = false, scratch = false } = options;
   statements = [];
   observer.state.files = [];
   observer.state.active = true;
@@ -4285,7 +4385,7 @@ async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printe
   try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId })); }
   finally { observer.state.active = false; }
   const settings = tool === "propose_verify_printer_checkoff" || tool === "get_printer_checkoff";
-  const observed = [...new Set(statements.flatMap((sql) => settings ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId, sourceDocs)))].sort();
+  const observed = [...new Set(statements.flatMap((sql) => settings ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId, sourceDocs, decisions)))].sort();
   expect(observed).toEqual(tables);
   const observedFiles = observer.state.files.map(({ api, args }): CategoryProbe => [api, ...args]);
   const union = unions.get(tool) ?? new Set<string>();
@@ -4401,15 +4501,56 @@ for (const isolated of [false, true]) {
   });
 }
 
-it.each<AcceptedPlanTool>(["propose_set_plan_progress", "propose_set_plan_assembly"])("traces %s isolated symlink snapshot refusal before unit reads", async (tool) => {
+it.each<AcceptedPlanTool>(["propose_set_plan_progress", "propose_set_plan_assembly", "archive_plan"])("traces %s isolated symlink snapshot refusal before unit reads", async (tool) => {
   const { repository, workspace, plan, part } = acceptedPlanFixture(true);
   const repos = join(dataDir, "repos");
   fs.renameSync(workspace, `${workspace}-moved`);
   fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
-  const input = tool === "propose_set_plan_progress" ? { plan_id: plan.id, rows: [{ part_id: part.projectionPartId, printed_count: 1 }] } : { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
-  const error = tool === "propose_set_plan_progress" ? "Plan not found" : "Accepted Plan is not ready";
+  const input = tool === "propose_set_plan_progress" ? { plan_id: plan.id, rows: [{ part_id: part.projectionPartId, printed_count: 1 }] }
+    : tool === "archive_plan" ? { plan_id: plan.id } : { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
+  const error = tool === "propose_set_plan_assembly" ? "Accepted Plan is not ready"
+    : tool === "archive_plan" ? "Accepted Plan data is inconsistent" : "Plan not found";
   expect(await traceAcceptedPlan(tool, input, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error });
 });
+
+const ARCHIVE_PLAN_TABLES = [...ACCEPTED_PLAN_TABLES, "table:plan_decisions"].sort();
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces archive_plan remaining units, plan selection, dismissals and tenants under ${policy} policy`, async () => {
+    const { repository, plan, part, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const options = { repository, files, decisions: true };
+    const hint = "Call get_remaining first; finish Progress checkoff before archive_plan.";
+    const archivedAt = () => sqlite.prepare("SELECT archived_at FROM build_profiles WHERE id = ?").get(plan.id);
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "Archive only when print remaining is 0", remaining_units: 2, total_units: 2, hint });
+    expect(sqlite.prepare("UPDATE print_progress SET completed = 1 WHERE part_id = ? AND unit_index = 0").run(part.projectionPartId).changes).toBe(1);
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "Archive only when print remaining is 0", remaining_units: 1, total_units: 2, hint });
+    expect(sqlite.prepare("UPDATE print_progress SET completed = 1 WHERE part_id = ?").run(part.projectionPartId).changes).toBe(2);
+    const read = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    if (read.kind !== "ready") throw new Error(`Accepted fixture is ${read.kind}`);
+    const params = { accepted_basis: acceptedPlanBasis(read.snapshot) };
+    const proposal = (summary = `Archive plan ${plan.id} as a reusable template (remaining = 0).`) => acceptedPlanProposal("archive_plan", plan.id, "Archive \u201cAccepted plan\u201d", summary, params);
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceAcceptedPlan("archive_plan", { plan_id }, ARCHIVE_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(proposal());
+    }
+    expect(await traceAcceptedPlan("archive_plan", {}, ARCHIVE_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(proposal());
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id, rationale: "  Printing is done.  " }, ARCHIVE_PLAN_TABLES, options)).toEqual(proposal("Printing is done."));
+    for (const plan_id of [undefined, null, "invalid"]) expect(await traceAcceptedPlan("archive_plan", { plan_id }, [], { repository })).toEqual({ error: "plan_id required" });
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("archive_plan", { plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Archive only when print remaining is 0", remaining_units: 0, total_units: 0, hint });
+    repo.createPlanDecision({ planId: idle.id, actor: "user", kind: "dismissed_action", actionType: "archive_plan", params });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "duplicate_plan", params });
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ARCHIVE_PLAN_TABLES, options)).toEqual(proposal());
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "archive_plan", params });
+    const dismissed = { error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: decisionFingerprint("archive_plan", params), action_type: "archive_plan" };
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id, rationale: "Again." }, ARCHIVE_PLAN_TABLES, options)).toEqual(dismissed);
+    expect(archivedAt()).toEqual({ archived_at: null });
+    assertAcceptedPlanDeclaration("archive_plan", [...(isolated ? ["file:source-workspace"] : []), ...ARCHIVE_PLAN_TABLES], ["file:source-workspace", ...ARCHIVE_PLAN_TABLES]);
+  });
+}
 
 it("rejects reads outside the accepted Plan declaration", () => {
   expect(() => acceptedPlanSelect('select "id", "project_id" from "source_docs" where "source_docs"."id" = 1.0', "default")).toThrow("Unsupported SQL:");
@@ -5700,7 +5841,9 @@ type PlanningProposalTool =
   | "propose_rebuild_plan"
   | "propose_apply_plan_draft"
   | "propose_assign_role_filament"
-  | "propose_add_build_checklist_items";
+  | "propose_add_build_checklist_items"
+  | "propose_edit_plan_draft_parts"
+  | "audit_build_coverage";
 const PLANNING_PROPOSAL_TOOLS = [
   "propose_update_build_brief",
   "propose_resolve_build_differences",
@@ -6461,4 +6604,263 @@ it("traces propose_add_build_checklist_items brief lookup, item validation and t
   expect(await tracePlanningProposal(tool, { plan_id: plan.id, items }, settings)).toEqual(proposal(plan.id, items));
   expect([...unions.get(tool) ?? []].sort()).toEqual(settings);
   expect(declared(`tool.${tool}`)).toEqual(settings);
+});
+
+async function traceSourceMapping(input: Record<string, unknown>, options: { repository: AppRepository; planId?: number; tenantId?: string; activePlanId?: number }) {
+  const { repository, planId, tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_source_mapping", input, { repo: repository, activePlanId, dataDir })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  const tables = [...new Set(statements.map((sql) => optionGroupSelect(sql, tenantId, planId)))];
+  const files = optionGroupFileResources(observer.state.files.map(({ api, args }) => [api, ...args]));
+  return { body: z.record(z.string(), z.unknown()).parse(JSON.parse(output.content)), resources: [...tables, ...files].sort() };
+}
+
+function sourceMappingFixture(isolated: boolean) {
+  // Only repo checkouts keep a root, so isolated Source listing probes stay inside the workspace roots.
+  sqlite.prepare("UPDATE projects SET local_path = NULL").run();
+  const declaredSource = optionGroupCheckout("Declared");
+  const inferred = optionGroupCheckout("Inferred", true);
+  fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
+  fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
+  const plan = repo.createProfile("Mapping", declaredSource.id);
+  repo.addAddonLayer(plan.id, inferred.id);
+  const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  return { repository, plan, declaredSource, inferred };
+}
+
+const SOURCE_MAPPING_UNION = ["file:path-hints", "file:source-workspace", "table:build_profiles", "table:plan_decisions", "table:profile_layers", "table:projects", "table:source_docs"];
+
+for (const isolated of [false, true]) {
+  it(`traces propose_source_mapping validation, Source lookup, option-group checks and dismissals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, plan } = sourceMappingFixture(isolated);
+    const empty = repo.createProfile("Mapping empty");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign mapping"));
+    const W = isolated ? ["file:source-workspace"] : [];
+    const sources = [...W, "table:projects", "table:source_docs"].sort();
+    const lookup = [...W, "table:build_profiles", "table:projects", "table:source_docs"].sort();
+    const groups = ["file:path-hints", "file:source-workspace", "table:build_profiles", "table:profile_layers", "table:projects", "table:source_docs"];
+    const proposing = [...groups, "table:plan_decisions"].sort();
+    const union = new Set<string>();
+    async function trace(input: Record<string, unknown>, resources: string[], options: { planId?: number; tenantId?: string; activePlanId?: number } = {}) {
+      const traced = await traceSourceMapping(input, { repository, ...options });
+      expect(traced.resources).toEqual(resources);
+      for (const resource of traced.resources) union.add(resource);
+      return traced.body;
+    }
+    const proposal = (planId: number | null, selections: Record<string, unknown>, rationale?: string) => ({
+      status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.",
+      action: { id: expect.any(String), type: "propose_source_mapping", plan_id: planId ?? 0, label: "Map Declared → Printers",
+        summary: rationale ?? `Set Library category to “Printers”${Object.keys(selections).length ? ` and propose kit selections ${Object.entries(selections).map(([group, value]) => `${group}=${Array.isArray(value) ? value.join(", ") : value}`).join(", ")}` : ""}.`,
+        params: { source_name: "Declared", category: "Printers", option_groups: selections, plan_id: planId } },
+    });
+
+    // The plan resolves before input validation, so an explicit plan_id costs one identity read.
+    const required = { error: "source_name and category required" };
+    expect(await trace({ source_name: "Declared" }, [])).toEqual(required);
+    for (const input of [{ category: "Printers" }, { source_name: " ", category: "Printers" }, { source_name: "Declared", category: " " }]) {
+      expect(await trace({ plan_id: plan.id, ...input }, ["table:build_profiles"], { planId: plan.id })).toEqual(required);
+    }
+    expect(await trace({ plan_id: plan.id, source_name: "Absent", category: "Printers" }, lookup, { planId: plan.id })).toEqual({ error: 'Source not found: "Absent". Call list_sources first.' });
+    // Selections are parsed after the Source lookup.
+    expect(await trace({ plan_id: plan.id, source_name: "Declared", category: "Printers", option_groups: "bad" }, lookup, { planId: plan.id })).toEqual({ error: "option_groups must be an object" });
+    // Without a plan there is no option-group check and no dismissal lookup.
+    expect(await trace({ source_name: "Declared", category: "Printers" }, sources)).toEqual(proposal(null, {}));
+    expect(await trace({ plan_id: foreign.id, source_name: "Declared", category: "Printers", option_groups: { fixture_mode: ["chosen", "ignored"] } }, lookup)).toEqual(proposal(null, { fixture_mode: ["chosen", "ignored"] }));
+    expect(await trace({ plan_id: plan.id, source_name: "Declared", category: "Printers", option_groups: { fixture_mode: ["chosen", "ignored"] } }, groups, { planId: plan.id })).toEqual({ error: "option_groups.fixture_mode must contain no more than 1 variant id" });
+    expect(await trace({ plan_id: plan.id, source_name: " Declared ", category: " Printers ", option_groups: { fixture_mode: "chosen" } }, proposing, { planId: plan.id })).toEqual(proposal(plan.id, { fixture_mode: "chosen" }));
+    // The lookup is case-insensitive, but the proposal keeps the caller's trimmed name rather than the canonical one.
+    expect(await trace({ plan_id: plan.id, source_name: " declared ", category: "Printers" }, proposing, { planId: plan.id })).toMatchObject({ action: { label: "Map declared → Printers", params: { source_name: "declared" } } });
+    expect(await trace({ source_name: "Declared", category: "Printers", rationale: " match the frame " }, proposing, { planId: plan.id, activePlanId: plan.id })).toEqual(proposal(plan.id, {}, "match the frame"));
+    // A plan without layers checks no checkouts.
+    expect(await trace({ plan_id: empty.id, source_name: "Declared", category: "Printers" }, [...W, "table:build_profiles", "table:plan_decisions", "table:profile_layers", "table:projects", "table:source_docs"].sort(), { planId: empty.id })).toEqual(proposal(empty.id, {}));
+    // Sources are tenant scoped.
+    expect(await trace({ plan_id: foreign.id, source_name: "Declared", category: "Printers" }, ["table:build_profiles", "table:projects", "table:source_docs"], { tenantId: "other" })).toEqual({ error: 'Source not found: "Declared". Call list_sources first.' });
+
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "propose_source_mapping", params: { source_name: "Declared", category: "Printers", option_groups: {}, plan_id: plan.id } });
+    expect(await trace({ plan_id: plan.id, source_name: "Declared", category: "Printers" }, proposing, { planId: plan.id })).toEqual(dismissed("propose_source_mapping", { source_name: "Declared", category: "Printers", option_groups: {}, plan_id: plan.id }));
+    expect(repo.getSource(repo.listSources().find((source) => source.name === "Declared")!.id)?.metadata?.category).toBeUndefined();
+    expect([...union].sort()).toEqual(SOURCE_MAPPING_UNION);
+    expect(declared("tool.propose_source_mapping")).toEqual(SOURCE_MAPPING_UNION);
+  });
+}
+
+it("traces audit_build_coverage brief, draft selection and part matching against the plan draft tables", async () => {
+  const tool = "audit_build_coverage";
+  const plan = repo.createProfile("Coverage plan");
+  const briefless = repo.createProfile("Coverage briefless");
+  const draft = insertEmptyPlanDraft(plan.id);
+  const otherDraft = insertEmptyPlanDraft(briefless.id);
+  // Insert one part and re-digest the draft the way getPlanDraft verifies it.
+  const insertPart = (target: { id: number; snapshotDigest: string }, key: string, filename: string, relativePath: string, requirement: string | null, included: boolean) => {
+    const id = Number(sqlite.prepare(`INSERT INTO plan_draft_parts (
+      tenant_id, draft_id, part_key, filename, relative_path, requirement, quantity_inferred, quantity_effective, included, notes
+    ) VALUES ('default', ?, ?, ?, ?, ?, 1, 1, ?, '')`).run(target.id, key, filename, relativePath, requirement, included ? 1 : 0).lastInsertRowid);
+    const rows = z.array(z.record(z.string(), z.unknown())).parse(sqlite.prepare("SELECT * FROM plan_draft_parts WHERE draft_id = ? ORDER BY id").all(target.id));
+    const parts = rows.map((row) => Object.fromEntries(Object.entries(row)
+      .filter(([column]) => column !== "tenant_id")
+      .map(([column, value]) => [column.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()), column === "included" || (column === "geometry_same" && value != null) ? Boolean(value) : value])));
+    target.snapshotDigest = digestPlanDraft({ baseRevisionId: null, basePlanVersion: 0, inputs: [], parts: z.array(z.any()).parse(parts) });
+    sqlite.prepare("UPDATE plan_drafts SET snapshot_digest = ? WHERE id = ?").run(target.snapshotDigest, target.id);
+    return id;
+  };
+  const bracket = insertPart(draft, "bracket", "bracket.stl", "frame/bracket.stl", "frame", true);
+  insertPart(draft, "duct", "duct.stl", "cooling/duct.stl", "cooling", false);
+  insertPart(draft, "zz", "zz.stl", "misc/zz.stl", null, true);
+  insertPart(otherDraft, "other", "frame.stl", "frame/frame.stl", "frame", true);
+  const requirements = [{ key: "frame", value: "bracket mount", status: "unverified" as const }, { key: "cooling", value: "fan duct", status: "unverified" as const }];
+  const saveBrief = (planId: number, draftId?: number) => {
+    const brief = newBuildPlanningBrief(planId, "Build the bracket", []);
+    brief.requirements = requirements;
+    if (draftId != null) brief.draft_id = draftId;
+    saveBuildPlanningBrief(repo, brief);
+  };
+  const settings = ["table:app_settings"];
+  const missingDraftTables = [...settings, "table:build_profiles", "table:plan_drafts"].sort();
+  const draftTables = [...missingDraftTables, "table:plan_draft_inputs", "table:plan_draft_parts"].sort();
+  const reconciledTables = [...draftTables, ...PLANNING_RECONCILIATION_TABLES].sort();
+  const missingBrief = { error: "Build planning brief not found" };
+  // With no draft at all, draft_id is undefined and JSON drops the key.
+  const none = (planId: number, draftId: number | null) => ({ plan_id: planId, ...(draftId === null ? {} : { draft_id: draftId }),
+    coverage: requirements.map((requirement) => ({ requirement, represented: false, part_ids: [], evidence: [] })), uncovered: ["frame", "cooling"] });
+  const covered = (planId: number, draftId: number) => ({ plan_id: planId, draft_id: draftId,
+    coverage: [{ requirement: requirements[0], represented: true, part_ids: [bracket], evidence: ["frame/bracket.stl"] }, { requirement: requirements[1], represented: false, part_ids: [], evidence: [] }],
+    uncovered: ["cooling"] });
+  // Without a plan nothing is read; a non-integer plan_id falls back to the active plan.
+  for (const plan_id of [undefined, null, "invalid"]) expect(await tracePlanningProposal(tool, { plan_id, draft_id: draft.id }, [])).toEqual({ error: "plan_id required" });
+  expect(await tracePlanningProposal(tool, { plan_id: briefless.id, draft_id: otherDraft.id }, settings)).toEqual(missingBrief);
+  // A brief without a draft and no draft_id reads only the brief.
+  saveBrief(plan.id);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id }, settings)).toEqual(none(plan.id, null));
+  // Excluded parts and tokens of two characters or fewer never match.
+  for (const draft_id of [draft.id, String(draft.id)]) expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id }, draftTables)).toEqual(covered(plan.id, draft.id));
+  expect(await tracePlanningProposal(tool, { plan_id: "invalid", draft_id: draft.id }, draftTables, { activePlanId: plan.id })).toEqual(covered(plan.id, draft.id));
+  // Another plan's draft and an unknown draft read no further than plan_drafts and yield no parts.
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: otherDraft.id }, missingDraftTables)).toEqual(none(plan.id, otherDraft.id));
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: 424242 }, missingDraftTables)).toEqual(none(plan.id, 424242));
+  // The brief's draft is the default, and an explicit draft_id wins over it.
+  saveBrief(plan.id, draft.id);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id }, draftTables)).toEqual(covered(plan.id, draft.id));
+  expect(await tracePlanningProposal(tool, {}, draftTables, { activePlanId: plan.id })).toEqual(covered(plan.id, draft.id));
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: 424242 }, missingDraftTables)).toEqual(none(plan.id, 424242));
+  // Explicit IDs are not ownership-checked; the tenant-filtered brief and plan_drafts fail closed.
+  const foreign = tenantStorage.run("other", () => {
+    const created = repo.createProfile("Foreign coverage");
+    saveBrief(created.id);
+    return created;
+  });
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, draft_id: draft.id }, settings)).toEqual(missingBrief);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id }, settings, { tenantId: "other" })).toEqual(missingBrief);
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, draft_id: draft.id }, missingDraftTables, { tenantId: "other" })).toEqual(none(foreign.id, draft.id));
+  // A selected Required-unit reconciliation adds its verification reads.
+  const reconciledPlan = repo.createProfile("Coverage reconciled");
+  const reconciledDraft = insertEmptyPlanDraft(reconciledPlan.id);
+  insertPart(reconciledDraft, "reconciled-duct", "duct.stl", "cooling/duct.stl", "cooling", true);
+  const saved = repo.savePlanDraftRequiredUnitReconciliation({
+    profileId: reconciledPlan.id, draftId: reconciledDraft.id, expectedSnapshotDigest: reconciledDraft.snapshotDigest,
+    decisions: [], actorId: "admission", idempotencyKey: "admission-coverage-reconciliation",
+  });
+  if (saved.kind !== "saved") throw new Error("reconciliation was not selected");
+  saveBrief(reconciledPlan.id, reconciledDraft.id);
+  const reconciled = await tracePlanningProposal(tool, { plan_id: reconciledPlan.id }, reconciledTables);
+  expect(reconciled.uncovered).toEqual(["frame"]);
+  // Auditing changes nothing.
+  expect(sqlite.prepare("SELECT included FROM plan_draft_parts WHERE id = ?").get(bracket)).toEqual({ included: 1 });
+  expect([...unions.get(tool) ?? []].sort()).toEqual(reconciledTables);
+  expect(declared(`tool.${tool}`)).toEqual(reconciledTables);
+});
+
+it("traces propose_edit_plan_draft_parts brief, draft and part checks against the plan draft tables", async () => {
+  const tool = "propose_edit_plan_draft_parts";
+  const plan = repo.createProfile("Draft edit plan");
+  const briefless = repo.createProfile("Draft edit briefless");
+  const draft = insertEmptyPlanDraft(plan.id);
+  const otherDraft = insertEmptyPlanDraft(briefless.id);
+  // Insert one part and re-digest the draft the way getPlanDraft verifies it.
+  const insertPart = (target: { id: number; snapshotDigest: string }, key: string) => {
+    const id = Number(sqlite.prepare(`INSERT INTO plan_draft_parts (
+      tenant_id, draft_id, part_key, quantity_inferred, quantity_effective, included, notes
+    ) VALUES ('default', ?, ?, 1, 1, 1, '')`).run(target.id, key).lastInsertRowid);
+    const rows = z.array(z.record(z.string(), z.unknown())).parse(sqlite.prepare("SELECT * FROM plan_draft_parts WHERE draft_id = ? ORDER BY id").all(target.id));
+    const parts = rows.map((row) => Object.fromEntries(Object.entries(row)
+      .filter(([column]) => column !== "tenant_id")
+      .map(([column, value]) => [column.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()), column === "included" || (column === "geometry_same" && value != null) ? Boolean(value) : value])));
+    target.snapshotDigest = digestPlanDraft({ baseRevisionId: null, basePlanVersion: 0, inputs: [], parts: z.array(z.any()).parse(parts) });
+    sqlite.prepare("UPDATE plan_drafts SET snapshot_digest = ? WHERE id = ?").run(target.snapshotDigest, target.id);
+    return id;
+  };
+  const part = insertPart(draft, "bracket");
+  const foreignPart = insertPart(otherDraft, "other-bracket");
+  const settings = ["table:app_settings"];
+  const missingDraftTables = [...settings, "table:build_profiles", "table:plan_drafts"].sort();
+  const draftTables = [...missingDraftTables, "table:plan_draft_inputs", "table:plan_draft_parts"].sort();
+  const reconciledTables = [...draftTables, ...PLANNING_RECONCILIATION_TABLES].sort();
+  const missingBrief = { error: "Build planning brief not found" };
+  const missingDraft = { error: "Plan draft not found" };
+  const edits = [{ part_id: part, included: false }];
+  const proposal = (planId: number, draftId: number, digest: string, parts: unknown) => ({
+    status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: {
+      id: expect.any(String), type: tool, plan_id: planId, label: "edit plan draft parts", summary: "Apply the reviewed part inclusion and quantity changes.",
+      params: { plan_id: planId, draft_id: draftId, expected_snapshot_digest: digest, parts },
+    },
+  });
+  // Plan and draft IDs are checked before any read.
+  for (const input of [{ draft_id: draft.id }, { plan_id: plan.id }, { plan_id: plan.id, draft_id: "x" }, { plan_id: "invalid", draft_id: draft.id }]) {
+    expect(await tracePlanningProposal(tool, { ...input, parts: edits }, [])).toEqual({ error: "plan_id and draft_id required" });
+  }
+  // The brief is read before the draft, so a briefless plan never reads plan_drafts.
+  expect(await tracePlanningProposal(tool, { plan_id: briefless.id, draft_id: otherDraft.id, parts: edits }, settings)).toEqual(missingBrief);
+  savePlanningBrief(plan.id);
+  // The draft must belong to the plan; another plan's draft and an unknown ID read only the visible-profile check and plan_drafts.
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: otherDraft.id, parts: edits }, missingDraftTables)).toEqual(missingDraft);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: 424242, parts: edits }, missingDraftTables)).toEqual(missingDraft);
+  // A loaded draft reads its inputs and parts before the edits are checked.
+  for (const parts of [undefined, null, [], {}, "bracket"]) {
+    expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts }, draftTables)).toEqual({ error: "parts required" });
+  }
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts: [null] }, draftTables)).toEqual({ error: "Invalid draft part edit" });
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts: [{}] }, draftTables)).toEqual({ error: "Draft part not found: missing" });
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts: [{ part_id: foreignPart, included: true }] }, draftTables)).toEqual({ error: `Draft part not found: ${foreignPart}` });
+  for (const quantity_override of [undefined, -1, 1.5, "2"]) {
+    expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts: [{ part_id: part, included: "no", quantity_override }] }, draftTables)).toEqual({ error: "Each edit must set included or quantity_override" });
+  }
+  const mixed = [{ part_id: part, included: false }, { id: part, quantity_override: 3 }, { part_id: String(part), included: true, quantity_override: null, notes: "dropped" }];
+  const normalized = [{ part_id: part, included: false }, { part_id: part, quantity_override: 3 }, { part_id: part, included: true, quantity_override: null }];
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts: mixed }, draftTables, { activePlanId: briefless.id })).toEqual(proposal(plan.id, draft.id, draft.snapshotDigest, normalized));
+  expect(await tracePlanningProposal(tool, { plan_id: String(plan.id), draft_id: String(draft.id), parts: edits, expected_snapshot_digest: "stale" }, draftTables)).toEqual(proposal(plan.id, draft.id, "stale", edits));
+  expect(await tracePlanningProposal(tool, { draft_id: draft.id, parts: edits }, draftTables, { activePlanId: plan.id })).toEqual(proposal(plan.id, draft.id, draft.snapshotDigest, edits));
+  // Explicit IDs are not ownership-checked; the tenant-filtered brief fails closed, and plan_drafts is tenant-filtered too.
+  const foreign = tenantStorage.run("other", () => {
+    const created = repo.createProfile("Foreign draft edit");
+    savePlanningBrief(created.id);
+    return created;
+  });
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, draft_id: draft.id, parts: edits }, settings)).toEqual(missingBrief);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts: edits }, settings, { tenantId: "other" })).toEqual(missingBrief);
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, draft_id: draft.id, parts: edits }, missingDraftTables, { tenantId: "other" })).toEqual(missingDraft);
+  // proposeAssistantAction skips the dismissal lookup, so a dismissed fingerprint still proposes and plan_decisions is never read.
+  repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { plan_id: plan.id, draft_id: draft.id, expected_snapshot_digest: draft.snapshotDigest, parts: edits } });
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id, parts: edits }, draftTables)).toEqual(proposal(plan.id, draft.id, draft.snapshotDigest, edits));
+  // A selected Required-unit reconciliation adds its verification reads.
+  const reconciledPlan = repo.createProfile("Draft edit reconciled");
+  const reconciledDraft = insertEmptyPlanDraft(reconciledPlan.id);
+  const reconciledPart = insertPart(reconciledDraft, "reconciled-bracket");
+  const saved = repo.savePlanDraftRequiredUnitReconciliation({
+    profileId: reconciledPlan.id, draftId: reconciledDraft.id, expectedSnapshotDigest: reconciledDraft.snapshotDigest,
+    decisions: [], actorId: "admission", idempotencyKey: "admission-edit-reconciliation",
+  });
+  if (saved.kind !== "saved") throw new Error("reconciliation was not selected");
+  savePlanningBrief(reconciledPlan.id, reconciledDraft.id);
+  const reconciledEdits = [{ part_id: reconciledPart, quantity_override: 2 }];
+  expect(await tracePlanningProposal(tool, { plan_id: reconciledPlan.id, draft_id: reconciledDraft.id, parts: reconciledEdits }, reconciledTables)).toEqual(proposal(reconciledPlan.id, reconciledDraft.id, saved.draft.snapshotDigest, reconciledEdits));
+  // Proposing changes nothing.
+  expect(sqlite.prepare("SELECT included, quantity_override FROM plan_draft_parts WHERE id = ?").get(part)).toEqual({ included: 1, quantity_override: null });
+  expect([...unions.get(tool) ?? []].sort()).toEqual(reconciledTables);
+  expect(declared(`tool.${tool}`)).toEqual(reconciledTables);
 });

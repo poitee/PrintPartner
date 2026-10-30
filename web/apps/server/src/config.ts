@@ -154,10 +154,18 @@ function resolveBasicAuth(): string | null {
   return null;
 }
 
-export function validateProductionConfig(config: ServerConfig): void {
+/**
+ * `desktop` is true in the desktop compatibility child. Its boundary admits each
+ * request only with a signed desktop principal, never a cookie session, so the
+ * multi-user SESSION_SECRET rule does not apply there.
+ */
+export function validateProductionConfig(
+  config: ServerConfig,
+  options: { desktop?: boolean } = {},
+): void {
   const isProd = process.env.NODE_ENV === "production";
   if (!isProd) return;
-  if (config.multiUser && !config.sessionSecret) {
+  if (config.multiUser && !config.sessionSecret && !options.desktop) {
     throw new Error("SESSION_SECRET is required when MULTI_USER is enabled");
   }
   if (config.deployMode === "saas" && !config.sessionSecret && config.githubOAuthConfigured) {

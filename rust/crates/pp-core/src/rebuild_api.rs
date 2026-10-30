@@ -18,7 +18,10 @@ use pp_storage::{
     WriterOwner,
     auth::{AuthPolicy, rebuild::AuthLifetimes, rebuild::RebuildAuthClient},
     build_graph::BuildGraphClient,
-    working_drafts::WorkingDraftClient,
+    working_drafts::{
+        WorkingDraftClient,
+        observation::{DraftReads, PreparationLimits},
+    },
 };
 use std::sync::{Arc, Mutex};
 
@@ -88,7 +91,8 @@ impl RebuildHttpClients {
     pub fn close(self) {}
 }
 
-/// Compose auth, draft, and Build clients without mounting.
+/// Compose auth, draft, and Build clients without mounting. Draft recompute
+/// and Build manifest options read Sources through `WriterOwner::source_reads`.
 /// Returns `None` before creating any client unless the stored setting is on.
 /// Catalog admission uses `admit_catalog_routes(owner)` from `read_router`.
 pub fn clients(
@@ -100,10 +104,15 @@ pub fn clients(
     if !rebuild.enabled() {
         return Ok(None);
     }
+    let reads: Arc<dyn DraftReads> = Arc::new(owner.source_reads()?);
     Ok(Some(RebuildHttpClients {
         auth: owner.rebuild_auth_with_policy(policy, lifetimes)?,
-        drafts: owner.working_drafts_with_policy(policy)?,
-        builds: owner.build_graph_with_policy(policy)?,
+        drafts: owner.working_drafts_with_observations(
+            policy,
+            reads.clone(),
+            PreparationLimits::default(),
+        )?,
+        builds: owner.build_graph_with_observations(policy, reads, PreparationLimits::default())?,
     }))
 }
 
@@ -335,6 +344,39 @@ mod tests {
                 "{value:?}"
             );
         }
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// T-10-draftreads (GRE-1052): production draft clients read Sources, so
+    /// recompute reaches authentication instead of refusing for missing reads.
+    #[test]
+    fn ticket_t_10_draftreads_production_clients_read_sources() {
+        let (owner, directory) = owner();
+        let bundle = clients(
+            DesktopRebuild::from_value(Some("1")),
+            &owner,
+            policy(),
+            lifetimes(),
+        )
+        .unwrap()
+        .expect("flag on constructs clients");
+        let refused = bundle
+            .drafts
+            .recompute(
+                Credential::Session(Secret::new("not-a-session".into())),
+                pp_storage::working_drafts::PositiveId::new(1).unwrap(),
+                pp_storage::working_drafts::RecomputeRequest::new("draftreads", true).unwrap(),
+                Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(2),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("Authentication required") || refused.contains("Invalid session"),
+            "{refused}"
+        );
+        bundle.close();
         owner.shutdown().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }

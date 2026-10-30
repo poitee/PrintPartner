@@ -626,7 +626,7 @@ export async function startServer(config: ServerConfig) {
   const releaseOwner = acquireDataDirectory(config.dataDir);
   try {
     beginSourceSyncAdmission(config.dataDir, rustOwnedNodeParticipants(config.dataDir));
-    validateProductionConfig(config);
+    validateProductionConfig(config, { desktop: desktopContext() !== null });
     const ownership = rustOwnedCopy(config.dataDir);
     if (!mappedDesktopTenant() && !config.databaseUrl && ownership.kind !== "foreign") {
       const preparation = await prepareSqliteUpgrade({

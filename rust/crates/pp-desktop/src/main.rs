@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tauri::{
     Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     image::Image,
-    menu::{IsMenuItem, Menu, MenuItem},
+    menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem},
     tray::TrayIconBuilder,
     webview::{DownloadEvent, NewWindowResponse},
 };
@@ -123,34 +123,17 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
     let app = builder
         .build(tauri::generate_context!())
         .context("Native shell initialization failed")?;
-    let mut args = std::env::args().skip(1);
-    let mut stage = None;
-    let mut data = None;
-    let mut test_exit = None;
-    let mut test_recovery_logs = false;
-    while let Some(argument) = args.next() {
-        match argument.as_str() {
-            "--dev-stage" if cfg!(debug_assertions) => {
-                stage = Some(PathBuf::from(
-                    args.next().context("Development stage missing")?,
-                ))
-            }
-            "--data" if cfg!(debug_assertions) => {
-                data = Some(PathBuf::from(
-                    args.next().context("Development data directory missing")?,
-                ))
-            }
-            "--test-exit-seconds" if cfg!(debug_assertions) => {
-                test_exit = Some(
-                    args.next()
-                        .context("Test duration missing")?
-                        .parse::<u64>()?,
-                )
-            }
-            "--test-recovery-logs" if cfg!(debug_assertions) => test_recovery_logs = true,
-            _ => anyhow::bail!("Unsupported desktop launch argument"),
-        }
-    }
+    let launch_args =
+        pp_desktop::LaunchArgs::parse(std::env::args().skip(1), cfg!(debug_assertions))?;
+    // The login LaunchAgent passes --minimized; the tray's Show brings the window back.
+    let window_visible = launch_args.window_visible();
+    let pp_desktop::LaunchArgs {
+        stage,
+        data,
+        test_exit,
+        test_recovery_logs,
+        ..
+    } = launch_args;
     let stage = match stage {
         Some(stage) => stage,
         None => {
@@ -174,9 +157,22 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         .and_then(|layout| layout.into_launch(data.clone()))
         .context("Desktop resource verification failed")?;
     let probe_diagnostics = recovery::RecoveryUi::new(data.clone());
-    let mut core = runtime
-        .block_on(CoreRuntime::start(launch))
-        .context("Desktop core startup failed")?;
+    let mut core = match runtime.block_on(CoreRuntime::start(launch)) {
+        Ok(core) => core,
+        Err(error) => {
+            let error = error.context("Desktop core startup failed");
+            // T-30: another desktop holds this data directory. Show its window
+            // instead of an error when it confirms the same directory.
+            if pp_desktop::focus::owned_by_another_desktop(&error)
+                && pp_desktop::focus::request(&data).unwrap_or(false)
+            {
+                eprintln!("desktop_already_running: focused_existing_window");
+                return Ok(0);
+            }
+            return Err(error);
+        }
+    };
+    let focus_data = data.clone();
     // Core startup admitted the data directory; flush the held rows and
     // record tracing and panics in its logs folder, telemetry or not.
     if let Err(error) = core_log.attach(&data) {
@@ -256,6 +252,7 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         };
         let window = builder
             .title("Print Partner")
+            .visible(window_visible)
             .inner_size(1280.0, 850.0)
             .min_inner_size(900.0, 650.0)
             .on_navigation(move |url| origin.admits(url))
@@ -301,6 +298,22 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
             return Err(error);
         }
     };
+    let focus_app = app.handle().clone();
+    let focus_server = {
+        let _runtime = runtime.enter();
+        pp_desktop::focus::FocusServer::start(&focus_data, move || {
+            let app = focus_app.clone();
+            let _ = focus_app.run_on_main_thread(move || {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            });
+        })
+    }
+    .inspect_err(|_| eprintln!("desktop_focus_unavailable"))
+    .ok();
     #[cfg(feature = "desktop_rebuild")]
     let origin_notice_shown = std::sync::atomic::AtomicBool::new(false);
     let shutdown_requested = core.shutdown_requested();
@@ -360,6 +373,8 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         let _ = (&window, &event);
     });
     stop_signal.abort();
+    // Remove the focus socket while this process still holds the data lock.
+    drop(focus_server);
     let receipt = runtime.block_on(core.shutdown());
     println!("{}", serde_json::to_string(&receipt)?);
     ensure!(receipt.complete(), "Desktop shutdown incomplete");
@@ -380,7 +395,25 @@ fn build_tray(
     let folder = MenuItem::with_id(app, "data", "Open data folder", true, None::<&str>)?;
     let log_folder = MenuItem::with_id(app, "log_folder", "Reveal log folder", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
-    let all = [
+    // Open at login is a per-user LaunchAgent, so only macOS gets the item (T-31).
+    let login_agent = if cfg!(target_os = "macos") {
+        app.path()
+            .home_dir()
+            .ok()
+            .zip(std::env::current_exe().ok())
+            .and_then(|(home, exe)| pp_desktop::autostart::LaunchAgent::new(&home, &exe).ok())
+    } else {
+        None
+    };
+    let open_at_login = CheckMenuItem::with_id(
+        app,
+        pp_desktop::tray::OPEN_AT_LOGIN,
+        "Open at login",
+        true,
+        login_agent.as_ref().is_some_and(|agent| agent.is_enabled()),
+        None::<&str>,
+    )?;
+    let all: [&dyn IsMenuItem<tauri::Wry>; 9] = [
         &show,
         &browser,
         &status,
@@ -388,14 +421,20 @@ fn build_tray(
         &log_folder,
         &recover,
         &folder,
+        &open_at_login,
         &quit,
     ];
-    let items = pp_desktop::tray::menu_ids()
+    let ids = if login_agent.is_some() {
+        pp_desktop::tray::menu_ids_with_open_at_login()
+    } else {
+        pp_desktop::tray::menu_ids().to_vec()
+    };
+    let items = ids
         .iter()
         .map(|id| {
             all.iter()
+                .copied()
                 .find(|item| item.id().as_ref() == *id)
-                .map(|item| *item as &dyn IsMenuItem<_>)
                 .with_context(|| format!("Tray menu item {id} missing"))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -430,6 +469,16 @@ fn build_tray(
             "data" => diagnostics.open_data(app),
             "log_folder" => diagnostics.reveal_logs(app),
             "quit" => app.exit(0),
+            id if id == pp_desktop::tray::OPEN_AT_LOGIN => {
+                if let Some(agent) = &login_agent {
+                    let on =
+                        pp_desktop::tray::toggle_open_at_login(agent).unwrap_or_else(|error| {
+                            tracing::error!("open_at_login_failed: {error:#}");
+                            agent.is_enabled()
+                        });
+                    let _ = open_at_login.set_checked(on);
+                }
+            }
             _ => {}
         })
         .build(app)?;

@@ -166,6 +166,18 @@ enum ReviewedEntry {
     ApplyStackPreset { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_add_build_checklist_items")]
     ProposeAddBuildChecklistItems { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_source_mapping")]
+    ProposeSourceMapping { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_edit_plan_draft_parts")]
+    ProposeEditPlanDraftParts { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.archive_plan")]
+    ArchivePlan { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.import_guide_notes")]
+    ImportGuideNotes { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_add_source")]
+    ProposeAddSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.audit_build_coverage")]
+    AuditBuildCoverage { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -675,6 +687,83 @@ impl ReviewedEntry {
                 resources,
                 BTreeSet::from([Table(AppSettings)]),
             ),
+            Self::ProposeSourceMapping { resources } => (
+                "tool.propose_source_mapping",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::PathHints),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            // The brief lookup, then `getPlanDraft`: the visible-profile check, the draft row,
+            // its inputs and parts, and any selected Required-unit reconciliation.
+            Self::ProposeEditPlanDraftParts { resources } => (
+                "tool.propose_edit_plan_draft_parts",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDrafts),
+                    Table(PlanDraftInputs),
+                    Table(PlanDraftParts),
+                    Table(PlanDraftRequiredUnitReconciliations),
+                    Table(PlanDraftRequiredUnitDecisions),
+                    Table(PlanDraftRequiredUnitAssignments),
+                ]),
+            ),
+            // The accepted-Plan read, then the dismissal lookup in `proposeChecked`.
+            Self::ArchivePlan { resources } => {
+                let mut expected = accepted_plan_operational();
+                expected.insert(Table(PlanDecisions));
+                ("tool.archive_plan", resources, expected)
+            }
+            // `sourceByName` lists Sources (twice when not found), the plan ownership check,
+            // then the dismissal lookup in `proposeChecked`.
+            Self::ImportGuideNotes { resources } => (
+                "tool.import_guide_notes",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            // `sourceByName` refuses an existing name, then the same plan ownership check and
+            // dismissal lookup as `tool.import_guide_notes`.
+            Self::ProposeAddSource { resources } => (
+                "tool.propose_add_source",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
+            // The brief lookup, then `getPlanDraft` for the requested or brief draft. Read-only:
+            // no proposal, so no dismissal lookup.
+            Self::AuditBuildCoverage { resources } => (
+                "tool.audit_build_coverage",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDrafts),
+                    Table(PlanDraftInputs),
+                    Table(PlanDraftParts),
+                    Table(PlanDraftRequiredUnitReconciliations),
+                    Table(PlanDraftRequiredUnitDecisions),
+                    Table(PlanDraftRequiredUnitAssignments),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -993,6 +1082,12 @@ impl Declarations {
             "tool.update_kit_selections",
             "tool.apply_stack_preset",
             "tool.propose_add_build_checklist_items",
+            "tool.propose_source_mapping",
+            "tool.propose_edit_plan_draft_parts",
+            "tool.archive_plan",
+            "tool.import_guide_notes",
+            "tool.propose_add_source",
+            "tool.audit_build_coverage",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
