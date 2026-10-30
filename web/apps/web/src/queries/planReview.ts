@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { TENANT_FEATURE_TOGGLES_CAPABILITY } from "@print-partner/contracts";
 import { patchPart } from "../api/endpoints/plans";
 import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
 import { patchPartAssembled, patchPartProgress } from "../api/endpoints/checkoff";
 import { useSpoolmanWorkflowAccess } from "../hooks/useSpoolmanWorkflowAccess";
+import { desktopRebuildEnabled } from "../lib/desktopRebuild";
 import { maskSpoolmanReviewPart, mergeAssembledIntoReview, mergeProgressIntoReview } from "../lib/reviewParts";
 import { queryKeys } from "./keys";
 import { useHealthQuery } from "./health";
@@ -12,11 +12,6 @@ import { invalidateRoleFilaments } from "./roleFilaments";
 
 const PLAN_REVIEW_REVISION_MISMATCH =
   "The Build Review response belongs to a different Plan revision";
-
-/** Health advertises this capability only when `PP_DESKTOP_REBUILD` is exactly `1` or `true`. */
-function rebuildWorkspaceReads(capabilities: readonly string[] | undefined): boolean {
-  return capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
-}
 
 function reviewQueryShouldRetry(failureCount: number, error: unknown, retry: unknown): boolean {
   if (error instanceof Error && error.message === PLAN_REVIEW_REVISION_MISMATCH) return false;
@@ -45,7 +40,7 @@ export function usePlanReviewQuery(
   const access = useSpoolmanWorkflowAccess(profileId);
   const health = useHealthQuery();
   const queryClient = useQueryClient();
-  const rebuild = rebuildWorkspaceReads(health.data?.capabilities);
+  const rebuild = desktopRebuildEnabled(health.data?.capabilities);
   const revisionId = rebuild && options?.revisionId !== undefined ? options.revisionId : undefined;
   return useQuery({
     queryKey: queryKeys.planReview(profileId ?? 0, includeExcluded, access.queryAllowed, revisionId),

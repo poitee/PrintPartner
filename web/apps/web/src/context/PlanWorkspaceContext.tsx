@@ -10,7 +10,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  TENANT_FEATURE_TOGGLES_CAPABILITY,
   type HealthResponse,
   type PlanFeatures,
   parsePlanDraftWorkspace,
@@ -38,6 +37,7 @@ import {
 import { fetchPlanReview, type PlanReview } from "../api/endpoints/planManifests";
 import { capturePlanSaveCache, hydratePlanSave, includedPlanReview } from "../lib/planSaveCache";
 import { spoolmanWorkflowAccess } from "../lib/spoolmanWorkflowAccess";
+import { desktopRebuildEnabled } from "../lib/desktopRebuild";
 import { formatCheckoffSummary } from "../lib/checkoffProgress";
 import { useEngineHealth } from "../hooks/useEngineHealth";
 import {
@@ -244,7 +244,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const healthQuery = useHealthQuery();
-  const rebuildReads = healthQuery.data?.capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
+  const rebuildReads = desktopRebuildEnabled(healthQuery.data?.capabilities);
   const draftListQuery = usePlanDraftListQuery(
     selectedProfileId,
     Boolean(health?.ok),

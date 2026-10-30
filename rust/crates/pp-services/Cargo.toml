@@ -8,18 +8,19 @@ publish = false
 
 [features]
 default = []
-desktop_rebuild = ["dep:serde_json", "dep:zip", "dep:ryu-js", "dep:crc32fast"]
+desktop_rebuild = ["dep:zip", "dep:ryu-js", "dep:crc32fast"]
 
 [dependencies]
 plist = "=1.10.1"
-serde_json = { workspace = true, optional = true, features = ["preserve_order", "float_roundtrip"] }
+rand.workspace = true
+serde_json = { workspace = true, features = ["preserve_order", "float_roundtrip"] }
 zip = { version = "=9.0.4", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
 ryu-js = { version = "=1.0.2", optional = true }
 crc32fast = { version = "=1.5.2", optional = true }
 
 [dev-dependencies]
+regex.workspace = true
 tempfile = "=3.27.0"
-serde_json.workspace = true
 hex.workspace = true
 sha2.workspace = true
 zip = { version = "=9.0.4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
