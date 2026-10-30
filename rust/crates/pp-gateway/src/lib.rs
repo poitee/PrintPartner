@@ -116,7 +116,7 @@ impl BootstrapMinter {
         let token = self
             .access
             .lock()
-            .expect("Session mutex poisoned")
+            .map_err(|_| anyhow::anyhow!("Session mutex poisoned"))?
             .mint_bootstrap()
             .context("Runtime is stopping")?;
         Ok(LaunchTarget(format!(
