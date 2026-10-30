@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -6462,3 +6462,87 @@ it("traces propose_add_build_checklist_items brief lookup, item validation and t
   expect([...unions.get(tool) ?? []].sort()).toEqual(settings);
   expect(declared(`tool.${tool}`)).toEqual(settings);
 });
+
+async function traceSourceMapping(input: Record<string, unknown>, options: { repository: AppRepository; planId?: number; tenantId?: string; activePlanId?: number }) {
+  const { repository, planId, tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("propose_source_mapping", input, { repo: repository, activePlanId, dataDir })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  const tables = [...new Set(statements.map((sql) => optionGroupSelect(sql, tenantId, planId)))];
+  const files = optionGroupFileResources(observer.state.files.map(({ api, args }) => [api, ...args]));
+  return { body: z.record(z.string(), z.unknown()).parse(JSON.parse(output.content)), resources: [...tables, ...files].sort() };
+}
+
+function sourceMappingFixture(isolated: boolean) {
+  // Only repo checkouts keep a root, so isolated Source listing probes stay inside the workspace roots.
+  sqlite.prepare("UPDATE projects SET local_path = NULL").run();
+  const declaredSource = optionGroupCheckout("Declared");
+  const inferred = optionGroupCheckout("Inferred", true);
+  fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
+  fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
+  const plan = repo.createProfile("Mapping", declaredSource.id);
+  repo.addAddonLayer(plan.id, inferred.id);
+  const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+  return { repository, plan, declaredSource, inferred };
+}
+
+const SOURCE_MAPPING_UNION = ["file:path-hints", "file:source-workspace", "table:build_profiles", "table:plan_decisions", "table:profile_layers", "table:projects", "table:source_docs"];
+
+for (const isolated of [false, true]) {
+  it(`traces propose_source_mapping validation, Source lookup, option-group checks and dismissals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, plan } = sourceMappingFixture(isolated);
+    const empty = repo.createProfile("Mapping empty");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign mapping"));
+    const W = isolated ? ["file:source-workspace"] : [];
+    const sources = [...W, "table:projects", "table:source_docs"].sort();
+    const lookup = [...W, "table:build_profiles", "table:projects", "table:source_docs"].sort();
+    const groups = ["file:path-hints", "file:source-workspace", "table:build_profiles", "table:profile_layers", "table:projects", "table:source_docs"];
+    const proposing = [...groups, "table:plan_decisions"].sort();
+    const union = new Set<string>();
+    async function trace(input: Record<string, unknown>, resources: string[], options: { planId?: number; tenantId?: string; activePlanId?: number } = {}) {
+      const traced = await traceSourceMapping(input, { repository, ...options });
+      expect(traced.resources).toEqual(resources);
+      for (const resource of traced.resources) union.add(resource);
+      return traced.body;
+    }
+    const proposal = (planId: number | null, selections: Record<string, unknown>, rationale?: string) => ({
+      status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.",
+      action: { id: expect.any(String), type: "propose_source_mapping", plan_id: planId ?? 0, label: "Map Declared → Printers",
+        summary: rationale ?? `Set Library category to “Printers”${Object.keys(selections).length ? ` and propose kit selections ${Object.entries(selections).map(([group, value]) => `${group}=${Array.isArray(value) ? value.join(", ") : value}`).join(", ")}` : ""}.`,
+        params: { source_name: "Declared", category: "Printers", option_groups: selections, plan_id: planId } },
+    });
+
+    // The plan resolves before input validation, so an explicit plan_id costs one identity read.
+    const required = { error: "source_name and category required" };
+    expect(await trace({ source_name: "Declared" }, [])).toEqual(required);
+    for (const input of [{ category: "Printers" }, { source_name: " ", category: "Printers" }, { source_name: "Declared", category: " " }]) {
+      expect(await trace({ plan_id: plan.id, ...input }, ["table:build_profiles"], { planId: plan.id })).toEqual(required);
+    }
+    expect(await trace({ plan_id: plan.id, source_name: "Absent", category: "Printers" }, lookup, { planId: plan.id })).toEqual({ error: 'Source not found: "Absent". Call list_sources first.' });
+    // Selections are parsed after the Source lookup.
+    expect(await trace({ plan_id: plan.id, source_name: "Declared", category: "Printers", option_groups: "bad" }, lookup, { planId: plan.id })).toEqual({ error: "option_groups must be an object" });
+    // Without a plan there is no option-group check and no dismissal lookup.
+    expect(await trace({ source_name: "Declared", category: "Printers" }, sources)).toEqual(proposal(null, {}));
+    expect(await trace({ plan_id: foreign.id, source_name: "Declared", category: "Printers", option_groups: { fixture_mode: ["chosen", "ignored"] } }, lookup)).toEqual(proposal(null, { fixture_mode: ["chosen", "ignored"] }));
+    expect(await trace({ plan_id: plan.id, source_name: "Declared", category: "Printers", option_groups: { fixture_mode: ["chosen", "ignored"] } }, groups, { planId: plan.id })).toEqual({ error: "option_groups.fixture_mode must contain no more than 1 variant id" });
+    expect(await trace({ plan_id: plan.id, source_name: " Declared ", category: " Printers ", option_groups: { fixture_mode: "chosen" } }, proposing, { planId: plan.id })).toEqual(proposal(plan.id, { fixture_mode: "chosen" }));
+    // The lookup is case-insensitive, but the proposal keeps the caller's trimmed name rather than the canonical one.
+    expect(await trace({ plan_id: plan.id, source_name: " declared ", category: "Printers" }, proposing, { planId: plan.id })).toMatchObject({ action: { label: "Map declared → Printers", params: { source_name: "declared" } } });
+    expect(await trace({ source_name: "Declared", category: "Printers", rationale: " match the frame " }, proposing, { planId: plan.id, activePlanId: plan.id })).toEqual(proposal(plan.id, {}, "match the frame"));
+    // A plan without layers checks no checkouts.
+    expect(await trace({ plan_id: empty.id, source_name: "Declared", category: "Printers" }, [...W, "table:build_profiles", "table:plan_decisions", "table:profile_layers", "table:projects", "table:source_docs"].sort(), { planId: empty.id })).toEqual(proposal(empty.id, {}));
+    // Sources are tenant scoped.
+    expect(await trace({ plan_id: foreign.id, source_name: "Declared", category: "Printers" }, ["table:build_profiles", "table:projects", "table:source_docs"], { tenantId: "other" })).toEqual({ error: 'Source not found: "Declared". Call list_sources first.' });
+
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "propose_source_mapping", params: { source_name: "Declared", category: "Printers", option_groups: {}, plan_id: plan.id } });
+    expect(await trace({ plan_id: plan.id, source_name: "Declared", category: "Printers" }, proposing, { planId: plan.id })).toEqual(dismissed("propose_source_mapping", { source_name: "Declared", category: "Printers", option_groups: {}, plan_id: plan.id }));
+    expect(repo.getSource(repo.listSources().find((source) => source.name === "Declared")!.id)?.metadata?.category).toBeUndefined();
+    expect([...union].sort()).toEqual(SOURCE_MAPPING_UNION);
+    expect(declared("tool.propose_source_mapping")).toEqual(SOURCE_MAPPING_UNION);
+  });
+}
