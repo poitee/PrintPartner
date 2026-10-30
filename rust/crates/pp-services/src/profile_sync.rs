@@ -17,6 +17,8 @@
 //! - A `__proto__` key never lands in a flat config (Node assigns it to the
 //!   prototype instead).
 //!
+//! - Number literals that overflow f64 read as +-Infinity, as `JSON.parse` does.
+//!
 //! Known differences, kept because the inputs are not real slicer saves:
 //! JSON nested deeper than 128 levels and lone surrogate escapes make the
 //! Rust parse fail, where Node accepts the file. A parent profile whose whole
@@ -364,9 +366,103 @@ impl fmt::Display for ProfileSyncError {
 
 impl std::error::Error for ProfileSyncError {}
 
+/// End of the JSON number token starting at `start`.
+fn number_end(b: &[u8], start: usize) -> usize {
+    let digits = |from: usize| from + b[from..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let mut i = start + usize::from(b[start] == b'-');
+    i = if b.get(i) == Some(&b'0') {
+        i + 1
+    } else {
+        digits(i)
+    };
+    if b.get(i) == Some(&b'.') && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
+        i = digits(i + 1);
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        let sign = usize::from(matches!(b.get(i + 1), Some(b'+' | b'-')));
+        if b.get(i + 1 + sign).is_some_and(u8::is_ascii_digit) {
+            i = digits(i + 1 + sign);
+        }
+    }
+    i
+}
+
+/// serde_json refuses number literals that overflow f64, where `JSON.parse`
+/// returns +-Infinity. Rewrite each one as the string `"Infinity"` or
+/// `"-Infinity"`, which `scalar` turns into the text `String(Infinity)`
+/// gives. A whole document that is one such number becomes `0`, since
+/// `Object.entries` of any number is empty. `None` when nothing overflows.
+fn overflow_as_infinity(raw: &str) -> Option<String> {
+    let b = raw.as_bytes();
+    let (mut out, mut last, mut i) = (String::new(), 0, 0);
+    // Open containers, and the last structural byte seen. A number is a
+    // value after `:`, `[`, an array's `,`, or at the start; anywhere else
+    // the text is invalid JSON and is left for serde_json to refuse.
+    let (mut open, mut prev) = (Vec::new(), None);
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+                prev = Some(b'"');
+            }
+            c @ (b'{' | b'[') => {
+                open.push(c);
+                prev = Some(c);
+                i += 1;
+            }
+            c @ (b'}' | b']' | b':' | b',') => {
+                if matches!(c, b'}' | b']') {
+                    open.pop();
+                }
+                prev = Some(c);
+                i += 1;
+            }
+            b'-' | b'0'..=b'9' => {
+                let end = number_end(b, i).max(i + 1);
+                let value = match prev {
+                    None => true,
+                    Some(b':' | b'[') => true,
+                    Some(b',') => open.last() == Some(&b'['),
+                    _ => false,
+                };
+                if let Ok(x) = raw[i..end].parse::<f64>()
+                    && value
+                    && x.is_infinite()
+                {
+                    out.push_str(&raw[last..i]);
+                    out.push_str(match (open.is_empty(), x > 0.0) {
+                        (true, _) => "0",
+                        (false, true) => "\"Infinity\"",
+                        (false, false) => "\"-Infinity\"",
+                    });
+                    last = end;
+                }
+                prev = Some(b'0');
+                i = end;
+            }
+            c if c.is_ascii_whitespace() => i += 1,
+            c => {
+                prev = Some(c);
+                i += 1;
+            }
+        }
+    }
+    (last > 0).then(|| out + &raw[last..])
+}
+
 /// TS `parseSlicerJson`.
 pub fn parse_slicer_json(raw: &str) -> Result<FlatConfig, ProfileSyncError> {
-    let top: JsonTop = serde_json::from_str(raw).map_err(ProfileSyncError::Json)?;
+    let top: JsonTop = match serde_json::from_str(raw) {
+        Ok(top) => top,
+        Err(error) => match overflow_as_infinity(raw) {
+            Some(rewritten) => serde_json::from_str(&rewritten).map_err(ProfileSyncError::Json)?,
+            None => return Err(ProfileSyncError::Json(error)),
+        },
+    };
     let mut flat = FlatConfig::default();
     match top {
         JsonTop::Object(entries) => {
@@ -851,6 +947,21 @@ mod tests {
         let mut out = String::new();
         push_json_string(&mut out, &all);
         assert_eq!(out, serde_json::to_string(&all).unwrap());
+    }
+
+    #[test]
+    fn overflowing_numbers_become_infinity_only_as_values() {
+        let flat = parse_slicer_json(
+            r#"{"a":1e999,"b":[2,-1e999],"c":{"value":1E400},"d":"1e999","e":1e-999}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            flat.to_json(),
+            r#"{"a":"Infinity","b":"2","c":"Infinity","d":"1e999","e":"0"}"#
+        );
+        assert!(parse_slicer_json("1e999").unwrap().is_empty());
+        assert!(parse_slicer_json(r#"{1e999:1}"#).is_err());
+        assert!(parse_slicer_json(r#"{"a":1,1e999:2}"#).is_err());
     }
 
     #[test]
