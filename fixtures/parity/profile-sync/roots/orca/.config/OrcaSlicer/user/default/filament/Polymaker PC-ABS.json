@@ -1,0 +1,8 @@
+{
+    "from": "User",
+    "name": "Polymaker PC-ABS",
+    "fan_always_on": "1",
+    "nozzle_temp_c": "260.5",
+    "filament_retraction_length": "Infinity",
+    "retraction_length_mm": "0.000001"
+}

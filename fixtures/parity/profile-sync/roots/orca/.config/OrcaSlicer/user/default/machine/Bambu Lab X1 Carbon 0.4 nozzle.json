@@ -1,0 +1,21 @@
+{
+    "type": "machine",
+    "name": "Bambu Lab X1 Carbon 0.4 nozzle",
+    "from": "system",
+    "inherits": "",
+    "printer_model": "Bambu Lab X1 Carbon",
+    "nozzle_diameter": [
+        "0.4"
+    ],
+    "printable_area": [
+        "0x0",
+        "256x0",
+        "256x256",
+        "0x256"
+    ],
+    "printable_height": "250",
+    "retraction_length": [
+        "0.8"
+    ],
+    "version": "02.03.00.70"
+}

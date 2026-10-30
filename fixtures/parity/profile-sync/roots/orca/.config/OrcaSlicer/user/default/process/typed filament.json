@@ -1,0 +1,8 @@
+{
+    "type": "Filament",
+    "name": "Generic PETG in process dir",
+    "nozzle_temperature": [
+        "240"
+    ],
+    "version": "2.3.2.60"
+}

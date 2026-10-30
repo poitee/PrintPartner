@@ -1,0 +1,4 @@
+{
+    "name": "string child",
+    "inherits": "string base"
+}
