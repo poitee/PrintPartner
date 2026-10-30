@@ -7,8 +7,10 @@
 //!
 //! The command must print one line on stdout when it is ready (`pp-server`
 //! prints its origin). `--artifact` is hashed into the record; `--package`
-//! (default: the artifact) is what package size measures. `--printers` records
-//! how many simulated printers the command was given; this tool starts none.
+//! (default: the artifact) is what package size measures. `--printers N` starts
+//! N loopback Moonraker simulators and seeds them into the app with one setup
+//! launch of the command plus `--test-credential-file` (a `pp-server` flag);
+//! the command must name a data directory, which should start empty.
 //! Each file in DIR is created new, so earlier captures are never overwritten.
 
 use std::ffi::OsString;
@@ -78,7 +80,7 @@ fn parse(mut raw: impl Iterator<Item = OsString>) -> Result<CaptureRequest, Stri
             stop_timeout: Duration::from_secs(10),
         },
         noise_tolerance_pct: noise,
-        simulated_printers: whole("--printers", printers)?,
+        printers: whole("--printers", printers)?,
         toolchain: Toolchain { rustc, node },
         out: out.ok_or("--out is required")?,
     })
@@ -86,10 +88,14 @@ fn parse(mut raw: impl Iterator<Item = OsString>) -> Result<CaptureRequest, Stri
 
 fn main() -> ExitCode {
     match parse(std::env::args_os().skip(1)).and_then(|request| write_capture(&request)) {
-        Ok(written) => {
-            for path in written {
+        Ok(summary) => {
+            for path in summary.files {
                 println!("{}", path.display());
             }
+            println!(
+                "simulated printers: {}, simulator requests during measured runs: {}",
+                summary.simulated_printers, summary.simulator_requests
+            );
             ExitCode::SUCCESS
         }
         Err(error) => {

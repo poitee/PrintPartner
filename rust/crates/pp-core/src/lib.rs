@@ -20,6 +20,7 @@ use std::{
 mod drain;
 mod origin;
 pub mod perf_launch;
+pub mod perf_seed;
 mod preferences;
 mod rebuild;
 mod state_file;
