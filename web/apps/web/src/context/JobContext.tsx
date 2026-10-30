@@ -9,7 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { TENANT_FEATURE_TOGGLES_CAPABILITY, type JobEvent, type JobSnapshot } from "@print-partner/contracts";
+import type { JobEvent, JobSnapshot } from "@print-partner/contracts";
+import { desktopRebuildEnabled } from "../lib/desktopRebuild";
 import { notifyEngineUnauthorized } from "../api/contractRequest";
 import { EngineHttpError } from "../api/engineTransport";
 import { fetchJob } from "../api/endpoints/jobs";
@@ -60,11 +61,6 @@ type JobContextValue = {
 const JobContext = createContext<JobContextValue | null>(null);
 
 const JOB_TERMINAL = new Set(["done", "error", "cancelled"]);
-
-/** Health advertises this capability only when `PP_DESKTOP_REBUILD` is exactly `1` or `true`. */
-function rebuildJobSnapshots(capabilities: readonly string[] | undefined): boolean {
-  return capabilities?.includes(TENANT_FEATURE_TOGGLES_CAPABILITY) === true;
-}
 
 /**
  * How long a finished job keeps its row in the job strip.
@@ -138,7 +134,7 @@ function upsertJob(jobs: ActiveJob[], next: ActiveJob): ActiveJob[] {
 export function JobProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const health = useHealthQuery();
-  const rebuildSnapshots = rebuildJobSnapshots(health.data?.capabilities);
+  const rebuildSnapshots = desktopRebuildEnabled(health.data?.capabilities);
   const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([]);
   const observers = useRef(new Set<AbortController>());
   useEffect(() => {
