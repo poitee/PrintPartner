@@ -19,7 +19,30 @@ const HEADERS: &str =
 
 /// Field, header, query and environment names that carry credentials.
 pub fn sensitive_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase().replace('-', "_");
+    // camelCase splits into words, so `accessToken` reads as `access_token`.
+    let mut snake = String::with_capacity(name.len() + 4);
+    let mut previous_lower = false;
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() && previous_lower {
+            snake.push('_');
+        }
+        previous_lower = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        snake.push(if ch == '-' {
+            '_'
+        } else {
+            ch.to_ascii_lowercase()
+        });
+    }
+    let name = snake;
+    // Versioned setting keys such as `api_keys_v1` name the same secret.
+    let name = match name.rsplit_once("_v") {
+        Some((stem, version))
+            if !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            stem.to_owned()
+        }
+        _ => name,
+    };
     matches!(
         name.as_str(),
         "authorization"
@@ -39,6 +62,11 @@ pub fn sensitive_name(name: &str) -> bool {
             | "passphrase"
             | "key"
             | "apikey"
+            | "api_keys"
+            | "pat"
+            | "webhook"
+            | "webhook_url"
+            | "webhookurl"
             | "credential"
             | "credentials"
             | "session"
@@ -52,6 +80,10 @@ pub fn sensitive_name(name: &str) -> bool {
         "_password",
         "_key",
         "_apikey",
+        "_keys",
+        "_pat",
+        "_webhook",
+        "_webhook_url",
         "_credential",
         "_session",
         "_session_id",
@@ -67,6 +99,7 @@ fn sensitive_query_name(name: &str) -> bool {
 
 struct Rules {
     url_userinfo: Regex,
+    webhook_path: Regex,
     token_shapes: Regex,
     json_pair: Regex,
     header_line: Regex,
@@ -79,6 +112,11 @@ struct Rules {
 static RULES: LazyLock<Option<Rules>> = LazyLock::new(|| {
     Some(Rules {
         url_userinfo: Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@?#]+@").ok()?,
+        // Discord and Slack style webhook URLs carry the token in the path.
+        webhook_path: Regex::new(
+            r#"(?i)(/api(?:/v\d+)?/webhooks/\d+/|hooks\.slack\.com/services/)[^\s?#"'<>\\]+"#,
+        )
+        .ok()?,
         token_shapes: Regex::new(concat!(
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+",
             r"|\b(?:sk|pk|rk)[-_](?:live[-_]|test[-_])?[A-Za-z0-9_-]{16,}",
@@ -130,6 +168,9 @@ impl Scrubber {
         let text = rules
             .url_userinfo
             .replace_all(&text, format!("${{1}}{REDACTED}@"));
+        let text = rules
+            .webhook_path
+            .replace_all(&text, format!("${{1}}{REDACTED}"));
         let text = rules.token_shapes.replace_all(&text, REDACTED);
         let text = rules.json_pair.replace_all(&text, |caps: &Captures| {
             if sensitive_name(&caps[1]) {
@@ -323,6 +364,58 @@ mod tests {
         assert_eq!(value["integration"]["spoolman"]["apiKey"], REDACTED);
         assert_eq!(value["level"], 50);
         assert!(value["key"].is_null());
+    }
+
+    #[test]
+    fn gre_1006_scrub_covers_webhooks_pats_and_versioned_key_settings() {
+        let text = concat!(
+            "notify https://discord.com/api/webhooks/123456789/PLANTED_DISCORD_TOKEN_x9 ",
+            "and https://discordapp.com/api/v10/webhooks/42/PLANTED_DISCORD_V10 ",
+            "and https://hooks.slack.com/services/T0/B0/PLANTED_SLACK_HOOK ",
+            "github_pat=PLANTED_GITHUB_PAT_1 api_keys_v1=PLANTED_API_KEYS_V1 ",
+            "discord_webhook_url=PLANTED_WEBHOOK_FIELD ",
+            "https://discord.com/api/webhooks/7/PLANTED_DOT.TILDE~PCT%2B+X?wait=true ",
+            "accessToken=PLANTED_CAMEL_TOKEN clientSecret=PLANTED_CAMEL_SECRET",
+        );
+        let scrubbed = scrub(text);
+        for secret in [
+            "PLANTED_DISCORD_TOKEN_x9",
+            "PLANTED_DISCORD_V10",
+            "PLANTED_SLACK_HOOK",
+            "PLANTED_GITHUB_PAT_1",
+            "PLANTED_API_KEYS_V1",
+            "PLANTED_WEBHOOK_FIELD",
+            "PLANTED_DOT",
+            "TILDE~PCT",
+            "PLANTED_CAMEL_TOKEN",
+            "PLANTED_CAMEL_SECRET",
+        ] {
+            assert!(!scrubbed.contains(secret), "{secret} leaked: {scrubbed}");
+        }
+        assert!(scrubbed.contains("https://discord.com/api/webhooks/123456789/[REDACTED]"));
+        assert!(scrubbed.contains("/webhooks/7/[REDACTED]?wait=true"));
+        let ordinary = "GET https://shop.local/api/v1/orders/123?page=2 primary_id=7";
+        assert_eq!(scrub(ordinary), ordinary);
+        let mut value = serde_json::json!({
+            "github_pat": "x", "api_keys_v1": ["x"], "webhookUrl": "x", "webhook": "x",
+            "githubPat": "x", "apiKeysV1": {"k": "x"}, "api_key": 12345, "webhookurl": "x",
+            "schema_v2": "kept", "version": "v1"
+        });
+        Scrubber::default().json(&mut value);
+        for name in [
+            "github_pat",
+            "api_keys_v1",
+            "webhookUrl",
+            "webhook",
+            "githubPat",
+            "apiKeysV1",
+            "api_key",
+            "webhookurl",
+        ] {
+            assert_eq!(value[name], REDACTED, "{name}");
+        }
+        assert_eq!(value["schema_v2"], "kept");
+        assert_eq!(value["version"], "v1");
     }
 
     #[test]

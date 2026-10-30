@@ -30,21 +30,25 @@ const savedMoonraker: PrinterMachine = {
   ...savedBambu, id: "moonraker", name: "Saved Moonraker", model: "Bambu-looking model", integration_id: "bambu-looking-id",
 };
 const deniedPrinter = {
-  id: "bambu", name: "Saved Bambu", state: "unknown", active_job: null, progress: null,
+  id: "bambu", name: "Saved Bambu", state: "not_connected", not_connected_reason: "Feature bambu is disabled.",
+  active_job: null, progress: null,
   eta_seconds: null, message: "Feature bambu is disabled.", integration_id: "moonraker-looking-id",
-  idle_since: null,
+  idle_since: null, idle_for: null,
   filament_slots: [{ slot: 1, label: "Saved PLA", filament_color_id: "catalog:saved-pla",
     remaining_g: null, spool_ids: [], empty: false, low: false }],
   filament_remaining_g: null, needs_filament_swap: false, filament_swap_reason: null,
 };
 const livePrinter = {
-  ...deniedPrinter, state: "paused", active_job: "private-bambu-job.gcode", progress: 37,
+  ...deniedPrinter, state: "paused", not_connected_reason: null, active_job: "private-bambu-job.gcode", progress: 37,
   eta_seconds: 123, message: "Filament runout private telemetry", needs_filament_swap: true,
   filament_swap_reason: "printer reports filament runout: Filament runout private telemetry",
 };
-const deniedFarm = { printer_count: 1, printers: [deniedPrinter], idle: 0, printing: 0,
-  offline: 1, needs_filament_swap: [] };
-const liveFarm = { printer_count: 1, printers: [livePrinter], idle: 0, printing: 1, offline: 0,
+/** One count per farm state, zero unless given. */
+const counts = (given: Record<string, number>) => ({ state_counts: { idle: 0, printing: 0, paused: 0, complete: 0,
+  error: 0, offline: 0, not_connected: 0, ...given } });
+const deniedFarm = { printer_count: 1, printers: [deniedPrinter], ...counts({ not_connected: 1 }),
+  needs_filament_swap: [] };
+const liveFarm = { printer_count: 1, printers: [livePrinter], ...counts({ paused: 1 }),
   needs_filament_swap: [{ id: "bambu", name: "Saved Bambu", reason: livePrinter.filament_swap_reason }] };
 const invalid = { error: "Stored feature toggles are invalid.", code: "FEATURE_TOGGLES_INVALID" };
 
@@ -181,8 +185,9 @@ describe("farm status Bambu feature admission", () => {
     repo.setSetting("feature_toggles", '{"farm":true,"bambu":false}');
     const client = await mcp();
     const expected = { printer_count: 2, printers: [deniedPrinter, { ...deniedPrinter,
-      id: "moonraker", name: "Saved Moonraker", state: "idle", message: null, integration_id: "bambu-looking-id" }],
-    idle: 1, printing: 0, offline: 1, needs_filament_swap: [] };
+      id: "moonraker", name: "Saved Moonraker", state: "idle", not_connected_reason: null, idle_for: "unknown", message: null,
+      integration_id: "bambu-looking-id" }],
+    ...counts({ idle: 1, not_connected: 1 }), needs_filament_swap: [] };
     expect(JSON.parse(await call())).toEqual(expected);
     expect(JSON.parse(await call(client))).toEqual(expected);
     expect(bambu).toHaveBeenCalledTimes(0);
@@ -196,13 +201,13 @@ describe("farm status Bambu feature admission", () => {
       repo.setSetting("integrations", JSON.stringify([null, 7, "x", [], { type: "bambu" }, ...stored]));
       repo.setSetting("feature_toggles", value);
       const enabled = value.includes('"bambu":true');
-      const moonrakerPrinter = { ...deniedPrinter, id: "moonraker", name: "Saved Moonraker", state: "idle",
-        message: null, integration_id: "bambu-looking-id" };
+      const moonrakerPrinter = { ...deniedPrinter, id: "moonraker", name: "Saved Moonraker",
+        state: "idle", not_connected_reason: null, idle_for: "unknown", message: null, integration_id: "bambu-looking-id" };
       const client = await mcp();
       const expected = enabled
-        ? { printer_count: 2, printers: [livePrinter, moonrakerPrinter], idle: 1, printing: 1, offline: 0,
+        ? { printer_count: 2, printers: [livePrinter, moonrakerPrinter], ...counts({ idle: 1, paused: 1 }),
           needs_filament_swap: liveFarm.needs_filament_swap }
-        : { printer_count: 2, printers: [deniedPrinter, moonrakerPrinter], idle: 1, printing: 0, offline: 1,
+        : { printer_count: 2, printers: [deniedPrinter, moonrakerPrinter], ...counts({ idle: 1, not_connected: 1 }),
           needs_filament_swap: [] };
       expect(JSON.parse(await call())).toEqual(expected);
       expect(JSON.parse(await call(client))).toEqual(expected);
@@ -212,8 +217,8 @@ describe("farm status Bambu feature admission", () => {
   it("fails closed when the printer's own integration element is corrupt", async () => {
     repo.setSetting("integrations", JSON.stringify([null, { type: "bambu", config: {} }]));
     repo.setSetting("feature_toggles", '{"farm":true,"bambu":true}');
-    expect(JSON.parse(await call())).toEqual({ ...deniedFarm,
-      printers: [{ ...deniedPrinter, state: "offline", message: "Integration not found" }] });
+    expect(JSON.parse(await call())).toEqual({ ...deniedFarm, ...counts({ offline: 1 }),
+      printers: [{ ...deniedPrinter, state: "offline", not_connected_reason: null, message: "Integration not found" }] });
     expect(bambu).toHaveBeenCalledTimes(0);
     expect(moonraker).toHaveBeenCalledTimes(0);
   });
@@ -284,8 +289,8 @@ describe("farm status Bambu feature admission", () => {
     repo.setSetting("feature_toggles", '{"farm":true,"bambu":false}');
     pending.resolve({ state: "idle" });
     expect(JSON.parse(await response)).toEqual({ printer_count: 2, printers: [deniedPrinter,
-      { ...deniedPrinter, id: "moonraker", name: "Saved Moonraker", state: "idle", message: null,
-        integration_id: "bambu-looking-id" }], idle: 1, printing: 0, offline: 1, needs_filament_swap: [] });
+      { ...deniedPrinter, id: "moonraker", name: "Saved Moonraker", state: "idle", not_connected_reason: null, idle_for: "unknown", message: null,
+        integration_id: "bambu-looking-id" }], ...counts({ idle: 1, not_connected: 1 }), needs_filament_swap: [] });
   });
 
   it("fails closed if settings become corrupt during an active probe", async () => {
@@ -298,6 +303,7 @@ describe("farm status Bambu feature admission", () => {
     repo.setSetting("feature_toggles", '{"farm":true,"bambu":[]}');
     pending.resolve(telemetry);
     expect(JSON.parse(await response)).toEqual({ ...deniedFarm,
-      printers: [{ ...deniedPrinter, message: "Stored feature toggles are invalid." }] });
+      printers: [{ ...deniedPrinter, not_connected_reason: "Stored feature toggles are invalid.",
+        message: "Stored feature toggles are invalid." }] });
   });
 });

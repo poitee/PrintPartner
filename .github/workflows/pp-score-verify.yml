@@ -1,11 +1,11 @@
 name: pp-score-verify
 
-# Posts the `pp/score-verified` check run on a PR's head SHA. The rules live in
-# .github/scripts/pp-score-verify.py. This workflow never checks out or runs PR
-# head code: it checks out only .github/scripts from the default branch and
-# reads the PR through the API. It uses no secret besides GITHUB_TOKEN.
-# Comment deletions also re-run it, so a deleted score cannot leave a stale pass.
-
+# The `pp/score-verified` job is the required check. It runs only on
+# pull_request_target, an event whose job checks GitHub counts for rulesets.
+# Comment and dispatch runs re-run the PR's latest pull_request_target run;
+# check runs they posted through the Checks API were refused at merge (405).
+# Rules: .github/scripts/pp-score-verify.py. PR head code is never checked out
+# or run (only .github/scripts from the default branch); no secret but GITHUB_TOKEN.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
@@ -26,29 +26,53 @@ concurrency:
 
 jobs:
   verify:
-    # issue_comment fires for issues too; only PR comments by the scorer
-    # account can change the result.
-    if: >-
-      github.event_name != 'issue_comment' || (
-      github.event.issue.pull_request && github.event.comment.user.login == 'poitee')
-    name: Verify scores
+    if: github.event_name == 'pull_request_target'
+    name: pp/score-verified
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
       issues: read
-      checks: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           sparse-checkout: .github/scripts
-      - name: Verify scores and post the check run
+      - name: Verify scores
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           FLEET_DEGRADED: ${{ vars.FLEET_DEGRADED }}
-        run: python3 .github/scripts/pp-score-verify.py verify --repo "$REPO" --pr "$PR_NUMBER"
+        run: python3 .github/scripts/pp-score-verify.py verify --repo "$REPO" --pr "$PR_NUMBER" --head "$HEAD_SHA"
+
+  rerun:
+    # issue_comment fires for issues too; only PR comments by the scorer
+    # account can change the result. Comment deletions re-run it too, so a
+    # deleted score cannot leave a stale pass.
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request && github.event.comment.user.login == 'poitee')
+    name: Re-run pp/score-verified
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Re-run the pull_request_target check on the PR head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number || inputs.pr }}
+        run: python3 .github/scripts/pp-score-verify.py rerun --repo "$REPO" --pr "$PR_NUMBER"

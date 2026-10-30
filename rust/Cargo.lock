@@ -3478,6 +3478,8 @@ name = "pp-services"
 version = "0.1.0"
 dependencies = [
  "plist",
+ "rand 0.9.5",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
