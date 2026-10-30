@@ -366,14 +366,15 @@ impl fmt::Display for ProfileSyncError {
 
 impl std::error::Error for ProfileSyncError {}
 
-/// End of the JSON number token starting at `start`.
+/// End of the JSON number token starting at `start`. A `-` with no integer
+/// digit after it is not a number, so the token stops after the `-`.
 fn number_end(b: &[u8], start: usize) -> usize {
     let digits = |from: usize| from + b[from..].iter().take_while(|c| c.is_ascii_digit()).count();
     let mut i = start + usize::from(b[start] == b'-');
-    i = if b.get(i) == Some(&b'0') {
-        i + 1
-    } else {
-        digits(i)
+    i = match b.get(i) {
+        Some(b'0') => i + 1,
+        Some(b'1'..=b'9') => digits(i),
+        _ => return i,
     };
     if b.get(i) == Some(&b'.') && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
         i = digits(i + 1);
