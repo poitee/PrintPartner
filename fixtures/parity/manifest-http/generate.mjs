@@ -5,9 +5,9 @@
 // required-units `unchanged.db` fixture after `SEED` adds two Sources with no
 // local checkout, Plan 3 (base Source 2, add-on Source 3, a stored kit) and
 // Plan 4 (no layers, an unreadable stored kit). Plan 1's base Source names a
-// local checkout, which Rust can only observe through a reads adapter that
-// production does not wire yet, so no builder read or kit save here touches
-// Plan 1. Plan 2 belongs to `foreign`. The Rust test applies the same `SEED`
+// local checkout outside the data directory, so no builder read or kit save
+// here touches Plan 1; manifest-checkouts-http covers real checkouts. Plan 2
+// belongs to `foreign`. The Rust test applies the same `SEED`
 // to its copy. Run from the repo root after `npm --prefix web ci`:
 //   node fixtures/parity/manifest-http/generate.mjs          # write
 //   node fixtures/parity/manifest-http/generate.mjs --check  # verify, no writes

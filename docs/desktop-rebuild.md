@@ -1844,6 +1844,9 @@ as required by this slice. D10b's validator continues to check cardinality;
 the command adds unknown-ID checks without changing `observation.rs`.
 Kit refusal texts and Plan id handling follow Node, as the GRE-451
 `manifest-http` parity corpus checks: an id that names no Plan is 404.
+The GRE-451 `manifest-checkouts-http` corpus replays builder reads and kit
+saves over real Source checkouts through the production `SourceReads`, with
+the unknown group and variant refusals declared as corrections.
 Save observes attached checkouts even when selections are omitted, as the
 reference does, so source failures and stale stamps still refuse that save.
 Node only builds option groups when the update supplies selections.
