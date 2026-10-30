@@ -44,6 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   changing it. Install v3.3.0, start it once so it migrates the database, then
   install this release. Migration code for schemas older than 31 is removed.
   See [OPERATIONS.md](OPERATIONS.md#update).
+- **MCP key on loopback** - `/api/v1/mcp` now needs an API key on a loopback
+  bind too. A local MCP client without `PRINT_PARTNER_API_KEY` or a Settings
+  key gets `503` or `401`. See [docs/assistant-mcp.md](docs/assistant-mcp.md).
 
 ### Removed
 

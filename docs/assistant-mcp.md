@@ -26,7 +26,7 @@ Use one of these endpoints:
 | On the Docker host | `http://127.0.0.1:8080/api/v1/mcp` |
 | Remote through HTTPS | `https://<your-host>/api/v1/mcp` |
 
-The MCP endpoint refuses a non-loopback deployment without an API key. Use HTTPS or an authenticated tunnel when the client is on another machine.
+Every MCP request needs a valid API key, from the desktop app, another process on the same computer, or a LAN peer. A loopback bind no longer skips the key. A request with no key gets `503` when the host has no deployment key, and `401 Valid API key required` when it has one. An invalid or revoked key gets `401`. Use HTTPS or an authenticated tunnel when the client is on another machine.
 
 ## Choose the credential
 

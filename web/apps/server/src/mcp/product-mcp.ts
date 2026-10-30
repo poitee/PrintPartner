@@ -483,8 +483,3 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
 
   return server;
 }
-
-export function isLoopbackBindHost(host: string): boolean {
-  const h = host.trim().toLowerCase();
-  return h === "127.0.0.1" || h === "::1" || h === "localhost";
-}

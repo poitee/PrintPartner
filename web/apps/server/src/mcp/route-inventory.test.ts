@@ -1,7 +1,7 @@
 /**
- * The golden Node HTTP route inventory must record /api/v1/mcp auth per mode:
- * open on single-user-auth loopback, 401/403 once multi-user, SaaS or an API key is
- * in play, and 503 fail-closed when exposed on a non-loopback host without a key.
+ * The golden Node HTTP route inventory must record /api/v1/mcp as auth-required in
+ * every mode: T-16 (GRE-348) removed the keyless loopback exemption, so a probe with
+ * no key is refused on loopback, LAN, multi-user and SaaS alike.
  * CI re-generates the inventory from the live app and diffs it against
  * fixtures/http/routes-inventory.json;
  * this test pins the MCP expectations so a golden regeneration cannot quietly
@@ -35,17 +35,14 @@ const mcpRoute = (method: string) => {
 };
 
 const gated = (status: number) => ({ status, authRequired: true });
-const open = (status: number) => ({ status, authRequired: false });
 
-const expectedByMode = {
-  "self-host/single-user-auth": open(404),
-  "self-host/multi-user": gated(401),
-  "saas/multi-user": gated(403),
-  "self-host/api-key": gated(401),
-  "self-host/non-loopback": gated(503),
-};
-
-const allModes = Object.keys(expectedByMode);
+const allModes = [
+  "self-host/single-user-auth",
+  "self-host/multi-user",
+  "saas/multi-user",
+  "self-host/api-key",
+  "self-host/non-loopback",
+];
 
 // A mode counts as observed only when it has a probe: an absent key and a null probe both
 // mean the inventory never recorded that mode.
@@ -77,22 +74,13 @@ const incompleteRegistration = (routes: InventoryRoute[]) =>
     .filter((entry) => entry.modes.length > 0);
 
 describe("golden route inventory: /api/v1/mcp auth per mode", () => {
-  for (const method of ["GET", "DELETE"]) {
-    it(`${method} records each auth mode's observed status`, () => {
+  for (const method of ["GET", "POST", "DELETE"]) {
+    it(`${method} requires auth in every mode`, () => {
       const route = mcpRoute(method);
-      expect(route.authRequired).toBe("mode-dependent");
-      expect(route.authByMode).toEqual(expectedByMode);
+      expect(route.authRequired).toBe(true);
+      expect(route.authByMode).toBeUndefined();
     });
   }
-
-  it("POST records each auth mode's observed status", () => {
-    const route = mcpRoute("POST");
-    expect(route.authRequired).toBe("mode-dependent");
-    expect(route.authByMode).toEqual({
-      ...expectedByMode,
-      "self-host/single-user-auth": open(400),
-    });
-  });
 
   it("every authByMode map records a real probe for every auth mode", () => {
     expect(incompleteRoutes(inventory.routes)).toEqual([]);
