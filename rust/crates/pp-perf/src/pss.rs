@@ -52,6 +52,9 @@ pub fn sample_process_tree(root: u32) -> Result<ProcessTreePss, PssError> {
 
 /// Same as [`sample_process_tree`], reading a procfs-shaped directory. A
 /// descendant that exits while the tree is read is skipped; the root is not.
+/// Children of a process that exits mid-scan may be missed too, so sample a
+/// tree only once its process set has settled. Other read errors fail the
+/// sample rather than shrinking the tree.
 pub fn sample_process_tree_at(proc_root: &Path, root: u32) -> Result<ProcessTreePss, PssError> {
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     let entries = std::fs::read_dir(proc_root).map_err(|e| io(proc_root, &e))?;
@@ -86,7 +89,15 @@ pub fn sample_process_tree_at(proc_root: &Path, root: u32) -> Result<ProcessTree
         let path = proc_root.join(pid.to_string()).join("smaps_rollup");
         match read_optional(&path)? {
             Some(rollup) => {
-                pss_bytes += pss_kib(&rollup).map_err(|detail| malformed(path, detail))? * 1024;
+                let bytes = pss_kib(&rollup)
+                    .and_then(|kib| {
+                        kib.checked_mul(1024)
+                            .ok_or_else(|| "Pss overflows u64 bytes".into())
+                    })
+                    .map_err(|detail| malformed(path.clone(), detail))?;
+                pss_bytes = pss_bytes
+                    .checked_add(bytes)
+                    .ok_or_else(|| malformed(path, "tree PSS overflows u64 bytes".into()))?;
                 pids.push(pid);
             }
             None if pid == root => return Err(PssError::RootMissing(root)),

@@ -225,6 +225,30 @@ fn ticket_t_53_refuses_invalid_records_and_zero_baselines() {
         .collect();
     assert_eq!(defects.len(), 3, "{defects:?}");
 
+    // Both sides invalid: baseline reasons first, then candidate, then setup differences.
+    let mut bad_baseline = good.clone();
+    bad_baseline.schema = 0;
+    let mut bad_candidate = good.clone();
+    bad_candidate.samples[0] = -1.0;
+    bad_candidate.simulated_printers = 4;
+    match mismatches(&bad_baseline, &bad_candidate).as_slice() {
+        [
+            Mismatch::Invalid {
+                side: Side::Baseline,
+                defect: first,
+            },
+            Mismatch::Invalid {
+                side: Side::Candidate,
+                defect: second,
+            },
+            Mismatch::SimulatedPrinters,
+        ] => {
+            assert_eq!(first, "schema 0 is not 1");
+            assert_eq!(second, "sample 0 is not a finite non-negative number");
+        }
+        other => panic!("{other:?}"),
+    }
+
     let idle = run(Metric::IdleCpuPercent, &steady(0.0));
     assert_eq!(mismatches(&idle, &good), [Mismatch::ZeroBaseline]);
 }
@@ -283,6 +307,14 @@ fn ticket_t_53_pss_reports_a_missing_root_and_malformed_files() {
     fs::write(root.join("100").join("smaps_rollup"), "Rss: 4 kB\n").unwrap();
     assert!(
         matches!(sample_process_tree_at(root, 100), Err(PssError::Malformed { detail, .. }) if detail == "no Pss line")
+    );
+    fs::write(
+        root.join("100").join("smaps_rollup"),
+        format!("Pss: {} kB\n", u64::MAX / 1024 + 1),
+    )
+    .unwrap();
+    assert!(
+        matches!(sample_process_tree_at(root, 100), Err(PssError::Malformed { detail, .. }) if detail == "Pss overflows u64 bytes")
     );
     fs::write(root.join("100").join("stat"), "100 no-parens\n").unwrap();
     assert!(matches!(
