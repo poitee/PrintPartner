@@ -7,11 +7,16 @@ license.workspace = true
 publish = false
 
 [dependencies]
+icu_collator = "=2.3.1"
 plist = "=1.10.1"
 rand.workspace = true
+regress = "=0.11.1"
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
+unicode-normalization = "=0.1.25"
+url = "=2.5.8"
 
 [dev-dependencies]
 regex.workspace = true
 tempfile = "=3.27.0"
+tokio.workspace = true

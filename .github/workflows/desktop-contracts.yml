@@ -11,6 +11,7 @@ on:
       - "fixtures/parity/auth-registration/**"
       - "fixtures/parity/catalog-http/**"
       - "fixtures/parity/drafts-http/**"
+      - "fixtures/parity/github-sync/**"
       - "fixtures/parity/jobs-http/**"
       - "fixtures/parity/jobs-ws/**"
       - "fixtures/parity/layers-http/**"
@@ -39,6 +40,7 @@ on:
       - "fixtures/parity/auth-registration/**"
       - "fixtures/parity/catalog-http/**"
       - "fixtures/parity/drafts-http/**"
+      - "fixtures/parity/github-sync/**"
       - "fixtures/parity/jobs-http/**"
       - "fixtures/parity/jobs-ws/**"
       - "fixtures/parity/layers-http/**"
@@ -105,6 +107,7 @@ jobs:
         run: |
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/catalog-http/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/drafts-http/generate.mjs --check
+          node ../fixtures/parity/github-sync/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/jobs-http/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/jobs-ws/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/layers-http/generate.mjs --check
