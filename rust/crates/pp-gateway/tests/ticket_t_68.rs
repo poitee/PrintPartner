@@ -778,37 +778,38 @@ async fn ticket_t_68_cookie_ambiguous_logout_cannot_revoke_session() {
     gateway.stop().await.unwrap();
 }
 
-/// Stand-in for the Node child. It answers every request with an empty JSON
-/// list, so the gateway's own integration snapshot reads succeed. It records
-/// the headers of the first request for `path`.
+/// One request as the Node child saw it: method, path and headers.
 #[cfg(unix)]
-async fn recording_node(
-    socket: &std::path::Path,
-    path: &'static str,
-) -> tokio::sync::oneshot::Receiver<Vec<(String, String)>> {
+type Seen = (String, String, Vec<(String, String)>);
+
+/// Stand-in for the Node child. It answers every request with an empty JSON
+/// list, so the gateway's own integration snapshot reads succeed, and logs
+/// each request before answering it.
+#[cfg(unix)]
+fn logging_node(socket: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<Vec<Seen>>> {
     let listener = tokio::net::UnixListener::bind(socket).unwrap();
-    let (recorded, received) = tokio::sync::oneshot::channel();
-    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Some(recorded)));
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = log.clone();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
-            let recorded = recorded.clone();
+            let seen = seen.clone();
             tokio::spawn(async move {
                 let service = move |request: Request<hyper::body::Incoming>| {
-                    if request.uri().path() == path
-                        && let Some(recorded) = recorded.lock().unwrap().take()
-                    {
-                        let headers = request
-                            .headers()
-                            .iter()
-                            .map(|(name, value)| {
-                                (
-                                    name.as_str().to_owned(),
-                                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
-                                )
-                            })
-                            .collect();
-                        let _ = recorded.send(headers);
-                    }
+                    let headers = request
+                        .headers()
+                        .iter()
+                        .map(|(name, value)| {
+                            (
+                                name.as_str().to_owned(),
+                                String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                            )
+                        })
+                        .collect();
+                    seen.lock().unwrap().push((
+                        request.method().to_string(),
+                        request.uri().path().to_owned(),
+                        headers,
+                    ));
                     async {
                         Ok::<_, std::convert::Infallible>(
                             axum::http::Response::builder()
@@ -824,17 +825,17 @@ async fn recording_node(
             });
         }
     });
-    received
+    log
 }
 
+/// A gateway whose Node child is `logging_node`, with a desktop session.
 #[cfg(unix)]
-#[tokio::test]
-async fn ticket_t_68_forged_trust_headers_never_reach_node() {
-    let scratch = tempfile::tempdir().unwrap();
-    let socket = scratch.path().join("compat.sock");
-    let recorded = recording_node(&socket, "/api/v1/printers").await;
+async fn gateway_with_logging_node(
+    socket: &std::path::Path,
+) -> (Gateway, String, std::sync::Arc<std::sync::Mutex<Vec<Seen>>>) {
+    let log = logging_node(socket);
     let (compat, _publication) =
-        CompatHandle::replaceable(Some(pp_compat::Endpoint::bound_to(&socket)));
+        CompatHandle::replaceable(Some(pp_compat::Endpoint::bound_to(socket)));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut gateway = Gateway::start(
         listener,
@@ -843,8 +844,17 @@ async fn ticket_t_68_forged_trust_headers_never_reach_node() {
         &pp_gateway::ownership::cutover::OperationOwners::node_only(),
     )
     .unwrap();
-    let origin = gateway.origin().to_owned();
     let (cookie, _) = bootstrap_session(&mut gateway).await;
+    (gateway, cookie, log)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ticket_t_68_forged_trust_headers_never_reach_node() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (gateway, cookie, log) =
+        gateway_with_logging_node(&scratch.path().join("compat.sock")).await;
+    let origin = gateway.origin().to_owned();
     let session = cookie.split_once('=').unwrap().1.to_owned();
     let forged = request(&origin, "/api/v1/printers")
         .header("origin", &origin)
@@ -858,12 +868,15 @@ async fn ticket_t_68_forged_trust_headers_never_reach_node() {
         .header("authorization", "Bearer forged")
         .header("x-print-partner-api-key", "pp_forged");
     let (status, _, body) = exchange(&origin, forged).await;
-    let headers = tokio::time::timeout(Duration::from_secs(5), recorded)
-        .await
-        .unwrap()
-        .unwrap();
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     assert_eq!(body, b"[]");
+    let headers = log
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, path, _)| path == "/api/v1/printers")
+        .map(|(_, _, headers)| headers.clone())
+        .expect("the printers request reached Node");
     let value = |name: &str| {
         headers
             .iter()
@@ -905,5 +918,63 @@ async fn ticket_t_68_forged_trust_headers_never_reach_node() {
     };
     assert_eq!(signature.len(), 64);
     assert!(signature.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    gateway.stop().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ticket_t_68_keyless_mcp_is_refused_on_loopback_and_never_reaches_node() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (gateway, cookie, log) =
+        gateway_with_logging_node(&scratch.path().join("compat.sock")).await;
+    let origin = gateway.origin().to_owned();
+    let mcp = |method: &str, path: &str| {
+        request(&origin, path)
+            .method(method)
+            .header("origin", &origin)
+            .header("content-type", "application/json")
+    };
+    // A desktop session alone, or with a client-supplied key, is not MCP authorization.
+    for path in ["/mcp", "/api/v1/mcp"] {
+        for method in ["GET", "POST", "DELETE"] {
+            for builder in [
+                mcp(method, path).header("cookie", &cookie),
+                mcp(method, path)
+                    .header("cookie", &cookie)
+                    .header("authorization", "Bearer pp_forged")
+                    .header("x-print-partner-api-key", "pp_forged"),
+            ] {
+                let (status, headers, body) = exchange(&origin, builder).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
+                private_response(&headers);
+                assert!(
+                    String::from_utf8(body)
+                        .unwrap()
+                        .contains("API-key authorization is required"),
+                    "{method} {path}"
+                );
+            }
+        }
+        // Without a desktop session the gateway refuses before the MCP check.
+        let (status, headers, _) = exchange(&origin, mcp("POST", path)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+        private_response(&headers);
+    }
+    // Look-alike paths are not registered operations, so they are not forwarded either.
+    for path in ["/mcp/", "/api/v1/mcp/", "/api/v1/mcp/sessions"] {
+        let (status, _, _) = exchange(&origin, mcp("POST", path).header("cookie", &cookie)).await;
+        assert!(!status.is_success(), "{path} returned {status}");
+    }
+    let forwarded: Vec<_> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(method, path, _)| format!("{method} {path}"))
+        .filter(|seen| seen.contains("mcp"))
+        .collect();
+    assert!(
+        forwarded.is_empty(),
+        "MCP requests reached Node: {forwarded:?}"
+    );
     gateway.stop().await.unwrap();
 }
