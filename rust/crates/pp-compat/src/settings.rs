@@ -10,8 +10,8 @@ pub enum Owner {
     Fixed(&'static str),
     /// Decided by core or the desktop entry point, never by the user.
     Core,
-    /// User setting persisted in `desktop.toml`.
-    DesktopToml,
+    /// User setting persisted in `desktop-settings.json` and passed to the child at spawn.
+    DesktopSettings,
     /// Secret held by the credential adapter. Never part of an ordinary settings payload.
     Credential,
     /// Stored in the database and edited in the app.
@@ -48,7 +48,7 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("DISCORD_CALLBACK_URL", Owner::Hidden),
     ("DISCORD_CLIENT_ID", Owner::Hidden),
     ("DISCORD_CLIENT_SECRET", Owner::Hidden),
-    ("DOCKER_SOCKET", Owner::DesktopToml),
+    ("DOCKER_SOCKET", Owner::DesktopSettings),
     ("EXA_API_KEY", Owner::Credential),
     ("GITHUB_CALLBACK_URL", Owner::Hidden),
     ("GITHUB_CLIENT_ID", Owner::Hidden),
@@ -67,15 +67,15 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("OPENAI_API_KEY", Owner::Credential),
     ("OPENAI_BASE_URL", Owner::Database),
     // Core for now: the route turns the UI on while NODE_ENV is not "production",
-    // and the child leaves NODE_ENV unset. Becomes a desktop.toml setting
+    // and the child leaves NODE_ENV unset. Becomes a desktop setting
     // (Settings > Advanced, design §4) once GRE-1037 sets NODE_ENV.
     ("OPENAPI_UI", Owner::Core),
     ("PASSWORD_RESET_DEV_EXPOSE", Owner::Hidden),
     ("PORT", Owner::Core),
     ("POSTGRES_EXPERIMENTAL", Owner::Hidden),
-    ("PP_COMPOSE_FILE", Owner::DesktopToml),
+    ("PP_COMPOSE_FILE", Owner::DesktopSettings),
     ("PP_DESKTOP_REBUILD", Owner::Core),
-    ("PP_EXCHANGE_DIR", Owner::DesktopToml),
+    ("PP_EXCHANGE_DIR", Owner::DesktopSettings),
     ("PP_SOURCE_SYNC_OWNERSHIP_MANIFEST", Owner::Hidden),
     ("PP_STORAGE_CORE_LOCK", Owner::Fixed("1")),
     ("PP_STORAGE_PARENT_IDENTITY", Owner::Core),
@@ -99,9 +99,9 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("SESSION_COOKIE_SECURE", Owner::Core),
     ("SESSION_SECRET", Owner::Credential),
     ("SINGLE_USER_AUTH", Owner::Core),
-    ("SLICER_BAMBU_DIR", Owner::DesktopToml),
-    ("SLICER_ORCA_DIR", Owner::DesktopToml),
-    ("SLICER_PRUSA_DIR", Owner::DesktopToml),
+    ("SLICER_BAMBU_DIR", Owner::DesktopSettings),
+    ("SLICER_ORCA_DIR", Owner::DesktopSettings),
+    ("SLICER_PRUSA_DIR", Owner::DesktopSettings),
     ("SMTP_FROM", Owner::Hidden),
     ("SMTP_HOST", Owner::Hidden),
     ("SMTP_PASS", Owner::Hidden),
@@ -112,6 +112,13 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("STATIC_DIR", Owner::Core),
     ("TRUST_PROXY", Owner::Core),
 ];
+
+/// Whether `name` is a user setting the spawn may pass to the child.
+pub fn is_desktop_setting(name: &str) -> bool {
+    ENVIRONMENT
+        .iter()
+        .any(|(entry, owner)| *entry == name && *owner == Owner::DesktopSettings)
+}
 
 /// The environment pairs the compatibility child receives. It also inherits `PATH`,
 /// `HOME`, `TMPDIR`, `LANG`, `LC_ALL` and `TZ`, and gets the release commit in `PP_COMMIT`.
@@ -210,6 +217,34 @@ mod tests {
                 ("PRINT_PARTNER_UPDATE_CHECK", "0"),
             ]
         );
+    }
+
+    #[test]
+    fn ticket_t_33_only_desktop_settings_may_be_passed_at_spawn() {
+        let allowed: Vec<_> = ENVIRONMENT
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| is_desktop_setting(name))
+            .collect();
+        assert_eq!(
+            allowed,
+            [
+                "DOCKER_SOCKET",
+                "PP_COMPOSE_FILE",
+                "PP_EXCHANGE_DIR",
+                "SLICER_BAMBU_DIR",
+                "SLICER_ORCA_DIR",
+                "SLICER_PRUSA_DIR",
+            ]
+        );
+        for name in [
+            "SESSION_SECRET",
+            "PRINT_PARTNER_API_KEY",
+            "HOST",
+            "NOT_A_SETTING",
+        ] {
+            assert!(!is_desktop_setting(name), "{name}");
+        }
     }
 
     #[test]

@@ -96,6 +96,7 @@ fn release_spec(scratch: &Scratch) -> super::SpawnSpec {
         storage_lock,
         port: 0,
         gateway_rate_limit: false,
+        settings: Vec::new(),
         before_setup: Box::new(ignore_child),
     }
 }

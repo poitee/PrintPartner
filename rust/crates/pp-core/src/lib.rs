@@ -17,6 +17,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+mod desktop_settings;
 mod drain;
 mod origin;
 pub mod perf_launch;
@@ -25,6 +26,7 @@ mod preferences;
 mod rebuild;
 mod state_file;
 
+pub use desktop_settings::{DesktopSetting, DesktopSettings};
 pub use origin::OriginChange;
 use origin::bind_origin;
 pub use preferences::{BrowserPreference, BrowserPreferences, PrinterPollInterval, Theme};
@@ -100,6 +102,15 @@ impl CoreHandle {
         field: BrowserPreference,
     ) -> Result<BrowserPreferences> {
         self.preferences.update(field).await
+    }
+
+    /// Desktop settings apply the next time Print Partner starts.
+    pub async fn desktop_settings(&self) -> Result<DesktopSettings> {
+        self.preferences.read_desktop().await
+    }
+
+    pub async fn set_desktop_setting(&self, field: DesktopSetting) -> Result<DesktopSettings> {
+        self.preferences.update_desktop(field).await
     }
 
     /// Power adapters can cancel/join status sockets before acknowledging sleep.
@@ -233,6 +244,14 @@ async fn start_resources(
     pp_gateway::ownership::boot_bundled_source_sync(owner.data_dir())
         .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
     let (listener, origin_change) = bind_origin(&owner).await?;
+    // An unreadable settings file keeps the app starting without those settings. The
+    // file stays untouched, and CoreHandle::desktop_settings reports the error.
+    let settings = desktop_settings::read(&owner)
+        .map(|settings| settings.env())
+        .unwrap_or_else(|error| {
+            tracing::warn!(error = %error, "desktop_settings_unreadable");
+            Vec::new()
+        });
     let supervisor = Supervisor::start_with_config(
         SpawnSpec {
             account_pin,
@@ -243,6 +262,7 @@ async fn start_resources(
             port: listener.local_addr()?.port(),
             gateway_rate_limit: owners.owner_of("http.GET /legal/summary")
                 == pp_gateway::ownership::Owner::Rust,
+            settings,
         },
         compat_config,
     )?;

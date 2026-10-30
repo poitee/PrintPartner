@@ -1,3 +1,4 @@
+use crate::desktop_settings::{self, DesktopSetting, DesktopSettings};
 use crate::state_file;
 use anyhow::{Context, Result, ensure};
 use pp_storage::lease::StorageLease;
@@ -119,6 +120,8 @@ pub(super) enum Command {
         BrowserPreference,
         oneshot::Sender<Result<BrowserPreferences>>,
     ),
+    ReadDesktop(oneshot::Sender<Result<DesktopSettings>>),
+    UpdateDesktop(DesktopSetting, oneshot::Sender<Result<DesktopSettings>>),
 }
 
 impl Command {
@@ -129,6 +132,12 @@ impl Command {
             }
             Self::Update(field, reply) => {
                 let _ = reply.send(update(owner, field));
+            }
+            Self::ReadDesktop(reply) => {
+                let _ = reply.send(desktop_settings::read(owner));
+            }
+            Self::UpdateDesktop(field, reply) => {
+                let _ = reply.send(desktop_settings::update(owner, field));
             }
         }
     }
@@ -156,6 +165,24 @@ impl Client {
         let (reply, result) = oneshot::channel();
         self.0
             .send(Command::Update(field, reply))
+            .await
+            .context("Core owner stopped")?;
+        result.await.context("Core owner stopped")?
+    }
+
+    pub(super) async fn read_desktop(&self) -> Result<DesktopSettings> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::ReadDesktop(reply))
+            .await
+            .context("Core owner stopped")?;
+        result.await.context("Core owner stopped")?
+    }
+
+    pub(super) async fn update_desktop(&self, field: DesktopSetting) -> Result<DesktopSettings> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::UpdateDesktop(field, reply))
             .await
             .context("Core owner stopped")?;
         result.await.context("Core owner stopped")?
