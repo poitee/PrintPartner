@@ -66,9 +66,10 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("OLLAMA_URL", Owner::Database),
     ("OPENAI_API_KEY", Owner::Credential),
     ("OPENAI_BASE_URL", Owner::Database),
-    // No effect yet: the route also turns the UI on while NODE_ENV is not
-    // "production", and the child leaves NODE_ENV unset (GRE-1037).
-    ("OPENAPI_UI", Owner::DesktopToml),
+    // Core for now: the route turns the UI on while NODE_ENV is not "production",
+    // and the child leaves NODE_ENV unset. Becomes a desktop.toml setting
+    // (Settings > Advanced, design §4) once GRE-1037 sets NODE_ENV.
+    ("OPENAPI_UI", Owner::Core),
     ("PASSWORD_RESET_DEV_EXPOSE", Owner::Hidden),
     ("PORT", Owner::Core),
     ("POSTGRES_EXPERIMENTAL", Owner::Hidden),
@@ -112,8 +113,8 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("TRUST_PROXY", Owner::Core),
 ];
 
-/// The environment pairs the compatibility child receives on top of the inherited
-/// `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL` and `TZ` and the release commit in `PP_COMMIT`.
+/// The environment pairs the compatibility child receives. It also inherits `PATH`,
+/// `HOME`, `TMPDIR`, `LANG`, `LC_ALL` and `TZ`, and gets the release commit in `PP_COMMIT`.
 pub fn fixed_env() -> impl Iterator<Item = (&'static str, &'static str)> {
     ENVIRONMENT.iter().filter_map(|(name, owner)| match owner {
         Owner::Fixed(value) => Some((*name, *value)),
@@ -126,9 +127,11 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// Environment names read by the non-test server sources. `process.env` used any
-    /// other way fails, except the whole object passed down (its readers use
-    /// `env.NAME`, collected here too) and the one dynamic storage identity lookup.
+    /// Environment names read by the non-test server sources. Names are UPPER_SNAKE:
+    /// `process.env.<anything else>` fails, and so does any `process.env[...]` other
+    /// than the one storage identity lookup. `env.NAME` on an environment object
+    /// passed down from `process.env` is collected too; camelCase `env.*` keys
+    /// belong to config objects such as the assistant settings, not the environment.
     fn server_names() -> BTreeSet<String> {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../web/apps/server/src");
         let mut files = vec![std::path::PathBuf::from(root)];
@@ -162,6 +165,12 @@ mod tests {
                         .chars()
                         .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
                         .collect();
+                    assert!(
+                        !process
+                            || !rest[name.len()..]
+                                .starts_with(|c: char| c.is_alphanumeric() || c == '_'),
+                        "process.env read with a name that is not UPPER_SNAKE in {file}"
+                    );
                     if name.len() > 1 && name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
                     {
                         names.insert(name);
