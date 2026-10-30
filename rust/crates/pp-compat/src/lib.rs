@@ -62,6 +62,8 @@ pub struct SpawnSpec {
     pub storage_lock: std::fs::File,
     pub port: u16,
     pub gateway_rate_limit: bool,
+    /// User settings for the child's environment. Only `Owner::DesktopSettings` names.
+    pub settings: Vec<(&'static str, String)>,
     #[cfg(test)]
     pub before_setup: BeforeSetup,
 }
@@ -497,6 +499,13 @@ impl Process {
             key,
             connections: Arc::new(Connections::new()),
         });
+        if let Some((name, _)) = spec
+            .settings
+            .iter()
+            .find(|(name, _)| !settings::is_desktop_setting(name))
+        {
+            bail!("{name} is not a desktop setting");
+        }
         let mut command = Command::new(&spec.bundle.node);
         command
             .arg("--no-global-search-paths")
@@ -515,6 +524,11 @@ impl Process {
             )
             .env("PP_COMMIT", release::manifest()?.commit)
             .envs(settings::fixed_env())
+            .envs(
+                spec.settings
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str())),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
