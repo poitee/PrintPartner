@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -4256,12 +4256,13 @@ it.each(SOURCE_PROPOSAL_TOOLS)("traces %s isolated rejected workspace paths with
 
 const IDLE_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revisions"].map((table) => `table:${table}`);
 const REFUSED_SNAPSHOT_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revisions", "projects", "source_revisions"].map((table) => `table:${table}`);
-type AcceptedPlanTool = "propose_set_plan_progress" | "propose_set_plan_assembly";
+type AcceptedPlanTool = "propose_set_plan_progress" | "propose_set_plan_assembly" | "archive_plan";
 const ACCEPTED_PLAN_TABLES = ["build_profiles", "parts", "plan_accepted_input_sets", "plan_revision_input_sets", "plan_revision_inputs", "plan_revision_parts", "plan_revision_required_unit_sets", "plan_revision_required_units", "plan_revisions", "print_progress", "projects", "required_units", "source_revisions"].map((table) => `table:${table}`);
 
-function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = false): string[] {
+function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = false, decisions = false): string[] {
   const sql = z.string().parse(statement);
   if (["BEGIN DEFERRED", "COMMIT", "ROLLBACK"].includes(sql)) return [];
+  if (decisions && sql.includes(' from "plan_decisions" ')) return [tableForObservedSelect(sql, tenantId)];
   if (sql.startsWith('select "id", "name", "order_number", "archived_at" from "build_profiles"')) return [tableForObservedSelect(sql, tenantId)];
   const match = /^select (?:(?!\bfrom\b).)+ from "([a-z_]+)" where (?:(?!\bfrom\b|\bjoin\b).)+$/.exec(sql);
   if (match?.[1] === "source_docs") {
@@ -4275,9 +4276,9 @@ function acceptedPlanSelect(statement: unknown, tenantId: string, sourceDocs = f
 type CheckoffReadTool = "get_plan_checkoff" | "get_remaining" | "get_printer_checkoff" | "propose_import_3mf_checkoff";
 
 async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printer_checkoff" | CheckoffReadTool, input: Record<string, unknown>, tables: string[], options: {
-  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number; sourceDocs?: boolean; scratch?: boolean;
+  repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number; sourceDocs?: boolean; decisions?: boolean; scratch?: boolean;
 } = {}) {
-  const { repository = repo, files = [], tenantId = "default", activePlanId, sourceDocs = false, scratch = false } = options;
+  const { repository = repo, files = [], tenantId = "default", activePlanId, sourceDocs = false, decisions = false, scratch = false } = options;
   statements = [];
   observer.state.files = [];
   observer.state.active = true;
@@ -4285,7 +4286,7 @@ async function traceAcceptedPlan(tool: AcceptedPlanTool | "propose_verify_printe
   try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo: repository, activePlanId })); }
   finally { observer.state.active = false; }
   const settings = tool === "propose_verify_printer_checkoff" || tool === "get_printer_checkoff";
-  const observed = [...new Set(statements.flatMap((sql) => settings ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId, sourceDocs)))].sort();
+  const observed = [...new Set(statements.flatMap((sql) => settings ? [tableForObservedSelect(sql, tenantId)] : acceptedPlanSelect(sql, tenantId, sourceDocs, decisions)))].sort();
   expect(observed).toEqual(tables);
   const observedFiles = observer.state.files.map(({ api, args }): CategoryProbe => [api, ...args]);
   const union = unions.get(tool) ?? new Set<string>();
@@ -4401,15 +4402,56 @@ for (const isolated of [false, true]) {
   });
 }
 
-it.each<AcceptedPlanTool>(["propose_set_plan_progress", "propose_set_plan_assembly"])("traces %s isolated symlink snapshot refusal before unit reads", async (tool) => {
+it.each<AcceptedPlanTool>(["propose_set_plan_progress", "propose_set_plan_assembly", "archive_plan"])("traces %s isolated symlink snapshot refusal before unit reads", async (tool) => {
   const { repository, workspace, plan, part } = acceptedPlanFixture(true);
   const repos = join(dataDir, "repos");
   fs.renameSync(workspace, `${workspace}-moved`);
   fs.symlinkSync(`${workspace}-moved`, workspace, "dir");
-  const input = tool === "propose_set_plan_progress" ? { plan_id: plan.id, rows: [{ part_id: part.projectionPartId, printed_count: 1 }] } : { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
-  const error = tool === "propose_set_plan_progress" ? "Plan not found" : "Accepted Plan is not ready";
+  const input = tool === "propose_set_plan_progress" ? { plan_id: plan.id, rows: [{ part_id: part.projectionPartId, printed_count: 1 }] }
+    : tool === "archive_plan" ? { plan_id: plan.id } : { plan_id: plan.id, part_id: part.projectionPartId, unit_index: 0, assembled: true };
+  const error = tool === "propose_set_plan_assembly" ? "Accepted Plan is not ready"
+    : tool === "archive_plan" ? "Accepted Plan data is inconsistent" : "Plan not found";
   expect(await traceAcceptedPlan(tool, input, REFUSED_SNAPSHOT_TABLES, { repository, files: [["realpathSync", repos], ["lstatSync", workspace]] })).toEqual({ error });
 });
+
+const ARCHIVE_PLAN_TABLES = [...ACCEPTED_PLAN_TABLES, "table:plan_decisions"].sort();
+
+for (const isolated of [false, true]) {
+  const policy = isolated ? "isolated" : "trusted";
+  it(`traces archive_plan remaining units, plan selection, dismissals and tenants under ${policy} policy`, async () => {
+    const { repository, plan, part, files, idle, foreign } = acceptedPlanFixture(isolated);
+    const options = { repository, files, decisions: true };
+    const hint = "Call get_remaining first; finish Progress checkoff before archive_plan.";
+    const archivedAt = () => sqlite.prepare("SELECT archived_at FROM build_profiles WHERE id = ?").get(plan.id);
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "Archive only when print remaining is 0", remaining_units: 2, total_units: 2, hint });
+    expect(sqlite.prepare("UPDATE print_progress SET completed = 1 WHERE part_id = ? AND unit_index = 0").run(part.projectionPartId).changes).toBe(1);
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ACCEPTED_PLAN_TABLES, options)).toEqual({ error: "Archive only when print remaining is 0", remaining_units: 1, total_units: 2, hint });
+    expect(sqlite.prepare("UPDATE print_progress SET completed = 1 WHERE part_id = ?").run(part.projectionPartId).changes).toBe(2);
+    const read = repo.readAcceptedPlanOperationalSnapshot(plan.id);
+    if (read.kind !== "ready") throw new Error(`Accepted fixture is ${read.kind}`);
+    const params = { accepted_basis: acceptedPlanBasis(read.snapshot) };
+    const proposal = (summary = `Archive plan ${plan.id} as a reusable template (remaining = 0).`) => acceptedPlanProposal("archive_plan", plan.id, "Archive \u201cAccepted plan\u201d", summary, params);
+    for (const plan_id of [plan.id, String(plan.id), plan.id + 0.9]) {
+      expect(await traceAcceptedPlan("archive_plan", { plan_id }, ARCHIVE_PLAN_TABLES, { ...options, activePlanId: idle.id })).toEqual(proposal());
+    }
+    expect(await traceAcceptedPlan("archive_plan", {}, ARCHIVE_PLAN_TABLES, { ...options, activePlanId: plan.id })).toEqual(proposal());
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id, rationale: "  Printing is done.  " }, ARCHIVE_PLAN_TABLES, options)).toEqual(proposal("Printing is done."));
+    for (const plan_id of [undefined, null, "invalid"]) expect(await traceAcceptedPlan("archive_plan", { plan_id }, [], { repository })).toEqual({ error: "plan_id required" });
+    for (const plan_id of [999999, foreign.id]) {
+      expect(await traceAcceptedPlan("archive_plan", { plan_id }, ["table:build_profiles"], { repository, activePlanId: plan.id })).toEqual({ error: "Plan not found" });
+    }
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ["table:build_profiles"], { repository, tenantId: "other" })).toEqual({ error: "Plan not found" });
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: idle.id }, IDLE_PLAN_TABLES, { repository })).toEqual({ error: "Archive only when print remaining is 0", remaining_units: 0, total_units: 0, hint });
+    repo.createPlanDecision({ planId: idle.id, actor: "user", kind: "dismissed_action", actionType: "archive_plan", params });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "duplicate_plan", params });
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id }, ARCHIVE_PLAN_TABLES, options)).toEqual(proposal());
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "archive_plan", params });
+    const dismissed = { error: "user_dismissed", detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.", fingerprint: decisionFingerprint("archive_plan", params), action_type: "archive_plan" };
+    expect(await traceAcceptedPlan("archive_plan", { plan_id: plan.id, rationale: "Again." }, ARCHIVE_PLAN_TABLES, options)).toEqual(dismissed);
+    expect(archivedAt()).toEqual({ archived_at: null });
+    assertAcceptedPlanDeclaration("archive_plan", [...(isolated ? ["file:source-workspace"] : []), ...ARCHIVE_PLAN_TABLES], ["file:source-workspace", ...ARCHIVE_PLAN_TABLES]);
+  });
+}
 
 it("rejects reads outside the accepted Plan declaration", () => {
   expect(() => acceptedPlanSelect('select "id", "project_id" from "source_docs" where "source_docs"."id" = 1.0', "default")).toThrow("Unsupported SQL:");

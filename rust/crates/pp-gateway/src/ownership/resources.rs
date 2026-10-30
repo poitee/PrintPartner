@@ -170,6 +170,8 @@ enum ReviewedEntry {
     ProposeSourceMapping { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_edit_plan_draft_parts")]
     ProposeEditPlanDraftParts { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.archive_plan")]
+    ArchivePlan { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -708,6 +710,12 @@ impl ReviewedEntry {
                     Table(PlanDraftRequiredUnitAssignments),
                 ]),
             ),
+            // The accepted-Plan read, then the dismissal lookup in `proposeChecked`.
+            Self::ArchivePlan { resources } => {
+                let mut expected = accepted_plan_operational();
+                expected.insert(Table(PlanDecisions));
+                ("tool.archive_plan", resources, expected)
+            }
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -1028,6 +1036,7 @@ impl Declarations {
             "tool.propose_add_build_checklist_items",
             "tool.propose_source_mapping",
             "tool.propose_edit_plan_draft_parts",
+            "tool.archive_plan",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
