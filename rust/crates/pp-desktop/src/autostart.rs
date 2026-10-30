@@ -7,7 +7,7 @@
 //! Disabling removes only this app's agent file, and only when it still
 //! carries this app's label.
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -134,4 +134,53 @@ fn escape(text: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+/// Desktop launch arguments. Release builds accept only [`MINIMIZED_ARG`];
+/// the development and test arguments need a debug build.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct LaunchArgs {
+    pub stage: Option<PathBuf>,
+    pub data: Option<PathBuf>,
+    pub test_exit: Option<u64>,
+    pub test_recovery_logs: bool,
+    /// Start with the main window hidden; the tray's Show brings it back.
+    pub minimized: bool,
+}
+
+impl LaunchArgs {
+    pub fn parse(args: impl IntoIterator<Item = String>, debug: bool) -> Result<Self> {
+        let mut parsed = Self::default();
+        let mut args = args.into_iter();
+        while let Some(argument) = args.next() {
+            match argument.as_str() {
+                MINIMIZED_ARG => parsed.minimized = true,
+                "--dev-stage" if debug => {
+                    parsed.stage = Some(PathBuf::from(
+                        args.next().context("Development stage missing")?,
+                    ))
+                }
+                "--data" if debug => {
+                    parsed.data = Some(PathBuf::from(
+                        args.next().context("Development data directory missing")?,
+                    ))
+                }
+                "--test-exit-seconds" if debug => {
+                    parsed.test_exit = Some(
+                        args.next()
+                            .context("Test duration missing")?
+                            .parse::<u64>()?,
+                    )
+                }
+                "--test-recovery-logs" if debug => parsed.test_recovery_logs = true,
+                _ => bail!("Unsupported desktop launch argument"),
+            }
+        }
+        Ok(parsed)
+    }
+
+    /// Whether the main window is visible when it is built.
+    pub fn window_visible(&self) -> bool {
+        !self.minimized
+    }
 }

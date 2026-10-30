@@ -139,3 +139,59 @@ fn ticket_t_31_requires_absolute_paths() {
     assert!(LaunchAgent::new(Path::new("relative-home"), Path::new(EXECUTABLE)).is_err());
     assert!(LaunchAgent::new(Path::new("/Users/me"), Path::new("pp-desktop")).is_err());
 }
+
+fn args(list: &[&str]) -> Vec<String> {
+    list.iter().map(|arg| arg.to_string()).collect()
+}
+
+#[test]
+fn ticket_t_31_release_launch_accepts_minimized_and_starts_hidden() {
+    use pp_desktop::LaunchArgs;
+    // The exact arguments the LaunchAgent passes after the binary.
+    let agent = LaunchAgent::new(Path::new("/Users/me"), Path::new(EXECUTABLE)).unwrap();
+    assert!(
+        agent
+            .plist()
+            .contains(&format!("<string>{MINIMIZED_ARG}</string>"))
+    );
+
+    let release = LaunchArgs::parse(args(&[MINIMIZED_ARG]), false).unwrap();
+    assert!(release.minimized);
+    assert!(!release.window_visible());
+
+    let plain = LaunchArgs::parse(args(&[]), false).unwrap();
+    assert!(plain.window_visible());
+    assert_eq!(plain, LaunchArgs::default());
+}
+
+#[test]
+fn ticket_t_31_release_launch_still_refuses_other_arguments() {
+    use pp_desktop::LaunchArgs;
+    for refused in [
+        &["--unknown"][..],
+        &["--data", "/tmp/x"],
+        &["--dev-stage", "/tmp/x"],
+        &["--test-exit-seconds", "3"],
+        &["--test-recovery-logs"],
+        &[MINIMIZED_ARG, "--unknown"],
+    ] {
+        assert!(
+            LaunchArgs::parse(args(refused), false).is_err(),
+            "{refused:?}"
+        );
+    }
+    let debug = LaunchArgs::parse(
+        args(&[
+            MINIMIZED_ARG,
+            "--data",
+            "/tmp/data",
+            "--test-exit-seconds",
+            "3",
+        ]),
+        true,
+    )
+    .unwrap();
+    assert!(debug.minimized && !debug.window_visible());
+    assert_eq!(debug.data.as_deref(), Some(Path::new("/tmp/data")));
+    assert_eq!(debug.test_exit, Some(3));
+}

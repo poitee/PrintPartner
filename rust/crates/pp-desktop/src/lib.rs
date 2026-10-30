@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use tauri::Url;
 
 pub mod autostart;
+pub use autostart::LaunchArgs;
 pub mod browser;
 pub mod downloads;
 pub mod focus;
