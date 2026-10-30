@@ -6,6 +6,7 @@ use tauri::Url;
 
 pub mod browser;
 pub mod downloads;
+pub mod focus;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_actions;
 #[cfg(feature = "desktop_rebuild")]

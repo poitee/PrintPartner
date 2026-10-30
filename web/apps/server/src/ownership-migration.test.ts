@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -75,6 +76,21 @@ it("excludes printpartner.lock from ownership inspection, copying, and artifact 
   expect(readFileSync(lock, "utf8")).toBe("during copy");
   expect(existsSync(join(paths.destinationDir, "printpartner.lock"))).toBe(false);
   expect(readFileSync(join(paths.destinationDir, "repos/1/a.stl"), "utf8")).toBe("source bytes");
+});
+it("excludes the desktop focus socket from ownership inspection and copying", async () => {
+  const paths = fixture();
+  const inventory = inspectOwnershipCopy(paths);
+  const server = createServer();
+  const socket = join(paths.sourceDir, ".desktop-focus.sock");
+  await new Promise<void>(resolve => server.listen(socket, resolve));
+  try {
+    expect(lstatSync(socket).isSocket()).toBe(true);
+    expect(inspectOwnershipCopy(paths)).toEqual(inventory);
+    expect(await executeOwnershipCopy({ ...paths, manifest: manifest(paths.sourceDir) })).toEqual({ destinationDir: paths.destinationDir, user_id: "account-a" });
+    expect(existsSync(join(paths.destinationDir, ".desktop-focus.sock"))).toBe(false);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 it("assigns a whole unclaimed source to one existing user", async () => {
   const paths = fixture(); await executeOwnershipCopy({ ...paths, manifest: manifest(paths.sourceDir, false) });

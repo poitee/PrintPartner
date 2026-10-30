@@ -1650,6 +1650,18 @@
         ]
       },
       {
+        "operation": "tool.propose_source_mapping",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "table", "name": "profile_layers"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "table", "name": "source_docs"},
+          {"kind": "file", "name": "path-hints"},
+          {"kind": "file", "name": "source-workspace"}
+        ]
+      },
+      {
         "operation": "tool.propose_edit_plan_draft_parts",
         "resources": [
           {"kind": "table", "name": "app_settings"},
@@ -2014,7 +2026,6 @@
       "tool.inspect_repo_tree",
       "tool.propose_add_source",
       "tool.propose_import_build_inputs",
-      "tool.propose_source_mapping",
       "tool.start_sync",
       "tool.suggest_source_contributions"
     ]

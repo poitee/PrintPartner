@@ -166,6 +166,8 @@ enum ReviewedEntry {
     ApplyStackPreset { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_add_build_checklist_items")]
     ProposeAddBuildChecklistItems { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_source_mapping")]
+    ProposeSourceMapping { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_edit_plan_draft_parts")]
     ProposeEditPlanDraftParts { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
@@ -677,6 +679,19 @@ impl ReviewedEntry {
                 resources,
                 BTreeSet::from([Table(AppSettings)]),
             ),
+            Self::ProposeSourceMapping { resources } => (
+                "tool.propose_source_mapping",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::PathHints),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             // The brief lookup, then `getPlanDraft`: the visible-profile check, the draft row,
             // its inputs and parts, and any selected Required-unit reconciliation.
             Self::ProposeEditPlanDraftParts { resources } => (
@@ -1011,6 +1026,7 @@ impl Declarations {
             "tool.update_kit_selections",
             "tool.apply_stack_preset",
             "tool.propose_add_build_checklist_items",
+            "tool.propose_source_mapping",
             "tool.propose_edit_plan_draft_parts",
             "tool.get_plan_decisions",
             "tool.read_source_file",

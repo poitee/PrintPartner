@@ -220,6 +220,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
         runtime_dir: ownership.runtime_dir.clone(),
         storage_lock: ownership.lock.try_clone()?,
         gateway_rate_limit: false,
+        settings: Vec::new(),
         port,
     })?;
     let mut status = supervisor.handle.status.clone();

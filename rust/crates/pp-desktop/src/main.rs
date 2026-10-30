@@ -174,9 +174,22 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         .and_then(|layout| layout.into_launch(data.clone()))
         .context("Desktop resource verification failed")?;
     let probe_diagnostics = recovery::RecoveryUi::new(data.clone());
-    let mut core = runtime
-        .block_on(CoreRuntime::start(launch))
-        .context("Desktop core startup failed")?;
+    let mut core = match runtime.block_on(CoreRuntime::start(launch)) {
+        Ok(core) => core,
+        Err(error) => {
+            let error = error.context("Desktop core startup failed");
+            // T-30: another desktop holds this data directory. Show its window
+            // instead of an error when it confirms the same directory.
+            if pp_desktop::focus::owned_by_another_desktop(&error)
+                && pp_desktop::focus::request(&data).unwrap_or(false)
+            {
+                eprintln!("desktop_already_running: focused_existing_window");
+                return Ok(0);
+            }
+            return Err(error);
+        }
+    };
+    let focus_data = data.clone();
     // Core startup admitted the data directory; flush the held rows and
     // record tracing and panics in its logs folder, telemetry or not.
     if let Err(error) = core_log.attach(&data) {
@@ -301,6 +314,22 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
             return Err(error);
         }
     };
+    let focus_app = app.handle().clone();
+    let focus_server = {
+        let _runtime = runtime.enter();
+        pp_desktop::focus::FocusServer::start(&focus_data, move || {
+            let app = focus_app.clone();
+            let _ = focus_app.run_on_main_thread(move || {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            });
+        })
+    }
+    .inspect_err(|_| eprintln!("desktop_focus_unavailable"))
+    .ok();
     #[cfg(feature = "desktop_rebuild")]
     let origin_notice_shown = std::sync::atomic::AtomicBool::new(false);
     let shutdown_requested = core.shutdown_requested();
@@ -360,6 +389,8 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         let _ = (&window, &event);
     });
     stop_signal.abort();
+    // Remove the focus socket while this process still holds the data lock.
+    drop(focus_server);
     let receipt = runtime.block_on(core.shutdown());
     println!("{}", serde_json::to_string(&receipt)?);
     ensure!(receipt.complete(), "Desktop shutdown incomplete");
