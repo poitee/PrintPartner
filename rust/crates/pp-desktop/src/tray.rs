@@ -32,22 +32,18 @@ pub fn status(state: &CoreStatus) -> (&'static str, Tone) {
     }
 }
 
-/// Menu item ids in display order. Logs and data stay behind the recovery UI switch.
-pub fn menu_ids(recovery_ui: bool) -> &'static [&'static str] {
-    if recovery_ui {
-        &[
-            "show",
-            "browser",
-            "status",
-            "logs",
-            "log_folder",
-            "recover",
-            "data",
-            "quit",
-        ]
-    } else {
-        &["show", "browser", "status", "recover", "quit"]
-    }
+/// Menu item ids in display order.
+pub fn menu_ids() -> &'static [&'static str] {
+    &[
+        "show",
+        "browser",
+        "status",
+        "logs",
+        "log_folder",
+        "recover",
+        "data",
+        "quit",
+    ]
 }
 
 /// Copies an RGBA icon and paints an opaque status dot in its bottom-right quarter.

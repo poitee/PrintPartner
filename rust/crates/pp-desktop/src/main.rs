@@ -380,7 +380,6 @@ fn build_tray(
     let folder = MenuItem::with_id(app, "data", "Open data folder", true, None::<&str>)?;
     let log_folder = MenuItem::with_id(app, "log_folder", "Reveal log folder", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
-    let recovery_ui = std::env::var("PP_DESKTOP_RECOVERY_UI").is_ok_and(|value| value == "1");
     let all = [
         &show,
         &browser,
@@ -391,7 +390,7 @@ fn build_tray(
         &folder,
         &quit,
     ];
-    let items = pp_desktop::tray::menu_ids(recovery_ui)
+    let items = pp_desktop::tray::menu_ids()
         .iter()
         .map(|id| {
             all.iter()
@@ -427,9 +426,9 @@ fn build_tray(
             "recover" => {
                 recovery::restart(app, recovery.clone(), recovery_gate.clone());
             }
-            "logs" if recovery_ui => diagnostics.view_logs(app),
-            "data" if recovery_ui => diagnostics.open_data(app),
-            "log_folder" if recovery_ui => diagnostics.reveal_logs(app),
+            "logs" => diagnostics.view_logs(app),
+            "data" => diagnostics.open_data(app),
+            "log_folder" => diagnostics.reveal_logs(app),
             "quit" => app.exit(0),
             _ => {}
         })

@@ -75,14 +75,8 @@ mod tests {
     }
 
     #[test]
-    fn ticket_t_19_tray_offers_open_in_browser_in_both_menus() {
-        for recovery_ui in [false, true] {
-            assert_eq!(
-                crate::tray::menu_ids(recovery_ui).get(1),
-                Some(&"browser"),
-                "recovery_ui={recovery_ui}"
-            );
-        }
+    fn ticket_t_19_tray_offers_open_in_browser() {
+        assert_eq!(crate::tray::menu_ids().get(1), Some(&"browser"));
     }
 
     #[test]
