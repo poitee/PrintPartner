@@ -215,6 +215,119 @@
   --elevation-lg: 0 12px 36px hsl(0 0% 0% / 0.65);
 }
 
+/*
+  Rebuilt desktop UI (v11). Everything below that names
+  :root[data-desktop-rebuild] applies only while the desktop_rebuild toggle is
+  on, so the current app renders exactly as before with the toggle off.
+
+  Printer status colors follow the GRE-1002 farm states. `queued` is a job
+  state and has no printer color. Each status has its own color in every
+  variant, and each is legible as text on every surface. The status glyph and
+  words live in lib/statusTone.ts; color never carries a status alone.
+
+  `node web/scripts/design-system-contrast.mjs --check` fails when a status is
+  missing, two statuses share a color, a pair drops below AA, or the generated
+  tables in docs/design-system.md are stale.
+*/
+:root[data-desktop-rebuild] {
+  --printer-idle: hsl(220 10% 37%);
+  --printer-printing: hsl(212 72% 36%);
+  --printer-paused: hsl(36 90% 28%);
+  --printer-complete: hsl(148 62% 26%);
+  --printer-error: hsl(4 72% 42%);
+  --printer-offline: hsl(275 45% 42%);
+  --printer-not-connected: hsl(320 48% 38%);
+}
+
+:root[data-desktop-rebuild].dark {
+  --printer-idle: hsl(220 9% 68%);
+  --printer-printing: hsl(212 74% 68%);
+  --printer-paused: hsl(40 88% 62%);
+  --printer-complete: hsl(146 48% 58%);
+  --printer-error: hsl(4 78% 72%);
+  --printer-offline: hsl(275 62% 76%);
+  --printer-not-connected: hsl(320 55% 74%);
+}
+
+/* High contrast. Ink and control edges move away from the surfaces; the
+   surfaces themselves stay put so layouts do not shift. */
+@media (prefers-contrast: more) {
+  :root[data-desktop-rebuild] {
+    --foreground: hsl(220 30% 6%);
+    --muted-foreground: hsl(220 14% 24%);
+    --border: hsl(220 10% 50%);
+    --border-strong: hsl(220 14% 26%);
+    --primary: hsl(196 92% 22%);
+    --ring: hsl(196 92% 22%);
+    --success: hsl(148 70% 19%);
+    --warning: hsl(28 92% 24%);
+    --info: hsl(212 80% 28%);
+    --destructive: hsl(4 78% 33%);
+    --printer-idle: hsl(220 14% 26%);
+    --printer-printing: hsl(212 80% 28%);
+    --printer-paused: hsl(36 95% 21%);
+    --printer-complete: hsl(148 70% 19%);
+    --printer-error: hsl(4 78% 33%);
+    --printer-offline: hsl(275 55% 33%);
+    --printer-not-connected: hsl(320 60% 29%);
+  }
+
+  :root[data-desktop-rebuild].dark {
+    --foreground: hsl(0 0% 100%);
+    --muted-foreground: hsl(220 14% 84%);
+    --border: hsl(220 8% 56%);
+    --border-strong: hsl(220 10% 74%);
+    --primary: hsl(190 80% 72%);
+    --ring: hsl(190 80% 72%);
+    --success: hsl(146 55% 70%);
+    --warning: hsl(42 92% 72%);
+    --info: hsl(212 85% 80%);
+    --destructive: hsl(4 85% 80%);
+    --printer-idle: hsl(220 12% 82%);
+    --printer-printing: hsl(212 85% 80%);
+    --printer-paused: hsl(42 92% 72%);
+    --printer-complete: hsl(146 55% 70%);
+    --printer-error: hsl(4 85% 80%);
+    --printer-offline: hsl(275 70% 84%);
+    --printer-not-connected: hsl(320 65% 82%);
+  }
+}
+
+/* Forced colors (Windows contrast themes). The system palette replaces ours,
+   so every status falls back to CanvasText and the glyph and words carry it. */
+@media (forced-colors: active) {
+  :root[data-desktop-rebuild] {
+    --border: GrayText;
+    --border-strong: CanvasText;
+    --ring: Highlight;
+    --printer-idle: CanvasText;
+    --printer-printing: CanvasText;
+    --printer-paused: CanvasText;
+    --printer-complete: CanvasText;
+    --printer-error: CanvasText;
+    --printer-offline: CanvasText;
+    --printer-not-connected: CanvasText;
+  }
+}
+
+/* Reduced motion. Every motion token is 0 ms and nothing animates. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-desktop-rebuild] {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+
+  :root[data-desktop-rebuild] *,
+  :root[data-desktop-rebuild] *::before,
+  :root[data-desktop-rebuild] *::after {
+    animation-duration: var(--motion-base) !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: var(--motion-base) !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Fonts, radii, type scale, motion defaults. */
 @theme {
   /* One foundry, matched metrics. Plex Sans has the wide apertures and
@@ -306,6 +419,15 @@
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
   --color-info-soft: var(--info-soft);
+
+  /* Printer status. Defined only under :root[data-desktop-rebuild]. */
+  --color-printer-idle: var(--printer-idle);
+  --color-printer-printing: var(--printer-printing);
+  --color-printer-paused: var(--printer-paused);
+  --color-printer-complete: var(--printer-complete);
+  --color-printer-error: var(--printer-error);
+  --color-printer-offline: var(--printer-offline);
+  --color-printer-not-connected: var(--printer-not-connected);
 
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
