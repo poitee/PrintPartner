@@ -1,0 +1,15 @@
+{
+    "from": "User",
+    "inherits": "Generic PLA @System",
+    "name": "PLA Matte",
+    "nozzle_temperature": [
+        "215.5"
+    ],
+    "bed_temperature": [
+        "  60abc"
+    ],
+    "filament_settings_id": [
+        "PLA Matte"
+    ],
+    "version": "2.3.2.60"
+}

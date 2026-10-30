@@ -145,3 +145,15 @@ From `web/`, after `npm ci`, with Node 22.23.3 or 24.21.0:
 ```sh
 TMPDIR=<scratch> node --conditions=development --import tsx ../fixtures/parity/required-unit-decisions/generate.mjs [--check]
 ```
+
+## profile-sync/node.json (GRE-437)
+
+`generate.mjs` runs Node's real `startProfileSyncWatcher` over the three slicer trees in `roots/` (Orca, Bambu Studio and PrusaSlicer, laid out as `defaultWatchDirs` expects), with a repository that records each upsert. It calls `syncAll()` once and stops the watcher. Each outcome is either the table and complete upsert input plus the broadcast event, or `failed` when Node logged a parse failure. Paths are relative to this directory.
+
+The trees hold user saves that inherit a parent (looked up case-insensitively), a missing parent, INI, array, string and `null` parents, a `type` field that overrides the directory, BOM and CRLF files, malformed JSON, a directory named `*.json`, number formatting cases, duplicate and array-index keys, and material names for `inferMaterialType`. `.gitattributes` keeps line endings byte-exact on Windows checkouts.
+
+`rust/crates/pp-services/tests/ticket_t_60_profile_sync.rs` scans the same roots with `pp_services::profile_sync::scan_root` and requires every outcome to match, in order, including the `resolvedFlatConfig` string byte for byte.
+
+```sh
+cd web && node --conditions=development --import tsx ../fixtures/parity/profile-sync/generate.mjs --check
+```

@@ -16,6 +16,7 @@ on:
       - "fixtures/parity/layers-http/**"
       - "fixtures/parity/manifest-http/**"
       - "fixtures/parity/plans-http/**"
+      - "fixtures/parity/profile-sync/**"
       - "rust/**"
       - "rust-toolchain.toml"
       - 'scripts/setup-ci-linux.sh'
@@ -43,6 +44,7 @@ on:
       - "fixtures/parity/layers-http/**"
       - "fixtures/parity/manifest-http/**"
       - "fixtures/parity/plans-http/**"
+      - "fixtures/parity/profile-sync/**"
       - "rust/**"
       - "rust-toolchain.toml"
       - 'scripts/setup-ci-linux.sh'
@@ -112,6 +114,8 @@ jobs:
         run: |
           node ../rust/crates/pp-storage/tests/fixtures/required-units/messages-node.mjs --check
           TMPDIR="$RUNNER_TEMP" node --conditions=development --import tsx ../rust/crates/pp-storage/tests/fixtures/required-units/gaps-node.mjs --check
+      - name: Verify profile-sync Node fixtures
+        run: node --conditions=development --import tsx ../fixtures/parity/profile-sync/generate.mjs --check
       - name: Verify builder glob Node fixtures
         run: |
           node ../rust/crates/pp-storage/tests/fixtures/manifest-globs-node.mjs --check
