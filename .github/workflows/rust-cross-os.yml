@@ -323,10 +323,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up pp-local prerequisites
-        if: runner.environment == 'self-hosted'
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
         run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
       - name: Set up Rust on pp-local
-        if: runner.environment == 'self-hosted'
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: '1.99.0'
@@ -403,7 +403,7 @@ jobs:
         run: cargo nextest run --archive-file nextest-archive-desktop-rebuild.tar.zst --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:${{ matrix.partition }}/3 --no-fail-fast -E "$NEXTEST_FILTER"
       # Partitions only run archived binaries, so this mostly shows the sccache is reachable.
       - name: sccache stats
-        if: always() && runner.environment == 'self-hosted'
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux'
         continue-on-error: true
         run: '"${RUSTC_WRAPPER:-sccache}" --show-stats'
 
