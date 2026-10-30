@@ -5,7 +5,7 @@
  * live product MCP server, descriptions included. A tool, prompt or resource
  * change here fails this test until the catalog is regenerated:
  *
- *   npx tsx --conditions=development scripts/export-mcp-catalog.ts
+ *   npm run mcp:catalog -w @print-partner/server
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";

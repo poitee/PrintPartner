@@ -2,7 +2,7 @@
  * Writes the Rust MCP catalog (GRE-441) from the live product MCP server.
  * See src/mcp/rust-catalog.ts. Regenerate after an intentional MCP change:
  *
- *   npx tsx --conditions=development scripts/export-mcp-catalog.ts
+ *   npm run mcp:catalog -w @print-partner/server
  *
  * Usage: tsx scripts/export-mcp-catalog.ts [outFile]
  */
