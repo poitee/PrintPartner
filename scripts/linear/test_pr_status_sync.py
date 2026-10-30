@@ -627,8 +627,20 @@ class SyncTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             self.merge_fixes()
         self.assertIn("GRE-1: not Done", str(caught.exception))
+        self.assertEqual([v["s"] for v in self.calls("issueUpdate(")], ["Done", "Done"])
+        self.assertIn(("::error::GRE-1 is not Done after a Fixes merge and one retried write",),
+                      [c.args for c in print.call_args_list])
         self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
         self.assertEqual(self.comments, [])
+
+    def test_reconcile_collects_a_done_write_that_never_lands(self):
+        self.blocked_world()
+        self.drop_done = 2
+        sync._prs = [pr(state="MERGED", body="Fixes GRE-1")]
+        with self.assertRaises(RuntimeError) as caught:
+            sync.reconcile(3)
+        self.assertIn("PR #1 GRE-1", str(caught.exception))
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
 
     def test_dry_run_reports_promotion_without_writing(self):
         self.blocked_world()
