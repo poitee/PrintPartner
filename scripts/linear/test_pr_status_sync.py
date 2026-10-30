@@ -251,6 +251,9 @@ class SyncTest(unittest.TestCase):
         self.issues = {"GRE-1": ticket()}
         self.comments = []
         self.fail_update = False
+        self.drop_done = 0
+        self.blocks = []
+        self.labels = {}
         self.pages = None
         self.api = patch.object(sync, "gql", side_effect=self.linear).start()
         self.gh = patch.object(sync, "gh", side_effect=github(lambda: sync._prs or [])).start()
@@ -263,16 +266,26 @@ class SyncTest(unittest.TestCase):
             return {"issues": {"nodes": [copy.deepcopy(iss)] if iss else []}}
         if "teams(" in query:
             return {"teams": {"nodes": [{"states": {"nodes": [
-                {"id": name, "name": name} for name in ("In Review", "In Progress", "Backlog", "Done")
+                {"id": name, "name": name} for name in ("In Review", "In Progress", "Backlog", "Todo", "Done")
             ]}}]}}
         if "commentCreate(" in query:
             self.comments.append({"body": variables["b"], "issueId": variables["id"]})
             return {"commentCreate": {"success": True}}
         if "issueUpdate(" in query:
-            if not self.fail_update:
+            if variables["s"] == "Done" and self.drop_done:  # accepted but never applied
+                self.drop_done -= 1
+            elif not self.fail_update:
                 self.issues[f"GRE-{variables['id']}"].update(updatedAt=ticket(age=0)["updatedAt"], state={
                     "name": variables["s"], "type": "completed" if variables["s"] == "Done" else "started"})
             return {"issueUpdate": {"success": not self.fail_update}}
+        if "inverseRelations(" in query:
+            end = lambda i: {**copy.deepcopy(self.issues[i]), "team": {"key": "GRE"},
+                             "labels": {"nodes": [{"name": name} for name in self.labels.get(i, [])]}}
+            rels = [{"type": "blocks", "issue": end(a), "relatedIssue": end(b)} for a, b in self.blocks]
+            me = variables["id"]
+            return {"issue": me in self.issues and {
+                **end(me), "relations": {"nodes": [r for r in rels if r["issue"]["identifier"] == me]},
+                "inverseRelations": {"nodes": [r for r in rels if r["relatedIssue"]["identifier"] == me]}} or None}
         if "issues(first:" in query:
             offset = int(variables["after"] or 0)
             pages = self.pages or [list(copy.deepcopy(self.issues).values())]
@@ -543,6 +556,99 @@ class SyncTest(unittest.TestCase):
                 sync.reconcile(3)
                 self.assertEqual(self.issues["GRE-1"]["state"]["name"], "In Progress")
                 self.assertEqual(self.comments, [])
+
+    def blocked_world(self, blocker="Done", **labels):
+        """GRE-1 (In Review) and GRE-3 (blocker) both block GRE-2 (Backlog)."""
+        self.issues = {"GRE-1": ticket(1, "In Review"), "GRE-2": ticket(2, "Backlog"), "GRE-3": ticket(3, blocker)}
+        self.blocks = [("GRE-1", "GRE-2"), ("GRE-3", "GRE-2")]
+        self.labels = {f"GRE-{n}": [v] for n, v in labels.items()}
+
+    def calls(self, marker):
+        return [c.args[1] for c in self.api.call_args_list if marker in c.args[0]]
+
+    def merge_fixes(self):
+        sync.apply_pr(pr(state="MERGED", body="Fixes GRE-1"))
+
+    def test_merge_promotes_backlog_once_all_blockers_done(self):
+        self.blocked_world()
+        self.merge_fixes()
+        self.merge_fixes()  # replay: already Todo, no second comment
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Done")
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Todo")
+        self.assertEqual(self.comments, [{"issueId": "2", "body": "fleet-promote: blockers done GRE-1, GRE-3"}])
+
+    def test_open_blocker_keeps_backlog(self):
+        self.blocked_world(blocker="In Progress")
+        self.merge_fixes()
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
+        self.assertEqual(self.comments, [])
+
+    def test_umbrella_blocker_is_ignored(self):
+        self.blocked_world(blocker="In Progress", **{"3": "umbrella"})
+        self.merge_fixes()
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Todo")
+        self.assertEqual(self.comments, [{"issueId": "2", "body": "fleet-promote: blockers done GRE-1"}])
+
+    def test_excluded_label_is_not_promoted(self):
+        for label in ("needs-chad-action", "umbrella", "post-parity", "pp:later"):
+            with self.subTest(label=label):
+                self.blocked_world(**{"2": label})
+                self.merge_fixes()
+                self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
+                self.assertEqual(self.comments, [])
+
+    def test_promotion_leaves_non_backlog_alone(self):
+        for state in ("Todo", "In Progress", "Canceled"):
+            with self.subTest(state=state):
+                self.blocked_world()
+                self.issues["GRE-2"] = ticket(2, state)
+                self.merge_fixes()
+                self.assertEqual(self.issues["GRE-2"]["state"]["name"], state)
+                self.assertEqual(self.comments, [])
+
+    def test_refs_merge_does_not_promote(self):
+        self.blocked_world()
+        sync.apply_pr(pr(state="MERGED", body="Refs GRE-1"))
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
+        self.assertTrue(self.calls("issueUpdate("))
+        self.assertEqual(self.calls("inverseRelations("), [])
+
+    def test_done_write_is_verified_and_retried_once(self):
+        self.blocked_world()
+        self.drop_done = 1
+        self.merge_fixes()
+        self.assertEqual(self.issues["GRE-1"]["state"]["name"], "Done")
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Todo")
+        self.assertEqual([v["s"] for v in self.calls("issueUpdate(")], ["Done", "Done", "Todo"])
+
+    def test_done_write_that_never_lands_fails_the_run(self):
+        self.blocked_world()
+        self.drop_done = 2
+        with self.assertRaises(RuntimeError) as caught:
+            self.merge_fixes()
+        self.assertIn("GRE-1: not Done", str(caught.exception))
+        self.assertEqual([v["s"] for v in self.calls("issueUpdate(")], ["Done", "Done"])
+        self.assertIn(("::error::GRE-1 is not Done after a Fixes merge and one retried write",),
+                      [c.args for c in print.call_args_list])
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
+        self.assertEqual(self.comments, [])
+
+    def test_reconcile_collects_a_done_write_that_never_lands(self):
+        self.blocked_world()
+        self.drop_done = 2
+        sync._prs = [pr(state="MERGED", body="Fixes GRE-1")]
+        with self.assertRaises(RuntimeError) as caught:
+            sync.reconcile(3)
+        self.assertIn("PR #1 GRE-1", str(caught.exception))
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
+
+    def test_dry_run_reports_promotion_without_writing(self):
+        self.blocked_world()
+        sync.DRY = True
+        self.merge_fixes()
+        self.assertEqual(self.issues["GRE-2"]["state"]["name"], "Backlog")
+        self.assertTrue(self.calls("inverseRelations("))
+        self.assertEqual(self.calls("issueUpdate(") + self.calls("commentCreate("), [])
 
     def test_dry_run_does_not_mutate_linear(self):
         sync.DRY = True

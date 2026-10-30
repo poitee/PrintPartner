@@ -1,0 +1,262 @@
+[
+  {
+    "name": "rfc2617-section-3.5",
+    "header": "Digest realm=\"testrealm@host.com\", qop=\"auth,auth-int\", nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\", opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"",
+    "username": "Mufasa",
+    "password": "Circle Of Life",
+    "method": "GET",
+    "uri": "/dir/index.html",
+    "nc": 1,
+    "cnonce": "0a4f113b"
+  },
+  {
+    "name": "fixture-challenge",
+    "header": "Digest realm=\"Printer API\", nonce=\"fixture-nonce\", qop=\"auth\", algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "fixture-challenge-put",
+    "header": "Digest realm=\"Printer API\", nonce=\"fixture-nonce\", qop=\"auth\", algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "PUT",
+    "uri": "/api/v1/files/usb/benchy.gcode",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "stale-challenge",
+    "header": "Digest realm=\"Printer API\", nonce=\"fixture-nonce-2\", qop=\"auth\", algorithm=MD5, stale=true",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "mixed-case-names",
+    "header": "Digest Realm=\"Printer API\", Nonce=\"abc123\", Qop=\"auth\", Algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "escaped-quoted-values",
+    "header": "Digest realm=\"Print\\\"er\", nonce=\"a\\\\b\", qop=\"auth\"",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "prefers-auth-over-auth-int",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", qop=\"auth-int, auth\", algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "only-auth-int",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", qop=\"auth-int\", algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "no-qop",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "nc-is-lowercase-hex",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", qop=\"auth\", algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 10,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "md5-sess-without-qop",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", algorithm=MD5-SESS",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "md5-sess-with-qop",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", qop=\"auth\", algorithm=md5-sess, opaque=\"op\"",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "unsupported-algorithm",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", qop=\"auth\", algorithm=SHA-256",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "quote-in-username",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", algorithm=MD5",
+    "username": "ma\"ker",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "newline-in-username",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", algorithm=MD5",
+    "username": "bad\nuser",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "empty-opaque-dropped",
+    "header": "Digest realm=\"Printer API\", nonce=\"n1\", qop=\"auth\", opaque=\"\"",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "unterminated-quote",
+    "header": "Digest realm=\"abc, nonce=n1, qop=auth",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "basic-scheme",
+    "header": "Basic realm=\"Printer API\"",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "query-in-uri",
+    "header": "Digest realm=\"Printer API\", nonce=\"fixture-nonce\", qop=\"auth\", algorithm=MD5",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/files/usb/a%20b.gcode?x=1",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "stray-words-and-empty-value",
+    "header": "Digest foo bar realm=\"R\", =x, nonce=n1, x=, qop=auth",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "newline-after-scheme",
+    "header": "Digest\nrealm=\"R\", nonce=\"n\"",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "newline-inside-value",
+    "header": "Digest realm=\"R\nX\", nonce=\"n\"",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "trailing-backslash-in-quotes",
+    "header": "Digest realm=\"ab\\\\\", nonce=\"n\\",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "tab-and-unicode-spaces",
+    "header": "dIgEsT\u00a0\trealm=R,\u3000nonce=\"n\u00e9\", qop=auth",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "lowercase-scheme-no-space",
+    "header": "Digestrealm=\"R\", nonce=\"n\"",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  },
+  {
+    "name": "duplicate-name-last-wins",
+    "header": "Digest nonce=\"a\", Nonce=\"b\", qop=auth",
+    "username": "fixture-user",
+    "password": "synthetic-fixture-password",
+    "method": "GET",
+    "uri": "/api/v1/status",
+    "nc": 1,
+    "cnonce": "00112233deadbeef"
+  }
+]
