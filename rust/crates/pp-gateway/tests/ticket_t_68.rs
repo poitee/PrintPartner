@@ -777,3 +777,133 @@ async fn ticket_t_68_cookie_ambiguous_logout_cannot_revoke_session() {
     );
     gateway.stop().await.unwrap();
 }
+
+/// Stand-in for the Node child. It answers every request with an empty JSON
+/// list, so the gateway's own integration snapshot reads succeed. It records
+/// the headers of the first request for `path`.
+#[cfg(unix)]
+async fn recording_node(
+    socket: &std::path::Path,
+    path: &'static str,
+) -> tokio::sync::oneshot::Receiver<Vec<(String, String)>> {
+    let listener = tokio::net::UnixListener::bind(socket).unwrap();
+    let (recorded, received) = tokio::sync::oneshot::channel();
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Some(recorded)));
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let recorded = recorded.clone();
+            tokio::spawn(async move {
+                let service = move |request: Request<hyper::body::Incoming>| {
+                    if request.uri().path() == path
+                        && let Some(recorded) = recorded.lock().unwrap().take()
+                    {
+                        let headers = request
+                            .headers()
+                            .iter()
+                            .map(|(name, value)| {
+                                (
+                                    name.as_str().to_owned(),
+                                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                                )
+                            })
+                            .collect();
+                        let _ = recorded.send(headers);
+                    }
+                    async {
+                        Ok::<_, std::convert::Infallible>(
+                            axum::http::Response::builder()
+                                .header("content-type", "application/json")
+                                .body(Body::from("[]"))
+                                .unwrap(),
+                        )
+                    }
+                };
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), hyper::service::service_fn(service))
+                    .await;
+            });
+        }
+    });
+    received
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ticket_t_68_forged_trust_headers_never_reach_node() {
+    let scratch = tempfile::tempdir().unwrap();
+    let socket = scratch.path().join("compat.sock");
+    let recorded = recording_node(&socket, "/api/v1/printers").await;
+    let (compat, _publication) =
+        CompatHandle::replaceable(Some(pp_compat::Endpoint::bound_to(&socket)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut gateway = Gateway::start(
+        listener,
+        PathBuf::new(),
+        compat,
+        &pp_gateway::ownership::cutover::OperationOwners::node_only(),
+    )
+    .unwrap();
+    let origin = gateway.origin().to_owned();
+    let (cookie, _) = bootstrap_session(&mut gateway).await;
+    let session = cookie.split_once('=').unwrap().1.to_owned();
+    let forged = request(&origin, "/api/v1/printers")
+        .header("origin", &origin)
+        .header("cookie", &cookie)
+        .header("x-pp-principal", "forged")
+        .header("x-pp-signature", "forged")
+        .header("x-pp-tenant", "account-b")
+        .header("x-forwarded-for", "203.0.113.9")
+        .header("x-forwarded-host", "foreign.invalid")
+        .header("forwarded", "for=203.0.113.9;host=foreign.invalid")
+        .header("authorization", "Bearer forged")
+        .header("x-print-partner-api-key", "pp_forged");
+    let (status, _, body) = exchange(&origin, forged).await;
+    let headers = tokio::time::timeout(Duration::from_secs(5), recorded)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(body, b"[]");
+    let value = |name: &str| {
+        headers
+            .iter()
+            .filter(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>()
+    };
+    for stripped in [
+        "x-pp-tenant",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "forwarded",
+        "authorization",
+        "x-print-partner-api-key",
+        "cookie",
+    ] {
+        assert!(
+            value(stripped).is_empty(),
+            "{stripped} reached Node: {headers:?}"
+        );
+    }
+    assert!(
+        headers.iter().all(|(_, value)| !value.contains(&session)),
+        "the desktop session reached Node"
+    );
+    assert_eq!(value("host"), ["desktop-compat"]);
+    let [principal] = value("x-pp-principal")[..] else {
+        panic!("expected one gateway principal: {headers:?}")
+    };
+    let principal: serde_json::Value =
+        serde_json::from_slice(&hex::decode(principal).unwrap()).unwrap();
+    assert_eq!(principal["generation"], "test-generation");
+    assert_eq!(principal["tenant"], "default");
+    assert_eq!(principal["actor"], "desktop-owner");
+    assert_eq!(principal["method"], "GET");
+    assert_eq!(principal["target"], "/api/v1/printers");
+    let [signature] = value("x-pp-signature")[..] else {
+        panic!("expected one gateway signature: {headers:?}")
+    };
+    assert_eq!(signature.len(), 64);
+    assert!(signature.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    gateway.stop().await.unwrap();
+}
