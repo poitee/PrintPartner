@@ -32,7 +32,16 @@ def t3_call(vm, tool, args):
         req = urllib.request.Request(os.environ[f"T3_URL_{vm}"].rstrip("/") + "/mcp", data=body.encode(),
               headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
         out = urllib.request.urlopen(req, timeout=60).read().decode()
-    return json.loads(out[out.find("{"):])
+    return parse_rpc(out)
+
+def parse_rpc(out):
+    """JSON-RPC reply from a plain JSON or SSE (data: lines) body. Raises on a JSON-RPC error."""
+    for line in reversed(out.splitlines()):
+        if line.startswith("data:"):
+            out = line[5:].strip(); break
+    r = json.loads(out[out.find("{"):])
+    if "error" in r: raise RuntimeError(f"mcp error {r['error'].get('code')}")
+    return r
 
 def running_threads(vm):
     r = t3_call(vm, "t3_thread_list", {"status": ["running", "waiting"]})

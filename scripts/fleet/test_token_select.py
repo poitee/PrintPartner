@@ -12,3 +12,11 @@ def test_per_vm_token_wins(tmp_path):
 def test_missing_token_names_var_not_value():
     with pytest.raises(KeyError) as e: ld.t3_token("135", {"T3_TOKEN_133": "secretval"})
     assert "T3_TOKEN_135" in str(e.value) and "secretval" not in str(e.value)
+
+def test_parse_rpc_json_and_sse():
+    assert ld.parse_rpc('{"jsonrpc":"2.0","id":1,"result":{"ok":1}}')["result"]["ok"] == 1
+    assert ld.parse_rpc('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":2}}\n\n')["result"]["ok"] == 2
+
+def test_parse_rpc_error_raises_without_body():
+    with pytest.raises(RuntimeError) as e: ld.parse_rpc('{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"tok abc"}}')
+    assert "-32001" in str(e.value) and "abc" not in str(e.value)

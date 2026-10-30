@@ -29,3 +29,13 @@ def test_project_filter():
     assert P([a, b]) == "GRE-2"
 def test_priority_beats_root_unblocker(): assert P([I(1, pri=2), I(2, pri=3, bl={"GRE-5": "Todo"})]) == "GRE-1"
 def test_done_states_never_picked(): assert P([I(1, state="Done"), I(2, state="In Progress")]) is None
+def test_claim_uses_uuid(monkeypatch):
+    calls = []
+    def gql(key, q, v):
+        calls.append(v)
+        if "states" in q: return {"team": {"states": {"nodes": [{"id": "s1", "name": R["claim"]["move_to_state"]}]}}}
+        if "comments(" in q: return {"issue": {"comments": {"nodes": []}}}
+        return {}
+    monkeypatch.setattr(nt, "gql", gql); monkeypatch.setattr(nt.time, "sleep", lambda s: None)
+    i = I(7); i["uuid"] = "uuid-7"; nt.claim("k", R, i, "133", "t", "b")
+    assert all(v.get("id") in (None, "uuid-7") for v in calls if "id" in v)

@@ -155,11 +155,11 @@ def claim(key, rules, i, vm, thread, branch):
     st = gql(key, 'query($t:String!){team(id:$t){states{nodes{id name}}}}', {"t": team})["team"]["states"]["nodes"]
     sid = next(s["id"] for s in st if s["name"] == c["move_to_state"])
     gql(key, 'mutation($id:String!,$s:String!,$a:String!){issueUpdate(id:$id,input:{stateId:$s,assigneeId:$a}){success}}',
-        {"id": i["id"], "s": sid, "a": c["assignee_id"]})
+        {"id": i.get("uuid") or i["id"], "s": sid, "a": c["assignee_id"]})
     tag = c["comment_template"].format(vm=vm, thread=thread, branch=branch, ts=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-    gql(key, 'mutation($id:String!,$b:String!){commentCreate(input:{issueId:$id,body:$b}){success}}', {"id": i["id"], "b": tag})
+    gql(key, 'mutation($id:String!,$b:String!){commentCreate(input:{issueId:$id,body:$b}){success}}', {"id": i.get("uuid") or i["id"], "b": tag})
     time.sleep(c.get("recheck_after_s", 5))
-    cm = gql(key, 'query($id:String!){issue(id:$id){comments(first:50){nodes{body createdAt}}}}', {"id": i["id"]})["issue"]["comments"]["nodes"]
+    cm = gql(key, 'query($id:String!){issue(id:$id){comments(first:50){nodes{body createdAt}}}}', {"id": i.get("uuid") or i["id"]})["issue"]["comments"]["nodes"]
     claims = sorted((x for x in cm if x["body"].startswith(c["comment_prefix"])), key=lambda x: x["createdAt"])
     return bool(claims) and claims[0]["body"] == tag  # earliest claim wins; others back off
 
