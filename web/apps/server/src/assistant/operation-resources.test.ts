@@ -6945,6 +6945,15 @@ for (const isolated of [false, true]) {
       expect(traced.catalogReads.length).toBeGreaterThan(0);
     }
     expect((await traceContributions({ evidence_id: "ev-1" }, CONTRIBUTION_TABLES, { ...options, activePlanId: plan.id })).output).toEqual(result);
+    // The scan skips symlinks, so a link that points outside the workspace is never followed or read.
+    const outside = join(dataDir, "outside.stl");
+    fs.writeFileSync(outside, "solid o\nendsolid o\n");
+    fs.symlinkSync(outside, join(workspace, "parts", "escape.stl"));
+    const escaped = await traceContributions({ plan_id: plan.id, evidence_id: "ev-1" }, CONTRIBUTION_TABLES, options);
+    expect(escaped.output).toEqual(result);
+    expect(observer.state.files.filter(({ args }) => String(args[0]) === outside)).toEqual([]);
+    expect(observer.state.files.filter(({ api, args }) => api === "lstatSync" && String(args[0]) === join(workspace, "parts", "escape.stl"))).toHaveLength(1);
+    fs.unlinkSync(join(workspace, "parts", "escape.stl"));
     // Explicit IDs are not ownership-checked; the tenant-filtered brief fails closed.
     expect((await traceContributions({ plan_id: plan.id, evidence_id: "ev-1" }, ["table:app_settings"], { ...options, tenantId: "other" })).output).toEqual({ error: "Build planning brief not found" });
     expect([...unions.get("suggest_source_contributions") ?? []].sort()).toEqual(CONTRIBUTION_DECLARATION);
