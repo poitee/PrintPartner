@@ -990,6 +990,25 @@ fn ticket_t_7_ownership_audit_build_coverage_refuses_invalid_admission_before_ef
 }
 
 #[test]
+fn ticket_t_7_ownership_suggest_source_contributions_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.suggest_source_contributions",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"},
+            {"kind": "file", "name": "kit-catalog"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_suggest_source_contributions_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.suggest_source_contributions");
+}
+
+#[test]
 fn ticket_t_7_ownership_apply_stack_preset_proposal_refuses_invalid_admission_before_effects() {
     assert_tool_invalid_admission("tool.apply_stack_preset");
 }
@@ -1378,6 +1397,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.import_guide_notes",
         "tool.propose_add_source",
         "tool.audit_build_coverage",
+        "tool.suggest_source_contributions",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1405,8 +1425,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 81);
-    assert_eq!(unresolved.len(), 348);
+    assert_eq!(reviewed.len(), 82);
+    assert_eq!(unresolved.len(), 347);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1721,6 +1741,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.import_guide_notes",
         "tool.propose_add_source",
         "tool.audit_build_coverage",
+        "tool.suggest_source_contributions",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1912,6 +1933,10 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.archive_plan", "tool.import_guide_notes"),
         ("tool.import_guide_notes", "tool.propose_add_source"),
         ("tool.propose_add_source", "tool.audit_build_coverage"),
+        (
+            "tool.audit_build_coverage",
+            "tool.suggest_source_contributions",
+        ),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),

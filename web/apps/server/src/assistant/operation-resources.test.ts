@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.import_guide_notes", "tool.propose_add_source", "tool.audit_build_coverage", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.import_guide_notes", "tool.propose_add_source", "tool.audit_build_coverage", "tool.suggest_source_contributions", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -6864,3 +6864,99 @@ it("traces propose_edit_plan_draft_parts brief, draft and part checks against th
   expect([...unions.get(tool) ?? []].sort()).toEqual(reconciledTables);
   expect(declared(`tool.${tool}`)).toEqual(reconciledTables);
 });
+
+const CONTRIBUTION_TABLES = ["table:app_settings", "table:projects", "table:source_docs"];
+const CONTRIBUTION_DECLARATION = ["file:kit-catalog", "file:source-workspace", ...CONTRIBUTION_TABLES];
+
+async function traceContributions(input: Record<string, unknown>, tables: string[], options: { repository: AppRepository; tenantId?: string; activePlanId?: number }) {
+  const { repository, tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("suggest_source_contributions", input, { repo: repository, activePlanId, dataDir })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  expect([...new Set(statements.map((sql) => tableForObservedSelect(sql, tenantId)))].sort()).toEqual(tables);
+  const catalogs = [...deploymentCatalogCandidates(dataDir), ...SHIPPED_CATALOG_CANDIDATES];
+  const families = new Set<string>();
+  const catalogReads: string[] = [];
+  for (const { api, args } of observer.state.files) {
+    const path = String(args[0]);
+    if (catalogs.includes(path)) {
+      expect([api, args[1]]).toEqual(["readFileSync", "utf8"]);
+      catalogReads.push(path);
+      families.add("file:kit-catalog");
+    } else if (under(join(dataDir, "repos"), path)) {
+      families.add("file:source-workspace");
+    } else {
+      throw new Error(`Unclassified filesystem call ${api} ${path}`);
+    }
+  }
+  const union = unions.get("suggest_source_contributions") ?? new Set<string>();
+  for (const resource of [...tables, ...families]) union.add(resource);
+  unions.set("suggest_source_contributions", union);
+  return { output: z.record(z.string(), z.unknown()).parse(JSON.parse(output.content)), families: [...families].sort(), catalogReads };
+}
+
+for (const isolated of [false, true]) {
+  it(`traces suggest_source_contributions evidence selection, sync gate, catalog and Source scan under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, workspace } = categoryTraceFixture(isolated);
+    fs.mkdirSync(join(workspace, "parts"), { recursive: true });
+    fs.writeFileSync(join(workspace, "parts", "bracket.stl"), "solid b\nendsolid b\n");
+    fs.writeFileSync(join(workspace, "README.md"), "readme");
+    const options = { repository };
+    const plan = repo.createProfile("Contributions");
+    const briefless = repo.createProfile("Contributions briefless");
+    const evidence = (id: string, source_id?: number) => ({ id, url: "https://github.com/a/b", normalized_url: "https://github.com/a/b", kind: "canonical_design" as const, source_role: "addon" as const, ...(source_id == null ? {} : { source_id }) });
+    const brief = newBuildPlanningBrief(plan.id, "Build the bracket", []);
+    brief.evidence = [evidence("ev-1", sourceId), evidence("ev-unsynced", unsyncedId), evidence("ev-loose")];
+    saveBuildPlanningBrief(repo, brief);
+    const missingEvidence = { error: "Attached Source evidence not found" };
+    const unpinned = { error: "Source must be synchronized and pinned first" };
+    // Without a plan nothing is read; without a brief only the brief lookup runs.
+    for (const plan_id of [undefined, null, "invalid"]) expect((await traceContributions({ plan_id, evidence_id: "ev-1" }, [], options)).output).toEqual({ error: "plan_id required" });
+    expect((await traceContributions({ plan_id: briefless.id, evidence_id: "ev-1" }, ["table:app_settings"], options)).output).toEqual({ error: "Build planning brief not found" });
+    // Hydration lists every tenant Source; an unknown, Source-less or absent selector stops before getSource and the catalog.
+    for (const selector of [{}, { evidence_id: "absent" }, { evidence_id: "ev-loose" }, { source_id: 999999 }, { evidence_id: 7, source_id: "bad" }]) {
+      const traced = await traceContributions({ plan_id: plan.id, ...selector }, CONTRIBUTION_TABLES, options);
+      expect(traced.output).toEqual(missingEvidence);
+      expect(traced.catalogReads).toEqual([]);
+      expect(traced.families).toEqual(isolated ? ["file:source-workspace"] : []);
+    }
+    // getSource re-reads the Source; an unsynced or unpinned Source is refused before the catalog and scan.
+    sqlite.prepare("UPDATE projects SET last_synced_at = NULL, last_commit_sha = NULL WHERE id = ?").run(sourceId);
+    for (const selector of [{ evidence_id: "ev-1" }, { evidence_id: "ev-unsynced" }, { source_id: unsyncedId }]) {
+      const traced = await traceContributions({ plan_id: plan.id, ...selector }, CONTRIBUTION_TABLES, options);
+      expect(traced.output).toEqual(unpinned);
+      expect(traced.catalogReads).toEqual([]);
+    }
+    sqlite.prepare("UPDATE projects SET last_synced_at = ? WHERE id = ?").run("2026-01-01T00:00:00.000Z", sourceId);
+    expect((await traceContributions({ plan_id: plan.id, evidence_id: "ev-1" }, CONTRIBUTION_TABLES, options)).output).toEqual(unpinned);
+    sqlite.prepare("UPDATE projects SET last_commit_sha = ? WHERE id = ?").run("a".repeat(40), sourceId);
+    // A synced, pinned Source loads the kit catalog, then scans its printable files.
+    const suggestions = [{ id: "cf7583c974cd42b4102dfaf6", evidence_id: "ev-1", slot: "general_parts", responsibility: "printable_parts", path_scopes: ["parts/**"], confidence: "low", evidence_text: "Fixture contains 1 printable file under the proposed general_parts responsibility.", status: "proposed" }];
+    const result = { source: { id: sourceId, name: "Fixture", pinned_revision: "a".repeat(40) }, suggestions, note: "Suggestions are not saved. Review path scopes and evidence, then use propose_update_build_brief and confirm_apply." };
+    for (const input of [{ plan_id: plan.id, evidence_id: "ev-1" }, { plan_id: String(plan.id), source_id: sourceId }, { plan_id: plan.id, evidence_id: "ev-1", source_id: unsyncedId }]) {
+      const traced = await traceContributions(input, CONTRIBUTION_TABLES, options);
+      expect(traced.output).toEqual(result);
+      expect(traced.families).toEqual(["file:kit-catalog", "file:source-workspace"]);
+      expect(traced.catalogReads.length).toBeGreaterThan(0);
+    }
+    expect((await traceContributions({ evidence_id: "ev-1" }, CONTRIBUTION_TABLES, { ...options, activePlanId: plan.id })).output).toEqual(result);
+    // The scan skips symlinks, so a link that points outside the workspace is never followed or read.
+    const outside = join(dataDir, "outside.stl");
+    fs.writeFileSync(outside, "solid o\nendsolid o\n");
+    fs.symlinkSync(outside, join(workspace, "parts", "escape.stl"));
+    const escaped = await traceContributions({ plan_id: plan.id, evidence_id: "ev-1" }, CONTRIBUTION_TABLES, options);
+    expect(escaped.output).toEqual(result);
+    expect(observer.state.files.filter(({ args }) => String(args[0]) === outside)).toEqual([]);
+    expect(observer.state.files.filter(({ api, args }) => api === "lstatSync" && String(args[0]) === join(workspace, "parts", "escape.stl"))).toHaveLength(1);
+    fs.unlinkSync(join(workspace, "parts", "escape.stl"));
+    // Explicit IDs are not ownership-checked; the tenant-filtered brief fails closed.
+    expect((await traceContributions({ plan_id: plan.id, evidence_id: "ev-1" }, ["table:app_settings"], { ...options, tenantId: "other" })).output).toEqual({ error: "Build planning brief not found" });
+    expect([...unions.get("suggest_source_contributions") ?? []].sort()).toEqual(CONTRIBUTION_DECLARATION);
+    expect(declared("tool.suggest_source_contributions")).toEqual(CONTRIBUTION_DECLARATION);
+  });
+}

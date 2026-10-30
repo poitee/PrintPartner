@@ -1726,6 +1726,16 @@
           {"kind": "table", "name": "plan_draft_required_unit_decisions"},
           {"kind": "table", "name": "plan_draft_required_unit_assignments"}
         ]
+      },
+      {
+        "operation": "tool.suggest_source_contributions",
+        "resources": [
+          {"kind": "table", "name": "app_settings"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "table", "name": "source_docs"},
+          {"kind": "file", "name": "source-workspace"},
+          {"kind": "file", "name": "kit-catalog"}
+        ]
       }
     ],
     "unresolved": [
@@ -2075,8 +2085,7 @@
       "tool.ingest_guide_url",
       "tool.inspect_repo_tree",
       "tool.propose_import_build_inputs",
-      "tool.start_sync",
-      "tool.suggest_source_contributions"
+      "tool.start_sync"
     ]
   },
   "live_formats": {
