@@ -10,6 +10,7 @@ pub mod downloads;
 pub mod native_actions;
 #[cfg(feature = "desktop_rebuild")]
 pub mod origin_change;
+pub mod tray;
 
 pub fn desktop_data_dir(
     explicit_data: Option<PathBuf>,

@@ -75,6 +75,17 @@ mod tests {
     }
 
     #[test]
+    fn ticket_t_19_tray_offers_open_in_browser_in_both_menus() {
+        for recovery_ui in [false, true] {
+            assert_eq!(
+                crate::tray::menu_ids(recovery_ui).get(1),
+                Some(&"browser"),
+                "recovery_ui={recovery_ui}"
+            );
+        }
+    }
+
+    #[test]
     fn ticket_t_19_log_scrub_removes_the_bootstrap_token() {
         let line = format!("open http://127.0.0.1:46222/__desktop/bootstrap?token={TOKEN}");
         let scrubbed = pp_core::redact::scrub(&line);
