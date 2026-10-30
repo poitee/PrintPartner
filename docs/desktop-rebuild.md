@@ -1105,6 +1105,8 @@ Reconnect after a lagged mailbox, and owner shutdown of live sockets, are GRE-80
 (`docs/gre-800-jobs-http.md`).
 Composing those routes on the opted-in rebuild router is GRE-821
 (`docs/gre-821-runtime-jobs.md`).
+Restart, resubscription, polling fallback, tenant and registry bounds for those
+streams are proved together by GRE-410 (`docs/gre-410-job-streams.md`).
 The browser job row follows that socket snapshot when health reports
 `tenant_feature_toggles`, and keeps HTTP polling otherwise. That wiring is
 GRE-822 (`docs/gre-822-job-context.md`).

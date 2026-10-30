@@ -3477,11 +3477,17 @@ dependencies = [
 name = "pp-services"
 version = "0.1.0"
 dependencies = [
+ "icu_collator",
  "plist",
  "rand 0.9.5",
  "regex",
+ "regress 0.11.1",
+ "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "unicode-normalization",
+ "url",
 ]
 
 [[package]]

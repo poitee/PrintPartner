@@ -55,7 +55,7 @@ The workspace is `rust/Cargo.toml`. A dependency marked "flagged" compiles only 
 | `pp-contracts` | Contract facade over `pp-api-types` for parity tooling and external consumers. | `pp-api-types` |
 | `pp-net` | Checked outbound connections and target canonicalization. | none |
 | `pp-drivers` | Printer adapters. Moonraker status today, plus the unrouted Moonraker driver (reads and upload). | `pp-net`, `pp-api-types` |
-| `pp-services` | Native Orca and Bambu slicer discovery. | none |
+| `pp-services` | Native Orca and Bambu slicer discovery, and GitHub Source sync decisions behind a `GithubPort`. | none |
 | `pp-storage` | SQLite owner: migrations, settings, read model, jobs, catalog, storage lease and backups. | `pp-domain`, `pp-contracts` (both flagged) |
 | `pp-source` | Immutable Source snapshots and bounded ZIP extraction. | none |
 | `pp-api` | Rust HTTP API. Holds the auth module today. | `pp-storage` |
