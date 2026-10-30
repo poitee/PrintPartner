@@ -1279,6 +1279,12 @@ mod ticket_t_10_fixtures {
         database: String,
         #[serde(default)]
         seed: Option<String>,
+        /// Each Source's `local_path`, relative to the data directory.
+        #[serde(default)]
+        checkouts: std::collections::BTreeMap<i64, String>,
+        /// Checkout and data-directory files, relative to the data directory.
+        #[serde(default)]
+        files: std::collections::BTreeMap<String, String>,
         cases: Vec<HttpCase>,
     }
 
@@ -1301,8 +1307,9 @@ mod ticket_t_10_fixtures {
         fixture
     }
 
-    /// Copies the fixture database into `sandbox`, runs the corpus seed on it
-    /// and opens the writer, as Node's generator opened its copy.
+    /// Copies the fixture database into `sandbox`, runs the corpus seed on it,
+    /// writes its checkout files and Source paths, and opens the writer, as
+    /// Node's generator prepared its copy.
     fn open_seeded(sandbox: &Sandbox, fixture: &SeededFixture) -> WriterOwner {
         let path = sandbox.path().join("print-partner.db");
         std::fs::write(
@@ -1310,11 +1317,25 @@ mod ticket_t_10_fixtures {
             include_bytes!("../../pp-storage/tests/fixtures/required-units/unchanged.db"),
         )
         .unwrap();
+        for (file, body) in &fixture.files {
+            let file = sandbox.path().join(file);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, body).unwrap();
+        }
         if let Some(seed) = &fixture.seed {
-            rusqlite::Connection::open(&path)
-                .unwrap()
-                .execute_batch(seed)
-                .unwrap();
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            connection.execute_batch(seed).unwrap();
+            for (source, checkout) in &fixture.checkouts {
+                let checkout = checkout
+                    .split('/')
+                    .fold(sandbox.path().to_path_buf(), |path, part| path.join(part));
+                connection
+                    .execute(
+                        "UPDATE projects SET local_path=?1 WHERE id=?2",
+                        params![checkout.to_str().unwrap(), source],
+                    )
+                    .unwrap();
+            }
         }
         WriterOwner::open(sandbox.path(), Limits::default())
             .unwrap()
@@ -1476,6 +1497,80 @@ mod ticket_t_10_fixtures {
         owner.shutdown().unwrap();
         print_report("manifest-http", &report);
         assert_eq!(report.matched, 43);
+        assert_eq!(report.corrected.len(), 3);
+    }
+
+    /// Builder reads and kit saves over real option groups: Sources 2-6 have
+    /// checkouts under `repos/<id>` (declared, merged, inferred, missing and
+    /// invalid manifests), read through the production `SourceReads` adapter
+    /// that `pp_core::rebuild_api::clients` wires.
+    #[tokio::test]
+    async fn manifest_checkouts_flat_v1_v2_match_node_responses_and_changed_tables() {
+        use pp_api::builds::{BuildHttpConfig, build_router};
+        use pp_storage::working_drafts::observation::{DraftReads, PreparationLimits};
+        use std::sync::Arc;
+
+        let fixture = seeded_fixture(
+            include_str!("../../../../fixtures/parity/manifest-checkouts-http/node.json"),
+            "manifest-checkouts-http",
+            20,
+        );
+        assert!(fixture.seed.is_some());
+        assert_eq!(
+            fixture.checkouts.keys().copied().collect::<Vec<_>>(),
+            [2, 3, 4, 5, 6]
+        );
+        let unknown = |case: &'static str, detail: &str| Correction {
+            case,
+            kind: CorrectionKind::Validation,
+            reason: "Rust refuses a selection naming an option group or variant no attached \
+                     Source defines (docs/desktop-rebuild.md); Node checks only the count and saves it",
+            rust: Exchange {
+                status: 400,
+                body: json!({"detail": detail}),
+                set_cookie: vec![],
+            },
+        };
+        let corrections = vec![
+            unknown(
+                "save_unknown_variant_v1",
+                "kit.selections.toolhead contains an unknown variant id",
+            ),
+            unknown(
+                "save_unknown_group_flat",
+                "kit.selections.wheels is an unknown option group",
+            ),
+            unknown(
+                "save_unknown_inferred_group_v2",
+                "kit.selections.toolhead is an unknown option group",
+            ),
+        ];
+        let sandbox = Sandbox::new("t10-manifest-checkouts").unwrap();
+        let owner = open_seeded(&sandbox, &fixture);
+        let reads: Arc<dyn DraftReads> = Arc::new(owner.source_reads().unwrap());
+        let graph = owner
+            .build_graph_with_observations(ACCOUNT_POLICY, reads, PreparationLimits::default())
+            .unwrap();
+        let served = Served::start(|origin| {
+            build_router(
+                BuildHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                graph,
+            )
+        })
+        .await
+        .unwrap();
+        let report = replay_seeded(
+            &served,
+            &sandbox,
+            FIXTURE_COOKIE,
+            &fixture.cases,
+            corrections,
+        )
+        .await;
+        served.stop().await.unwrap();
+        owner.shutdown().unwrap();
+        print_report("manifest-checkouts-http", &report);
+        assert_eq!(report.matched, 17);
         assert_eq!(report.corrected.len(), 3);
     }
 

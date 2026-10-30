@@ -16,6 +16,7 @@ on:
       - "fixtures/parity/jobs-ws/**"
       - "fixtures/parity/layers-http/**"
       - "fixtures/parity/manifest-http/**"
+      - "fixtures/parity/manifest-checkouts-http/**"
       - "fixtures/parity/plans-http/**"
       - "fixtures/parity/profile-sync/**"
       - "rust/**"
@@ -45,6 +46,7 @@ on:
       - "fixtures/parity/jobs-ws/**"
       - "fixtures/parity/layers-http/**"
       - "fixtures/parity/manifest-http/**"
+      - "fixtures/parity/manifest-checkouts-http/**"
       - "fixtures/parity/plans-http/**"
       - "fixtures/parity/profile-sync/**"
       - "rust/**"
@@ -113,6 +115,7 @@ jobs:
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/jobs-ws/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/layers-http/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/manifest-http/generate.mjs --check
+          TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/manifest-checkouts-http/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/plans-http/generate.mjs --check
       - name: Verify required-unit Node fixtures
         run: |

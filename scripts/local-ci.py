@@ -126,6 +126,7 @@ STEPS = [
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/jobs-ws/generate.mjs --check',
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/layers-http/generate.mjs --check',
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/manifest-http/generate.mjs --check',
+          'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/manifest-checkouts-http/generate.mjs --check',
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/plans-http/generate.mjs --check',
           "node ../rust/crates/pp-storage/tests/fixtures/required-units/messages-node.mjs --check",
           'TMPDIR="$RUNNER_TEMP" node --conditions=development --import tsx '
