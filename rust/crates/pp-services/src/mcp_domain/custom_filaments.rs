@@ -9,6 +9,10 @@ use serde_json::{Map, Value, json};
 use std::fs;
 use std::path::Path;
 
+// Rust writes this family only through McpSession, which nothing routes to
+// yet. The GRE-441 MCP cutover sets the GRE-402 manifest's custom-filaments
+// `rust_writes` to 1 when it switches the routes.
+// ast-grep-ignore: no-writer-family-literal
 const FILE_NAME: &str = "custom_filaments.json";
 
 pub(super) fn propose(args: &Map<String, Value>) -> ToolInvocation {
@@ -72,8 +76,8 @@ fn add_or_replay(data_dir: &Path, params: &Map<String, Value>) -> Result<(Value,
 
     let mut store = load_store(data_dir);
     let filaments = store
-        .get("filaments")
-        .and_then(Value::as_array)
+        .get_mut("filaments")
+        .and_then(Value::as_array_mut)
         .ok_or_else(|| format!("{FILE_NAME} does not hold a filaments list"))?;
     // Node calls toLowerCase on each field in `&&` order, so a non-string
     // field it reaches throws and the apply fails without writing.
@@ -84,7 +88,7 @@ fn add_or_replay(data_dir: &Path, params: &Map<String, Value>) -> Result<(Value,
             .map(str::to_lowercase)
             .ok_or_else(|| format!("{FILE_NAME} has a filament without a text {key}"))
     };
-    for entry in filaments {
+    for entry in filaments.iter() {
         if field(entry, "display_name")? != display_name.to_lowercase() {
             continue;
         }
@@ -112,10 +116,7 @@ fn add_or_replay(data_dir: &Path, params: &Map<String, Value>) -> Result<(Value,
         "hex": format!("#{hex}"),
         "combo_label": display_name,
     });
-    store["filaments"]
-        .as_array_mut()
-        .expect("checked above")
-        .push(entry.clone());
+    filaments.push(entry.clone());
     fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
     let text = serde_json::to_string_pretty(&store).map_err(|e| e.to_string())?;
     fs::write(data_dir.join(FILE_NAME), text).map_err(|e| e.to_string())?;

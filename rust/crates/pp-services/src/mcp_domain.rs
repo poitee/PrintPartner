@@ -49,7 +49,8 @@ const PROPOSED_NOTE: &str = "Not applied yet — user must confirm via Apply in 
 fn catalog() -> &'static Map<String, Value> {
     static CATALOG: OnceLock<Map<String, Value>> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        serde_json::from_str(CATALOG_JSON).expect("mcp_domain/catalog.json is valid JSON")
+        // A malformed catalog lists nothing; the ticket tests fail on that.
+        serde_json::from_str(CATALOG_JSON).unwrap_or_default()
     })
 }
 
@@ -434,7 +435,7 @@ impl<P: DomainPort> McpSession<P> {
 
 /// `JSON.stringify(value, null, 2)`.
 fn pretty(value: &Value) -> String {
-    serde_json::to_string_pretty(value).expect("JSON values serialize")
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
 /// JS `String(value)` for JSON values.
