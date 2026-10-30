@@ -273,7 +273,7 @@ fn present(view: Value, head: bool, missing: &str) -> Response {
 /// `ReadClient` refuses credentials with `AuthFailure` (sessions) or the plain
 /// "Authentication required" message (API keys); admission refusals are plain
 /// messages too. Anything else is Node's opaque 500.
-fn read_error(error: &anyhow::Error) -> Response {
+pub(crate) fn read_error(error: &anyhow::Error) -> Response {
     match error.downcast_ref::<AuthFailure>() {
         Some(
             AuthFailure::SessionRequired
@@ -317,7 +317,7 @@ fn json_response(status: StatusCode, value: &Value, head: bool) -> Response {
         .unwrap_or_else(|_| Response::new(axum::body::Body::empty()))
 }
 
-fn failure(status: StatusCode, detail: &str) -> Response {
+pub(crate) fn failure(status: StatusCode, detail: &str) -> Response {
     json_response(status, &json!({"detail": detail}), false)
 }
 
