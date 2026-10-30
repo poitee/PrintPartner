@@ -41,7 +41,7 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | Crate | Current allowed `pp-*` deps |
 | --- | --- |
 | `pp-source` | *(none)* |
-| `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` and `pp-net` only through `desktop_rebuild` |
+| `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-perf`; `pp-source` and `pp-net` only through `desktop_rebuild` |
 | `pp-storage` | `pp-domain` and `pp-contracts`, only through `desktop_rebuild` |
 | `pp-api` | `pp-storage` |
 | `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` |
@@ -54,6 +54,7 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | `pp-net` | *(none)* |
 | `pp-drivers` | `pp-net`, `pp-api-types` |
 | `pp-services` | *(none)* |
+| `pp-perf` | *(none)* |
 
 Graph form of the non-empty current edges:
 
@@ -62,12 +63,12 @@ pp-contracts → pp-api-types → pp-domain
 pp-api → pp-storage
 pp-gateway → pp-compat, pp-drivers, pp-net
 pp-drivers → pp-net, pp-api-types
-pp-core → pp-gateway, pp-compat, pp-storage
+pp-core → pp-gateway, pp-compat, pp-storage, pp-perf
 pp-core → pp-source, pp-net                 (desktop_rebuild only)
 pp-storage → pp-domain, pp-contracts         (desktop_rebuild only)
 pp-desktop → pp-core
 pp-server → pp-core
-pp-source, pp-services → (no pp-* deps)
+pp-source, pp-services, pp-perf → (no pp-* deps)
 ```
 
 ## Planned edges after the desktop rebuild
