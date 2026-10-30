@@ -73,12 +73,13 @@ impl std::error::Error for SourceRefError {}
 pub fn is_community_manifest_slug(value: &str) -> bool {
     let bytes = value.as_bytes();
     let body = |b: &u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(b);
-    !bytes.is_empty()
+    // ast-grep-ignore: no-writer-family-literal -- Refuses embedded catalog document names as slugs; reads and writes nothing.
+    let reserved = matches!(value, "kit-catalog" | "registry-index");
+    !reserved
+        && !bytes.is_empty()
         && bytes.len() <= 64
         && (bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit())
         && bytes[1..].iter().all(body)
-        && value != "kit-catalog"
-        && value != "registry-index"
 }
 
 /// `parseCommunityManifestSlug`: trimmed slug, or `None` when absent or blank.
