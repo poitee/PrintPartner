@@ -142,6 +142,12 @@ enum ReviewedEntry {
     ProposeRebuildPlan { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_apply_plan_draft")]
     ProposeApplyPlanDraft { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_assign_role_filament")]
+    ProposeAssignRoleFilament { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_restore_snapshot")]
+    ProposeRestoreSnapshot { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.propose_exclude_replaced_parts")]
+    ProposeExcludeReplacedParts { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -554,6 +560,25 @@ impl ReviewedEntry {
                 resources,
                 BTreeSet::from([Table(AppSettings)]),
             ),
+            Self::ProposeAssignRoleFilament { resources } => (
+                "tool.propose_assign_role_filament",
+                resources,
+                BTreeSet::from([Table(AppSettings), Table(BuildProfiles)]),
+            ),
+            Self::ProposeRestoreSnapshot { resources } => (
+                "tool.propose_restore_snapshot",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(PlanSnapshots),
+                ]),
+            ),
+            Self::ProposeExcludeReplacedParts { resources } => (
+                "tool.propose_exclude_replaced_parts",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(PlanDecisions)]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -860,6 +885,9 @@ impl Declarations {
             "tool.propose_set_build_source_roles",
             "tool.propose_rebuild_plan",
             "tool.propose_apply_plan_draft",
+            "tool.propose_assign_role_filament",
+            "tool.propose_restore_snapshot",
+            "tool.propose_exclude_replaced_parts",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

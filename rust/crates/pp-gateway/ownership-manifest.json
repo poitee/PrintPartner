@@ -1546,6 +1546,28 @@
         "resources": [
           {"kind": "table", "name": "app_settings"}
         ]
+      },
+      {
+        "operation": "tool.propose_assign_role_filament",
+        "resources": [
+          {"kind": "table", "name": "app_settings"},
+          {"kind": "table", "name": "build_profiles"}
+        ]
+      },
+      {
+        "operation": "tool.propose_restore_snapshot",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "table", "name": "plan_snapshots"}
+        ]
+      },
+      {
+        "operation": "tool.propose_exclude_replaced_parts",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
       }
     ],
     "unresolved": [
@@ -1903,11 +1925,8 @@
       "tool.inspect_repo_tree",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_source",
-      "tool.propose_assign_role_filament",
       "tool.propose_edit_plan_draft_parts",
-      "tool.propose_exclude_replaced_parts",
       "tool.propose_import_build_inputs",
-      "tool.propose_restore_snapshot",
       "tool.propose_source_mapping",
       "tool.remove_layer",
       "tool.set_base",

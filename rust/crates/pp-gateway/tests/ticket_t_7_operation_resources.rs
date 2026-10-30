@@ -614,6 +614,43 @@ fn ticket_t_7_ownership_build_planning_proposals_refuse_invalid_admission_before
 }
 
 #[test]
+fn ticket_t_7_ownership_checked_plan_proposals_have_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.propose_assign_role_filament",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "build_profiles"}
+        ]),
+    );
+    assert_sqlite_tool_resources(
+        "tool.propose_restore_snapshot",
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"},
+            {"kind": "table", "name": "plan_snapshots"}
+        ]),
+    );
+    assert_sqlite_tool_resources(
+        "tool.propose_exclude_replaced_parts",
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_checked_plan_proposals_refuse_invalid_admission_before_effects() {
+    for id in [
+        "tool.propose_assign_role_filament",
+        "tool.propose_restore_snapshot",
+        "tool.propose_exclude_replaced_parts",
+    ] {
+        assert_tool_invalid_admission(id);
+    }
+}
+
+#[test]
 fn ticket_t_7_ownership_list_sources_has_complete_node_owned_resources() {
     assert_sqlite_tool_resources(
         "tool.list_sources",
@@ -948,6 +985,9 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.propose_set_build_source_roles",
         "tool.propose_rebuild_plan",
         "tool.propose_apply_plan_draft",
+        "tool.propose_assign_role_filament",
+        "tool.propose_restore_snapshot",
+        "tool.propose_exclude_replaced_parts",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -975,8 +1015,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 63);
-    assert_eq!(unresolved.len(), 366);
+    assert_eq!(reviewed.len(), 66);
+    assert_eq!(unresolved.len(), 363);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1273,6 +1313,9 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.propose_set_build_source_roles",
         "tool.propose_rebuild_plan",
         "tool.propose_apply_plan_draft",
+        "tool.propose_assign_role_filament",
+        "tool.propose_restore_snapshot",
+        "tool.propose_exclude_replaced_parts",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1425,6 +1468,18 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.propose_rebuild_plan",
         ),
         ("tool.propose_rebuild_plan", "tool.propose_apply_plan_draft"),
+        (
+            "tool.propose_apply_plan_draft",
+            "tool.propose_assign_role_filament",
+        ),
+        (
+            "tool.propose_assign_role_filament",
+            "tool.propose_restore_snapshot",
+        ),
+        (
+            "tool.propose_restore_snapshot",
+            "tool.propose_exclude_replaced_parts",
+        ),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),
