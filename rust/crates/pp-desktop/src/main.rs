@@ -123,34 +123,17 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
     let app = builder
         .build(tauri::generate_context!())
         .context("Native shell initialization failed")?;
-    let mut args = std::env::args().skip(1);
-    let mut stage = None;
-    let mut data = None;
-    let mut test_exit = None;
-    let mut test_recovery_logs = false;
-    while let Some(argument) = args.next() {
-        match argument.as_str() {
-            "--dev-stage" if cfg!(debug_assertions) => {
-                stage = Some(PathBuf::from(
-                    args.next().context("Development stage missing")?,
-                ))
-            }
-            "--data" if cfg!(debug_assertions) => {
-                data = Some(PathBuf::from(
-                    args.next().context("Development data directory missing")?,
-                ))
-            }
-            "--test-exit-seconds" if cfg!(debug_assertions) => {
-                test_exit = Some(
-                    args.next()
-                        .context("Test duration missing")?
-                        .parse::<u64>()?,
-                )
-            }
-            "--test-recovery-logs" if cfg!(debug_assertions) => test_recovery_logs = true,
-            _ => anyhow::bail!("Unsupported desktop launch argument"),
-        }
-    }
+    let launch_args =
+        pp_desktop::LaunchArgs::parse(std::env::args().skip(1), cfg!(debug_assertions))?;
+    // The login LaunchAgent passes --minimized; the tray's Show brings the window back.
+    let window_visible = launch_args.window_visible();
+    let pp_desktop::LaunchArgs {
+        stage,
+        data,
+        test_exit,
+        test_recovery_logs,
+        ..
+    } = launch_args;
     let stage = match stage {
         Some(stage) => stage,
         None => {
@@ -269,6 +252,7 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         };
         let window = builder
             .title("Print Partner")
+            .visible(window_visible)
             .inner_size(1280.0, 850.0)
             .min_inner_size(900.0, 650.0)
             .on_navigation(move |url| origin.admits(url))
