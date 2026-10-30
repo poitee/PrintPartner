@@ -14,8 +14,12 @@ filter = 'binary(=runtime_m0) | (package(=pp-compat) & test(/^ticket_t_2::/))'
 test-group = "process-heavy"
 
 # Flaky list: nextest retries each test once and reports a retried pass as FLAKY.
-# Add a test only with its open Linear ticket, as `| (binary(=<bin>) & test(=<name>))`.
 # docs/development/ci.md has the policy. Empty: every known flake is fixed.
+# Add a test only with its open Linear ticket and owner in a comment, e.g.
+#   filter = 'none() | (binary(=runtime_m0) & test(=some_test))'  # GRE-n, owner
+# Quarantine (retried twice in a week) moves the test from here to a default-filter
+# under [profile.default]; nextest applies it on top of CI's -E filter:
+#   default-filter = 'not (binary(=runtime_m0) & test(=some_test))'  # GRE-n, owner
 [[profile.default.overrides]]
 filter = 'none()'
 retries = 1

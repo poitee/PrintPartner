@@ -151,7 +151,19 @@ A test that fails at random goes on the flaky list, the override with `retries =
 
 1. Add a test to the list only with an open Linear ticket that names it and an owner. Put the ticket id in a comment next to the filter.
 2. nextest runs a failed test on the list once more. A pass on the second try passes the job, and the log shows the test as `FLAKY`.
-3. If a test needs that retry twice in one week, the owner quarantines it: they remove it from the list and exclude it from the `default` profile, with the ticket id in a comment, until the ticket is fixed. To find retries, run `gh run view <run-id> --log | grep FLAKY` on the week's `Rust cross-OS` runs.
+3. If a test needs that retry in two runs within seven days, the owner quarantines it. In one pull request they remove the test from the flaky list and add it to `default-filter` under `[profile.default]`, as `default-filter = 'not (binary(=<bin>) & test(=<name>))'` with the ticket id in a comment. nextest applies `default-filter` on top of the `-E` filter that CI passes, so the test no longer runs anywhere that uses the `default` profile. The comment in `nextest.toml` shows both forms. To count retries, run this from the repository root. It prints, for each test, the number of `Rust cross-OS` runs in the last seven days that logged it as `FLAKY`:
+
+   ```sh
+   since=$(date -u -d '7 days ago' +%F)
+   gh run list -R poitee/PrintPartner -w "Rust cross-OS" --created ">=$since" -L 500 --json databaseId --jq '.[].databaseId' |
+     while read -r id; do
+       gh run view "$id" -R poitee/PrintPartner --log 2>/dev/null |
+         sed -E 's/(\x1b|\^\[)\[[0-9;]*m//g' | grep -oE 'FLAKY [0-9]+/[0-9]+ \[ *[0-9.]+s\] .*' |
+         sed -E 's/^FLAKY [^]]*\] +//' | sort -u
+     done | sort | uniq -c | sort -rn
+   ```
+
+   A count of 2 or more means quarantine, unless rule 4 applies.
 4. Never quarantine a test of a core guarantee: no orphan processes and no data loss. It stays required. Fix it or make its wait longer.
 5. When the ticket is fixed, remove the test from the list in the same pull request.
 
