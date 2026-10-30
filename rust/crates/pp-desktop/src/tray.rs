@@ -37,6 +37,7 @@ pub fn menu_ids(recovery_ui: bool) -> &'static [&'static str] {
     if recovery_ui {
         &[
             "show",
+            "browser",
             "status",
             "logs",
             "log_folder",
@@ -45,7 +46,7 @@ pub fn menu_ids(recovery_ui: bool) -> &'static [&'static str] {
             "quit",
         ]
     } else {
-        &["show", "status", "recover", "quit"]
+        &["show", "browser", "status", "recover", "quit"]
     }
 }
 

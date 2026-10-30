@@ -1,4 +1,5 @@
 use pp_core::{CoreHandle, CoreStatus};
+use pp_desktop::AllowedOrigin;
 use std::{
     path::PathBuf,
     sync::{
@@ -139,6 +140,32 @@ async fn open(mut command: Command) -> bool {
     )
     .await
     .is_ok_and(|result| result.is_ok_and(|status| status.success()))
+}
+
+/// Tray Open in browser: mint a fresh bootstrap, check it targets this
+/// desktop origin and port, then hand it to the default browser.
+pub(crate) fn open_in_browser(app: &AppHandle, handle: &CoreHandle, origin: &AllowedOrigin) {
+    let command = handle
+        .browser_launch_target()
+        .and_then(|target| pp_desktop::browser::bootstrap_url(origin, &target.into_url()))
+        .map(|url| Command::from(pp_desktop::browser::opener(&url)));
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let opened = match command {
+            Ok(command) => open(command).await,
+            Err(_) => false,
+        };
+        if !opened {
+            tracing::warn!("browser_open_failed");
+            let _ = app.run_on_main_thread(|| {
+                show_message(
+                    "Open in browser",
+                    "Print Partner could not open your default browser.",
+                    || {},
+                )
+            });
+        }
+    });
 }
 
 pub(crate) fn restart(app: &AppHandle, handle: CoreHandle, gate: Arc<RecoveryGate>) {
