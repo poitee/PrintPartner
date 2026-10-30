@@ -1,0 +1,19 @@
+{
+    "filament_flow_ratio": [
+        "0.98"
+    ],
+    "filament_settings_id": [
+        "Bambu PLA Basic @BBL X1C - user"
+    ],
+    "from": "User",
+    "inherits": "Bambu PLA Basic @BBL X1C",
+    "is_custom_defined": "0",
+    "name": "Bambu PLA Basic @BBL X1C - user",
+    "nozzle_temperature": [
+        "220"
+    ],
+    "pressure_advance": [
+        "0.025"
+    ],
+    "version": "01.10.00.89"
+}

@@ -1,0 +1,21 @@
+{
+    "type": "filament",
+    "name": "Generic PLA @System",
+    "from": "system",
+    "nozzle_temperature": [
+        "220"
+    ],
+    "bed_temperature": [
+        "55"
+    ],
+    "filament_flow_ratio": [
+        "0.98"
+    ],
+    "filament_retraction_length": [
+        "0.8"
+    ],
+    "pressure_advance": [
+        "0.02"
+    ],
+    "version": "2.3.2.60"
+}

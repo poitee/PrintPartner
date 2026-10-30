@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  PRINTER_STATUS_KINDS,
+  printerStatusPresentation,
   statusTone,
   WORKFLOW_STATUS_KINDS,
   workflowStatusPresentation,
@@ -69,5 +71,30 @@ describe("workflowStatusPresentation", () => {
       const { live } = workflowStatusPresentation(kind);
       if (kind !== "error") expect(live).not.toBe("alert");
     }
+  });
+});
+
+describe("printerStatusPresentation", () => {
+  it("uses the GRE-1002 farm states and gives queued no printer color", () => {
+    // Keys of get_farm_status state_counts.
+    expect([...PRINTER_STATUS_KINDS].sort()).toEqual(
+      ["complete", "error", "idle", "not_connected", "offline", "paused", "printing"],
+    );
+    expect(PRINTER_STATUS_KINDS).not.toContain("queued");
+  });
+
+  it("gives each state words, a distinct icon and its own printer token", () => {
+    const icons = new Set<unknown>();
+    const classes = new Set<string>();
+    for (const kind of PRINTER_STATUS_KINDS) {
+      const presentation = printerStatusPresentation(kind);
+      expect(presentation.kind).toBe(kind);
+      expect(presentation.label.trim().length).toBeGreaterThan(0);
+      expect(presentation.className).toBe(`text-printer-${kind.replaceAll("_", "-")}`);
+      icons.add(presentation.icon);
+      classes.add(presentation.className);
+    }
+    expect(icons.size).toBe(PRINTER_STATUS_KINDS.length);
+    expect(classes.size).toBe(PRINTER_STATUS_KINDS.length);
   });
 });

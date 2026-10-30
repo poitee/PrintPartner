@@ -4,10 +4,16 @@ import {
   CircleArrowRight,
   CircleCheck,
   CircleDashed,
+  CirclePause,
+  Clock,
   LoaderCircle,
   Lock,
+  OctagonAlert,
+  Printer,
   RefreshCw,
   TriangleAlert,
+  Unplug,
+  WifiOff,
   type LucideIcon,
 } from "lucide-react";
 
@@ -188,4 +194,49 @@ export function workflowStatusPresentation(
   kind: WorkflowStatusKind,
 ): WorkflowStatusPresentation {
   return PRESENTATION[kind];
+}
+
+/**
+ * Printer states, as reported by farm status (GRE-1002) and the printer event
+ * stream (GRE-1014). `queued` is a job state, not a printer state.
+ */
+export const PRINTER_STATUS_KINDS = [
+  "idle",
+  "printing",
+  "paused",
+  "complete",
+  "error",
+  "offline",
+  "not_connected",
+] as const;
+
+export type PrinterStatusKind = (typeof PRINTER_STATUS_KINDS)[number];
+
+type PrinterStatusPresentation = Readonly<{
+  kind: PrinterStatusKind;
+  label: string;
+  /** Distinct shape per state, so the status reads without color. */
+  icon: LucideIcon;
+  /** Text color from the `--printer-*` tokens. Rebuilt UI only. */
+  className: string;
+}>;
+
+const PRINTER_PRESENTATION: Readonly<Record<PrinterStatusKind, PrinterStatusPresentation>> = {
+  idle: { kind: "idle", label: "Idle", icon: Clock, className: "text-printer-idle" },
+  printing: { kind: "printing", label: "Printing", icon: Printer, className: "text-printer-printing" },
+  paused: { kind: "paused", label: "Paused", icon: CirclePause, className: "text-printer-paused" },
+  complete: { kind: "complete", label: "Complete", icon: CircleCheck, className: "text-printer-complete" },
+  error: { kind: "error", label: "Error", icon: OctagonAlert, className: "text-printer-error" },
+  offline: { kind: "offline", label: "Offline", icon: WifiOff, className: "text-printer-offline" },
+  not_connected: {
+    kind: "not_connected",
+    label: "Not connected",
+    icon: Unplug,
+    className: "text-printer-not-connected",
+  },
+};
+
+/** Words, icon, and token color for a printer state on rebuilt screens. */
+export function printerStatusPresentation(kind: PrinterStatusKind): PrinterStatusPresentation {
+  return PRINTER_PRESENTATION[kind];
 }

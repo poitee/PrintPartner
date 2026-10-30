@@ -16,7 +16,7 @@ plist = "=1.10.1"
 rand.workspace = true
 regress = "=0.11.1"
 serde.workspace = true
-serde_json = { workspace = true, features = ["preserve_order", "float_roundtrip"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 unicode-normalization = "=0.1.25"
 url = "=2.5.8"
 zip = { version = "=9.0.4", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }

@@ -1,0 +1,10 @@
+{
+    "from": "User",
+    "name": "eSUN ePLA+ HS",
+    "temperature": "-2.5",
+    "bed_temp_c": "0x40",
+    "cooling": "1e-7",
+    "extrusion_multiplier": "1.",
+    "filament_pressure_advance": "1e21",
+    "retraction_length_mm": "Infinity"
+}
