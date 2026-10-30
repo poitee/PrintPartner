@@ -1609,6 +1609,19 @@
           {"kind": "table", "name": "source_docs"},
           {"kind": "file", "name": "source-workspace"}
         ]
+      },
+      {
+        "operation": "tool.add_addon",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "table", "name": "profile_layers"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "table", "name": "source_docs"},
+          {"kind": "file", "name": "assistant-domain"},
+          {"kind": "file", "name": "kit-catalog"},
+          {"kind": "file", "name": "source-workspace"}
+        ]
       }
     ],
     "unresolved": [
@@ -1951,7 +1964,6 @@
       "profile.sync",
       "startup.seedStockSlicerInstancesIfEmpty",
       "startup.sweepExpiredTransferArtifacts",
-      "tool.add_addon",
       "tool.apply_build_recipe",
       "tool.apply_stack_preset",
       "tool.archive_plan",
