@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tauri::{
     Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     image::Image,
-    menu::{IsMenuItem, Menu, MenuItem},
+    menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem},
     tray::TrayIconBuilder,
     webview::{DownloadEvent, NewWindowResponse},
 };
@@ -395,7 +395,25 @@ fn build_tray(
     let folder = MenuItem::with_id(app, "data", "Open data folder", true, None::<&str>)?;
     let log_folder = MenuItem::with_id(app, "log_folder", "Reveal log folder", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
-    let all = [
+    // Open at login is a per-user LaunchAgent, so only macOS gets the item (T-31).
+    let login_agent = if cfg!(target_os = "macos") {
+        app.path()
+            .home_dir()
+            .ok()
+            .zip(std::env::current_exe().ok())
+            .and_then(|(home, exe)| pp_desktop::autostart::LaunchAgent::new(&home, &exe).ok())
+    } else {
+        None
+    };
+    let open_at_login = CheckMenuItem::with_id(
+        app,
+        pp_desktop::tray::OPEN_AT_LOGIN,
+        "Open at login",
+        true,
+        login_agent.as_ref().is_some_and(|agent| agent.is_enabled()),
+        None::<&str>,
+    )?;
+    let all: [&dyn IsMenuItem<tauri::Wry>; 9] = [
         &show,
         &browser,
         &status,
@@ -403,14 +421,20 @@ fn build_tray(
         &log_folder,
         &recover,
         &folder,
+        &open_at_login,
         &quit,
     ];
-    let items = pp_desktop::tray::menu_ids()
+    let ids = if login_agent.is_some() {
+        pp_desktop::tray::menu_ids_with_open_at_login()
+    } else {
+        pp_desktop::tray::menu_ids().to_vec()
+    };
+    let items = ids
         .iter()
         .map(|id| {
             all.iter()
+                .copied()
                 .find(|item| item.id().as_ref() == *id)
-                .map(|item| *item as &dyn IsMenuItem<_>)
                 .with_context(|| format!("Tray menu item {id} missing"))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -445,6 +469,16 @@ fn build_tray(
             "data" => diagnostics.open_data(app),
             "log_folder" => diagnostics.reveal_logs(app),
             "quit" => app.exit(0),
+            id if id == pp_desktop::tray::OPEN_AT_LOGIN => {
+                if let Some(agent) = &login_agent {
+                    let on =
+                        pp_desktop::tray::toggle_open_at_login(agent).unwrap_or_else(|error| {
+                            tracing::error!("open_at_login_failed: {error:#}");
+                            agent.is_enabled()
+                        });
+                    let _ = open_at_login.set_checked(on);
+                }
+            }
             _ => {}
         })
         .build(app)?;

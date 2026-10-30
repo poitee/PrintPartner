@@ -1,5 +1,10 @@
 //! Tray status model: menu text and icon badge color per core status.
+use crate::autostart::LaunchAgent;
+use anyhow::Result;
 use pp_core::CoreStatus;
+
+/// Menu id of the macOS "Open at login" check item (T-31).
+pub const OPEN_AT_LOGIN: &str = "open_at_login";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
@@ -44,6 +49,24 @@ pub fn menu_ids() -> &'static [&'static str] {
         "data",
         "quit",
     ]
+}
+
+/// The macOS menu order: "Open at login" sits just before Quit.
+pub fn menu_ids_with_open_at_login() -> Vec<&'static str> {
+    let mut ids = menu_ids().to_vec();
+    ids.insert(ids.len() - 1, OPEN_AT_LOGIN);
+    ids
+}
+
+/// Turns open-at-login off when this app's agent is installed, otherwise on,
+/// and returns whether it is on afterwards.
+pub fn toggle_open_at_login(agent: &LaunchAgent) -> Result<bool> {
+    if agent.is_enabled() {
+        agent.disable()?;
+    } else {
+        agent.enable()?;
+    }
+    Ok(agent.is_enabled())
 }
 
 /// Copies an RGBA icon and paints an opaque status dot in its bottom-right quarter.
