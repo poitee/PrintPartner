@@ -6,13 +6,17 @@ Rules (team GRE):
     in title/body)                                   -> In Review
   * PR merged with Fixes/Closes/Resolves GRE-NNN     -> Done
     Closing directives must start the title or a line, with optional Markdown.
+    The Done write is read back and retried once; a ticket still not Done fails
+    the run. Then each Backlog issue it blocks whose other blockers are Done
+    (umbrella blockers ignored), and that has no PROMOTE_SKIP label, -> Todo
+    with one "fleet-promote: blockers done <ids>" comment.
   * PR merged with only Refs GRE-NNN (multi-slice)   -> In Progress (if another
     PR for the ticket is still open: stays In Review)
   * PR closed unmerged                               -> In Progress if it was In
     Review and no other open PR
   * Cron: In Progress/In Review with no PR activity for STALE_HOURS (48) and no
     open PR -> Backlog.
-Writes ticket state only. Posts no Linear comments: GitHub holds PR state.
+Writes ticket state, plus the fleet-promote comment. GitHub holds PR state.
 Never touches Done/Canceled/Duplicate issues. Never prints secrets.
 Fork PRs are excluded from both event handling and reconciliation.
 
@@ -33,6 +37,10 @@ REF_RE = re.compile(r"\b(?:refs?|part of|towards?)\s*:?\s+((?:GRE-\d+[\s,]*(?:an
 ID_RE = re.compile(r"GRE-(\d+)", re.I)
 BRANCH_RE = re.compile(r"^gre-(\d+)\b", re.I)
 TERMINAL = {"completed", "canceled", "duplicate"}
+PROMOTE_SKIP = {"needs-chad-action", "umbrella", "post-parity", "pp:later"}
+_END = "id identifier team{key} state{name type} labels(first:50){nodes{name}}"
+LINKED_QUERY = ("query($id:String!){issue(id:$id){%s relations(first:100){nodes{type issue{%s} relatedIssue{%s}}} "
+                "inverseRelations(first:100){nodes{type issue{%s} relatedIssue{%s}}}}}" % ((_END,) * 5))
 _request_deadline = None
 
 
@@ -152,10 +160,7 @@ def settle(ident, decide, basis=None):
         if not current or (current["state"]["name"], current["updatedAt"]) != version:
             basis, version = current, current and (current["state"]["name"], current["updatedAt"])
             continue
-        updated = gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
-            {"id": current["id"], "s": state_id(target)})
-        if not updated["issueUpdate"]["success"]:
-            raise RuntimeError("Linear issueUpdate failed")
+        write_state(current["id"], target)
         print(f"{ident}: {current['state']['name']} -> {target}")
         want = converge(ident, target)
         if want == target:
@@ -166,6 +171,69 @@ def settle(ident, decide, basis=None):
         version = (basis["state"]["name"], basis["updatedAt"])
         decide = lambda _, want=want: want
     raise RuntimeError(f"{ident}: concurrent Linear writes did not settle")
+
+
+def write_state(issue_id, name):
+    updated = gql('mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}',
+        {"id": issue_id, "s": state_id(name)})
+    if not updated["issueUpdate"]["success"]:
+        raise RuntimeError("Linear issueUpdate failed")
+
+
+def labels(node):
+    return {label["name"] for label in node["labels"]["nodes"]}
+
+
+def blocking(ident):
+    """(issue, issues it blocks, its blockers), read from both relation directions."""
+    node = gql(LINKED_QUERY, {"id": ident})["issue"]
+    if not node:
+        return None, [], []
+    blocks, blockers = [], []
+    for rel in node["relations"]["nodes"] + node["inverseRelations"]["nodes"]:
+        if rel["type"] != "blocks":
+            continue
+        if rel["issue"]["id"] == node["id"]:
+            blocks.append(rel["relatedIssue"])
+        elif rel["relatedIssue"]["id"] == node["id"]:
+            blockers.append(rel["issue"])
+    return node, blocks, blockers
+
+
+def close_out(ident):
+    """After a Fixes merge: confirm ident is Done (one retried write), then promote what it unblocked."""
+    current = issue(ident)
+    if not current or current["state"]["type"] in TERMINAL - {"completed"}:
+        return
+    if current["state"]["name"] != "Done" and not DRY:
+        print(f"{ident}: {current['state']['name']} after the Done write; retrying once", file=sys.stderr)
+        write_state(current["id"], "Done")
+        current = issue(ident)
+        if not current or current["state"]["name"] != "Done":
+            print(f"::error::{ident} is not Done after a Fixes merge and one retried write", file=sys.stderr)
+            raise RuntimeError(f"{ident}: not Done after a Fixes merge")
+    promote(ident)
+
+
+def promote(done):
+    """Backlog -> Todo for issues done blocked, once every non-umbrella blocker is Done. Never demotes."""
+    _, unblocked, _ = blocking(done)
+    for blocked in unblocked:
+        if blocked["team"]["key"] != TEAM:
+            continue
+        node, _, blockers = blocking(blocked["identifier"])
+        if not node or node["state"]["name"] != "Backlog" or labels(node) & PROMOTE_SKIP:
+            continue
+        real = [b for b in blockers if "umbrella" not in labels(b)]
+        if any(b["identifier"] != done and b["state"]["name"] != "Done" for b in real):
+            continue
+        print(f"{node['identifier']}: Backlog -> Todo")
+        if DRY:
+            continue
+        write_state(node["id"], "Todo")
+        ids = sorted({b["identifier"] for b in real} or {done}, key=lambda i: int(i.rsplit("-", 1)[1]))
+        gql('mutation($id:String!,$b:String!){commentCreate(input:{issueId:$id,body:$b}){success}}',
+            {"id": node["id"], "b": "fleet-promote: blockers done " + ", ".join(ids)})
 
 
 def rule(pr, ident, state, others):
@@ -264,10 +332,13 @@ def apply_pr(pr, errors=None):
     if pr["isCrossRepository"]:
         return
     n = pr["number"]
-    for ident in sorted(refs(pr)[1]):
+    closing, ids = refs(pr)
+    for ident in sorted(ids):
         try:
             settle(ident, lambda iss, ident=ident: rule(pr, ident, iss["state"]["name"],
                                                         lambda: other_open(ident, n)))
+            if pr["state"] == "MERGED" and ident in closing:
+                close_out(ident)
         except Exception:
             if errors is None:
                 raise
