@@ -13,7 +13,7 @@ On ready PRs, the jobs are selected as follows:
 - `rust (macos)` uses the same path selection. It runs only when relevant inputs change and the PR has the exact `macos` label and is not a draft. Adding or removing the label, marking the PR ready for review and converting it to a draft each start a new run.
 - When those jobs run on a pull request, nextest uses an affected-crate filter from `scripts/ci-affected-nextest-filter.py`: for each changed `rust/crates/<pkg>/` path it unions `rdeps(=<pkg>)` so reverse dependents are covered. A crate whose sources read another crate's files by path (for example pp-gateway's `include_str!("../../pp-storage/...")` drift guards) joins the selection when that crate changes. The filtered nextest steps pass `--no-tests=warn`, so a selection that matches nothing in a job's `CARGO_SCOPE` (Windows excludes every reverse dependent of pp-core, for example) passes instead of exiting 4. Shared inputs (workspace `Cargo.toml` / `Cargo.lock`, toolchain, web assets, fixtures, `rust/tests/**`, `rust/scripts/**`, the workflow, or the filter scripts) keep `all()`. Clippy and doctests still cover the whole `CARGO_SCOPE`.
 
-Pushes to `main`, merge groups, nightly and manual runs execute all three jobs regardless of paths, and nextest keeps `all()`. A new push to a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so each merge has a result and no `main` run waits for or cancels another. Its purpose is to stop code that compiles on one OS only from reaching `main`.
+Pushes to `main`, merge groups, nightly and manual runs execute all three jobs regardless of paths, and nextest keeps `all()`. A new push to a pull request cancels that pull request's older run, and a new push to `main` cancels the older `main` run (see [Superseded runs](#superseded-runs)). Its purpose is to stop code that compiles on one OS only from reaching `main`.
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
@@ -27,11 +27,11 @@ The workflow has one job per OS. Each job uses the toolchain pinned in `rust-too
 | `rust (macos)` | `macos-26` | The whole workspace | All except [macOS exclusions](#macos-exclusions) |
 | `rust (windows)` | `windows-latest` | The workspace without [Windows exclusions](#windows-exclusions) | All in those packages |
 
-`rust (linux) build` and its rebuild partitions use `ubuntu-latest` for every event.
+`rust (linux) build`, its rebuild partitions and the `rust (linux)` aggregate run on the pp-local fleet or on `ubuntu-latest`; see [Linux Rust runner](#linux-rust-runner).
 
 Build caching and linking differ by OS:
 
-- Every OS restores and saves `Swatinem/rust-cache`. Only `main` saves.
+- Hosted jobs restore `Swatinem/rust-cache`; only `main` saves it. pp-local Linux jobs skip it and use the container's sccache instead.
 - Linux installs `mold` and links with it through `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold`. macOS and Windows keep their default linkers.
 - All jobs set `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to `line-tables-only`. Panic locations keep their file and line, and the build output is smaller.
 
@@ -214,12 +214,12 @@ To collect twenty consecutive green hosted `rust (macos)` job links after tip is
 
 ## Other Rust workflows
 
-- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
+- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. It is the one push-to-`main` CI workflow that does not cancel superseded runs: a cancelled run would skip the ratchet for that push's diff, and the job is short. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
 - **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. Its `changes` job selects them by event and changed paths:
   - On pull requests, `linux-precheck`, `server-smoke`, the arm64 `bundle` and `macos-storage-gate` run only when the PR has the exact `macos` label, is not a draft, and changes desktop inputs. The selector includes the Rust inputs above, the native workflow, its cleanup tests and the Rust verification helper directory. Fork PRs skip `macos-storage-gate`. The Intel bundle never runs on pull requests.
   - Pushes to `main` or `master`, merge groups, nightly and manual runs select every job, including the Intel bundle.
 
-  Every macOS job also needs a successful `linux-precheck`, so a broken web build never starts a macOS runner. Skipped jobs still report their checks. A new push, label change or draft change on a pull request cancels that pull request's older run. Every non-PR run has its own concurrency group, so a push to `main` never waits for or cancels another `main` run.
+  Every macOS job also needs a successful `linux-precheck`, so a broken web build never starts a macOS runner. Skipped jobs still report their checks. A new push, label change or draft change on a pull request cancels that pull request's older run. A new push to `main` cancels the older `main` run; reruns, merge groups, nightly and manual runs each keep their own group.
   The source fixture registers the named `cleanup_source_fixture` function with `trap cleanup_source_fixture EXIT` after a successful attach. It captures `$?` immediately and exits with that status on every cleanup path. Cleanup targets only this step's owned mount. It tries normal detach of the mount three times, with `sleep 2` between failures. If all three fail, it records holders and then forces detach of the whole-disk device that `hdiutil attach` printed first, again up to three times with `sleep 2` between failures. A forced unmount can succeed while ejecting the backing device returns `Resource busy`. The mount path is then an ordinary directory, so the forced retries target the device. The explicit sleeps total at most eight seconds. The `hdiutil` calls and holder diagnostics add time, so eight seconds is not a wall-clock cleanup bound.
 
   After normal detach retries fail, `lsof +f -- "$fixture_mount"` records open files on the source fixture's owned APFS filesystem before forced detach. A diagnostic failure, or failure of all three forced attempts, warns without changing the test exit status. Run `python3 scripts/test_native_image_cleanup.py -v` for executable cleanup fixtures. The same suite runs in `macos-storage-gate`, including a macOS-only disposable APFS image held open by a child process. Linux skips that native proof.
@@ -235,15 +235,69 @@ Required Rust and lint jobs fail if their input-selection job fails, so a broken
 
 ## Ephemeral PR runners
 
-Every job runs on a GitHub-hosted runner (`ubuntu-latest`, `ubuntu-24.04`,
-`macos-26`, `macos-26-intel`, `macos-latest` or `windows-latest`), for PRs, forks
-and non-PR events alike. Each job gets a fresh VM. No workflow uses a
-self-hosted label, a runner-local sccache, or `scripts/setup-ci-linux.sh`;
-hosted images already ship those prerequisites.
+Jobs run on GitHub-hosted runners (`ubuntu-latest`, `ubuntu-24.04`, `macos-26`,
+`macos-26-intel`, `macos-latest` or `windows-latest`), except the Linux Rust jobs
+below. Each hosted job gets a fresh VM.
 
-Rust jobs cache with `Swatinem/rust-cache`, saved only from `main`. The
-repository's Actions cache is limited to 10 GB, so older entries are evicted
-first when it fills.
+### Linux Rust runner
+
+`rust (linux) build`, `rust (linux) rebuild m/3` and the `rust (linux)` aggregate
+run on `[self-hosted, linux, x64, pp-local]` for same-repository PRs, pushes to
+`main`, merge groups and manual runs. pp-local is six ephemeral JIT slots, two on
+each of three VMs, and each job runs in a fresh `pp-slot-N` container. Job names do
+not change with the runner, so the required checks stay the same.
+
+The `changes` job picks the runner with `scripts/ci-rust-runner.py` and passes it
+on as a job output. It picks `ubuntu-latest` when:
+
+- the event is a fork PR or the nightly schedule;
+- the `PP_RUST_RUNNER` repository variable is `hosted` (unset or `local` means pp-local;
+  any other value means hosted);
+- the optional `PP_RUNNER_READ_TOKEN` secret can list runners and no online pp-local
+  runner is idle;
+- without that secret, or when it cannot list runners: another `rust (linux)` job has
+  waited 15 minutes or more for a pp-local runner.
+
+`GITHUB_TOKEN` cannot list self-hosted runners, so without the secret the choice
+reads only this workflow's queued jobs (`actions: read`). If that read fails too,
+the job stays on pp-local. One dead VM leaves four slots, so jobs keep running.
+If the whole fleet is down, the first job queues and each later run goes hosted
+after 15 minutes; rerun a stuck run to move it. `PP_RUST_RUNNER=hosted` moves every
+new run at once. To enable the idle check, store a fine-grained token with the
+repository's Administration read permission as `PP_RUNNER_READ_TOKEN`.
+
+The containers provide `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE` and a host-mounted Cargo
+registry. `scripts/ci-pp-local-sccache.sh` sets `RUSTC_WRAPPER` to `sccache` only
+when it is unset and sccache is on `PATH` (or at `/opt/pp-sccache-bin`), sets
+`CARGO_INCREMENTAL=0`, and never creates cache directories. The build and partition jobs end with
+`sccache --show-stats`. pp-local jobs skip `Swatinem/rust-cache`: the Actions cache
+is not needed there, and its post-job cleanup can delete registry sources that
+another container is compiling. `scripts/setup-ci-linux.sh` and
+`dtolnay/rust-toolchain` install the packages and Rust that hosted images ship.
+[Cargo cache trust](cargo-cache-trust.md) covers the shared registry.
+
+### Actions cache
+
+The repository's Actions cache is limited to 10 GB, so older entries are evicted
+first when it fills. Caches are saved only from `main`; PRs restore `main`'s
+entries. This covers `Swatinem/rust-cache` (`save-if`), the Tauri CLI archive
+(`actions/cache/restore` and `actions/cache/save`), and the Docker layer caches in
+Web CI (`cache-to` is empty off `main`). `actions/setup-node` and
+`actions/setup-python` have no save switch; they save only when the lockfile key
+is new.
+
+### Superseded runs
+
+Every CI workflow that runs on pushes to `main` groups those pushes by workflow
+and ref and cancels the older run when a newer push arrives, except the ast-grep
+ratchet above. The newest `main` run tests every earlier merge, so a burst of
+merges no longer queues one full run per merge. The cost is attribution: a
+cancelled merge has no result of its own. To find the merge that broke `main`,
+dispatch the workflow on each candidate SHA. Reruns (attempt 2 and later, which
+`main-red` starts) keep their own group so they never cancel the newer run. Tag
+pushes, merge groups, the schedule and manual runs never cancel each other.
+`pages.yml` keeps `cancel-in-progress: false`, because cancelling a Pages deploy
+can leave the site half-published, and `release.yml` runs only on tags.
 
 The web validation job keeps its 45-minute limit on same-repository PRs; fork
 PRs and non-PR runs keep 20 minutes.

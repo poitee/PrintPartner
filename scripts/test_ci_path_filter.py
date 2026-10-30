@@ -25,7 +25,8 @@ class CiPathFilterTests(unittest.TestCase):
                      "web/scripts/storage-fixtures/prepare.mts",
                      "fixtures/parity/jobs-model/jobs-model.json",
                      "fixtures/drivers/moonraker/moonraker-success.json",
-                     "fixtures/http/routes-inventory.json"]:
+                     "fixtures/http/routes-inventory.json", "scripts/ci-rust-runner.py",
+                     "scripts/test_ci_rust_runner.py", "scripts/ci-pp-local-sccache.sh"]:
             with self.subTest(path=path):
                 self.assertTrue(ci_filter.relevant(path, "rust"))
         for path in ["docs/ci.md", "README.md", "web/scripts/tool.mjs",

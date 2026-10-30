@@ -1,7 +1,9 @@
 # Cargo cache trust for same-repository PRs
 
-All CI jobs now run on GitHub-hosted runners, so no job shares a host Cargo
-cache volume. This assessment records the earlier local-runner configuration.
+The Linux Rust jobs in Rust cross-OS run on pp-local again (GRE-1042), so
+same-repository PRs and `main` share the containers' host-mounted Cargo registry
+and sccache. This assessment, written for the earlier local-runner configuration,
+applies to them again.
 
 Same-repository PR jobs share a Linux Cargo cache trust domain. A fresh runner
 does not make dependencies private when its host mounts persistent writable

@@ -9,6 +9,9 @@ name: Rust cross-OS
 # all(). On main push, merge_group, and workflow_dispatch, Linux archives
 # desktop_rebuild nextest once and runs --partition slice:m/3 across three
 # runners. Schedule keeps the in-job monolithic desktop_rebuild nextest.
+# The Linux jobs run on the pp-local fleet for same-repo PRs and non-schedule
+# runs, and on ubuntu-latest for forks, schedule, PP_RUST_RUNNER=hosted or an
+# unavailable fleet (scripts/ci-rust-runner.py; docs/development/ci.md).
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -24,8 +27,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || (github.event_name == 'push' && github.run_attempt == '1' && !startsWith(github.ref, 'refs/tags/')) && 'push' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == '1' && !startsWith(github.ref, 'refs/tags/')) }}
 
 defaults:
   run:
@@ -45,9 +48,14 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # The runner choice reads this workflow's queued jobs.
+      actions: read
     outputs:
       relevant: ${{ steps.select.outputs.relevant }}
       nextest_filter: ${{ steps.select.outputs.nextest_filter }}
+      linux_runs_on: ${{ steps.runner.outputs.linux_runs_on }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,13 +73,30 @@ jobs:
           python3 -B -m unittest discover -s scripts -p test_alert_macos_main.py
           python3 scripts/ci-path-filter.py rust
           python3 scripts/ci-affected-nextest-filter.py
+      - name: Select the Linux Rust runner
+        id: runner
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          RUN_ID: ${{ github.run_id }}
+          PP_RUST_RUNNER: ${{ vars.PP_RUST_RUNNER }}
+          # Optional: a read-only token that can list self-hosted runners.
+          RUNNER_TOKEN: ${{ secrets.PP_RUNNER_READ_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B -m unittest discover -s scripts -p test_ci_rust_runner.py
+          python3 scripts/ci-rust-runner.py
 
   rust-linux-build:
     name: rust (linux) build
     needs: changes
     # Explicit jobs keep each required check present when selection skips it.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.relevant != 'false'))
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_runs_on || '"ubuntu-latest"') }}
+    outputs:
+      # The rebuild partitions and the aggregate reuse this runner choice.
+      runs_on: ${{ needs.changes.outputs.linux_runs_on }}
     env:
       RUST_OS: linux
       CARGO_SCOPE: --workspace
@@ -88,6 +113,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # pp-local containers bring sccache (SCCACHE_DIR, size) and a host-mounted
+      # CARGO_HOME registry; hosted images bring the rest of these prerequisites.
+      - name: Set up pp-local prerequisites
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on pp-local
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
+          components: rustfmt, clippy
+      - name: Use the pp-local sccache
+        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
+        run: bash "$GITHUB_WORKSPACE/scripts/ci-pp-local-sccache.sh"
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
       - name: Install the pinned toolchain from rust-toolchain.toml
@@ -96,7 +135,10 @@ jobs:
           rustup toolchain install
           rustc --version
       # Only main saves; PRs and other refs restore main's entry when keys match.
+      # pp-local skips it: sccache covers it there, and the action's post-job
+      # cleanup can delete registry sources another container is compiling.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: runner.environment != 'self-hosted'
         with:
           workspaces: rust -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -252,6 +294,10 @@ jobs:
       - name: doctests (desktop_rebuild on)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
         run: cargo test --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --no-fail-fast --doc --features desktop_rebuild
+      - name: sccache stats
+        if: always() && runner.environment == 'self-hosted' && runner.os == 'Linux'
+        continue-on-error: true
+        run: '"${RUSTC_WRAPPER:-sccache}" --show-stats'
 
   # Three Linux partitions (see docs/development/ci.md). Only main push,
   # merge_group, and workflow_dispatch; PRs run desktop_rebuild nextest in-job.
@@ -261,7 +307,8 @@ jobs:
     # Draft guard first (merge-group workflow tests). Event filter still keeps
     # partitions off pull_request; only push / merge_group / workflow_dispatch.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result == 'success' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'))
-    runs-on: ubuntu-latest
+    # Same runner as the build: the archived binaries link its system libraries.
+    runs-on: ${{ fromJSON(needs.rust-linux-build.outputs.runs_on || '"ubuntu-latest"') }}
     strategy:
       fail-fast: false
       matrix:
@@ -275,6 +322,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up pp-local prerequisites
+        if: runner.environment == 'self-hosted'
+        run: bash "$GITHUB_WORKSPACE/scripts/setup-ci-linux.sh"
+      - name: Set up Rust on pp-local
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.99.0'
       - name: Fetch pinned historical schema commits
         run: rust/scripts/fetch-historical-schema-commits.sh
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
@@ -346,6 +401,11 @@ jobs:
         # Remap the archived workspace root (rust/) onto this runner's checkout so
         # partitions do not require identical absolute paths across runners.
         run: cargo nextest run --archive-file nextest-archive-desktop-rebuild.tar.zst --workspace-remap "$GITHUB_WORKSPACE/rust" --partition slice:${{ matrix.partition }}/3 --no-fail-fast -E "$NEXTEST_FILTER"
+      # Partitions only run archived binaries, so this mostly shows the sccache is reachable.
+      - name: sccache stats
+        if: always() && runner.environment == 'self-hosted'
+        continue-on-error: true
+        run: '"${RUSTC_WRAPPER:-sccache}" --show-stats'
 
   # Preserve the required check name rust (linux). Partitions are skipped on PRs
   # and on schedule (monolithic in-job rebuild-on nextest).
@@ -355,7 +415,7 @@ jobs:
     # Draft guard first. !cancelled() so cancel reports skipped, not aggregate fail.
     # Rebuild may be skipped on PRs/schedule; push / merge_group / dispatch require success.
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (!cancelled() && needs.rust-linux-build.result != 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.rust-linux-build.outputs.runs_on || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:
       - name: Require linux build and rebuild partitions

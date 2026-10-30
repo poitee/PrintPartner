@@ -42,8 +42,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: web-ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: web-ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || (github.event_name == 'push' && github.run_attempt == '1' && !startsWith(github.ref, 'refs/tags/')) && 'push' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == '1' && !startsWith(github.ref, 'refs/tags/')) }}
 
 jobs:
   web:
@@ -167,7 +167,8 @@ jobs:
           load: true
           push: false
           cache-from: type=gha,scope=slicer-sidecar
-          cache-to: type=gha,scope=slicer-sidecar,mode=max
+          # PRs read main's layers but never write their own (10 GB cache cap).
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,scope=slicer-sidecar,mode=max' || '' }}
       - name: Test sidecar request handling
         run: |
           docker run --rm --entrypoint /lsiopy/bin/python3 \
@@ -200,7 +201,8 @@ jobs:
           load: true
           push: false
           cache-from: type=gha,scope=print-partner
-          cache-to: type=gha,scope=print-partner,mode=max
+          # PRs read main's layers but never write their own (10 GB cache cap).
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,scope=print-partner,mode=max' || '' }}
       - name: Verify fresh-volume ownership and restart persistence
         run: bash scripts/docker-startup-smoke.sh print-partner:ci
       - name: Create local smoke source
