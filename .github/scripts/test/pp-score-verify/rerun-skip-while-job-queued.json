@@ -1,0 +1,9 @@
+{
+  "kind": "rerun",
+  "head_sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090",
+  "runs": [
+    {"id": 100, "event": "pull_request_target", "head_sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090", "status": "completed", "conclusion": "failure"},
+    {"id": 101, "event": "pull_request_target", "head_sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090", "status": "queued", "conclusion": null, "verify_status": "queued"}
+  ],
+  "expect": {"action": "skip", "run_id": null, "message_contains": ["run 101", "it reads the comments when it runs"]}
+}
