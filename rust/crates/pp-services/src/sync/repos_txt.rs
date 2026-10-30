@@ -12,15 +12,17 @@ pub struct ReposTxtLine {
     pub branch: String,
 }
 
-fn github_url_pattern() -> &'static regress::Regex {
-    static URL: OnceLock<regress::Regex> = OnceLock::new();
+/// `None` only if the constant pattern fails to compile, which the parity tests rule out.
+fn github_url_pattern() -> Option<&'static regress::Regex> {
+    static URL: OnceLock<Option<regress::Regex>> = OnceLock::new();
     URL.get_or_init(|| {
         regress::Regex::with_flags(
             r"^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$",
             "i",
         )
-        .expect("valid repos.txt URL pattern")
+        .ok()
     })
+    .as_ref()
 }
 
 fn is_none_url(url: &str) -> bool {
@@ -47,7 +49,7 @@ pub fn parse_repos_txt_line(line: &str) -> Option<ReposTxtLine> {
             branch: branch.unwrap_or("main").into(),
         });
     }
-    let found = github_url_pattern().find(raw)?;
+    let found = github_url_pattern()?.find(raw)?;
     Some(ReposTxtLine {
         name: raw[found.group(2)?].into(),
         url: raw.into(),

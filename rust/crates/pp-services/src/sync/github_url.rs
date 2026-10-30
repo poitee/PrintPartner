@@ -50,12 +50,13 @@ fn decode_uri_component(value: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-fn ssh_pattern() -> &'static regress::Regex {
-    static SSH: OnceLock<regress::Regex> = OnceLock::new();
+/// `None` only if the constant pattern fails to compile, which the parity tests rule out.
+fn ssh_pattern() -> Option<&'static regress::Regex> {
+    static SSH: OnceLock<Option<regress::Regex>> = OnceLock::new();
     SSH.get_or_init(|| {
-        regress::Regex::with_flags(r"^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$", "i")
-            .expect("valid SSH pattern")
+        regress::Regex::with_flags(r"^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$", "i").ok()
     })
+    .as_ref()
 }
 
 /// Path segments of a WHATWG URL, as `pathname.split("/").filter(Boolean)`.
@@ -74,7 +75,7 @@ fn url_segments(url: &str) -> Option<Vec<String>> {
 /// Parses an SSH or `http(s)://github.com` repository URL.
 pub fn parse_github_url(url: &str) -> Option<GithubRepoRef> {
     let trimmed = js_trim(url);
-    if let Some(found) = ssh_pattern().find(trimmed) {
+    if let Some(found) = ssh_pattern()?.find(trimmed) {
         let owner = &trimmed[found.group(1)?];
         let repo = &trimmed[found.group(2)?];
         return Some(GithubRepoRef {
