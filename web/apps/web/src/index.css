@@ -322,8 +322,10 @@
   :root[data-desktop-rebuild] *::before,
   :root[data-desktop-rebuild] *::after {
     animation-duration: var(--motion-base) !important;
+    animation-delay: var(--motion-base) !important;
     animation-iteration-count: 1 !important;
     transition-duration: var(--motion-base) !important;
+    transition-delay: var(--motion-base) !important;
     scroll-behavior: auto !important;
   }
 }

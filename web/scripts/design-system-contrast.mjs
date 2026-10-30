@@ -245,7 +245,7 @@ for (const [key, value] of pick(ROOT)) {
 }
 const catchAll = rules.find((r) => r.media === REDUCED_MOTION && r.selector.startsWith(`${REBUILD} *`));
 const catchAllDecls = catchAll ? declarations(catchAll.body) : new Map();
-for (const prop of ["animation-duration", "transition-duration"]) {
+for (const prop of ["animation-duration", "animation-delay", "transition-duration", "transition-delay"]) {
   const value = catchAllDecls.get(prop) ?? "";
   if (!/^var\(--motion-[\w-]+\) !important$/.test(value)) {
     problems.push(`reduced motion: ${REBUILD} * must set ${prop} from a motion token`);

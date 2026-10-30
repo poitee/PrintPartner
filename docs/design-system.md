@@ -230,7 +230,8 @@ One color per printer state from farm status (GRE-1002) and the printer event st
 (GRE-1014). `queued` is a job state and has no printer color. No two states share a
 color in any variant. `printerStatusPresentation(kind)` in `lib/statusTone.ts` gives the
 words, a distinct icon and the `text-printer-*` class. Always render the icon and the
-words with the color.
+words with the color. A printer color may match a workflow tone (`complete` and
+`success`, `error` and `destructive`); only the printer states must differ from each other.
 
 | State | Token | Icon | Words |
 | --- | --- | --- | --- |
@@ -250,7 +251,8 @@ words with the color.
   `--border-strong` to `CanvasText`, `--border` to `GrayText` and `--ring` to
   `Highlight`. The icon and words carry the status.
 - Reduced motion sets `--motion-fast`, `--motion-base` and `--motion-slow` to 0 ms, and
-  every animation and transition reads `--motion-base`, so nothing animates.
+  every animation and transition duration and delay reads `--motion-base`, so nothing
+  animates.
 
 ### Tokens only
 
