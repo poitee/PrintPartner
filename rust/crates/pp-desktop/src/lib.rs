@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tauri::Url;
 
+pub mod autostart;
 pub mod browser;
 pub mod downloads;
 pub mod focus;

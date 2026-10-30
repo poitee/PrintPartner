@@ -128,8 +128,11 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
     let mut data = None;
     let mut test_exit = None;
     let mut test_recovery_logs = false;
+    let mut minimized = false;
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            // The login LaunchAgent passes this; the tray's Show brings the window back.
+            pp_desktop::autostart::MINIMIZED_ARG => minimized = true,
             "--dev-stage" if cfg!(debug_assertions) => {
                 stage = Some(PathBuf::from(
                     args.next().context("Development stage missing")?,
@@ -269,6 +272,7 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
         };
         let window = builder
             .title("Print Partner")
+            .visible(!minimized)
             .inner_size(1280.0, 850.0)
             .min_inner_size(900.0, 650.0)
             .on_navigation(move |url| origin.admits(url))
