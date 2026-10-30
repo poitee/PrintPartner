@@ -141,6 +141,22 @@ These failures are common:
 - `unused variable` or `function is never used` on one OS only. A value is used only inside a `#[cfg]` block. Compute the value inside that block, or gate the function with the same `#[cfg]`.
 - A test that fails on one OS only. Run that test locally on the same OS with `cargo nextest run -E 'test(<name>)'`.
 
+## Test groups and flaky tests
+
+`rust/.config/nextest.toml` sets both rules below in the `default` profile, which CI and `just ci` use.
+
+Tests that start real Node children run in the `process-heavy` test group, and at most two of them run at once. The group holds every `pp-core` `runtime_m0` test and the `pp-compat` `ticket_t_2::` supervisor tests. On a busy runner, four of these at once timed out (GRE-956). Other tests keep running on the remaining threads. To see which tests a build puts in the group, run `cargo nextest show-config test-groups --manifest-path rust/Cargo.toml`.
+
+A test that fails at random goes on the flaky list, the override with `retries = 1`. The rules:
+
+1. Add a test to the list only with an open Linear ticket that names it and an owner. Put the ticket id in a comment next to the filter.
+2. nextest runs a failed test on the list once more. A pass on the second try passes the job, and the log shows the test as `FLAKY`.
+3. If a test needs that retry twice in one week, the owner quarantines it: they remove it from the list and exclude it from the `default` profile, with the ticket id in a comment, until the ticket is fixed. To find retries, run `gh run view <run-id> --log | grep FLAKY` on the week's `Rust cross-OS` runs.
+4. Never quarantine a test of a core guarantee: no orphan processes and no data loss. It stays required. Fix it or make its wait longer.
+5. When the ticket is fixed, remove the test from the list in the same pull request.
+
+The list is empty while no flaky ticket is open.
+
 ## Keep platform code in cfg modules
 
 Put code that differs by OS in one module for each platform, and select the module once:

@@ -3,6 +3,23 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 10 }
 
+# Tests that start real Node children (pp-core runtime_m0, pp-compat's ticket_t_2
+# supervisor tests). Under a loaded runner they time out when four run at once
+# (GRE-956), so at most two run together. Other tests keep the remaining threads.
+[test-groups]
+process-heavy = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'binary(=runtime_m0) | (package(=pp-compat) & test(/^ticket_t_2::/))'
+test-group = "process-heavy"
+
+# Flaky list: nextest retries each test once and reports a retried pass as FLAKY.
+# Add a test only with its open Linear ticket, as `| (binary(=<bin>) & test(=<name>))`.
+# docs/development/ci.md has the policy. Empty: every known flake is fixed.
+[[profile.default.overrides]]
+filter = 'none()'
+retries = 1
+
 [[profile.default.overrides]]
 filter = 'binary(=ticket_t_3_drain) & test(=scratch_root_is_empty_after_drain_tests)'
 threads-required = "num-test-threads"
