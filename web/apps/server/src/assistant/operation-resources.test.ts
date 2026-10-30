@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -5699,7 +5699,8 @@ type PlanningProposalTool =
   | "propose_set_build_source_roles"
   | "propose_rebuild_plan"
   | "propose_apply_plan_draft"
-  | "propose_assign_role_filament";
+  | "propose_assign_role_filament"
+  | "propose_add_build_checklist_items";
 const PLANNING_PROPOSAL_TOOLS = [
   "propose_update_build_brief",
   "propose_resolve_build_differences",
@@ -6421,4 +6422,43 @@ it("traces apply_stack_preset plan checks, catalog presets, stack warnings and d
   expect(repo.getProfileLayers(plan.id).map((layer) => layer.project_name)).toEqual(layersBefore);
   expect([...union].sort()).toEqual(STACK_PRESET_UNION);
   expect(declared("tool.apply_stack_preset")).toEqual(STACK_PRESET_UNION);
+});
+
+it("traces propose_add_build_checklist_items brief lookup, item validation and tenants against app_settings", async () => {
+  const tool = "propose_add_build_checklist_items";
+  const plan = repo.createProfile("Checklist plan");
+  const briefless = repo.createProfile("Checklist briefless");
+  const settings = ["table:app_settings"];
+  const missing = { error: "Build planning brief not found" };
+  const items = [{ label: "Level the bed" }, { label: "Dry the filament", note: "4 h at 50 C" }];
+  const proposal = (planId: number, list: unknown) => ({
+    status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: { id: expect.any(String), type: tool, plan_id: planId, label: "add Build checklist items", summary: "Persist the reviewed pre-print checklist.", params: { plan_id: planId, items: list } },
+  });
+  // Without a plan the brief lookup is skipped.
+  for (const plan_id of [undefined, null, "invalid"]) expect(await tracePlanningProposal(tool, { plan_id, items }, [])).toEqual(missing);
+  expect(await tracePlanningProposal(tool, { plan_id: briefless.id, items }, settings)).toEqual(missing);
+  savePlanningBrief(plan.id);
+  const foreign = tenantStorage.run("other", () => {
+    const created = repo.createProfile("Foreign checklist");
+    savePlanningBrief(created.id);
+    return created;
+  });
+  // The brief is checked before the items.
+  for (const bad of [undefined, null, [], {}, "Level the bed"]) expect(await tracePlanningProposal(tool, { plan_id: plan.id, items: bad }, settings)).toEqual({ error: "items required" });
+  expect(await tracePlanningProposal(tool, { plan_id: briefless.id, items: [] }, settings)).toEqual(missing);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, items }, settings, { activePlanId: briefless.id })).toEqual(proposal(plan.id, items));
+  expect(await tracePlanningProposal(tool, { plan_id: String(plan.id), items }, settings)).toEqual(proposal(plan.id, items));
+  expect(await tracePlanningProposal(tool, { items }, settings, { activePlanId: plan.id })).toEqual(proposal(plan.id, items));
+  // Items pass through unvalidated beyond a non-empty array.
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, items: [7, null] }, settings)).toEqual(proposal(plan.id, [7, null]));
+  // Explicit IDs are not ownership-checked; the tenant-filtered brief key fails closed for another tenant's plan.
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, items }, settings)).toEqual(missing);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, items }, settings, { tenantId: "other" })).toEqual(missing);
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, items }, settings, { tenantId: "other" })).toEqual(proposal(foreign.id, items));
+  // proposeAssistantAction skips the dismissal lookup, so a dismissed fingerprint still proposes and plan_decisions is never read.
+  repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: tool, params: { plan_id: plan.id, items } });
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, items }, settings)).toEqual(proposal(plan.id, items));
+  expect([...unions.get(tool) ?? []].sort()).toEqual(settings);
+  expect(declared(`tool.${tool}`)).toEqual(settings);
 });

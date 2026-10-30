@@ -1642,6 +1642,12 @@
           {"kind": "file", "name": "assistant-domain"},
           {"kind": "file", "name": "kit-catalog"}
         ]
+      },
+      {
+        "operation": "tool.propose_add_build_checklist_items",
+        "resources": [
+          {"kind": "table", "name": "app_settings"}
+        ]
       }
     ],
     "unresolved": [
@@ -1993,7 +1999,6 @@
       "tool.ingest_guide_text",
       "tool.ingest_guide_url",
       "tool.inspect_repo_tree",
-      "tool.propose_add_build_checklist_items",
       "tool.propose_add_source",
       "tool.propose_edit_plan_draft_parts",
       "tool.propose_import_build_inputs",
