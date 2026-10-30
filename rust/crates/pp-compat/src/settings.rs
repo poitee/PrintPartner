@@ -113,14 +113,15 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("TRUST_PROXY", Owner::Core),
 ];
 
-/// The environment pairs the compatibility child receives. It also inherits `PATH`,
-/// `HOME`, `TMPDIR`, `LANG`, `LC_ALL` and `TZ`, and gets the release commit in `PP_COMMIT`.
+/// Whether `name` is a user setting the spawn may pass to the child.
 pub fn is_desktop_setting(name: &str) -> bool {
     ENVIRONMENT
         .iter()
         .any(|(entry, owner)| *entry == name && *owner == Owner::DesktopSettings)
 }
 
+/// The environment pairs the compatibility child receives. It also inherits `PATH`,
+/// `HOME`, `TMPDIR`, `LANG`, `LC_ALL` and `TZ`, and gets the release commit in `PP_COMMIT`.
 pub fn fixed_env() -> impl Iterator<Item = (&'static str, &'static str)> {
     ENVIRONMENT.iter().filter_map(|(name, owner)| match owner {
         Owner::Fixed(value) => Some((*name, *value)),
