@@ -247,3 +247,7 @@ first when it fills.
 
 The web validation job keeps its 45-minute limit on same-repository PRs; fork
 PRs and non-PR runs keep 20 minutes.
+
+## Reviewer fallback
+
+When no reviewer from another vendor can score a pull request, follow [Reviewer fallback](definition-of-done.md#reviewer-fallback). That page holds the rule.
