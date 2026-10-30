@@ -112,7 +112,7 @@ fn ticket_t_60_profile_sync_matches_node_capture() {
     let roots = watch_roots(&capture);
     let rust = rust_outcomes(&roots);
     assert!(
-        capture.outcomes.len() >= 36,
+        capture.outcomes.len() >= 39,
         "corpus shrank: {}",
         capture.outcomes.len()
     );

@@ -150,7 +150,7 @@ TMPDIR=<scratch> node --conditions=development --import tsx ../fixtures/parity/r
 
 `generate.mjs` runs Node's real `startProfileSyncWatcher` over the three slicer trees in `roots/` (Orca, Bambu Studio and PrusaSlicer, laid out as `defaultWatchDirs` expects), with a repository that records each upsert. It calls `syncAll()` once and stops the watcher. Each outcome is either the table and complete upsert input plus the broadcast event, or `failed` when Node logged a parse failure. Paths are relative to this directory.
 
-The trees hold user saves that inherit a parent (looked up case-insensitively), a missing parent, INI, array, string and `null` parents, a `type` field that overrides the directory, BOM and CRLF files, malformed JSON, a directory named `*.json`, number formatting cases, duplicate and array-index keys, and material names for `inferMaterialType`. `.gitattributes` keeps line endings byte-exact on Windows checkouts.
+The trees hold user saves that inherit a parent (looked up case-insensitively), a missing parent, INI, array, string and `null` parents, a `type` field that overrides the directory, BOM and CRLF files, Unicode separators (U+2028, U+2029, U+00A0, U+3000, U+FEFF, U+0085) at trim and `\s` boundaries, malformed JSON, a directory named `*.json`, number formatting cases, duplicate and array-index keys, and material names for `inferMaterialType`. `.gitattributes` keeps line endings byte-exact on Windows checkouts.
 
 `rust/crates/pp-services/tests/ticket_t_60_profile_sync.rs` scans the same roots with `pp_services::profile_sync::scan_root` and requires every outcome to match, in order, including the `resolvedFlatConfig` string byte for byte.
 
