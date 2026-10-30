@@ -28,6 +28,7 @@ import {
   isSourcesPath,
 } from "../lib/routes";
 import { cn } from "@/lib/utils";
+import { DESKTOP_REBUILD_ATTRIBUTE, desktopRebuildEnabled } from "../lib/desktopRebuild";
 import { useProfileSelection } from "../context/ProfileContext";
 import { useStlAutoSync } from "../context/StlAutoSyncContext";
 import { useFlushBuildPageSaves } from "../context/BuildSaveFlushContext";
@@ -62,6 +63,16 @@ export default function AppLayout() {
       setBannerDismissed(isUpdateBannerDismissed(updateCheck.latest_version));
     }
   }, [updateCheck?.latest_version]);
+
+  const desktopRebuild = desktopRebuildEnabled(health?.capabilities);
+  // Rebuilt styles scope under this root attribute, which also reaches portals.
+  // The shell mounts once, so its cleanup owns the attribute.
+  useEffect(() => {
+    if (!desktopRebuild) return;
+    const root = document.documentElement;
+    root.setAttribute(DESKTOP_REBUILD_ATTRIBUTE, "");
+    return () => root.removeAttribute(DESKTOP_REBUILD_ATTRIBUTE);
+  }, [desktopRebuild]);
 
   useEffect(() => {
     const width = sidebarCollapsed ? "4.25rem" : "18rem";
