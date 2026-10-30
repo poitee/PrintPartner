@@ -352,7 +352,7 @@ pub struct UploadResult {
 }
 
 impl UploadResult {
-    fn failed(message: String, outcome_unknown: bool) -> Self {
+    pub(crate) fn failed(message: String, outcome_unknown: bool) -> Self {
         Self {
             ok: false,
             remote_path: None,
@@ -505,7 +505,7 @@ async fn multipart(source: UploadSource, name: &str) -> Result<PostBody> {
 
 /// `: <first 200 UTF-16 units>` of an error reply, as Node formats it. Node
 /// drops text over 64 KiB, and `TextDecoder` strips a leading BOM.
-fn error_text(body: &[u8]) -> String {
+pub(crate) fn error_text(body: &[u8]) -> String {
     if body.len() > MAX_ERROR_TEXT_BYTES {
         return String::new();
     }
@@ -542,7 +542,7 @@ fn envelope(body: &[u8]) -> Result<Value> {
 }
 
 /// `String.prototype.trim`: Unicode White_Space without NEL, plus the BOM.
-fn js_trim(value: &str) -> &str {
+pub(crate) fn js_trim(value: &str) -> &str {
     value.trim_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}')
 }
 
@@ -600,7 +600,7 @@ fn same_origin(base: &str, advertised: &str) -> Option<Option<String>> {
 
 /// Host-reported paths are untrusted: reject backslashes, NULs and empty,
 /// `.` or `..` segments. Leading and trailing slashes are trimmed.
-fn safe_storage_path(raw: &str) -> Option<String> {
+pub(crate) fn safe_storage_path(raw: &str) -> Option<String> {
     if raw.contains(['\\', '\0']) {
         return None;
     }
@@ -614,7 +614,7 @@ fn entry_name(raw: Option<&Value>) -> Option<String> {
     safe_storage_path(raw?.as_str()?).filter(|name| !name.contains('/'))
 }
 
-fn encode_uri_component(segment: &str) -> String {
+pub(crate) fn encode_uri_component(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {
         if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {

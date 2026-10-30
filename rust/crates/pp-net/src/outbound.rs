@@ -122,6 +122,9 @@ pub struct HttpGuard {
 pub struct HttpReply {
     pub status: u16,
     pub body: Vec<u8>,
+    /// The `WWW-Authenticate` header, for Digest challenges. Other response
+    /// headers are not kept.
+    pub www_authenticate: Option<String>,
 }
 
 /// A POST body of exactly `length` bytes, sent with that `Content-Length`.
@@ -222,8 +225,40 @@ impl HttpGuard {
     }
     pub async fn get(&self, url: &str, api_key: Option<&str>) -> Result<HttpReply> {
         let written = AtomicBool::new(false);
-        let request = self.send("GET", url, api_key, None, Empty::<Bytes>::new(), &written);
+        let key = key_header(api_key);
+        let headers = with_key(&key, &[]);
+        let request = self.send("GET", url, &headers, None, Empty::<Bytes>::new(), &written);
         self.bounded(self.deadline, request).await
+    }
+
+    /// One GET or PUT attempt with extra request headers and no API key.
+    /// `body: None` sends no body. Errors say whether the printer may have
+    /// acted on the request, as for [`HttpGuard::post`].
+    pub async fn request(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: Option<PostBody>,
+        deadline: Duration,
+    ) -> Result<HttpReply, PostError> {
+        if !matches!(method, "GET" | "PUT") {
+            return Err(PostError::Unsent(anyhow::anyhow!("Unsupported method")));
+        }
+        if method == "GET" && body.is_some() {
+            return Err(PostError::Unsent(anyhow::anyhow!("GET with a body")));
+        }
+        // The guard owns framing and the pinned host.
+        let owned = ["host", "connection", "content-length", "content-type"];
+        if headers
+            .iter()
+            .any(|(name, _)| owned.iter().any(|o| o.eq_ignore_ascii_case(name)))
+        {
+            return Err(PostError::Unsent(anyhow::anyhow!(
+                "Reserved request header"
+            )));
+        }
+        self.write(method, url, None, headers, body, deadline).await
     }
 
     /// One POST attempt. `body: None` sends an empty body.
@@ -234,11 +269,25 @@ impl HttpGuard {
         body: Option<PostBody>,
         deadline: Duration,
     ) -> Result<HttpReply, PostError> {
+        self.write("POST", url, api_key, &[], body, deadline).await
+    }
+
+    async fn write(
+        &self,
+        method: &str,
+        url: &str,
+        api_key: Option<&str>,
+        headers: &[(&str, &str)],
+        body: Option<PostBody>,
+        deadline: Duration,
+    ) -> Result<HttpReply, PostError> {
         if deadline.is_zero() || deadline > MAX_POST_DEADLINE {
             return Err(PostError::Unsent(anyhow::anyhow!("Invalid deadline")));
         }
         let written = AtomicBool::new(false);
         let failed = Arc::new(AtomicBool::new(false));
+        let key = key_header(api_key);
+        let headers = with_key(&key, headers);
         let result = match body {
             Some(body) => {
                 let reader = ReaderBody {
@@ -248,12 +297,12 @@ impl HttpGuard {
                     failed: failed.clone(),
                 };
                 let header = Some((body.content_type, body.length));
-                let request = self.send("POST", url, api_key, header, reader, &written);
+                let request = self.send(method, url, &headers, header, reader, &written);
                 self.bounded(deadline, request).await
             }
             None => {
-                let request =
-                    self.send("POST", url, api_key, None, Empty::<Bytes>::new(), &written);
+                let empty = Empty::<Bytes>::new();
+                let request = self.send(method, url, &headers, None, empty, &written);
                 self.bounded(deadline, request).await
             }
         };
@@ -301,7 +350,7 @@ impl HttpGuard {
         &self,
         method: &str,
         url: &str,
-        api_key: Option<&str>,
+        headers: &[(&str, &str)],
         content: Option<(String, u64)>,
         body: B,
         written: &AtomicBool,
@@ -368,35 +417,30 @@ impl HttpGuard {
             .uri(uri.path_and_query().map_or("/", |p| p.as_str()))
             .header("host", authority.as_str())
             .header("connection", "close");
-        if let Some(key) = api_key.filter(|key| !key.is_empty() && *key != "****") {
-            let jwt = key.split('.').count() == 3
-                && key.split('.').all(|segment| {
-                    !segment.is_empty()
-                        && segment
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
-                });
-            builder = if jwt {
-                builder.header("authorization", format!("Bearer {key}"))
-            } else {
-                builder.header("x-api-key", key)
-            };
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
         }
         if let Some((content_type, length)) = content {
             builder = builder
                 .header("content-type", content_type)
                 .header("content-length", length);
-        } else if method == "POST" {
+        } else if method != "GET" {
             builder = builder.header("content-length", 0);
         }
         let request = builder.body(body)?;
         written.store(true, Ordering::SeqCst);
         let response = sender.send_request(request).await?;
         let status = response.status().as_u16();
+        let www_authenticate = response
+            .headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         if response.status().is_redirection() {
             return Ok(HttpReply {
                 status,
                 body: Vec::new(),
+                www_authenticate,
             });
         }
         let body = Limited::new(response.into_body(), self.max_body)
@@ -405,8 +449,40 @@ impl HttpGuard {
             .map_err(|_| anyhow::anyhow!("HTTP body unavailable or oversized"))?
             .to_bytes()
             .to_vec();
-        Ok(HttpReply { status, body })
+        Ok(HttpReply {
+            status,
+            body,
+            www_authenticate,
+        })
     }
+}
+
+/// The header an API key travels in: a JWT as a bearer token, else `x-api-key`.
+fn key_header(api_key: Option<&str>) -> Option<(&'static str, String)> {
+    let key = api_key.filter(|key| !key.is_empty() && *key != "****")?;
+    let jwt = key.split('.').count() == 3
+        && key.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+        });
+    Some(if jwt {
+        ("authorization", format!("Bearer {key}"))
+    } else {
+        ("x-api-key", key.to_owned())
+    })
+}
+
+fn with_key<'a>(
+    key: &'a Option<(&'static str, String)>,
+    headers: &[(&'a str, &'a str)],
+) -> Vec<(&'a str, &'a str)> {
+    let mut all = headers.to_vec();
+    if let Some((name, value)) = key {
+        all.push((name, value));
+    }
+    all
 }
 
 async fn connect_addresses<T, F>(
@@ -850,6 +926,65 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(matches!(error, PostError::Unsent(_)), "{url}: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ticket_t_22_request_sends_headers_and_keeps_the_challenge() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/v1/status", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut chunk = [0; 1024];
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest nonce=\"n\"\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8(bytes).unwrap()
+        });
+        let guard = HttpGuard::new(Arc::new(SystemResolver), Duration::from_secs(1), 100).unwrap();
+        let reply = guard
+            .request(
+                "GET",
+                &url,
+                &[("authorization", "Digest x")],
+                None,
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.status, 401);
+        assert_eq!(
+            reply.www_authenticate.as_deref(),
+            Some("Digest nonce=\"n\"")
+        );
+        let request = server.await.unwrap();
+        assert!(
+            request.starts_with("GET /api/v1/status HTTP/1.1\r\n"),
+            "{request}"
+        );
+        assert!(
+            request.contains("\r\nauthorization: Digest x\r\n"),
+            "{request}"
+        );
+        assert!(!request.contains("content-length"), "{request}");
+
+        for (method, headers) in [
+            ("POST", &[][..]),
+            ("PUT", &[("Content-Length", "1")][..]),
+            ("PUT", &[("host", "elsewhere")][..]),
+        ] {
+            let error = guard
+                .request(method, &url, headers, None, Duration::from_secs(1))
+                .await
+                .unwrap_err();
+            assert!(matches!(error, PostError::Unsent(_)), "{method}: {error}");
         }
     }
 
