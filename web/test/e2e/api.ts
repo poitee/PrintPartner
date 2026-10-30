@@ -8,7 +8,7 @@ export async function api<T = unknown>(page: Page, path: string, method = "GET",
   const origin = process.env.PP_SERVER_URL;
   const response = await page.request.fetch(`${origin}${path}`, {
     method,
-    headers: { Origin: origin!, Accept: "application/json", "Idempotency-Key": randomUUID() },
+    headers: { Origin: origin!, Accept: "application/json", ...(method === "GET" ? {} : { "Idempotency-Key": randomUUID() }) },
     ...(data === undefined ? {} : { data }),
   });
   const text = await response.text();

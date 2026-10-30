@@ -704,8 +704,8 @@ def main():
         parser.error("--credential-file applies only to launch")
     if args.binary is not None and args.mode != "launch":
         parser.error("--binary applies only to launch")
-    if args.binary is not None and not args.binary.is_file():
-        parser.error(f"--binary is not a file: {args.binary}")
+    if args.binary is not None and not (args.binary.is_file() and os.access(args.binary, os.X_OK)):
+        parser.error(f"--binary is not an executable file: {args.binary}")
     root = args.repo.resolve() if args.repo is not None else default_repo_root()
     if args.mode == "launch":
         # Resolve the directory only: a symlink at the final component is an existing entry to refuse.

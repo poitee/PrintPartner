@@ -146,6 +146,9 @@ jobs:
         run: |
           set -o pipefail
           npm run test:e2e 2>&1 | tee "$PP_EVIDENCE/playwright.log"
+          # verify.py checks pp-server's shutdown; Playwright does not fail on it, so check here.
+          grep -q 'STOP: exit=0; compatibility reservation removed' "$PP_EVIDENCE/playwright.log"
+          if pgrep -x pp-server; then echo '::error::pp-server survived the Playwright run'; exit 1; fi
       - name: Preserve final inventory and lockfile state
         if: always()
         run: |

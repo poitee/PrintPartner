@@ -362,6 +362,13 @@ class PrebuiltBinaryTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("--binary applies only to launch", result.stderr)
 
+    def test_binary_must_be_executable(self):
+        with tempfile.NamedTemporaryFile(prefix="pp-not-executable-") as plain:
+            result = subprocess.run([sys.executable, str(HELPER), "launch", "--binary", plain.name],
+                                    capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--binary is not an executable file", result.stderr)
+
 
 class StopAfterOriginTest(unittest.TestCase):
     def test_stop_after_origin_runs_shutdown_checks(self):
