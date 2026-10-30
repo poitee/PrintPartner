@@ -71,6 +71,9 @@ class ConcurrentWriteTest(unittest.TestCase):
             return {"issues": {"nodes": copy.deepcopy([
                 issue for issue in self.issues.values() if issue["state"]["name"] in {"In Progress", "In Review"}
             ]), "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+        if "inverseRelations(" in query:  # Fixes merges look for issues to promote; none are linked here
+            return {"issue": {**copy.deepcopy(self.issues[variables["id"]]), "team": {"key": "GRE"},
+                              "labels": {"nodes": []}, "relations": {"nodes": []}, "inverseRelations": {"nodes": []}}}
         raise AssertionError(f"Unexpected fake query: {query}")
 
     def state(self, ident="GRE-1"):
