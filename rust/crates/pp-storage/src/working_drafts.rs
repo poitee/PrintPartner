@@ -42,6 +42,9 @@ mod manifest_tests;
 mod siblings;
 #[cfg(test)]
 mod siblings_tests;
+pub mod source_reads;
+#[cfg(test)]
+mod ticket_t_10_draftreads;
 mod yaml;
 #[cfg(test)]
 mod yaml_continuation_tests;
@@ -528,6 +531,15 @@ impl WriterOwner {
             policy,
             observations: None,
         })
+    }
+    /// The production Source reader over this owner's data directory.
+    pub fn source_reads(&self) -> Result<source_reads::SourceReads> {
+        Ok(source_reads::SourceReads::new(
+            self.lease
+                .as_ref()
+                .ok_or_else(|| anyhow!("Storage owner is closed"))?
+                .data_dir(),
+        ))
     }
     /// A client that can also recompute, reading Sources through `reads`.
     pub fn working_drafts_with_observations(
