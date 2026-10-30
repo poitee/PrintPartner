@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -320,11 +321,21 @@ def rerun(args):
             latest = max(mine, key=lambda r: r["id"])
             if latest.get("status") != "completed":
                 jobs = gh.request("GET", f"{api}/actions/runs/{latest['id']}/jobs")[0]["jobs"]
-                latest["verify_status"] = next((j.get("status") for j in jobs if j.get("name") == CHECK_NAME), None)
+                named = [j for j in jobs if j.get("name") == CHECK_NAME]
+                if jobs and not named:
+                    # A renamed job would read as "not started" forever and bring the skip back.
+                    sys.exit(f"run {latest['id']} has no {CHECK_NAME} job (jobs: {[j.get('name') for j in jobs]})")
+                latest["verify_status"] = named[0].get("status") if named else None
         action, run_id, message = pick_rerun(head_sha, runs)
         print(message, flush=True)
         if action == "rerun":
-            gh.request("POST", f"{api}/actions/runs/{run_id}/rerun")
+            try:
+                gh.request("POST", f"{api}/actions/runs/{run_id}/rerun")
+            except urllib.error.HTTPError as e:
+                # Another comment run re-ran it first; that attempt reads the comments when it runs.
+                if e.code not in (403, 409):
+                    raise
+                print(f"run {run_id} was not re-run ({e.code}); it is already re-running")
             return
         if action == "skip":
             if not mine:
@@ -334,6 +345,11 @@ def rerun(args):
             sys.exit(f"run {run_id} did not complete within {RERUN_WAIT_SECONDS}s; "
                      f"re-run it by hand: gh run rerun {run_id} -R {args.repo}")
         time.sleep(RERUN_POLL_SECONDS)
+        current = gh.request("GET", f"{api}/pulls/{args.pr}")[0]["head"]["sha"]
+        if current != head_sha:
+            # The new head's own pull_request_target run reads the comments.
+            print(f"head moved from {head_sha} to {current}; its own run reads the comments")
+            return
 
 
 def self_test(args):
