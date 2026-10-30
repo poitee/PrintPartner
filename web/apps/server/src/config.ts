@@ -63,7 +63,7 @@ export type ServerConfig = {
   authSuccessRedirect: string;
   basicAuthUser: string | null;
   basicAuthPass: string | null;
-  /** Self-host: API key for versioned routes; required for /api/v1/mcp unless HOST is loopback */
+  /** Self-host: API key for versioned routes; /api/v1/mcp needs this or a Settings key on every host */
   integrationApiKey: string | null;
   /** When false, skip GitHub / override version checks for app updates */
   updateCheckEnabled: boolean;

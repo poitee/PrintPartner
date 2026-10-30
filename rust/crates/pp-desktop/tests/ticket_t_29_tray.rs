@@ -98,6 +98,7 @@ fn ticket_t_29_tray_menu_always_offers_show_status_restart_and_quit() {
         menu_ids(true),
         [
             "show",
+            "browser",
             "status",
             "logs",
             "log_folder",

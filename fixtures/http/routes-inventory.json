@@ -931,58 +931,14 @@
       "path": "/api/v1/mcp",
       "owner": "web/apps/server/src/mcp/http-routes.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": {
-          "status": 404,
-          "authRequired": false
-        },
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/non-loopback": {
-          "status": 503,
-          "authRequired": true
-        }
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
       "path": "/api/v1/mcp",
       "owner": "web/apps/server/src/mcp/http-routes.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": {
-          "status": 404,
-          "authRequired": false
-        },
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/non-loopback": {
-          "status": 503,
-          "authRequired": true
-        }
-      }
+      "authRequired": true
     },
     {
       "method": "HEAD",
@@ -996,29 +952,7 @@
       "path": "/api/v1/mcp",
       "owner": "web/apps/server/src/mcp/http-routes.ts",
       "websocket": false,
-      "authRequired": "mode-dependent",
-      "authByMode": {
-        "self-host/single-user-auth": {
-          "status": 400,
-          "authRequired": false
-        },
-        "self-host/multi-user": {
-          "status": 401,
-          "authRequired": true
-        },
-        "saas/multi-user": {
-          "status": 403,
-          "authRequired": true
-        },
-        "self-host/api-key": {
-          "status": 401,
-          "authRequired": true
-        },
-        "self-host/non-loopback": {
-          "status": 503,
-          "authRequired": true
-        }
-      }
+      "authRequired": true
     },
     {
       "method": "GET",
