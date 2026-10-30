@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -5905,7 +5905,7 @@ it("traces propose_assign_role_filament brief, Spoolman access and tenants again
   expect(repo.getSetting(`build_planning.v1.${plan.id}`)).toBe(before);
 });
 
-type CheckedProposalTool = "propose_restore_snapshot" | "propose_exclude_replaced_parts";
+type CheckedProposalTool = "propose_restore_snapshot" | "propose_exclude_replaced_parts" | "create_plan_snapshot" | "duplicate_plan" | "remove_layer";
 
 function checkedProposalSelect(statement: unknown, tenantId: string): string {
   const sql = z.string().parse(statement);
@@ -6046,4 +6046,65 @@ it("traces propose_exclude_replaced_parts selectors, validation and dismissals a
   expect(repo.listPlanDecisions(plan.id)).toEqual([]);
   expect([...unions.get(tool) ?? []].sort()).toEqual(tables);
   expect(declared(`tool.${tool}`)).toEqual(tables);
+});
+
+it("traces create_plan_snapshot, duplicate_plan and remove_layer selectors, validation and dismissals against their literal unions", async () => {
+  const plan = repo.createProfile("Checked plan");
+  const idle = repo.createProfile("Checked idle");
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign checked"));
+  const identity = ["table:build_profiles"];
+  const tables = ["table:build_profiles", "table:plan_decisions"];
+  const snapshot = (planId: number, name?: string) => checkedProposal("create_plan_snapshot", planId, name ? `Create snapshot “${name}”` : "Create plan snapshot", `Save a configuration snapshot of plan #${planId}.`, { name });
+  const duplicate = (planId: number, name: string, clear = false, rationale?: string) => checkedProposal("duplicate_plan", planId, `Duplicate plan as “${name}”`, rationale ?? `Copy plan ${planId} to “${name}”${clear ? " (clear checkoff)" : ""}.`, { name, clear_checkoff: clear });
+  const removal = (planId: number, layerId: number) => checkedProposal("remove_layer", planId, `Remove layer #${layerId}`, `Remove profile layer id ${layerId} from plan ${planId}.`, { layer_id: layerId });
+
+  for (const plan_id of [undefined, null, "invalid"]) {
+    expect(await traceCheckedProposal("create_plan_snapshot", { plan_id }, [])).toEqual({ error: "plan_id required" });
+    expect(await traceCheckedProposal("duplicate_plan", { plan_id, name: "Copy" }, [])).toEqual({ error: "plan_id required" });
+    expect(await traceCheckedProposal("remove_layer", { plan_id, layer_id: 4 }, [])).toEqual({ error: "plan_id and layer_id required" });
+  }
+  expect(await traceCheckedProposal("create_plan_snapshot", { plan_id: 999999 }, identity)).toEqual({ error: "plan_id required" });
+  expect(await traceCheckedProposal("duplicate_plan", { plan_id: foreign.id, name: "Copy" }, identity)).toEqual({ error: "plan_id required" });
+  // The plan is resolved before the layer ID is checked.
+  for (const layer_id of [undefined, "", "nope"]) {
+    expect(await traceCheckedProposal("remove_layer", { plan_id: plan.id, layer_id }, identity)).toEqual({ error: "plan_id and layer_id required" });
+  }
+  for (const name of [undefined, "", "   ", 7]) {
+    expect(await traceCheckedProposal("duplicate_plan", { plan_id: plan.id, name }, identity)).toEqual({ error: "name required" });
+  }
+
+  expect(await traceCheckedProposal("create_plan_snapshot", { plan_id: plan.id, name: "  Before swap  " }, tables, { activePlanId: idle.id })).toEqual(snapshot(plan.id, "Before swap"));
+  expect(await traceCheckedProposal("create_plan_snapshot", { plan_id: String(plan.id), name: "  " }, tables)).toEqual(snapshot(plan.id));
+  expect(await traceCheckedProposal("duplicate_plan", { plan_id: plan.id, name: " Copy ", clear_checkoff: true }, tables)).toEqual(duplicate(plan.id, "Copy", true));
+  expect(await traceCheckedProposal("duplicate_plan", { plan_id: plan.id, name: "Copy", clear_checkoff: "yes", rationale: " spare frame " }, tables)).toEqual(duplicate(plan.id, "Copy", false, "spare frame"));
+  expect(await traceCheckedProposal("remove_layer", { plan_id: plan.id, layer_id: "4" }, tables)).toEqual(removal(plan.id, 4));
+  for (const tool of ["create_plan_snapshot", "duplicate_plan", "remove_layer"] as const) {
+    const input = tool === "duplicate_plan" ? { name: "Copy" } : tool === "remove_layer" ? { layer_id: 4 } : {};
+    const expected = tool === "duplicate_plan" ? duplicate(idle.id, "Copy") : tool === "remove_layer" ? removal(idle.id, 4) : snapshot(idle.id);
+    // Active-plan fallback skips the identity read.
+    expect(await traceCheckedProposal(tool, input, ["table:plan_decisions"], { activePlanId: idle.id })).toEqual(expected);
+    expect(await traceCheckedProposal(tool, { ...input, plan_id: foreign.id }, tables, { activePlanId: idle.id })).toEqual(expected);
+    const own = tool === "duplicate_plan" ? duplicate(foreign.id, "Copy") : tool === "remove_layer" ? removal(foreign.id, 4) : snapshot(foreign.id);
+    expect(await traceCheckedProposal(tool, { ...input, plan_id: foreign.id }, tables, { tenantId: "other" })).toEqual(own);
+    expect(await traceCheckedProposal(tool, { ...input, plan_id: plan.id }, identity, { tenantId: "other" })).toEqual(tool === "remove_layer" ? { error: "plan_id and layer_id required" } : { error: "plan_id required" });
+  }
+
+  repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "create_plan_snapshot", params: { name: "Old" } });
+  repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "remove_layer", params: { layer_id: 4 } });
+  repo.createPlanDecision({ planId: idle.id, actor: "user", kind: "dismissed_action", actionType: "duplicate_plan", params: { name: "Copy" } });
+  tenantStorage.run("other", () => repo.createPlanDecision({ planId: foreign.id, actor: "user", kind: "dismissed_action", actionType: "duplicate_plan", params: { name: "Copy" } }));
+  // These fingerprints ignore `name`, so one dismissal refuses every snapshot or duplicate on that plan.
+  expect(await traceCheckedProposal("create_plan_snapshot", { plan_id: plan.id, name: "New" }, tables)).toEqual(dismissed("create_plan_snapshot", { name: "New" }));
+  expect(await traceCheckedProposal("duplicate_plan", { plan_id: plan.id, name: "Copy" }, tables)).toEqual(duplicate(plan.id, "Copy"));
+  expect(await traceCheckedProposal("duplicate_plan", { plan_id: idle.id, name: "Other" }, tables)).toEqual(dismissed("duplicate_plan", { name: "Other", clear_checkoff: false }));
+  // `layer_id` is in the fingerprint, so only the dismissed layer refuses.
+  expect(await traceCheckedProposal("remove_layer", { plan_id: plan.id, layer_id: 4 }, tables)).toEqual(dismissed("remove_layer", { layer_id: 4 }));
+  expect(await traceCheckedProposal("remove_layer", { plan_id: plan.id, layer_id: 5 }, tables)).toEqual(removal(plan.id, 5));
+
+  expect(repo.listPlanSnapshots(plan.id)).toEqual([]);
+  expect(repo.listPlanDecisions(plan.id)).toHaveLength(2);
+  for (const tool of ["create_plan_snapshot", "duplicate_plan", "remove_layer"] as const) {
+    expect([...unions.get(tool) ?? []].sort()).toEqual(tables);
+    expect(declared(`tool.${tool}`)).toEqual(tables);
+  }
 });

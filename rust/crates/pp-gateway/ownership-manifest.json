@@ -1568,6 +1568,27 @@
           {"kind": "table", "name": "build_profiles"},
           {"kind": "table", "name": "plan_decisions"}
         ]
+      },
+      {
+        "operation": "tool.create_plan_snapshot",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
+      },
+      {
+        "operation": "tool.duplicate_plan",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
+      },
+      {
+        "operation": "tool.remove_layer",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
       }
     ],
     "unresolved": [
@@ -1915,9 +1936,7 @@
       "tool.apply_stack_preset",
       "tool.archive_plan",
       "tool.audit_build_coverage",
-      "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
-      "tool.duplicate_plan",
       "tool.get_farm_status",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",
@@ -1928,7 +1947,6 @@
       "tool.propose_edit_plan_draft_parts",
       "tool.propose_import_build_inputs",
       "tool.propose_source_mapping",
-      "tool.remove_layer",
       "tool.set_base",
       "tool.set_source_git_ref",
       "tool.start_sync",

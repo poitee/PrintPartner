@@ -148,6 +148,12 @@ enum ReviewedEntry {
     ProposeRestoreSnapshot { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_exclude_replaced_parts")]
     ProposeExcludeReplacedParts { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.create_plan_snapshot")]
+    CreatePlanSnapshot { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.duplicate_plan")]
+    DuplicatePlan { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.remove_layer")]
+    RemoveLayer { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -579,6 +585,21 @@ impl ReviewedEntry {
                 resources,
                 BTreeSet::from([Table(BuildProfiles), Table(PlanDecisions)]),
             ),
+            Self::CreatePlanSnapshot { resources } => (
+                "tool.create_plan_snapshot",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(PlanDecisions)]),
+            ),
+            Self::DuplicatePlan { resources } => (
+                "tool.duplicate_plan",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(PlanDecisions)]),
+            ),
+            Self::RemoveLayer { resources } => (
+                "tool.remove_layer",
+                resources,
+                BTreeSet::from([Table(BuildProfiles), Table(PlanDecisions)]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -888,6 +909,9 @@ impl Declarations {
             "tool.propose_assign_role_filament",
             "tool.propose_restore_snapshot",
             "tool.propose_exclude_replaced_parts",
+            "tool.create_plan_snapshot",
+            "tool.duplicate_plan",
+            "tool.remove_layer",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
