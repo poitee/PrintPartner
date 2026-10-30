@@ -49,18 +49,80 @@ impl ShutdownRequested {
     }
 }
 
+/// Bootstrap tokens live 60 seconds. At most this many wait at once, so a
+/// burst of tray clicks cannot grow the set; the oldest token goes first.
+const BOOTSTRAP_TTL: Duration = Duration::from_secs(60);
+const PENDING_BOOTSTRAPS: usize = 4;
+
 struct Sessions {
     draining: bool,
     active: usize,
-    bootstrap: Option<([u8; 32], tokio::time::Instant)>,
+    /// SHA-256 of each unredeemed bootstrap token with its deadline.
+    bootstraps: Vec<([u8; 32], tokio::time::Instant)>,
     sessions: HashSet<[u8; 32]>,
 }
 
 impl Sessions {
     fn begin_drain(&mut self) {
         self.draining = true;
-        self.bootstrap = None;
+        self.bootstraps.clear();
         self.sessions.clear();
+    }
+
+    /// Store a fresh 256-bit token and return it. None while draining.
+    fn mint_bootstrap(&mut self) -> Option<String> {
+        if self.draining {
+            return None;
+        }
+        let now = tokio::time::Instant::now();
+        self.bootstraps.retain(|(_, deadline)| now < *deadline);
+        if self.bootstraps.len() >= PENDING_BOOTSTRAPS {
+            self.bootstraps.remove(0);
+        }
+        let token = hex::encode(rand::random::<[u8; 32]>());
+        self.bootstraps.push((digest(&token), now + BOOTSTRAP_TTL));
+        Some(token)
+    }
+
+    /// Remove the token if it is pending and unexpired. Callers hold the
+    /// session mutex, so two requests with one token cannot both redeem it.
+    fn redeem_bootstrap(&mut self, token: &str) -> bool {
+        let now = tokio::time::Instant::now();
+        self.bootstraps.retain(|(_, deadline)| now < *deadline);
+        let hash = digest(token);
+        match self
+            .bootstraps
+            .iter()
+            .position(|(pending, _)| *pending == hash)
+        {
+            Some(index) => {
+                self.bootstraps.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Mints browser bootstrap URLs for the gateway's own origin and port. The
+/// desktop tray uses it for Open in browser; a WebGL fallback can reuse it.
+#[derive(Clone)]
+pub struct BootstrapMinter {
+    origin: String,
+    access: Arc<Mutex<Sessions>>,
+}
+impl BootstrapMinter {
+    pub fn mint(&self) -> Result<LaunchTarget> {
+        let token = self
+            .access
+            .lock()
+            .expect("Session mutex poisoned")
+            .mint_bootstrap()
+            .context("Runtime is stopping")?;
+        Ok(LaunchTarget(format!(
+            "{}/__desktop/bootstrap?token={token}",
+            self.origin
+        )))
     }
 }
 
@@ -157,7 +219,6 @@ impl Gateway {
         );
         let host = address.to_string();
         let origin = format!("http://{host}");
-        let token = hex::encode(rand::random::<[u8; 32]>());
         let mut manifest: Manifest = serde_json::from_str(include_str!("../operations.json"))?;
         let mut seen = HashSet::new();
         for route in &mut manifest.routes {
@@ -184,6 +245,15 @@ impl Gateway {
         ownership::admit_bundled_source_sync()
             .map_err(|error| anyhow::anyhow!("Source Sync ownership admission failed: {error}"))?;
         sort_routes(&mut manifest.routes);
+        let mut sessions = Sessions {
+            draining: false,
+            active: 0,
+            bootstraps: Vec::new(),
+            sessions: HashSet::new(),
+        };
+        let token = sessions
+            .mint_bootstrap()
+            .context("Desktop bootstrap unavailable")?;
         let launch = Some(LaunchTarget(format!(
             "{origin}/__desktop/bootstrap?token={token}"
         )));
@@ -202,15 +272,7 @@ impl Gateway {
             compat,
             rate_limits: (owners.owner_of("http.GET /legal/summary") == Owner::Rust)
                 .then(|| tokio::sync::Mutex::new(rate_limit::Budgets::default())),
-            access: Arc::new(Mutex::new(Sessions {
-                draining: false,
-                active: 0,
-                bootstrap: Some((
-                    digest(&token),
-                    tokio::time::Instant::now() + Duration::from_secs(60),
-                )),
-                sessions: HashSet::new(),
-            })),
+            access: Arc::new(Mutex::new(sessions)),
             routes: manifest.routes,
             denied: manifest.denied,
             relays: TaskTracker::new(),
@@ -297,6 +359,12 @@ impl Gateway {
     }
     pub fn monitoring_control(&self) -> MonitoringControl {
         MonitoringControl(self.state.clone())
+    }
+    pub fn bootstrap_minter(&self) -> BootstrapMinter {
+        BootstrapMinter {
+            origin: self.state.origin.clone(),
+            access: self.state.access.clone(),
+        }
     }
     pub fn shutdown_requested(&self) -> ShutdownRequested {
         ShutdownRequested {
@@ -431,6 +499,30 @@ fn error(status: StatusCode, detail: &'static str) -> Response<Body> {
     )
         .into_response()
 }
+
+/// A browser that follows a stale link gets a page that says what to do next.
+/// Other clients keep the JSON error.
+fn bootstrap_rejected(request: &Request<Body>) -> Response<Body> {
+    const DETAIL: &str = "Bootstrap expired or consumed";
+    let navigation = header(request, "sec-fetch-mode") == Some("navigate")
+        || header(request, "accept").is_some_and(|value| value.contains("text/html"));
+    if !navigation {
+        return error(StatusCode::UNAUTHORIZED, DETAIL);
+    }
+    (
+        StatusCode::UNAUTHORIZED,
+        [
+            ("cache-control", "no-store"),
+            ("referrer-policy", "no-referrer"),
+            ("content-type", "text/html; charset=utf-8"),
+            ("content-security-policy", "default-src 'none'"),
+        ],
+        BOOTSTRAP_REJECTED_PAGE,
+    )
+        .into_response()
+}
+
+const BOOTSTRAP_REJECTED_PAGE: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Print Partner sign-in link expired</title></head><body><h1>This sign-in link has expired</h1><p>Each Open in browser link works once, within 60 seconds.</p><p>Choose Open in browser from the Print Partner tray menu to get a new link.</p></body></html>";
 
 fn node_unavailable() -> Response<Body> {
     let mut response = Response::new(Body::from(
@@ -614,15 +706,10 @@ async fn handle(
         if access.draining {
             return error(StatusCode::SERVICE_UNAVAILABLE, "Runtime is stopping");
         }
-        let valid = token.is_some_and(|token| {
-            access.bootstrap.as_ref().is_some_and(|(hash, deadline)| {
-                *hash == digest(token) && tokio::time::Instant::now() < *deadline
-            })
-        });
-        if !valid {
-            return error(StatusCode::UNAUTHORIZED, "Bootstrap expired or consumed");
+        if !token.is_some_and(|token| access.redeem_bootstrap(token)) {
+            drop(access);
+            return bootstrap_rejected(&request);
         }
-        access.bootstrap.take();
         let session = hex::encode(rand::random::<[u8; 32]>());
         access.sessions.insert(digest(&session));
         return Response::builder()
@@ -1803,10 +1890,10 @@ mod tests {
         let access = Arc::new(Mutex::new(Sessions {
             draining: false,
             active: 0,
-            bootstrap: Some((
+            bootstraps: vec![(
                 [1; 32],
                 tokio::time::Instant::now() + Duration::from_secs(60),
-            )),
+            )],
             sessions: HashSet::from([digest("session")]),
         }));
         let held = Admission::acquire(&access, Some("session")).unwrap();
@@ -1817,12 +1904,49 @@ mod tests {
         ));
         let state = access.lock().unwrap();
         assert!(state.draining);
-        assert!(state.bootstrap.is_none());
+        assert!(state.bootstraps.is_empty());
         assert!(state.sessions.is_empty());
         assert_eq!(state.active, 1);
         drop(state);
         drop(held);
         assert_eq!(access.lock().unwrap().active, 0);
+    }
+
+    fn empty_sessions() -> super::Sessions {
+        super::Sessions {
+            draining: false,
+            active: 0,
+            bootstraps: Vec::new(),
+            sessions: std::collections::HashSet::new(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ticket_t_19_bootstrap_expires_after_60_seconds() {
+        let mut sessions = empty_sessions();
+        let token = sessions.mint_bootstrap().unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(59)).await;
+        assert!(sessions.redeem_bootstrap(&token));
+        assert!(!sessions.redeem_bootstrap(&token));
+        let token = sessions.mint_bootstrap().unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        assert!(!sessions.redeem_bootstrap(&token));
+        assert!(sessions.bootstraps.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ticket_t_19_pending_bootstraps_stay_bounded() {
+        let mut sessions = empty_sessions();
+        let tokens: Vec<_> = (0..=super::PENDING_BOOTSTRAPS)
+            .map(|_| sessions.mint_bootstrap().unwrap())
+            .collect();
+        assert_eq!(sessions.bootstraps.len(), super::PENDING_BOOTSTRAPS);
+        assert!(!sessions.redeem_bootstrap(&tokens[0]));
+        for token in &tokens[1..] {
+            assert!(sessions.redeem_bootstrap(token));
+        }
+        sessions.begin_drain();
+        assert!(sessions.mint_bootstrap().is_none());
     }
 
     #[test]
@@ -1832,7 +1956,7 @@ mod tests {
             let access = Arc::new(Mutex::new(Sessions {
                 draining: false,
                 active: 0,
-                bootstrap: None,
+                bootstraps: Vec::new(),
                 sessions: HashSet::from([digest("session")]),
             }));
             let start = Arc::new(std::sync::Barrier::new(17));

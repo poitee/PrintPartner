@@ -186,6 +186,7 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
     }
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
+        let browser_origin = origin.clone();
         let launch_url = core.take_launch_target()?.into_url();
         #[cfg(feature = "desktop_rebuild")]
         let (sponsor, origin_bridge) = {
@@ -287,8 +288,8 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
                 let _ = hide.hide();
             }
         });
-        let watch =
-            build_tray(&app, core.handle(), data).context("Native tray initialization failed")?;
+        let watch = build_tray(&app, core.handle(), browser_origin, data)
+            .context("Native tray initialization failed")?;
         Ok((window, watch, origin_notice))
     })();
     let (window, status_watch, origin_notice) = match setup {
@@ -367,9 +368,11 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
 fn build_tray(
     app: &tauri::App,
     handle: CoreHandle,
+    origin: AllowedOrigin,
     data: PathBuf,
 ) -> Result<tauri::async_runtime::JoinHandle<()>> {
     let show = MenuItem::with_id(app, "show", "Show Print Partner", true, None::<&str>)?;
+    let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Service ready", false, None::<&str>)?;
     let recover = MenuItem::with_id(app, "recover", "Restart service", false, None::<&str>)?;
     let logs = MenuItem::with_id(app, "logs", "View logs", true, None::<&str>)?;
@@ -380,13 +383,23 @@ fn build_tray(
     let menu = if recovery_ui {
         Menu::with_items(
             app,
-            &[&show, &status, &logs, &log_folder, &recover, &folder, &quit],
+            &[
+                &show,
+                &browser,
+                &status,
+                &logs,
+                &log_folder,
+                &recover,
+                &folder,
+                &quit,
+            ],
         )?
     } else {
-        Menu::with_items(app, &[&show, &status, &recover, &quit])?
+        Menu::with_items(app, &[&show, &browser, &status, &recover, &quit])?
     };
     let status_receiver = handle.subscribe();
     let recovery = handle.clone();
+    let browser_handle = handle.clone();
     let gate = std::sync::Arc::new(recovery::RecoveryGate::default());
     let recovery_gate = gate.clone();
     let diagnostics = recovery::RecoveryUi::new(data);
@@ -405,6 +418,7 @@ fn build_tray(
                     let _ = window.set_focus();
                 }
             }
+            "browser" => recovery::open_in_browser(app, &browser_handle, &origin),
             "recover" => {
                 recovery::restart(app, recovery.clone(), recovery_gate.clone());
             }
