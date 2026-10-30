@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    - pp-intake
+    - pp-local
+    - pp-local-mac
+    - pp-local-win
+    - fleet
