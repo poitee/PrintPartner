@@ -9,7 +9,7 @@
  * so both consumers answer identically.
  */
 
-import type { PrinterHostStatus } from "@print-partner/contracts";
+import type { PrinterCheckoffLink, PrinterHostStatus } from "@print-partner/contracts";
 import type { PrinterMachine } from "@print-partner/domain";
 import type { AppRepository } from "../db/repository.js";
 import { getIntegrationConfig } from "../integrations/store.js";
@@ -21,6 +21,8 @@ import {
   type SpoolmanSpool,
 } from "../integrations/spoolman-client.js";
 import { readSpoolmanAccess } from "../lib/spoolman-access.js";
+import { normalizePrinterFilename } from "./printer-checkoff.js";
+import type { UnattributedPrint } from "./unattributed-print-store.js";
 
 /**
  * Resolves a filament colour id to the spools backing it.
@@ -324,4 +326,166 @@ export function printStatsByPrinter(jobs: PrintJobLike[]): PrinterPrintStats[] {
     row.completion_rate = completionRate(row.plates_completed, row.plates_failed);
   }
   return [...byPrinter.values()].sort((a, b) => a.printer_id.localeCompare(b.printer_id));
+}
+
+/** Farm summary buckets. Every printer lands in exactly one, so they sum to the printer count. */
+export const FARM_STATES = ["idle", "printing", "paused", "complete", "error", "offline", "not_connected"] as const;
+export type FarmState = (typeof FARM_STATES)[number];
+
+/**
+ * Row state for one fleet printer. A printer with no live host answer (no host
+ * linked, host access withheld, or a host that reports no state) is
+ * "not_connected" with a reason. "offline" is kept for a configured host that
+ * could not be reached.
+ */
+export function farmStateFor(
+  machine: Pick<PrinterMachine, "integration_id">,
+  hostStatus: PrinterHostStatus | null,
+): { state: FarmState; not_connected_reason: string | null } {
+  if (!hostStatus) {
+    return {
+      state: "not_connected",
+      not_connected_reason: machine.integration_id ? "printer host access is unavailable" : "no printer host linked",
+    };
+  }
+  if (hostStatus.state === "unknown") {
+    return { state: "not_connected", not_connected_reason: hostStatus.message ?? "printer host reported no state" };
+  }
+  return { state: hostStatus.state, not_connected_reason: null };
+}
+
+export function farmStateCounts(states: readonly FarmState[]): Record<FarmState, number> {
+  const counts = Object.fromEntries(FARM_STATES.map((s) => [s, 0])) as Record<FarmState, number>;
+  for (const state of states) counts[state] += 1;
+  return counts;
+}
+
+/** "3h 12m" since `idleSince`, or "unknown" when there is no last-activity time. */
+export function idleForLabel(idleSince: string | null, now: number = Date.now()): string {
+  const since = idleSince ? Date.parse(idleSince) : NaN;
+  if (!Number.isFinite(since)) return "unknown";
+  const minutes = Math.max(0, Math.floor((now - since) / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+/** A fleet printer's id and display name, as every tool should report it. */
+export type FleetPrinter = { id: string; name: string };
+
+/**
+ * Maps a stored print's printer_id and integration_id to its fleet printer, so
+ * every tool names a printer the same way. Stored printer ids are not always
+ * fleet ids (discovered prints use "default"), so a host linked to exactly one
+ * fleet printer also identifies it. Unknown printers keep their stored id.
+ */
+export function fleetPrinterResolver(
+  fleet: readonly Pick<PrinterMachine, "id" | "name" | "integration_id">[],
+): (printerId: string, integrationId?: string | null) => FleetPrinter | null {
+  const byId = new Map(fleet.map((m) => [m.id, m]));
+  const byHost = new Map<string, (typeof fleet)[number] | null>();
+  for (const m of fleet) {
+    if (!m.integration_id) continue;
+    byHost.set(m.integration_id, byHost.has(m.integration_id) ? null : m);
+  }
+  return (printerId, integrationId) => {
+    const m = byId.get(printerId) ?? (integrationId ? byHost.get(integrationId) : undefined);
+    return m ? { id: m.id, name: m.name } : null;
+  };
+}
+
+type SeenLink = Pick<
+  PrinterCheckoffLink,
+  "printer_id" | "integration_id" | "host_name" | "filename" | "host_outcome" | "completed_at" | "created_at"
+>;
+type SeenUnattributed = Pick<
+  UnattributedPrint,
+  "printer_id" | "integration_id" | "host_name" | "filename" | "completed_at" | "claimed_profile_id"
+>;
+
+export type SeenPrint = {
+  /** Fleet printer id when known, else the stored printer_id. */
+  printer_id: string;
+  printer_name: string;
+  /** When the host finished the print, or when the link was made if no finish time was stored. */
+  at: string;
+  /** True when `at` is the host's finish time, so it can drive idle_since. */
+  finished_at_known: boolean;
+  outcome: "completed" | "failed" | "cancelled";
+  attached_to_plan: boolean;
+};
+
+/**
+ * Prints the printers reported finishing, failing or being cancelled, whether or
+ * not a Plan owns them. Checkoff links belong to a Plan; unattributed prints
+ * belong to one only once claimed. Claiming a print creates a link for the same
+ * host and file and keeps the claimed entry, so a claimed print with a matching
+ * link is counted once, as the link. Links still printing are not counted.
+ */
+export function printsSeenOnPrinters(
+  links: readonly SeenLink[],
+  unattributed: readonly SeenUnattributed[],
+  resolve: ReturnType<typeof fleetPrinterResolver>,
+): SeenPrint[] {
+  const printer = (p: { printer_id: string; integration_id: string; host_name: string }) => {
+    const fleetPrinter = resolve(p.printer_id, p.integration_id);
+    const id = fleetPrinter?.id ?? (p.printer_id.trim() || "unassigned");
+    return { printer_id: id, printer_name: fleetPrinter?.name ?? (p.host_name || id) };
+  };
+  const fileKey = (p: { integration_id: string; filename: string }) =>
+    `${p.integration_id}\u0000${normalizePrinterFilename(p.filename)}`;
+  const linkedFiles = new Set(links.map(fileKey));
+  const seen: SeenPrint[] = [];
+  for (const link of links) {
+    const outcome = link.host_outcome === "success" ? "completed"
+      : link.host_outcome === "failed" ? "failed"
+      : link.host_outcome === "cancelled" ? "cancelled"
+      : null;
+    if (!outcome) continue;
+    seen.push({
+      ...printer(link),
+      at: link.completed_at ?? link.created_at,
+      finished_at_known: link.completed_at != null,
+      outcome,
+      attached_to_plan: true,
+    });
+  }
+  for (const print of unattributed) {
+    if (print.claimed_profile_id != null && linkedFiles.has(fileKey(print))) continue;
+    seen.push({
+      ...printer(print),
+      at: print.completed_at,
+      finished_at_known: true,
+      outcome: "completed",
+      attached_to_plan: print.claimed_profile_id != null,
+    });
+  }
+  return seen;
+}
+
+/** Totals and a per-printer list for prints seen at or after `since`. */
+export function printsSeenSummary(seen: readonly SeenPrint[], since: string) {
+  const inWindow = seen.filter((p) => p.at >= since);
+  const byPrinter = new Map<string, {
+    printer_id: string; printer_name: string; seen: number; completed: number; failed: number; cancelled: number;
+  }>();
+  for (const print of inWindow) {
+    let row = byPrinter.get(print.printer_id);
+    if (!row) {
+      row = { printer_id: print.printer_id, printer_name: print.printer_name, seen: 0, completed: 0, failed: 0, cancelled: 0 };
+      byPrinter.set(print.printer_id, row);
+    }
+    row.seen += 1;
+    row[print.outcome] += 1;
+  }
+  const attached = inWindow.filter((p) => p.attached_to_plan).length;
+  return {
+    total: inWindow.length,
+    attached_to_plan: attached,
+    not_attached_to_plan: inWindow.length - attached,
+    by_printer: [...byPrinter.values()].sort((a, b) => a.printer_id.localeCompare(b.printer_id)),
+  };
 }

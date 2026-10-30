@@ -1266,14 +1266,14 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   {
     name: "get_farm_status",
     description:
-      "Current printer farm state: each printer's name, live host state (idle/printing/paused/offline/unknown), active job filename with progress and ETA, how long it has been idle, per-slot filament remaining in grams, and whether it needs a filament swap (runout reported by the host, an empty slot, or a spool at/below the low threshold). Also returns a needs_filament_swap list naming the printers that need attention. Useful for the morning digest or routing decisions.",
+      "Current printer farm state: each printer's name, state (idle/printing/paused/complete/error/offline/not_connected; not_connected carries not_connected_reason, offline means a linked host could not be reached), active job filename with progress and ETA, idle_since and idle_for (a duration, or \"unknown\") for idle printers, per-slot filament remaining in grams, and whether it needs a filament swap (runout reported by the host, an empty slot, or a spool at/below the low threshold). Also returns state_counts, one count per state that sums to printer_count, and a needs_filament_swap list naming the printers that need attention. Useful for the morning digest or routing decisions.",
     input_schema: { type: "object", properties: {} },
     tier: "read",
   },
   {
     name: "get_print_stats",
     description:
-      "Recent print activity and accepted Plan progress. Returns plates sent in the last N hours, completed and failed counts, completion rate, filament consumed, and a per-printer breakdown. active_plans is either an available collection or unavailable when collection loading fails. Each available Plan has plan_id, plan_name, part_count, and accepted_progress. accepted_progress is ready with total_units and remaining_units, empty when nothing has been applied, or unavailable with reason compatibility_dirty, uninitialized, integrity, or concurrent_update. Per-Plan unavailable states remain inside an available collection. Pass hours to control the lookback window.",
+      "Recent print activity and accepted Plan progress. Returns plates sent in the last N hours, completed and failed counts, completion rate, filament consumed, and a per-printer breakdown. prints_seen_on_printers counts prints the printers reported finishing, failing or being cancelled in the window, attached to a Plan or not, with a per-printer list; it is separate from plates sent from Print Partner. empty_window says in words when nothing happened since the window start. active_plans is either an available collection or unavailable when collection loading fails. Each available Plan has plan_id, plan_name, part_count, and accepted_progress. accepted_progress is ready with total_units and remaining_units, empty when nothing has been applied, or unavailable with reason compatibility_dirty, uninitialized, integrity, or concurrent_update. Per-Plan unavailable states remain inside an available collection. Pass hours to control the lookback window.",
     input_schema: {
       type: "object",
       properties: {
