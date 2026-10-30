@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Verify fleet model scores on a PR and post the `pp/score-verified` check run.
+"""Verify fleet model scores on a PR for the `pp/score-verified` check.
 
 Usage:
-  pp-score-verify.py verify --repo OWNER/NAME --pr N [--dry-run]
+  pp-score-verify.py verify --repo OWNER/NAME --pr N [--head SHA]
+  pp-score-verify.py rerun --repo OWNER/NAME --pr N [--workflow FILE]
   pp-score-verify.py self-test [--fixtures DIR]
 
 `verify` reads the PR through the API only. It never checks out or runs PR code.
-It needs GITHUB_TOKEN (pull-requests: read, issues: read, checks: write) and
-reads FLEET_DEGRADED from the environment ("1" means degraded).
+It needs GITHUB_TOKEN (pull-requests: read, issues: read) and reads
+FLEET_DEGRADED from the environment ("1" means degraded). It exits 1 when the
+scores do not pass, so the `pp/score-verified` job that runs it is the check.
+`--head` judges scores against that SHA (the event's head) instead of the
+PR's current head.
+
+`rerun` re-runs the latest pull_request_target run of the workflow on the PR's
+current head, so a new or deleted score comment re-runs the check job. It needs
+GITHUB_TOKEN (actions: write, pull-requests: read).
 
 Rules:
 - A score is a line in a PR (issue) comment by `poitee` that reads exactly
@@ -195,7 +203,6 @@ def evaluate(pr, comments, degraded):
         summary += ["", "### Failing because", *(f"- {p}" for p in problems)]
     return {
         "conclusion": "success" if passed else "failure",
-        "title": "Score verified" if passed else "Score not verified",
         "summary": "\n".join(summary),
         "author_vendor": author,
         "vendors": sorted(vendors),
@@ -255,20 +262,49 @@ def verify(args):
     owner, name = args.repo.split("/", 1)
     pr = gh.graphql(PR_QUERY, {"owner": owner, "name": name, "number": args.pr})["repository"]["pullRequest"]
     comments = gh.paginate(f"https://api.github.com/repos/{args.repo}/issues/{args.pr}/comments?per_page=100")
+    if args.head:
+        pr["headRefOid"] = args.head
     result = evaluate(pr, comments, os.environ.get("FLEET_DEGRADED") == "1")
     print(f"{CHECK_NAME}: {result['conclusion']}\n{result['summary']}")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(f"## {CHECK_NAME}: {result['conclusion']}\n\n{result['summary']}\n")
-    if args.dry_run:
+    if result["conclusion"] != "success":
+        sys.exit(1)
+
+
+def pick_rerun(head_sha, runs):
+    """Return (run id or None, message) for the run that `rerun` should re-run.
+
+    Only a pull_request_target run on the PR's current head counts. If the
+    latest one has not finished, it reads the comments when it runs, so there
+    is nothing to re-run.
+    """
+    mine = [r for r in runs if r.get("event") == "pull_request_target" and r.get("head_sha") == head_sha]
+    if not mine:
+        return None, f"no pull_request_target run on head {head_sha}; push or edit the PR to start one"
+    latest = max(mine, key=lambda r: r["id"])
+    if latest.get("status") != "completed":
+        return None, f"run {latest['id']} on head {head_sha} is {latest.get('status')}; it reads the comments when it runs"
+    return latest["id"], f"re-running run {latest['id']} on head {head_sha}"
+
+
+def rerun(args):
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        sys.exit("GITHUB_TOKEN is not set")
+    gh = GitHub(token)
+    api = f"https://api.github.com/repos/{args.repo}"
+    head_sha = gh.request("GET", f"{api}/pulls/{args.pr}")[0]["head"]["sha"]
+    runs = gh.request("GET", f"{api}/actions/workflows/{args.workflow}/runs"
+                             f"?event=pull_request_target&head_sha={head_sha}&per_page=100")[0]["workflow_runs"]
+    run_id, message = pick_rerun(head_sha, runs)
+    print(message)
+    if run_id is None:
+        if not any(r.get("head_sha") == head_sha for r in runs):
+            sys.exit(1)
         return
-    gh.request("POST", f"https://api.github.com/repos/{args.repo}/check-runs", {
-        "name": CHECK_NAME,
-        "head_sha": pr["headRefOid"],
-        "status": "completed",
-        "conclusion": result["conclusion"],
-        "output": {"title": result["title"], "summary": result["summary"]},
-    })
+    gh.request("POST", f"{api}/actions/runs/{run_id}/rerun")
 
 
 def self_test(args):
@@ -276,9 +312,21 @@ def self_test(args):
     paths = sorted(Path(args.fixtures).glob("*.json"))
     for path in paths:
         case = json.loads(path.read_text())
-        result = evaluate(case["pr"], case["comments"], case.get("degraded", False))
         expect = case["expect"]
         errors = []
+        if case.get("kind") == "rerun":
+            run_id, message = pick_rerun(case["head_sha"], case["runs"])
+            if run_id != expect["run_id"]:
+                errors.append(f"run_id {run_id} != {expect['run_id']}")
+            for text in expect.get("message_contains", []):
+                if text not in message:
+                    errors.append(f"message lacks {text!r}")
+            print(f"{'ok  ' if not errors else 'FAIL'} {path.stem}: run_id={run_id} {message}")
+            for e in errors:
+                print(f"     {e}")
+            failures += bool(errors)
+            continue
+        result = evaluate(case["pr"], case["comments"], case.get("degraded", False))
         if result["conclusion"] != expect["conclusion"]:
             errors.append(f"conclusion {result['conclusion']} != {expect['conclusion']}")
         if "vendors" in expect and result["vendors"] != expect["vendors"]:
@@ -302,11 +350,15 @@ def main():
     v = sub.add_parser("verify")
     v.add_argument("--repo", required=True)
     v.add_argument("--pr", required=True, type=int)
-    v.add_argument("--dry-run", action="store_true")
+    v.add_argument("--head", help="judge scores against this SHA instead of the PR's current head")
+    r = sub.add_parser("rerun")
+    r.add_argument("--repo", required=True)
+    r.add_argument("--pr", required=True, type=int)
+    r.add_argument("--workflow", default="pp-score-verify.yml")
     t = sub.add_parser("self-test")
     t.add_argument("--fixtures", default=str(Path(__file__).parent / "test" / "pp-score-verify"))
     args = parser.parse_args()
-    verify(args) if args.cmd == "verify" else self_test(args)
+    {"verify": verify, "rerun": rerun, "self-test": self_test}[args.cmd](args)
 
 
 if __name__ == "__main__":
