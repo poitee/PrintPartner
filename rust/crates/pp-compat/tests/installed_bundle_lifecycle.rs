@@ -91,7 +91,7 @@ struct LifecycleReceipt<'a> {
     shutdown: &'static str,
     child_pid_absent: bool,
     runtime_socket_absent: bool,
-    environment_overrides: [&'static str; 9],
+    environment_overrides: [&'static str; 10],
 }
 
 fn required_path(name: &str) -> Result<PathBuf> {
@@ -282,6 +282,7 @@ async fn installed_bundle_start_health_shutdown() -> Result<()> {
                 "DEPLOY_MODE=self-host",
                 "HOST=127.0.0.1",
                 "NODE_OPTIONS removed",
+                "NODE_ENV=production",
                 "NODE_PATH removed",
                 "PRINT_PARTNER_UPDATE_CHECK=0",
                 "MULTI_USER removed",

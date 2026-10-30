@@ -61,14 +61,16 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("INTEGRATION_API_KEY", Owner::Credential),
     ("MQTTJS_SOCKS_PROXY", Owner::Hidden),
     ("MULTI_USER", Owner::Core),
-    ("NODE_ENV", Owner::Core),
+    // Production, as in the Docker image. Outside production the server returns
+    // password reset links in the response (PASSWORD_RESET_DEV_EXPOSE defaults on),
+    // serves /auth/dev-login and turns on the OpenAPI docs UI.
+    ("NODE_ENV", Owner::Fixed("production")),
     ("OLLAMA_NUM_CTX", Owner::Database),
     ("OLLAMA_URL", Owner::Database),
     ("OPENAI_API_KEY", Owner::Credential),
     ("OPENAI_BASE_URL", Owner::Database),
-    // Core for now: the route turns the UI on while NODE_ENV is not "production",
-    // and the child leaves NODE_ENV unset. Becomes a desktop setting
-    // (Settings > Advanced, design §4) once GRE-1037 sets NODE_ENV.
+    // Core for now: core leaves it unset, so the docs UI stays off in the production
+    // child. Can become a desktop setting (Settings > Advanced, design §4).
     ("OPENAPI_UI", Owner::Core),
     ("PASSWORD_RESET_DEV_EXPOSE", Owner::Hidden),
     ("PORT", Owner::Core),
@@ -213,6 +215,7 @@ mod tests {
                 ("AI_ENABLED", "0"),
                 ("DEPLOY_MODE", "self-host"),
                 ("HOST", "127.0.0.1"),
+                ("NODE_ENV", "production"),
                 ("PP_STORAGE_CORE_LOCK", "1"),
                 ("PRINT_PARTNER_UPDATE_CHECK", "0"),
             ]

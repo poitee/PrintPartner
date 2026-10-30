@@ -376,7 +376,7 @@ def _run_backend(node, evidence, control, excluded_endpoints):
     token = secrets.token_hex(16)
     env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}
     env.update(PP_STORAGE_CORE_LOCK="1", PRINT_PARTNER_UPDATE_CHECK="0", AI_ENABLED="0", HOST="127.0.0.1",
-               DEPLOY_MODE="self-host", **{RUN_TOKEN: token})
+               NODE_ENV="production", DEPLOY_MODE="self-host", **{RUN_TOKEN: token})
     # A short temp path keeps the socket under the 104-byte macOS limit.
     runtime = Path(tempfile.mkdtemp(prefix="pp-listen-")).resolve()
     socket_path = runtime / "backend.sock"
