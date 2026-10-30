@@ -930,6 +930,25 @@ fn ticket_t_7_ownership_archive_plan_proposal_refuses_invalid_admission_before_e
 }
 
 #[test]
+fn ticket_t_7_ownership_import_guide_notes_proposal_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.import_guide_notes",
+        json!([
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_decisions"},
+            {"kind": "table", "name": "projects"},
+            {"kind": "table", "name": "source_docs"},
+            {"kind": "file", "name": "source-workspace"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_import_guide_notes_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.import_guide_notes");
+}
+
+#[test]
 fn ticket_t_7_ownership_apply_stack_preset_proposal_refuses_invalid_admission_before_effects() {
     assert_tool_invalid_admission("tool.apply_stack_preset");
 }
@@ -1315,6 +1334,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.propose_source_mapping",
         "tool.propose_edit_plan_draft_parts",
         "tool.archive_plan",
+        "tool.import_guide_notes",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1342,8 +1362,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 78);
-    assert_eq!(unresolved.len(), 351);
+    assert_eq!(reviewed.len(), 79);
+    assert_eq!(unresolved.len(), 350);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1655,6 +1675,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.propose_source_mapping",
         "tool.propose_edit_plan_draft_parts",
         "tool.archive_plan",
+        "tool.import_guide_notes",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1843,6 +1864,7 @@ fn reviewed_participants_cannot_swap_operations() {
             "tool.propose_edit_plan_draft_parts",
         ),
         ("tool.propose_edit_plan_draft_parts", "tool.archive_plan"),
+        ("tool.archive_plan", "tool.import_guide_notes"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),
@@ -1900,13 +1922,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.audit_build_coverage", "tool.import_guide_notes"],
+        &["tool.audit_build_coverage", "tool.start_sync"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.audit_build_coverage" && id != "tool.import_guide_notes");
+    unresolved.retain(|id| id != "tool.audit_build_coverage" && id != "tool.start_sync");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.audit_build_coverage", "tool.import_guide_notes"] {
+    for id in ["tool.audit_build_coverage", "tool.start_sync"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
