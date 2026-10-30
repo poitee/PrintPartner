@@ -224,6 +224,7 @@ mod with_feature {
             auth_routes(&origin),
             &origin,
             "default",
+            None,
         )
         .unwrap()
         .expect("flag on mounts read routers");
@@ -371,6 +372,7 @@ mod with_feature {
                     auth_routes("http://127.0.0.1:9"),
                     "http://127.0.0.1:9",
                     "default",
+                    None,
                 )
                 .unwrap()
                 .is_none(),
@@ -396,6 +398,7 @@ mod with_feature {
             auth_routes(&origin),
             &origin,
             "default",
+            None,
         )
         .unwrap()
         .unwrap();

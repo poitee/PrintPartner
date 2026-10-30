@@ -21,9 +21,13 @@ use pp_storage::{
     working_drafts::{
         WorkingDraftClient,
         observation::{DraftReads, PreparationLimits},
+        source_reads::{SourceFilesystemPolicy, SourceReads},
     },
 };
-use std::sync::{Arc, Mutex};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 pub struct AuthRoutes {
     pub http: AuthHttpConfig,
@@ -92,7 +96,10 @@ impl RebuildHttpClients {
 }
 
 /// Compose auth, draft, and Build clients without mounting. Draft recompute
-/// and Build manifest options read Sources through `WriterOwner::source_reads`.
+/// and Build manifest options read Sources through `WriterOwner::source_reads`,
+/// with Node's filesystem policy for `policy` and the community manifests in
+/// `community_manifests` (the Node bundle's, from
+/// `pp_compat::Bundle::community_manifests_dir`; `None` reads them as missing).
 /// Returns `None` before creating any client unless the stored setting is on.
 /// Catalog admission uses `admit_catalog_routes(owner)` from `read_router`.
 pub fn clients(
@@ -100,11 +107,12 @@ pub fn clients(
     owner: &WriterOwner,
     policy: AuthPolicy,
     lifetimes: AuthLifetimes,
+    community_manifests: Option<&Path>,
 ) -> Result<Option<RebuildHttpClients>> {
     if !rebuild.enabled() {
         return Ok(None);
     }
-    let reads: Arc<dyn DraftReads> = Arc::new(owner.source_reads()?);
+    let reads: Arc<dyn DraftReads> = Arc::new(source_reads(owner, policy, community_manifests)?);
     Ok(Some(RebuildHttpClients {
         auth: owner.rebuild_auth_with_policy(policy, lifetimes)?,
         drafts: owner.working_drafts_with_observations(
@@ -114,6 +122,21 @@ pub fn clients(
         )?,
         builds: owner.build_graph_with_observations(policy, reads, PreparationLimits::default())?,
     }))
+}
+
+/// The Source reader `clients` gives drafts and Builds.
+fn source_reads(
+    owner: &WriterOwner,
+    policy: AuthPolicy,
+    community_manifests: Option<&Path>,
+) -> Result<SourceReads> {
+    let reads = owner
+        .source_reads()?
+        .with_filesystem_policy(SourceFilesystemPolicy::for_auth(&policy));
+    Ok(match community_manifests {
+        Some(root) => reads.with_community_manifests(root),
+        None => reads,
+    })
 }
 
 /// Rust HTTP routes for the desktop rebuild, served by the rebuild auth client.
@@ -149,6 +172,7 @@ pub fn read_router(
     auth: AuthRoutes,
     origin: &str,
     api_key_tenant: &str,
+    community_manifests: Option<&Path>,
 ) -> Result<Option<Router>> {
     if !rebuild.enabled() {
         return Ok(None);
@@ -167,7 +191,7 @@ pub fn read_router(
             .lock()
             .map_err(|_| anyhow!("rebuild owner lock poisoned"))?;
         (
-            clients(rebuild, &guard, policy, auth.lifetimes)?
+            clients(rebuild, &guard, policy, auth.lifetimes, community_manifests)?
                 .ok_or_else(|| anyhow!("flag on constructs clients"))?,
             guard.accepted_reads_with_policy(policy)?,
             guard.admin_files()?,
@@ -222,6 +246,7 @@ pub fn draft_router(
     lifetimes: AuthLifetimes,
     origin: &str,
     api_key_tenant: &str,
+    community_manifests: Option<&Path>,
 ) -> Result<Option<Router>> {
     if !rebuild.enabled() {
         return Ok(None);
@@ -230,7 +255,7 @@ pub fn draft_router(
         auth,
         drafts,
         builds: _,
-    } = clients(rebuild, owner, policy, lifetimes)?
+    } = clients(rebuild, owner, policy, lifetimes, community_manifests)?
         .ok_or_else(|| anyhow!("flag on constructs clients"))?;
     Ok(Some(api_draft_router(
         DraftHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
@@ -338,12 +363,37 @@ mod tests {
                     &owner,
                     policy(),
                     lifetimes(),
+                    None,
                 )
                 .unwrap()
                 .is_none(),
                 "{value:?}"
             );
         }
+        owner.shutdown().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// GRE-1056: `clients` reads Sources with the community manifests root it
+    /// was given and Node's filesystem policy for the auth policy.
+    #[test]
+    fn ticket_t_10_draftreads_clients_wire_manifests_and_filesystem_policy() {
+        let (owner, directory) = owner();
+        // ast-grep-ignore: no-writer-family-literal -- A test path for the read-only community manifests root.
+        let manifests = directory.join("bundle/data/manifests");
+        let reads = source_reads(&owner, policy(), Some(&manifests)).unwrap();
+        assert_eq!(reads.community_manifests(), Some(manifests.as_path()));
+        assert_eq!(
+            reads.filesystem_policy(),
+            SourceFilesystemPolicy::TrustedSingleUser
+        );
+        let multi_user = AuthPolicy {
+            session_tenant: SessionTenantPolicy::AccountTenant,
+            ..policy()
+        };
+        let reads = source_reads(&owner, multi_user, None).unwrap();
+        assert_eq!(reads.community_manifests(), None);
+        assert_eq!(reads.filesystem_policy(), SourceFilesystemPolicy::Isolated);
         owner.shutdown().unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -358,6 +408,7 @@ mod tests {
             &owner,
             policy(),
             lifetimes(),
+            None,
         )
         .unwrap()
         .expect("flag on constructs clients");
@@ -389,6 +440,7 @@ mod tests {
             &owner,
             policy(),
             lifetimes(),
+            None,
         )
         .unwrap()
         .expect("flag on constructs clients");

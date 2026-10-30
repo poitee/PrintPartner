@@ -202,6 +202,7 @@ mod with_feature {
             AuthLifetimes::default(),
             &origin,
             "default",
+            None,
         )
         .unwrap()
         .expect("flag on mounts draft routers");
@@ -298,6 +299,7 @@ mod with_feature {
                     AuthLifetimes::default(),
                     "http://127.0.0.1:9",
                     "default",
+                    None,
                 )
                 .unwrap()
                 .is_none(),
@@ -325,6 +327,7 @@ mod with_feature {
             AuthLifetimes::default(),
             &origin,
             "default",
+            None,
         )
         .unwrap()
         .unwrap();

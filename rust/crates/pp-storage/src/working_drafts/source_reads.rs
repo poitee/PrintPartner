@@ -6,6 +6,7 @@ use super::observation::{
     OwnedCatalogReadRequest, OwnedCheckoutReadRequest, OwnedStlReadRequest, PreparationBudget,
     ReadFailure, ReadResult, StlInventory, StlPurpose, StlRootRead,
 };
+use crate::auth::{AuthPolicy, SessionTenantPolicy};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -22,14 +23,40 @@ const SHIPPED_HINTS: &[u8] =
     include_bytes!("../../../../../web/apps/server/src/data/path-hints.yaml");
 const CHUNK: usize = 64 * 1024;
 
+/// Node's `SourceFilesystemPolicy` for a stored Source `localPath`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceFilesystemPolicy {
+    /// The path must stay in the Source's workspace `repos/<id>`.
+    Isolated,
+    /// Any absolute folder the user stored, as Node's trusted
+    /// `resolveSourceFilesystemRoot` returns `resolve(storedPath)`.
+    TrustedSingleUser,
+}
+impl SourceFilesystemPolicy {
+    /// Node's `createPorts` trusts a self-host server that is not multi-user,
+    /// which is the desktop compat child. Rust single-account sessions are
+    /// that case; account tenants are multi-user and stay isolated.
+    pub fn for_auth(policy: &AuthPolicy) -> Self {
+        match policy.session_tenant {
+            SessionTenantPolicy::SingleAccountDefault => Self::TrustedSingleUser,
+            SessionTenantPolicy::AccountTenant => Self::Isolated,
+        }
+    }
+}
+
 /// Reads Sources for working-draft preparation and manifest observation.
-/// A stored `localPath` or `snapshotLocator` must stay in the Source's
-/// workspace `repos/<id>`, lexically and after resolving symlinks, as Node's
-/// isolated `resolveSourceFilesystemRoot` requires.
+/// Under [`SourceFilesystemPolicy::Isolated`] (the default), a stored
+/// `localPath` must stay in the Source's workspace `repos/<id>`, lexically
+/// and after resolving symlinks, as Node's isolated `resolveSourceFilesystemRoot`
+/// requires. Trusted mode accepts any absolute stored folder. A
+/// `snapshotLocator` is always resolved under the workspace. Relative paths
+/// and `.` or `..` segments are refused in both modes, which is stricter than
+/// Node's `resolve`.
 pub struct SourceReads {
     repos: PathBuf,
     custom_hints: PathBuf,
     community: Option<PathBuf>,
+    filesystem: SourceFilesystemPolicy,
 }
 impl SourceReads {
     /// Sources under `<data_dir>/repos`; custom hints in
@@ -41,11 +68,22 @@ impl SourceReads {
             // ast-grep-ignore: no-writer-family-literal -- Node's custom hints file, read only; Rust never writes it.
             custom_hints: data_dir.join("path-hints.yaml"),
             community: None,
+            filesystem: SourceFilesystemPolicy::Isolated,
         }
     }
     pub fn with_community_manifests(mut self, root: impl Into<PathBuf>) -> Self {
         self.community = Some(root.into());
         self
+    }
+    pub fn with_filesystem_policy(mut self, policy: SourceFilesystemPolicy) -> Self {
+        self.filesystem = policy;
+        self
+    }
+    pub fn community_manifests(&self) -> Option<&Path> {
+        self.community.as_deref()
+    }
+    pub fn filesystem_policy(&self) -> SourceFilesystemPolicy {
+        self.filesystem
     }
     /// The Source workspace for an untracked checkout path.
     fn locate(
@@ -62,6 +100,12 @@ impl SourceReads {
             && !path
                 .components()
                 .any(|c| matches!(c, Component::CurDir | Component::ParentDir));
+        if lexical && self.filesystem == SourceFilesystemPolicy::TrustedSingleUser {
+            return Ok(match fs::canonicalize(path) {
+                Ok(canonical) => Located::Present(canonical),
+                Err(_) => Located::Absent,
+            });
+        }
         if !lexical
             || !(path.starts_with(&workspace)
                 || fs::canonicalize(&self.repos)
