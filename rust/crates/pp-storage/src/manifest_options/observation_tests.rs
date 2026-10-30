@@ -1043,3 +1043,83 @@ fn invalid_stored_community_slugs_read_no_community_manifest() {
         );
     }
 }
+
+/// T-10-draftreads (GRE-1052): the oracle replayed through the production
+/// `SourceReads` on real checkouts laid out as `manifest-builder-node.mts`.
+mod ticket_t_10_draftreads {
+    use super::*;
+    use crate::working_drafts::source_reads::SourceReads;
+
+    #[test]
+    fn ticket_t_10_draftreads_builder_bytes_equal_node_on_real_checkouts() {
+        let mut database = Database::oracle();
+        let data = database.directory.clone();
+        let write = |path: &str, bytes: &[u8]| {
+            let path = data.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        };
+        let reads = Reads::oracle();
+        for (id, paths) in &reads.allowed_roots {
+            for path in paths {
+                write(&format!("repos/{id}/{path}"), b"solid");
+            }
+        }
+        for (id, manifest) in &reads.manifests {
+            match manifest {
+                Ok(bytes) => write(&format!("repos/{id}/print-partner.manifest.yaml"), bytes),
+                Err(_) => write(
+                    &format!("repos/{id}/print-partner.manifest.yaml/.keep"),
+                    b"",
+                ),
+            }
+        }
+        write(
+            // ast-grep-ignore: no-writer-family-literal -- Test fixture for Node's custom hints file; production only reads it.
+            "path-hints.yaml",
+            b"version: 1\nrules:\n  - path: \"**/rail_mount.stl\"\n    option_group: rail_mounts\n    variant_id: printed_mount\n",
+        );
+        write(
+            // ast-grep-ignore: no-writer-family-literal -- Test fixture community manifest; production only reads it.
+            "manifests/oracle-kit.yaml",
+            b"selections:\n  beta: x\n  toolhead: custom\n",
+        );
+        for id in 1..=4 {
+            let root = data.join(format!("repos/{id}"));
+            database
+                .connection
+                .execute(
+                    "UPDATE projects SET local_path=?1 WHERE id=?2",
+                    params![root.to_str().unwrap(), id],
+                )
+                .unwrap();
+        }
+        // Source 6 points outside its workspace; the reader refuses it, so
+        // observation skips it like a Source with no checkout.
+        database
+            .connection
+            .execute(
+                "UPDATE projects SET local_path=?1 WHERE id=6",
+                [data.join("repos/6/../1").to_str().unwrap()],
+            )
+            .unwrap();
+        // ast-grep-ignore: no-writer-family-literal -- Names the fixture community-manifest root to read.
+        let reads = SourceReads::new(&data).with_community_manifests(data.join("manifests"));
+        let captured = database.capture(TENANT, 1).unwrap();
+        let observed =
+            observe(&captured, Some(&reads), PreparationLimits::default(), false).unwrap();
+        assert_eq!(
+            json(&observed),
+            std::str::from_utf8(NODE_BUILDER).unwrap().trim_end()
+        );
+        assert_eq!(
+            observed
+                .stamps
+                .iter()
+                .map(|(source, _)| *source)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+        assert!(observed.invalid_community_slugs.is_empty());
+    }
+}

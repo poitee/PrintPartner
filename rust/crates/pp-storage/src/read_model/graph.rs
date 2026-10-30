@@ -521,7 +521,7 @@ pub(super) fn timestamp(s: &str) -> bool {
     (1..=days[month as usize - 1]).contains(&day)
         && ((-271821, 4, 20, 0, 0, 0, 0)..=(275760, 9, 13, 0, 0, 0, 0)).contains(&date)
 }
-fn safe_path(s: &str) -> bool {
+pub(crate) fn safe_path(s: &str) -> bool {
     !s.is_empty()
         && !s.contains(['\\', '\0'])
         && !s.starts_with('/')
