@@ -612,7 +612,7 @@ export const ASSISTANT_TOOL_SPECS: AssistantToolSpec[] = [
   },
   {
     name: "get_plan_review",
-    description: "Review summary for a plan: issue counts, blockers, role/filament totals — not a full STL dump.",
+    description: "Review summary for a plan's accepted build: issue counts, blockers, role/filament totals, layers — not a full STL dump. Call get_plan_snapshot for the current layers and build_stale (true until the next rebuild).",
     input_schema: {
       type: "object",
       properties: { plan_id: { type: "number" } },
