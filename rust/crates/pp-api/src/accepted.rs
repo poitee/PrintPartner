@@ -63,8 +63,9 @@ struct App {
     admission: Arc<tokio::sync::Semaphore>,
 }
 
-/// Mounts Accepted Plan Checkoff GET+HEAD at `/`, `/api/v1`, and `/api/v2`
-/// when `PP_DESKTOP_REBUILD` was exactly `1` or `true`; otherwise nothing.
+/// Mounts Accepted Plan Checkoff GET+HEAD at `/`, `/api/v1`, and `/api/v2`,
+/// and Part assembled units at `/` and `/api/v1`, when `PP_DESKTOP_REBUILD`
+/// was exactly `1` or `true`; otherwise nothing.
 /// Filament labels come from the colour catalog only; Plans that name custom
 /// or Spoolman filaments answer 503 until those lookups are ported.
 pub fn accepted_router(config: AcceptedHttpConfig, client: ReadClient) -> Router {
@@ -76,11 +77,13 @@ pub fn accepted_router(config: AcceptedHttpConfig, client: ReadClient) -> Router
         client,
         admission: Arc::new(tokio::sync::Semaphore::new(64)),
     };
-    let routes = Router::new().route("/plans/{id}/checkoff", get(checkoff));
+    let plans = Router::new().route("/plans/{id}/checkoff", get(checkoff));
+    // Node registers Part routes at `/` and `/api/v1` only.
+    let parts = plans.clone().route("/parts/{id}/assembled", get(assembled));
     Router::new()
-        .merge(routes.clone())
-        .nest("/api/v1", routes.clone())
-        .nest("/api/v2", routes)
+        .merge(parts.clone())
+        .nest("/api/v1", parts)
+        .nest("/api/v2", plans)
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -121,42 +124,76 @@ impl Drop for Cancellation {
     }
 }
 
+/// The accepted projection a route answers with.
+#[derive(Clone, Copy)]
+enum View {
+    Checkoff,
+    Assembled,
+}
+
+impl View {
+    fn missing(self) -> &'static str {
+        match self {
+            Self::Checkoff => "Profile not found",
+            Self::Assembled => "Part not found",
+        }
+    }
+}
+
 async fn checkoff(
     State(app): State<App>,
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Response {
+    project(app, &id, request, View::Checkoff).await
+}
+
+async fn assembled(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Response {
+    project(app, &id, request, View::Assembled).await
+}
+
+async fn project(app: App, id: &str, request: axum::extract::Request, view: View) -> Response {
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
     let head = *request.method() == Method::HEAD;
-    // An id that cannot name a Plan is "Profile not found" once the
-    // credential is proven (an empty batch).
-    let profile = plan_id(&id);
+    // An id that cannot name a row is "not found" once the credential is
+    // proven (an empty batch).
+    let target = node_id(id);
     let client = app.client.clone();
     let wait = app.config.wait;
     let cancelled = Arc::new(AtomicBool::new(false));
     let flag = Cancellation(cancelled.clone());
     let read = tokio::task::spawn_blocking(move || {
-        let ids = profile.as_slice();
-        let batch = client.read(presented.into_credential(), ids, &cancelled, wait)?;
-        Ok::<_, anyhow::Error>(match batch.builds.first() {
-            Some(build) if needs_filament_lookup(&build.accepted) => {
-                Some(json!({"kind":"filament_lookup_unavailable"}))
+        let credential = presented.into_credential();
+        let batch = match (view, target) {
+            (View::Assembled, Some(part)) => {
+                client.read_part(credential, part, &cancelled, wait)?
             }
-            Some(build) => Some(views::checkoff(
-                build.profile_id,
-                &build.accepted,
-                &CatalogOnly,
-            )?),
-            None => None,
-        })
+            _ => client.read(credential, target.as_slice(), &cancelled, wait)?,
+        };
+        let Some(build) = batch.builds.first() else {
+            return Ok(None);
+        };
+        Ok::<_, anyhow::Error>(Some(match (view, target) {
+            (View::Checkoff, _) if needs_filament_lookup(&build.accepted) => {
+                json!({"kind":"filament_lookup_unavailable"})
+            }
+            (View::Checkoff, _) => {
+                views::checkoff(build.profile_id, &build.accepted, &CatalogOnly)?
+            }
+            (View::Assembled, part) => views::assembled(part.unwrap_or_default(), &build.accepted),
+        }))
     })
     .await;
     drop(flag);
     match read {
-        Ok(Ok(Some(view))) => present(view, head),
-        Ok(Ok(None)) => failure(StatusCode::NOT_FOUND, "Profile not found"),
+        Ok(Ok(Some(body))) => present(body, head, view.missing()),
+        Ok(Ok(None)) => failure(StatusCode::NOT_FOUND, view.missing()),
         Ok(Err(error)) => read_error(&error),
         Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
     }
@@ -164,8 +201,8 @@ async fn checkoff(
 
 /// Node reads the id with `Number()`: JS whitespace is trimmed, and decimal,
 /// exponent and `0x`/`0o`/`0b` forms are numbers. Only a safe positive integer
-/// can name a Plan.
-fn plan_id(raw: &str) -> Option<i64> {
+/// can name a Plan or Part.
+fn node_id(raw: &str) -> Option<i64> {
     let text = views::js_trim(raw);
     let radix = |digits: &str, radix: u32| {
         (!digits.is_empty() && digits.chars().all(|c| c.is_digit(radix)))
@@ -203,11 +240,12 @@ fn needs_filament_lookup(read: &AcceptedRead) -> bool {
         })
 }
 
-/// Maps a `views::checkoff` result to Node's `/plans/:id/checkoff` responses.
-fn present(view: Value, head: bool) -> Response {
+/// Maps a `views` result to Node's response for the route, whose "not found"
+/// detail is `missing`.
+fn present(view: Value, head: bool, missing: &str) -> Response {
     match view["kind"].as_str() {
         Some("ready" | "empty") => json_response(StatusCode::OK, &view["body"], head),
-        Some("not_found") => failure(StatusCode::NOT_FOUND, "Profile not found"),
+        Some("not_found" | "part_not_found") => failure(StatusCode::NOT_FOUND, missing),
         Some("accepted_state_unavailable") => failure(
             StatusCode::CONFLICT,
             if view["reason"] == "compatibility_dirty" {
@@ -337,7 +375,10 @@ mod tests {
                 }),
             ),
         ] {
-            assert_eq!(body(present(view, false)).await, (status, expected));
+            assert_eq!(
+                body(present(view, false, "Profile not found")).await,
+                (status, expected)
+            );
         }
     }
 

@@ -819,3 +819,45 @@ fn read_model_stale_freshness_marks_sources_stale() {
     assert!(workspace["sources"]["issue_count"].as_u64().unwrap() >= 1);
     assert_eq!(workspace["stages"][0]["status"]["kind"], "stale");
 }
+#[test]
+fn ticket_t_61_read_model_part_resolves_its_plan_in_one_read() {
+    let f = Fixture::new();
+    let before = f.dump();
+    let read = |part: i64| {
+        f.client
+            .read_part(
+                Credential::Session(Secret::new("read-fixture-secret".into())),
+                part,
+                &AtomicBool::new(false),
+                Duration::from_secs(1),
+            )
+            .unwrap()
+    };
+    let batch = read(2);
+    assert_eq!(batch.builds.len(), 1);
+    assert_eq!(batch.builds[0].profile_id, 1);
+    assert!(matches!(
+        batch.builds[0].accepted,
+        AcceptedRead::Ready { .. }
+    ));
+    assert!(read(999).builds.is_empty());
+    for bad in [0, -1, 9_007_199_254_740_992] {
+        assert!(
+            f.client
+                .read_part(
+                    Credential::Session(Secret::new("read-fixture-secret".into())),
+                    bad,
+                    &AtomicBool::new(false),
+                    Duration::ZERO,
+                )
+                .is_err(),
+            "{bad}"
+        );
+    }
+    assert_eq!(before, f.dump());
+    f.mutate("UPDATE parts SET tenant_id='foreign'");
+    assert!(
+        read(2).builds.is_empty(),
+        "another tenant's Part is missing"
+    );
+}

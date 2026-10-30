@@ -1,4 +1,4 @@
-# GRE-415: read Accepted Plan Checkoff over HTTP
+# GRE-415: read Accepted Plan Checkoff and Part assembled units over HTTP
 
 With the default-off `desktop_rebuild` feature compiled, `GET` and `HEAD`
 `/plans/{id}/checkoff` mount at `/`, `/api/v1`, and `/api/v2` only when stored
@@ -32,8 +32,21 @@ filaments from the data dir and Spoolman filaments over the network. Rust has
 neither reader yet, so a Plan whose included Parts name any filament id outside
 the catalog answers `503` instead of labels that may differ from Node's. That
 includes ids Node also leaves blank (deleted custom filaments, Spoolman turned
-off or unreachable). Review, Build Workflow and `/parts/{id}/assembled` are not
-part of this route yet.
+off or unreachable). Review and Build Workflow are not served yet.
+
+## Part assembled units
+
+`GET` and `HEAD` `/parts/{id}/assembled` mount at `/` and `/api/v1` only, as
+in Node, which has no `/api/v2` Part routes. `ReadClient::read_part` finds the
+caller's tenant's projection Part and reads the Plan that owns it, both in one
+read transaction. The body is `views::assembled`:
+`{part_id, assembled_count, assembled_units}`. Excluded Parts are found too, as
+in Node.
+
+A missing Part, another tenant's Part, an empty Plan, and an id that cannot
+name a Part all answer `404` `Part not found`. The 409, 500, 401 and 503 rows
+above apply unchanged. The filament refusal does not apply, because the body
+has no filament fields.
 
 ```sh
 cargo nextest run --locked --manifest-path rust/Cargo.toml -p pp-api -p pp-core \

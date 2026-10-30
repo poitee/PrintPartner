@@ -1,0 +1,268 @@
+#![cfg(unix)]
+//! T-8-archive (GRE-403): keep three verified pre-upgrade backups and never
+//! prune the last usable rollback.
+
+use pp_storage::{Limits, SchemaReady, WriterOwner};
+use rusqlite::Connection;
+use std::{
+    collections::BTreeMap,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime},
+};
+
+#[path = "common/scratch.rs"]
+mod scratch;
+use scratch::Scratch;
+
+const SCHEMA34: &[u8] = include_bytes!("fixtures/accepted-plan-node.db");
+
+/// A valid WAL-mode SQLite copy, like one the backup API writes from a WAL
+/// database, with its mtime set `age` before now.
+fn verified_copy(path: &Path, age: Duration) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .unwrap();
+    connection
+        .execute_batch("CREATE TABLE marker(value); INSERT INTO marker VALUES('old copy');")
+        .unwrap();
+    drop(connection);
+    assert!(!sidecar(path, "-wal").exists() && !sidecar(path, "-shm").exists());
+    age_file(path, age);
+}
+
+fn age_file(path: &Path, age: Duration) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::now() - age)
+        .unwrap();
+}
+
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+fn hour(n: u64) -> Duration {
+    Duration::from_secs(3600 * n)
+}
+
+fn contents(directory: &Path) -> BTreeMap<String, Vec<u8>> {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let bytes = std::fs::read(entry.path()).unwrap_or_default();
+            (entry.file_name().into_string().unwrap(), bytes)
+        })
+        .collect()
+}
+
+fn upgrade(data: &Path) -> SchemaReady {
+    std::fs::write(data.join("print-partner.db"), SCHEMA34).unwrap();
+    let (owner, ready) = WriterOwner::open(data, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    ready
+}
+
+fn names(paths: &[PathBuf]) -> Vec<String> {
+    let mut names: Vec<_> = paths
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn ticket_t_8_archive_retention_keeps_rollback_this_upgrade_and_three_older() {
+    let data = Scratch::new("pp-t8-retention");
+    let backups = data.join("backups");
+    std::fs::create_dir(&backups).unwrap();
+    // Six older verified copies, 20 the oldest and 25 the newest.
+    for (index, version) in (20..=25).enumerate() {
+        verified_copy(
+            &backups.join(format!("pre-schema{version}.db")),
+            hour(10 - index as u64),
+        );
+    }
+    // An immutable open would ignore a real WAL, so a copy with one is kept.
+    std::fs::write(sidecar(&backups.join("pre-schema20.db"), "-wal"), b"stale").unwrap();
+    // A shared-memory sidecar of a copy retention removes goes with it.
+    std::fs::write(sidecar(&backups.join("pre-schema21.db"), "-shm"), b"stale").unwrap();
+    // The oldest verified copy is a pre-37 legacy copy. After an upgrade
+    // interrupted between steps it can be the only one the previous release
+    // opens, so it is never pruned.
+    verified_copy(&backups.join("pre-schema31-to-41.db"), hour(40));
+    // The oldest file of all fails verification and is kept.
+    std::fs::write(backups.join("pre-schema19.db"), b"not a database").unwrap();
+    age_file(&backups.join("pre-schema19.db"), hour(20));
+    // Files retention never touches.
+    let untouched = [
+        (
+            "print-partner-pre-update-to-3.8.0-schema-31-to-34.tar.gz",
+            b"node pre-update".as_slice(),
+        ),
+        (
+            "print-partner-backup-2026-01-01T00-00-00-000Z.tar.gz",
+            b"manual backup",
+        ),
+        (
+            ".backup-00112233445566778899aabbccddeeff.db",
+            b"crashed temp copy",
+        ),
+        ("pre-schema21.db.bak", b"user copy"),
+    ];
+    for (name, bytes) in untouched {
+        std::fs::write(backups.join(name), bytes).unwrap();
+        age_file(&backups.join(name), hour(30));
+    }
+    let before = contents(&backups);
+
+    let ready = upgrade(&data);
+
+    let rollback = ready
+        .backup
+        .clone()
+        .expect("an upgrade from 34 takes a rollback copy");
+    assert!(rollback.exists());
+    assert_eq!(
+        names(&ready.pruned_backups),
+        ["pre-schema21.db", "pre-schema22.db"]
+    );
+    let after = contents(&backups);
+    for removed in ["pre-schema21.db", "pre-schema21.db-shm", "pre-schema22.db"] {
+        assert!(!after.contains_key(removed), "{removed} survived");
+    }
+    for kept in [
+        "pre-schema19.db",
+        "pre-schema20.db",
+        "pre-schema20.db-wal",
+        "pre-schema31-to-41.db",
+        "pre-schema23.db",
+        "pre-schema24.db",
+        "pre-schema25.db",
+    ] {
+        assert_eq!(after.get(kept), before.get(kept), "{kept} changed");
+    }
+    for (name, bytes) in untouched {
+        assert_eq!(after.get(name).map(Vec::as_slice), Some(bytes), "{name}");
+    }
+    // Every copy this upgrade wrote survives, the rollback among them.
+    let written: Vec<_> = after
+        .keys()
+        .filter(|name| !before.contains_key(*name))
+        .cloned()
+        .collect();
+    assert!(written.contains(&rollback.file_name().unwrap().to_string_lossy().into_owned()));
+    assert!(
+        written
+            .iter()
+            .all(|name| name.starts_with("pre-schema") && name.ends_with(".db")),
+        "{written:?}"
+    );
+    // Verification opened every kept copy without leaving sidecars.
+    let sidecars: Vec<_> = after
+        .keys()
+        .filter(|name| name.ends_with("-wal") || name.ends_with("-shm"))
+        .collect();
+    assert_eq!(sidecars, ["pre-schema20.db-wal"]);
+    assert_eq!(
+        ready.backup_warnings.len(),
+        2,
+        "{:?}",
+        ready.backup_warnings
+    );
+    for name in ["pre-schema19.db", "pre-schema20.db"] {
+        assert!(
+            ready
+                .backup_warnings
+                .iter()
+                .any(|warning| warning.contains(name)),
+            "{name}: {:?}",
+            ready.backup_warnings
+        );
+    }
+}
+
+#[test]
+fn ticket_t_8_archive_retention_breaks_mtime_ties_by_step() {
+    let data = Scratch::new("pp-t8-retention-ties");
+    let backups = data.join("backups");
+    std::fs::create_dir(&backups).unwrap();
+    for version in 20..=25 {
+        verified_copy(&backups.join(format!("pre-schema{version}.db")), hour(5));
+    }
+    let tied = SystemTime::now() - hour(5);
+    for version in 20..=25 {
+        std::fs::File::options()
+            .write(true)
+            .open(backups.join(format!("pre-schema{version}.db")))
+            .unwrap()
+            .set_modified(tied)
+            .unwrap();
+    }
+    let ready = upgrade(&data);
+    assert_eq!(
+        names(&ready.pruned_backups),
+        ["pre-schema20.db", "pre-schema21.db", "pre-schema22.db"]
+    );
+}
+
+#[test]
+fn ticket_t_8_archive_retention_never_deletes_below_three_verified_or_without_an_upgrade() {
+    let data = Scratch::new("pp-t8-retention-floor");
+    let backups = data.join("backups");
+    std::fs::create_dir(&backups).unwrap();
+    verified_copy(&backups.join("pre-schema20.db"), hour(3));
+    verified_copy(&backups.join("pre-schema21.db"), hour(2));
+    for version in 22..=23 {
+        let path = backups.join(format!("pre-schema{version}.db"));
+        std::fs::write(&path, b"corrupt copy").unwrap();
+        age_file(&path, hour(1));
+    }
+    // A valid copy nobody can read is kept too. Root reads it anyway, and
+    // then it counts as the third verified copy, which is also kept.
+    let unreadable = backups.join("pre-schema24.db");
+    verified_copy(&unreadable, hour(1));
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let root = unsafe { libc::geteuid() } == 0;
+    let ready = upgrade(&data);
+    assert!(
+        ready.pruned_backups.is_empty(),
+        "{:?}",
+        ready.pruned_backups
+    );
+    assert_eq!(
+        ready.backup_warnings.len(),
+        if root { 2 } else { 3 },
+        "{:?}",
+        ready.backup_warnings
+    );
+    std::fs::set_permissions(
+        backups.join("pre-schema24.db"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    for version in 20..=24 {
+        assert!(backups.join(format!("pre-schema{version}.db")).exists());
+    }
+
+    // Four more verified older copies, then a reopen at the current schema:
+    // no upgrade ran, so nothing is pruned.
+    for version in 10..=13 {
+        verified_copy(&backups.join(format!("pre-schema{version}.db")), hour(50));
+    }
+    let (owner, reopened) = WriterOwner::open(&data, Limits::default()).unwrap();
+    owner.shutdown().unwrap();
+    assert_eq!(reopened.backup, None);
+    assert!(reopened.pruned_backups.is_empty());
+    assert!(reopened.backup_warnings.is_empty());
+    for version in (10..=13).chain(20..=24) {
+        assert!(backups.join(format!("pre-schema{version}.db")).exists());
+    }
+}
