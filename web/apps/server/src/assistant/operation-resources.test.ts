@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.import_guide_notes", "tool.propose_add_source", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.propose_add_build_checklist_items", "tool.propose_source_mapping", "tool.propose_edit_plan_draft_parts", "tool.archive_plan", "tool.import_guide_notes", "tool.propose_add_source", "tool.audit_build_coverage", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -5842,7 +5842,8 @@ type PlanningProposalTool =
   | "propose_apply_plan_draft"
   | "propose_assign_role_filament"
   | "propose_add_build_checklist_items"
-  | "propose_edit_plan_draft_parts";
+  | "propose_edit_plan_draft_parts"
+  | "audit_build_coverage";
 const PLANNING_PROPOSAL_TOOLS = [
   "propose_update_build_brief",
   "propose_resolve_build_differences",
@@ -6688,6 +6689,91 @@ for (const isolated of [false, true]) {
     expect(declared("tool.propose_source_mapping")).toEqual(SOURCE_MAPPING_UNION);
   });
 }
+
+it("traces audit_build_coverage brief, draft selection and part matching against the plan draft tables", async () => {
+  const tool = "audit_build_coverage";
+  const plan = repo.createProfile("Coverage plan");
+  const briefless = repo.createProfile("Coverage briefless");
+  const draft = insertEmptyPlanDraft(plan.id);
+  const otherDraft = insertEmptyPlanDraft(briefless.id);
+  // Insert one part and re-digest the draft the way getPlanDraft verifies it.
+  const insertPart = (target: { id: number; snapshotDigest: string }, key: string, filename: string, relativePath: string, requirement: string | null, included: boolean) => {
+    const id = Number(sqlite.prepare(`INSERT INTO plan_draft_parts (
+      tenant_id, draft_id, part_key, filename, relative_path, requirement, quantity_inferred, quantity_effective, included, notes
+    ) VALUES ('default', ?, ?, ?, ?, ?, 1, 1, ?, '')`).run(target.id, key, filename, relativePath, requirement, included ? 1 : 0).lastInsertRowid);
+    const rows = z.array(z.record(z.string(), z.unknown())).parse(sqlite.prepare("SELECT * FROM plan_draft_parts WHERE draft_id = ? ORDER BY id").all(target.id));
+    const parts = rows.map((row) => Object.fromEntries(Object.entries(row)
+      .filter(([column]) => column !== "tenant_id")
+      .map(([column, value]) => [column.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()), column === "included" || (column === "geometry_same" && value != null) ? Boolean(value) : value])));
+    target.snapshotDigest = digestPlanDraft({ baseRevisionId: null, basePlanVersion: 0, inputs: [], parts: z.array(z.any()).parse(parts) });
+    sqlite.prepare("UPDATE plan_drafts SET snapshot_digest = ? WHERE id = ?").run(target.snapshotDigest, target.id);
+    return id;
+  };
+  const bracket = insertPart(draft, "bracket", "bracket.stl", "frame/bracket.stl", "frame", true);
+  insertPart(draft, "duct", "duct.stl", "cooling/duct.stl", "cooling", false);
+  insertPart(draft, "zz", "zz.stl", "misc/zz.stl", null, true);
+  insertPart(otherDraft, "other", "frame.stl", "frame/frame.stl", "frame", true);
+  const requirements = [{ key: "frame", value: "bracket mount", status: "unverified" as const }, { key: "cooling", value: "fan duct", status: "unverified" as const }];
+  const saveBrief = (planId: number, draftId?: number) => {
+    const brief = newBuildPlanningBrief(planId, "Build the bracket", []);
+    brief.requirements = requirements;
+    if (draftId != null) brief.draft_id = draftId;
+    saveBuildPlanningBrief(repo, brief);
+  };
+  const settings = ["table:app_settings"];
+  const missingDraftTables = [...settings, "table:build_profiles", "table:plan_drafts"].sort();
+  const draftTables = [...missingDraftTables, "table:plan_draft_inputs", "table:plan_draft_parts"].sort();
+  const reconciledTables = [...draftTables, ...PLANNING_RECONCILIATION_TABLES].sort();
+  const missingBrief = { error: "Build planning brief not found" };
+  // With no draft at all, draft_id is undefined and JSON drops the key.
+  const none = (planId: number, draftId: number | null) => ({ plan_id: planId, ...(draftId === null ? {} : { draft_id: draftId }),
+    coverage: requirements.map((requirement) => ({ requirement, represented: false, part_ids: [], evidence: [] })), uncovered: ["frame", "cooling"] });
+  const covered = (planId: number, draftId: number) => ({ plan_id: planId, draft_id: draftId,
+    coverage: [{ requirement: requirements[0], represented: true, part_ids: [bracket], evidence: ["frame/bracket.stl"] }, { requirement: requirements[1], represented: false, part_ids: [], evidence: [] }],
+    uncovered: ["cooling"] });
+  // Without a plan nothing is read; a non-integer plan_id falls back to the active plan.
+  for (const plan_id of [undefined, null, "invalid"]) expect(await tracePlanningProposal(tool, { plan_id, draft_id: draft.id }, [])).toEqual({ error: "plan_id required" });
+  expect(await tracePlanningProposal(tool, { plan_id: briefless.id, draft_id: otherDraft.id }, settings)).toEqual(missingBrief);
+  // A brief without a draft and no draft_id reads only the brief.
+  saveBrief(plan.id);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id }, settings)).toEqual(none(plan.id, null));
+  // Excluded parts and tokens of two characters or fewer never match.
+  for (const draft_id of [draft.id, String(draft.id)]) expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id }, draftTables)).toEqual(covered(plan.id, draft.id));
+  expect(await tracePlanningProposal(tool, { plan_id: "invalid", draft_id: draft.id }, draftTables, { activePlanId: plan.id })).toEqual(covered(plan.id, draft.id));
+  // Another plan's draft and an unknown draft read no further than plan_drafts and yield no parts.
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: otherDraft.id }, missingDraftTables)).toEqual(none(plan.id, otherDraft.id));
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: 424242 }, missingDraftTables)).toEqual(none(plan.id, 424242));
+  // The brief's draft is the default, and an explicit draft_id wins over it.
+  saveBrief(plan.id, draft.id);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id }, draftTables)).toEqual(covered(plan.id, draft.id));
+  expect(await tracePlanningProposal(tool, {}, draftTables, { activePlanId: plan.id })).toEqual(covered(plan.id, draft.id));
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: 424242 }, missingDraftTables)).toEqual(none(plan.id, 424242));
+  // Explicit IDs are not ownership-checked; the tenant-filtered brief and plan_drafts fail closed.
+  const foreign = tenantStorage.run("other", () => {
+    const created = repo.createProfile("Foreign coverage");
+    saveBrief(created.id);
+    return created;
+  });
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, draft_id: draft.id }, settings)).toEqual(missingBrief);
+  expect(await tracePlanningProposal(tool, { plan_id: plan.id, draft_id: draft.id }, settings, { tenantId: "other" })).toEqual(missingBrief);
+  expect(await tracePlanningProposal(tool, { plan_id: foreign.id, draft_id: draft.id }, missingDraftTables, { tenantId: "other" })).toEqual(none(foreign.id, draft.id));
+  // A selected Required-unit reconciliation adds its verification reads.
+  const reconciledPlan = repo.createProfile("Coverage reconciled");
+  const reconciledDraft = insertEmptyPlanDraft(reconciledPlan.id);
+  insertPart(reconciledDraft, "reconciled-duct", "duct.stl", "cooling/duct.stl", "cooling", true);
+  const saved = repo.savePlanDraftRequiredUnitReconciliation({
+    profileId: reconciledPlan.id, draftId: reconciledDraft.id, expectedSnapshotDigest: reconciledDraft.snapshotDigest,
+    decisions: [], actorId: "admission", idempotencyKey: "admission-coverage-reconciliation",
+  });
+  if (saved.kind !== "saved") throw new Error("reconciliation was not selected");
+  saveBrief(reconciledPlan.id, reconciledDraft.id);
+  const reconciled = await tracePlanningProposal(tool, { plan_id: reconciledPlan.id }, reconciledTables);
+  expect(reconciled.uncovered).toEqual(["frame"]);
+  // Auditing changes nothing.
+  expect(sqlite.prepare("SELECT included FROM plan_draft_parts WHERE id = ?").get(bracket)).toEqual({ included: 1 });
+  expect([...unions.get(tool) ?? []].sort()).toEqual(reconciledTables);
+  expect(declared(`tool.${tool}`)).toEqual(reconciledTables);
+});
 
 it("traces propose_edit_plan_draft_parts brief, draft and part checks against the plan draft tables", async () => {
   const tool = "propose_edit_plan_draft_parts";

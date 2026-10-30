@@ -968,6 +968,28 @@ fn ticket_t_7_ownership_add_source_proposal_refuses_invalid_admission_before_eff
 }
 
 #[test]
+fn ticket_t_7_ownership_audit_build_coverage_has_complete_node_owned_resources() {
+    assert_sqlite_tool_resources(
+        "tool.audit_build_coverage",
+        json!([
+            {"kind": "table", "name": "app_settings"},
+            {"kind": "table", "name": "build_profiles"},
+            {"kind": "table", "name": "plan_drafts"},
+            {"kind": "table", "name": "plan_draft_inputs"},
+            {"kind": "table", "name": "plan_draft_parts"},
+            {"kind": "table", "name": "plan_draft_required_unit_reconciliations"},
+            {"kind": "table", "name": "plan_draft_required_unit_decisions"},
+            {"kind": "table", "name": "plan_draft_required_unit_assignments"}
+        ]),
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_audit_build_coverage_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.audit_build_coverage");
+}
+
+#[test]
 fn ticket_t_7_ownership_apply_stack_preset_proposal_refuses_invalid_admission_before_effects() {
     assert_tool_invalid_admission("tool.apply_stack_preset");
 }
@@ -1355,6 +1377,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.archive_plan",
         "tool.import_guide_notes",
         "tool.propose_add_source",
+        "tool.audit_build_coverage",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1382,8 +1405,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 80);
-    assert_eq!(unresolved.len(), 349);
+    assert_eq!(reviewed.len(), 81);
+    assert_eq!(unresolved.len(), 348);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1598,8 +1621,8 @@ fn unknown_resource_syntax_and_competing_import_fail_closed() {
         ),
         (
             "/resources/reviewed/1/operation",
-            json!("tool.audit_build_coverage"),
-            "unknown variant `tool.audit_build_coverage`",
+            json!("tool.ingest_guide_url"),
+            "unknown variant `tool.ingest_guide_url`",
         ),
         ("/resources/extra", json!(true), "unknown field `extra`"),
     ] {
@@ -1697,6 +1720,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.archive_plan",
         "tool.import_guide_notes",
         "tool.propose_add_source",
+        "tool.audit_build_coverage",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1731,7 +1755,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
                 .as_array_mut()
                 .unwrap()
                 .retain(|name| format!("tool.{}", name.as_str().unwrap()) != id);
-            let stand_in = "tool.audit_build_coverage";
+            let stand_in = "tool.ingest_guide_url";
             regroup(&mut value, id, &[stand_in]);
             let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
             unresolved.retain(|operation| operation != stand_in);
@@ -1887,6 +1911,7 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.propose_edit_plan_draft_parts", "tool.archive_plan"),
         ("tool.archive_plan", "tool.import_guide_notes"),
         ("tool.import_guide_notes", "tool.propose_add_source"),
+        ("tool.propose_add_source", "tool.audit_build_coverage"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),
@@ -1944,13 +1969,13 @@ fn unresolved_participants_can_share_a_regrouped_operation() {
     regroup(
         &mut value,
         "tool.source_queries",
-        &["tool.audit_build_coverage", "tool.start_sync"],
+        &["tool.ingest_guide_text", "tool.start_sync"],
     );
     let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
-    unresolved.retain(|id| id != "tool.audit_build_coverage" && id != "tool.start_sync");
+    unresolved.retain(|id| id != "tool.ingest_guide_text" && id != "tool.start_sync");
     unresolved.push(json!("tool.source_queries"));
     let index = admit(&value).unwrap();
-    for id in ["tool.audit_build_coverage", "tool.start_sync"] {
+    for id in ["tool.ingest_guide_text", "tool.start_sync"] {
         assert_eq!(index.lookup(id).unwrap().operation, "tool.source_queries");
         assert_eq!(
             index.resources_for(id),
@@ -2883,7 +2908,7 @@ fn assert_tool_invalid_admission(id: &str) {
                 AdmissionError::ResourceSetMismatch { id: id.into() }
             }
             13 => {
-                let participant = "tool.audit_build_coverage";
+                let participant = "tool.ingest_guide_url";
                 regroup(&mut value, "tool.regrouped", &[id]);
                 regroup(&mut value, id, &[participant]);
                 let unresolved = value["resources"]["unresolved"].as_array_mut().unwrap();
