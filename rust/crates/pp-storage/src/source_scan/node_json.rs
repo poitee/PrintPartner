@@ -39,6 +39,42 @@ pub(super) fn failure_metadata(raw: Option<&str>, detail: &str) -> String {
     object(&members)
 }
 
+/// What JavaScript sees reading `key` from `JSON.parse(text)`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Property {
+    /// `JSON.parse` throws, or the document nests past 128 levels.
+    Unparsable,
+    /// The document is `null`, so reading any property throws a `TypeError`.
+    Null,
+    /// The value has no such own property, so it reads as `undefined`.
+    Missing,
+    /// `JSON.stringify` of the property's value.
+    Value(String),
+}
+
+pub(crate) fn property(text: &str, key: &str) -> Property {
+    let Ok(raw) = serde_json::from_str::<Box<RawValue>>(text) else {
+        return Property::Unparsable;
+    };
+    // Walk the whole document so every string and nesting level is checked.
+    if stringify(&raw, 0).is_none() {
+        return Property::Unparsable;
+    }
+    match raw.get().as_bytes().first() {
+        Some(b'n') => Property::Null,
+        Some(b'{') => members(raw.get(), 0)
+            .and_then(|members| {
+                members
+                    .into_iter()
+                    .find(|(name, _)| name.0 == key.as_bytes())
+            })
+            .map_or(Property::Missing, |(_, value)| Property::Value(value)),
+        // Strings, numbers, booleans and arrays have no such data property
+        // while `key` is not an array index or `length`.
+        _ => Property::Missing,
+    }
+}
+
 fn members(text: &str, depth: usize) -> Option<Vec<(JsString, String)>> {
     serde_json::from_str::<JsObject>(text)
         .ok()?

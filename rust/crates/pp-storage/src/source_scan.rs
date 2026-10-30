@@ -930,6 +930,6 @@ pub(crate) fn validate_schema(connection: &Connection, version: u64) -> Result<(
     Ok(())
 }
 
-mod node_json;
+pub(crate) mod node_json;
 #[cfg(test)]
 mod tests;
