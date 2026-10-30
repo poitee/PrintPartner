@@ -585,3 +585,102 @@ fn ticket_t_10_draftreads_charges_the_budget_before_reads() {
     b.cancel_after_checks(2);
     assert_eq!(failure(root.scan_stls(&mut b)), "Cancelled");
 }
+
+/// GRE-1056: Node's trusted single-user policy reads a stored folder anywhere;
+/// the isolated policy refuses it. Relative and dotted paths stay refused, and
+/// snapshot locators stay under the workspace in both modes.
+#[test]
+fn ticket_t_10_draftreads_trusted_policy_reads_a_user_folder() {
+    use super::source_reads::SourceFilesystemPolicy;
+    let data = Data::new();
+    write(
+        &data.path("outside/print-partner.manifest.yaml"),
+        b"user: 1\n",
+    );
+    write(&data.path("outside/part.stl"), b"stl");
+    let outside = data.path("outside");
+    let cancelled = AtomicBool::new(false);
+    let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
+    let trusted = data
+        .reads()
+        .with_filesystem_policy(SourceFilesystemPolicy::TrustedSingleUser);
+    let isolated = data.reads();
+
+    let canonical = fs::canonicalize(&outside).unwrap();
+    let (logical, inventory) = scan(
+        &trusted,
+        &stl(StlPurpose::Untracked, 1, outside.to_str().unwrap()),
+        &mut b,
+    )
+    .unwrap();
+    assert_eq!(logical.as_deref(), canonical.to_str());
+    assert_eq!(paths(inventory.as_ref()), [("part.stl".to_owned(), 0)]);
+    assert_eq!(
+        document(trusted.read_checkout_manifest(
+            &checkout(1, &outside),
+            CheckoutManifestUse::OptionGroups,
+            &mut b
+        )),
+        "user: 1\n"
+    );
+
+    let root = isolated
+        .resolve_stl_root(
+            &stl(StlPurpose::Untracked, 1, outside.to_str().unwrap()),
+            &mut b,
+        )
+        .unwrap();
+    assert_eq!(root.logical_resolved_path(), None);
+    assert_eq!(
+        document(isolated.read_checkout_manifest(
+            &checkout(1, &outside),
+            CheckoutManifestUse::OptionGroups,
+            &mut b
+        )),
+        "skipped PermissionDenied"
+    );
+
+    let dotted = format!("{}/../outside", data.path("repos").display());
+    for stored in ["outside", "repos/1/checkout", dotted.as_str()] {
+        let root = trusted
+            .resolve_stl_root(&stl(StlPurpose::Untracked, 1, stored), &mut b)
+            .unwrap();
+        assert_eq!(root.logical_resolved_path(), None, "{stored}");
+    }
+    // An absent folder scans nothing, as in the workspace case.
+    let missing = data.path("gone");
+    let (logical, inventory) = scan(
+        &trusted,
+        &stl(StlPurpose::Untracked, 1, missing.to_str().unwrap()),
+        &mut b,
+    )
+    .unwrap();
+    assert_eq!(logical.as_deref(), missing.to_str());
+    assert!(inventory.entries().is_empty());
+    assert_eq!(
+        failure(trusted.resolve_stl_root(
+            &stl(StlPurpose::Revision, 1, outside.to_str().unwrap()),
+            &mut b
+        )),
+        "UnsafeLocator"
+    );
+}
+
+#[test]
+fn ticket_t_10_draftreads_filesystem_policy_follows_node_multi_user() {
+    use super::source_reads::SourceFilesystemPolicy;
+    use crate::auth::{AuthPolicy, FirstUserTenant, RegistrationPolicy, SessionTenantPolicy};
+    let policy = |session_tenant| AuthPolicy {
+        registration: RegistrationPolicy::Open,
+        session_tenant,
+        first_user: FirstUserTenant::NewUser,
+    };
+    assert_eq!(
+        SourceFilesystemPolicy::for_auth(&policy(SessionTenantPolicy::SingleAccountDefault)),
+        SourceFilesystemPolicy::TrustedSingleUser
+    );
+    assert_eq!(
+        SourceFilesystemPolicy::for_auth(&policy(SessionTenantPolicy::AccountTenant)),
+        SourceFilesystemPolicy::Isolated
+    );
+}

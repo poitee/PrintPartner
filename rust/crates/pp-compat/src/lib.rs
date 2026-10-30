@@ -48,6 +48,15 @@ pub struct Bundle {
     pub commit: String,
 }
 
+impl Bundle {
+    /// The community manifests Node reads: `manifest-apply.js` sits in
+    /// `services/` next to `entry` and joins `../data/manifests`.
+    pub fn community_manifests_dir(&self) -> Option<PathBuf> {
+        // ast-grep-ignore: no-writer-family-literal -- Node's shipped community manifests, read only; Rust never writes them.
+        self.entry.parent().map(|dist| dist.join("data/manifests"))
+    }
+}
+
 #[cfg(test)]
 pub type BeforeSetup = Box<dyn Fn(&Path, u32) -> Result<()> + Send + Sync>;
 
