@@ -300,7 +300,8 @@ function* walk(dir) {
 }
 
 // A rebuilt screen renders whatever it imports, so follow relative and `@/`
-// imports out of src/rebuild/ and hold those files to the same rule.
+// imports out of src/rebuild/ and hold those files to the same rule. Static
+// imports only: a computed dynamic import() path is not followed.
 const srcRoot = dirname(rebuildDir);
 function resolveImport(from, spec) {
   let base;

@@ -255,7 +255,8 @@ words with the color. A printer color may match a workflow tone (`complete` and
 - Reduced motion sets `--motion-fast`, `--motion-base` and `--motion-slow` to 0 ms, and
   every animation and transition duration and delay reads `--motion-base`, so nothing
   animates. Motion driven from script (`requestAnimationFrame`, `element.animate`) must
-  check `prefers-reduced-motion` itself.
+  check `prefers-reduced-motion` itself. A looping indicator such as a spinner stops on
+  its first frame, so pair it with words ("Printing", "Loading") that still read as busy.
 
 ### Tokens only
 
