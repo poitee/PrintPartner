@@ -8,12 +8,15 @@ snapshot version and drops any published snapshot at or below it, so a
 commit already in the snapshot is not sent again.
 
 `job_ws_subscribe_during_commits_loses_and_repeats_nothing` in
-`rust/crates/pp-api/tests/jobs_http.rs` proves this over HTTP. One socket
-opens before the claim and records every frame. Ten more sockets upgrade
-while a worker commits the claim, progress 1 through 12, and the finish.
-Each later socket must receive an exact suffix of the first socket's frames,
-ending in the one `done` frame and close 1000. A socket opened after the
-finish receives only the final snapshot, then close 1000. Reconnect after a
+`rust/crates/pp-api/tests/jobs_http.rs` proves this over HTTP. A worker
+commits the claim, progress 1 through 12, and the finish. One socket opens
+before the claim and must receive 15 distinct frames. After each of the first
+13 commits the worker reports it over a channel, and the test opens one more
+socket while the worker goes on to the next commit. Each of those sockets must
+receive an exact suffix of the 15 frames that starts at or after the commit it
+was opened behind, ending in the one `done` frame and close 1000. A socket
+opened after the finish receives only the final snapshot, then close 1000.
+Reconnect after a
 lagged close is `job_ws_reconnect_returns_authoritative_snapshot` (GRE-800).
 
 The verify helper's default `--repo` half of this ticket merged in #278.

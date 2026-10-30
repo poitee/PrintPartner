@@ -1932,13 +1932,15 @@ async fn job_ws_reconnect_returns_authoritative_snapshot() {
     shutdown(owner, directory);
 }
 
-/// Sockets upgrade while a worker commits the claim, progress 1 through 12,
-/// and the finish. The first socket opens before the claim, so it sees every
-/// commit. Each later socket must see an exact suffix of that stream: its
-/// first frame is the snapshot current at subscribe, and every later commit
-/// arrives once, in order. A gap would be a lost event and a repeated frame a
-/// duplicate. A socket opened after the finish replays only the final
-/// snapshot, then closes 1000.
+/// A worker commits the claim, progress 1 through 12, and the finish: 14
+/// commits after the queued snapshot. The first socket opens before the claim
+/// and must see 15 distinct frames. After each of the first 13 commits the
+/// worker reports it, and the test upgrades one more socket while the worker
+/// goes on to the next commit. Each of those sockets must see an exact suffix
+/// of the 15 frames that starts at or after the commit it was opened behind.
+/// A gap would be a lost event, a repeated frame a duplicate, and an earlier
+/// start a stale snapshot. A socket opened after the finish replays only the
+/// final snapshot, then closes 1000.
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn job_ws_subscribe_during_commits_loses_and_repeats_nothing() {
@@ -1986,24 +1988,38 @@ async fn job_ws_subscribe_during_commits_loses_and_repeats_nothing() {
     assert_eq!(queued["job_id"], job_id);
     assert_ne!(queued["status"], "done");
 
+    let (committed, mut commits) = tokio::sync::mpsc::unbounded_channel();
     let writer = {
         let owner = owner.clone();
         let job_id = job_id.clone();
         tokio::task::spawn_blocking(move || {
-            progress_then_finish(&owner, chosen, &job_id, 12, Duration::from_millis(3))
+            progress_then_finish(
+                &owner,
+                chosen,
+                &job_id,
+                12,
+                Duration::from_millis(3),
+                committed,
+            )
         })
     };
     let mut joined = Vec::new();
-    for _ in 0..10 {
-        joined.push(open_socket(&server, &path, Some(&cookie)).await);
-        tokio::time::sleep(Duration::from_millis(4)).await;
+    while let Some(count) = commits.recv().await {
+        if count < 14 {
+            joined.push((count, open_socket(&server, &path, Some(&cookie)).await));
+        }
     }
     writer.await.unwrap();
+    assert_eq!(joined.len(), 13);
 
     let (rest, close) = frames_until_close(&mut reference).await;
     assert_eq!(close, (1000, String::new()));
     let mut full = vec![queued];
     full.extend(rest);
+    assert_eq!(full.len(), 15, "{full:?}");
+    for (index, frame) in full.iter().enumerate() {
+        assert!(!full[index + 1..].contains(frame), "repeated {frame:?}");
+    }
     let progress: Vec<_> = full
         .iter()
         .filter_map(|frame| frame["progress"].as_i64())
@@ -2029,13 +2045,18 @@ async fn job_ws_subscribe_during_commits_loses_and_repeats_nothing() {
         1
     );
 
-    for mut socket in joined {
+    for (count, mut socket) in joined {
         let (frames, close) = frames_until_close(&mut socket).await;
         assert_eq!(close, (1000, String::new()));
         assert!(!frames.is_empty());
         assert!(
             full.ends_with(&frames),
             "frames {frames:?} are not a suffix of {full:?}"
+        );
+        assert!(
+            full.len() - frames.len() >= count,
+            "socket opened after commit {count} started at frame {}",
+            full.len() - frames.len()
         );
     }
 
@@ -2221,8 +2242,9 @@ fn publish_until_lag(
     }
 }
 
-/// Claims the job, commits progress 1 through `steps` with `pause` after each
-/// commit, then finishes it.
+/// Claims the job, commits progress 1 through `steps`, then finishes it.
+/// After each commit it sends the number of commits so far, then waits
+/// `pause`.
 #[cfg(feature = "desktop_rebuild")]
 fn progress_then_finish(
     owner: &Arc<Mutex<WriterOwner>>,
@@ -2230,6 +2252,7 @@ fn progress_then_finish(
     job_id: &str,
     steps: u8,
     pause: std::time::Duration,
+    committed: tokio::sync::mpsc::UnboundedSender<usize>,
 ) {
     use pp_storage::jobs::{
         CompletedResult, JobKind, SourceUpdatesResult, WorkerAdmission, WorkerOperation,
@@ -2250,11 +2273,13 @@ fn progress_then_finish(
         .unwrap();
     let mut lease = worker.claim().unwrap().unwrap().lease;
     assert_eq!(lease.job_id(), job_id);
+    committed.send(1).unwrap();
     std::thread::sleep(pause);
     for step in 1..=steps {
         worker
             .update(&mut lease, WorkerOperation::Progress(step))
             .unwrap();
+        committed.send(1 + usize::from(step)).unwrap();
         std::thread::sleep(pause);
     }
     worker
@@ -2271,6 +2296,7 @@ fn progress_then_finish(
             },
         )
         .unwrap();
+    committed.send(2 + usize::from(steps)).unwrap();
 }
 
 /// Reads text frames until the close frame. Each read waits at most 30 s.
