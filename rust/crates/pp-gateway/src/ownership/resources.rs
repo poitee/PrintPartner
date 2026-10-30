@@ -176,6 +176,8 @@ enum ReviewedEntry {
     ImportGuideNotes { resources: Vec<ResourceId> },
     #[serde(rename = "tool.propose_add_source")]
     ProposeAddSource { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.audit_build_coverage")]
+    AuditBuildCoverage { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -746,6 +748,22 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            // The brief lookup, then `getPlanDraft` for the requested or brief draft. Read-only:
+            // no proposal, so no dismissal lookup.
+            Self::AuditBuildCoverage { resources } => (
+                "tool.audit_build_coverage",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(BuildProfiles),
+                    Table(PlanDrafts),
+                    Table(PlanDraftInputs),
+                    Table(PlanDraftParts),
+                    Table(PlanDraftRequiredUnitReconciliations),
+                    Table(PlanDraftRequiredUnitDecisions),
+                    Table(PlanDraftRequiredUnitAssignments),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -1069,6 +1087,7 @@ impl Declarations {
             "tool.archive_plan",
             "tool.import_guide_notes",
             "tool.propose_add_source",
+            "tool.audit_build_coverage",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
