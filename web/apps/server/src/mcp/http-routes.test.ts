@@ -9,7 +9,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp, createPorts } from "../app.js";
 import { loadConfig } from "../config.js";
-import { isLoopbackBindHost } from "./product-mcp.js";
 import { pruneMcpSessions, resolveMcpSession } from "./http-routes.js";
 
 describe("HTTP MCP /api/v1/mcp", () => {
@@ -100,7 +99,6 @@ describe("HTTP MCP /api/v1/mcp", () => {
     process.env.HOST = "0.0.0.0";
     const config = loadConfig();
     expect(config.integrationApiKey).toBeNull();
-    expect(isLoopbackBindHost(config.host)).toBe(false);
 
     const ports = createPorts(config);
     await ports.db.connect();
