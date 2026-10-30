@@ -10,7 +10,8 @@
 //! Tools without a Rust port go through [`DomainPort`].
 //!
 //! The catalog (`mcp_domain/catalog.json`) is exported from the live Node
-//! server by `web/apps/server/scripts/export-mcp-catalog.ts`.
+//! server by `web/apps/server/scripts/export-mcp-catalog.ts`; the Node test
+//! `src/mcp/rust-catalog.test.ts` fails when the two differ.
 
 mod custom_filaments;
 
