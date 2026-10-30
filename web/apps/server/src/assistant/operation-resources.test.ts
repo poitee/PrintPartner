@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.apply_stack_preset", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -6343,3 +6343,82 @@ for (const isolated of [false, true]) {
     expect(declared("tool.update_kit_selections")).toEqual(KIT_SELECTION_UNION);
   });
 }
+
+function stackPresetCatalog() {
+  const catalog = deploymentCatalogCandidates(dataDir)[0]!;
+  fs.writeFileSync(catalog, JSON.stringify({ version: 1, bases: { v24: { source_name: "Fixture" } }, addon_categories: {
+    toolhead: { rule: "pick_one", replaces_slot: "toolhead", sources: [{ name: "Toolhead-A" }, { name: "Toolhead-B" }] },
+  }, stack_presets: {
+    v24_toolheads: { label: "V2.4 toolheads", base: "v24", base_tag: "v2.4.1", addon_sources: ["Toolhead-A", "Toolhead-B"] },
+    v24_branch: { label: "V2.4 branch", base: "v24", base_branch: "main", addon_sources: ["Toolhead-B"] },
+  } }));
+  return catalog;
+}
+
+async function traceStackPreset(input: Record<string, unknown>, options: { roots: { domain: string[]; catalog: string[]; workspace: string[] }; tenantId?: string; activePlanId?: number }) {
+  const { roots, tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("apply_stack_preset", input, { repo, dataDir, activePlanId })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  const tables = [...new Set(statements.map((sql) => {
+    try { return stackSelect(sql, tenantId); } catch { return tableForObservedSelect(sql, tenantId); }
+  }))];
+  const files = interactionFileResources(observer.state.files, roots);
+  return { body: z.record(z.string(), z.unknown()).parse(JSON.parse(output.content)), resources: [...tables, ...files].sort() };
+}
+
+const STACK_PRESET_UNION = ["file:assistant-domain", "file:kit-catalog", "table:build_profiles", "table:plan_decisions"];
+
+it("traces apply_stack_preset plan checks, catalog presets, stack warnings and dismissals", async () => {
+  const { roots } = interactionDomainFixture();
+  stackPresetCatalog();
+  const plan = repo.createProfile("Preset plan", sourceId);
+  const idle = repo.createProfile("Preset idle", sourceId);
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign preset"));
+  const layersBefore = repo.getProfileLayers(plan.id).map((layer) => layer.project_name);
+  const identity = ["table:build_profiles"];
+  const catalog = ["file:kit-catalog", "table:build_profiles"];
+  const union = new Set<string>();
+  vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+  try {
+    async function trace(input: Record<string, unknown>, resources: string[], options: { tenantId?: string; activePlanId?: number } = {}) {
+      const traced = await traceStackPreset(input, { roots, ...options });
+      expect(traced.resources).toEqual(resources);
+      for (const resource of traced.resources) union.add(resource);
+      return traced.body;
+    }
+    const proposal = z.object({ status: z.literal("proposed"), action: z.object({ type: z.literal("apply_stack_preset"), plan_id: z.number(), label: z.string(), summary: z.string(), params: z.record(z.string(), z.unknown()) }).passthrough(), warnings: z.array(z.object({ code: z.string() }).passthrough()), suggested_excludes: z.array(z.string()) }).passthrough();
+    const required = { error: "plan_id and preset_id required" };
+    expect(await trace({ preset_id: "v24_toolheads" }, [])).toEqual(required);
+    for (const preset_id of [undefined, "", "  ", 7]) expect(await trace({ plan_id: plan.id, preset_id }, identity)).toEqual(required);
+    // A missing or foreign plan falls back to no plan.
+    for (const plan_id of [999999, foreign.id]) expect(await trace({ plan_id, preset_id: "v24_toolheads" }, identity)).toEqual(required);
+    // A foreign active plan passes resolution but fails the identity re-read.
+    expect(await trace({ preset_id: "v24_toolheads" }, identity, { activePlanId: foreign.id })).toEqual({ error: "Plan not found" });
+    expect(await trace({ plan_id: plan.id, preset_id: "nope" }, catalog)).toEqual({ error: 'Unknown stack preset "nope". Known ids: v24_toolheads, v24_branch' });
+
+    const full = ["file:assistant-domain", "file:kit-catalog", "table:build_profiles", "table:plan_decisions"];
+    const tagged = proposal.parse(await trace({ plan_id: plan.id, preset_id: " V2.4 toolheads " }, full));
+    expect(tagged.action).toMatchObject({ plan_id: plan.id, label: "Apply stack preset “v24_toolheads”", params: { preset_id: "v24_toolheads", base_tag: "v2.4.1", suggested_excludes: ["hotend_mount.stl"] } });
+    expect(tagged.action.summary).toContain("Pins base source to tag v2.4.1 (Sync required after Apply).");
+    expect(tagged.warnings.map(({ code }) => code)).toEqual(expect.arrayContaining(["compat_conflict", "compat_slot"]));
+    const branch = proposal.parse(await trace({ plan_id: String(plan.id), preset_id: "v24_branch" }, full));
+    expect(branch.action.params).toEqual({ preset_id: "v24_branch", base_branch: "main" });
+    expect(branch.warnings).toEqual([]);
+    expect(proposal.parse(await trace({ preset_id: "v24_branch" }, full, { activePlanId: idle.id })).action.plan_id).toBe(idle.id);
+    // The other tenant gets the same catalog presets for its own plan.
+    expect(proposal.parse(await trace({ plan_id: foreign.id, preset_id: "v24_branch" }, full, { tenantId: "other" })).action.plan_id).toBe(foreign.id);
+
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "apply_stack_preset", params: branch.action.params });
+    expect(await trace({ plan_id: plan.id, preset_id: "v24_branch" }, full)).toEqual(dismissed("apply_stack_preset", branch.action.params));
+    expect(proposal.parse(await trace({ plan_id: idle.id, preset_id: "v24_branch" }, full)).action.plan_id).toBe(idle.id);
+  } finally { vi.unstubAllEnvs(); }
+  expect(repo.getProfileLayers(plan.id).map((layer) => layer.project_name)).toEqual(layersBefore);
+  expect([...union].sort()).toEqual(STACK_PRESET_UNION);
+  expect(declared("tool.apply_stack_preset")).toEqual(STACK_PRESET_UNION);
+});
