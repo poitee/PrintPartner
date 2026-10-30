@@ -35,6 +35,7 @@ import { getLogger } from "../services/logger.js";
 import { loadManifestYaml } from "../services/manifest-apply.js";
 import { inferOptionGroupsFromPaths } from "../services/path-hints.js";
 import type { AssistantRuntimeConfig } from "./resolve-assistant.js";
+import { decisionFingerprint } from "./preferences-digest.js";
 import { invokeAssistantTool } from "./tools.js";
 
 const observer = vi.hoisted(() => {
@@ -82,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -5696,7 +5697,8 @@ type PlanningProposalTool =
   | "propose_resolve_build_differences"
   | "propose_set_build_source_roles"
   | "propose_rebuild_plan"
-  | "propose_apply_plan_draft";
+  | "propose_apply_plan_draft"
+  | "propose_assign_role_filament";
 const PLANNING_PROPOSAL_TOOLS = [
   "propose_update_build_brief",
   "propose_resolve_build_differences",
@@ -5850,3 +5852,198 @@ it("traces build planning proposal creators against the app_settings brief looku
 });
 
 
+
+it("traces propose_assign_role_filament brief, Spoolman access and tenants against its literal union", async () => {
+  const tool = "propose_assign_role_filament";
+  const plan = repo.createProfile("Role filament");
+  const idle = repo.createProfile("Role filament idle");
+  const foreign = tenantStorage.run("other", () => {
+    const created = repo.createProfile("Foreign role filament");
+    savePlanningBrief(created.id);
+    return created;
+  });
+  const settings = ["table:app_settings"];
+  const spoolman = { role: "primary", assignment: { inventory_kind: "spoolman", spool_id: "7" } };
+  const manual = { role: "primary", assignment: { inventory_kind: "manual", color: "#112233" } };
+  for (const plan_id of [undefined, null, "invalid"]) {
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id }, [])).toEqual({ error: "plan_id required" });
+  }
+  expect(await tracePlanningProposal(tool, { ...manual, plan_id: plan.id }, settings)).toEqual({ error: "Build planning brief not found" });
+  savePlanningBrief(plan.id);
+  for (const input of [manual, spoolman]) {
+    for (const plan_id of [plan.id, String(plan.id)]) {
+      expect(await tracePlanningProposal(tool, { ...input, plan_id }, settings, { activePlanId: idle.id })).toEqual(planningProposal(tool, plan.id, { ...input, plan_id }));
+    }
+    expect(await tracePlanningProposal(tool, input, settings, { activePlanId: plan.id })).toEqual(planningProposal(tool, plan.id, input));
+    // Without the desktop rebuild flag no ownership check runs; the missing brief fails closed.
+    expect(await tracePlanningProposal(tool, { ...input, plan_id: foreign.id }, settings)).toEqual({ error: "Build planning brief not found" });
+    expect(await tracePlanningProposal(tool, { ...input, plan_id: foreign.id }, settings, { tenantId: "other" })).toEqual(planningProposal(tool, foreign.id, { ...input, plan_id: foreign.id }));
+  }
+  vi.stubEnv("PP_DESKTOP_REBUILD", "1");
+  try {
+    const owned = ["table:app_settings", "table:build_profiles"];
+    const notFound = { error: "Profile not found", code: "PROFILE_NOT_FOUND" };
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: 999999 }, ["table:build_profiles"])).toEqual(notFound);
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: foreign.id }, ["table:build_profiles"])).toEqual(notFound);
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: plan.id }, ["table:build_profiles"], { tenantId: "other" })).toEqual(notFound);
+    const disabled = { error: "Feature spoolman is disabled.", code: "FEATURE_DISABLED" };
+    // Spoolman is off by default; the toggle reads stop before the brief lookup.
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: plan.id }, owned)).toEqual(disabled);
+    // Manual assignments skip the Spoolman gate even with the flag on.
+    expect(await tracePlanningProposal(tool, { ...manual, plan_id: plan.id }, settings)).toEqual(planningProposal(tool, plan.id, { ...manual, plan_id: plan.id }));
+    repo.setSetting("feature_toggles", JSON.stringify({ spoolman: true }));
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: plan.id }, owned)).toEqual(planningProposal(tool, plan.id, { ...spoolman, plan_id: plan.id }));
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: idle.id }, owned)).toEqual({ error: "Build planning brief not found" });
+    repo.setSetting(`feature_toggles:plan:${plan.id}`, JSON.stringify({ spoolman: false }));
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: plan.id }, owned)).toEqual(disabled);
+    repo.setSetting("feature_toggles", "[invalid");
+    expect(await tracePlanningProposal(tool, { ...spoolman, plan_id: plan.id }, owned)).toEqual({ error: "Stored feature toggles are invalid.", code: "FEATURE_TOGGLES_INVALID" });
+  } finally { vi.unstubAllEnvs(); }
+  const before = repo.getSetting(`build_planning.v1.${plan.id}`);
+  expect([...unions.get(tool) ?? []].sort()).toEqual(["table:app_settings", "table:build_profiles"]);
+  expect(declared(`tool.${tool}`)).toEqual(["table:app_settings", "table:build_profiles"]);
+  expect(repo.getSetting(`build_planning.v1.${plan.id}`)).toBe(before);
+});
+
+type CheckedProposalTool = "propose_restore_snapshot" | "propose_exclude_replaced_parts";
+
+function checkedProposalSelect(statement: unknown, tenantId: string): string {
+  const sql = z.string().parse(statement);
+  const tenant = `'${tenantId.replaceAll("'", "''")}'`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const snapshot = new RegExp(`^select "id", "tenant_id", "profile_id", "name", "created_at", "source", "payload_json" from "plan_snapshots" where \\("plan_snapshots"\\."tenant_id" = ${tenant} and "plan_snapshots"\\."id" = -?(?:0|[1-9][0-9]*)(?:\\.0)?\\)(?: limit \\?)?$`);
+  if (snapshot.test(sql)) return "table:plan_snapshots";
+  return tableForObservedSelect(sql, tenantId);
+}
+
+async function traceCheckedProposal(
+  tool: CheckedProposalTool,
+  input: Record<string, unknown>,
+  tables: string[],
+  options: { tenantId?: string; activePlanId?: number } = {},
+) {
+  const { tenantId = "default", activePlanId } = options;
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try {
+    output = await tenantStorage.run(tenantId, () => invokeAssistantTool(tool, input, { repo, activePlanId }));
+  } finally {
+    observer.state.active = false;
+  }
+  const observed = [...new Set(statements.map((sql) => checkedProposalSelect(sql, tenantId)))].sort();
+  expect(observed).toEqual(tables);
+  expect(observer.state.files).toEqual([]);
+  const union = unions.get(tool) ?? new Set<string>();
+  for (const resource of observed) union.add(resource);
+  unions.set(tool, union);
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+}
+
+function checkedProposal(type: string, planId: number, label: string, summary: string, params: Record<string, unknown>) {
+  return {
+    status: "proposed",
+    note: "Not applied yet — user must confirm via Apply in the UI.",
+    action: { id: expect.any(String), type, plan_id: planId, label, summary, params },
+  };
+}
+
+function dismissed(type: string, params: Record<string, unknown>) {
+  return {
+    error: "user_dismissed",
+    detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
+    fingerprint: decisionFingerprint(type, params),
+    action_type: type,
+  };
+}
+
+it("traces propose_restore_snapshot selectors, snapshot ownership and dismissals against its literal union", async () => {
+  const tool = "propose_restore_snapshot";
+  const plan = repo.createProfile("Restore");
+  const sibling = repo.createProfile("Restore sibling");
+  const snap = repo.createPlanSnapshot({ planId: plan.id, name: "Before swap", source: "user", payload: { layers: [] } });
+  const siblingSnap = repo.createPlanSnapshot({ planId: sibling.id, name: "Sibling", source: "user", payload: {} });
+  const { foreign, foreignSnap } = tenantStorage.run("other", () => {
+    const created = repo.createProfile("Foreign restore");
+    return { foreign: created, foreignSnap: repo.createPlanSnapshot({ planId: created.id, name: "Foreign", source: "user", payload: {} }) };
+  });
+  const identity = ["table:build_profiles"];
+  const lookup = ["table:build_profiles", "table:plan_snapshots"];
+  const tables = ["table:build_profiles", "table:plan_decisions", "table:plan_snapshots"];
+  const proposal = (planId: number, snapshot: { id: number; name: string }) => checkedProposal(
+    "restore_plan_snapshot", planId, `Restore “${snapshot.name}”`,
+    `Restore plan #${planId} from snapshot #${snapshot.id} (${snapshot.name}).`,
+    { snapshot_id: snapshot.id, name: snapshot.name },
+  );
+  for (const plan_id of [undefined, null, "invalid"]) {
+    expect(await traceCheckedProposal(tool, { plan_id, snapshot_id: snap.id }, [])).toEqual({ error: "plan_id required" });
+  }
+  expect(await traceCheckedProposal(tool, { plan_id: 999999, snapshot_id: snap.id }, identity)).toEqual({ error: "plan_id required" });
+  expect(await traceCheckedProposal(tool, { plan_id: foreign.id, snapshot_id: snap.id }, identity)).toEqual({ error: "plan_id required" });
+  for (const snapshot_id of [undefined, "", "nope"]) {
+    expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id }, identity)).toEqual({ error: "snapshot_id required" });
+  }
+  const missing = { error: "Snapshot not found for this plan" };
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id: 999999 }, lookup)).toEqual(missing);
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id: siblingSnap.id }, lookup)).toEqual(missing);
+  // The snapshot SELECT filters the tenant, so a foreign snapshot ID is not found.
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id: foreignSnap.id }, lookup)).toEqual(missing);
+  for (const snapshot_id of [snap.id, String(snap.id)]) {
+    expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id }, tables, { activePlanId: sibling.id })).toEqual(proposal(plan.id, snap));
+  }
+  expect(await traceCheckedProposal(tool, { snapshot_id: snap.id }, ["table:plan_decisions", "table:plan_snapshots"], { activePlanId: plan.id })).toEqual(proposal(plan.id, snap));
+  expect(await traceCheckedProposal(tool, { plan_id: foreign.id, snapshot_id: snap.id }, tables, { activePlanId: plan.id })).toEqual(proposal(plan.id, snap));
+  expect(await traceCheckedProposal(tool, { plan_id: foreign.id, snapshot_id: foreignSnap.id }, tables, { tenantId: "other" })).toEqual(proposal(foreign.id, foreignSnap));
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id: snap.id }, lookup, { tenantId: "other", activePlanId: foreign.id })).toEqual({ error: "Snapshot not found for this plan" });
+  const params = { snapshot_id: snap.id, name: snap.name };
+  repo.createPlanDecision({ planId: sibling.id, actor: "user", kind: "dismissed_action", actionType: "restore_plan_snapshot", params });
+  repo.createPlanDecision({ planId: plan.id, actor: "assistant", kind: "applied_action", actionType: "restore_plan_snapshot", params });
+  tenantStorage.run("other", () => repo.createPlanDecision({ planId: foreign.id, actor: "user", kind: "dismissed_action", actionType: "restore_plan_snapshot", params }));
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id: snap.id }, tables)).toEqual(proposal(plan.id, snap));
+  repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "restore_plan_snapshot", params });
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id: snap.id }, tables)).toEqual(dismissed("restore_plan_snapshot", params));
+  // The fingerprint ignores `snapshot_id`, so one dismissal refuses every snapshot of that plan.
+  const later = repo.createPlanSnapshot({ planId: plan.id, name: "Later", source: "user", payload: {} });
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, snapshot_id: later.id }, tables)).toEqual(dismissed("restore_plan_snapshot", { snapshot_id: later.id, name: later.name }));
+  expect(repo.listPlanSnapshots(plan.id).map(({ id }) => id).sort()).toEqual([snap.id, later.id].sort());
+  expect([...unions.get(tool) ?? []].sort()).toEqual(tables);
+  expect(declared(`tool.${tool}`)).toEqual(tables);
+});
+
+it("traces propose_exclude_replaced_parts selectors, validation and dismissals against its literal union", async () => {
+  const tool = "propose_exclude_replaced_parts";
+  const plan = repo.createProfile("Excludes");
+  const idle = repo.createProfile("Excludes idle");
+  const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign excludes"));
+  const identity = ["table:build_profiles"];
+  const tables = ["table:build_profiles", "table:plan_decisions"];
+  const proposal = (planId: number, excludes: string[], summary?: string) => checkedProposal(
+    tool, planId, "Exclude replaced parts",
+    summary ?? `Merge ${excludes.length} path/slug exclude(s) into kit manifest: ${excludes.slice(0, 6).join(", ")}.`,
+    { excludes },
+  );
+  for (const plan_id of [undefined, null, "invalid"]) {
+    expect(await traceCheckedProposal(tool, { plan_id, excludes: ["a.stl"] }, [])).toEqual({ error: "plan_id required" });
+  }
+  expect(await traceCheckedProposal(tool, { plan_id: 999999, excludes: ["a.stl"] }, identity)).toEqual({ error: "plan_id required" });
+  for (const excludes of [undefined, "a.stl", [], ["  ", ""]]) {
+    expect(await traceCheckedProposal(tool, { plan_id: plan.id, excludes }, identity)).toEqual({ error: "excludes required" });
+  }
+  const many = ["a.stl", "b.stl", "c.stl", "d.stl", "e.stl", "f.stl", "g.stl"];
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, excludes: [" a.stl ", 3, ""] }, tables, { activePlanId: idle.id })).toEqual(proposal(plan.id, ["a.stl", "3"]));
+  expect(await traceCheckedProposal(tool, { plan_id: String(plan.id), excludes: many, rationale: "  swapped hotend  " }, tables)).toEqual(proposal(plan.id, many, "swapped hotend"));
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, excludes: many, rationale: "   " }, tables)).toEqual(proposal(plan.id, many));
+  expect(await traceCheckedProposal(tool, { excludes: ["a.stl"] }, ["table:plan_decisions"], { activePlanId: plan.id })).toEqual(proposal(plan.id, ["a.stl"]));
+  expect(await traceCheckedProposal(tool, { plan_id: foreign.id, excludes: ["a.stl"] }, tables, { activePlanId: idle.id })).toEqual(proposal(idle.id, ["a.stl"]));
+  expect(await traceCheckedProposal(tool, { plan_id: foreign.id, excludes: ["a.stl"] }, tables, { tenantId: "other" })).toEqual(proposal(foreign.id, ["a.stl"]));
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, excludes: ["a.stl"] }, identity, { tenantId: "other" })).toEqual({ error: "plan_id required" });
+  const params = { excludes: ["a.stl"] };
+  repo.createPlanDecision({ planId: idle.id, actor: "user", kind: "dismissed_action", actionType: tool, params });
+  tenantStorage.run("other", () => repo.createPlanDecision({ planId: foreign.id, actor: "user", kind: "dismissed_action", actionType: tool, params }));
+  expect(await traceCheckedProposal(tool, { plan_id: plan.id, excludes: ["a.stl"] }, tables)).toEqual(proposal(plan.id, ["a.stl"]));
+  // The fingerprint ignores `excludes`, so one dismissal refuses every exclude list on that plan.
+  expect(await traceCheckedProposal(tool, { plan_id: idle.id, excludes: ["other.stl"] }, tables)).toEqual(dismissed(tool, { excludes: ["other.stl"] }));
+  expect(repo.listPlanDecisions(plan.id)).toEqual([]);
+  expect([...unions.get(tool) ?? []].sort()).toEqual(tables);
+  expect(declared(`tool.${tool}`)).toEqual(tables);
+});
