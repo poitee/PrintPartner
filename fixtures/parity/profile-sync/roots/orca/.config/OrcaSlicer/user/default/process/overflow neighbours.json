@@ -1,0 +1,1 @@
+{"name":"overflow neighbours","max":1e308,"max_exact":1.7976931348623157e308,"rounds_down":1.7976931348623158e308,"rounds_up":1.7976931348623159e308,"neg_zero":-0,"neg_zero_exp":-0e999,"zero_exp":0e999,"denorm":5e-324,"neg_denorm":-5e-324,"denorm_up":3e-324,"denorm_zero":2e-324}

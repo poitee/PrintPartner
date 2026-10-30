@@ -1,0 +1,12 @@
+{
+    "from": "User",
+    "inherits": "Bambu Lab P1S 0.4 nozzle",
+    "is_custom_defined": "0",
+    "name": "Bambu Lab P1S 0.4 nozzle - user",
+    "nozzle_diameter": [
+        "0.4"
+    ],
+    "print_host": "",
+    "printer_settings_id": "Bambu Lab P1S 0.4 nozzle - user",
+    "version": "01.10.00.89"
+}
