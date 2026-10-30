@@ -12,7 +12,12 @@ if [ -z "${SCCACHE_IDLE_TIMEOUT:-}" ]; then
 fi
 
 # Use a candidate only if it runs and reports itself as sccache.
-is_sccache() { [ -n "$1" ] && [ -f "$1" ] && [ -x "$1" ] && "$1" --version 2>/dev/null | grep -q '^sccache '; }
+is_sccache() {
+  [ -n "$1" ] && [ -f "$1" ] && [ -x "$1" ] || return 1
+  local version
+  version=$("$1" --version 2>/dev/null) || return 1
+  [[ $version == "sccache "* ]]
+}
 
 if [ -n "${RUSTC_WRAPPER:-}" ]; then
   echo "RUSTC_WRAPPER is already $RUSTC_WRAPPER"
