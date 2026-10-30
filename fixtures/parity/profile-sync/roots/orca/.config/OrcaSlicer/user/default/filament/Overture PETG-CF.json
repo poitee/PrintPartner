@@ -1,0 +1,10 @@
+{
+    "from": "User",
+    "name": "Overture PETG-CF",
+    "nozzle_temperature_initial_layer": [
+        "250"
+    ],
+    "bed_temperature_initial_layer": "80",
+    "fan_pct": "0",
+    "filament_flow_ratio": ".95"
+}

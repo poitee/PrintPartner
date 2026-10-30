@@ -1,0 +1,15 @@
+{
+    "from": "User",
+    "inherits": "bambu lab x1 carbon 0.4 NOZZLE",
+    "is_custom_defined": "0",
+    "name": "My X1C",
+    "nozzle_diameter": [
+        "0.4"
+    ],
+    "printer_settings_id": "My X1C",
+    "retraction_length": [
+        "0.6"
+    ],
+    "z_offset": "0",
+    "version": "2.3.2.60"
+}

@@ -66,7 +66,7 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
   it("describes the accepted Progress collection to the model", () => {
     const spec = ASSISTANT_TOOL_SPECS.find(({ name }) => name === "get_print_stats");
     expect(spec?.description).toBe(
-      "Recent print activity and accepted Plan progress. Returns plates sent in the last N hours, completed and failed counts, completion rate, filament consumed, and a per-printer breakdown. active_plans is either an available collection or unavailable when collection loading fails. Each available Plan has plan_id, plan_name, part_count, and accepted_progress. accepted_progress is ready with total_units and remaining_units, empty when nothing has been applied, or unavailable with reason compatibility_dirty, uninitialized, integrity, or concurrent_update. Per-Plan unavailable states remain inside an available collection. Pass hours to control the lookback window.",
+      "Recent print activity and accepted Plan progress. Returns plates sent in the last N hours, completed and failed counts, completion rate, filament consumed, and a per-printer breakdown. prints_seen_on_printers counts prints the printers reported finishing, failing or being cancelled in the window, attached to a Plan or not, with a per-printer list; it is separate from plates sent from Print Partner. empty_window says in words when nothing happened since the window start. active_plans is either an available collection or unavailable when collection loading fails. Each available Plan has plan_id, plan_name, part_count, and accepted_progress. accepted_progress is ready with total_units and remaining_units, empty when nothing has been applied, or unavailable with reason compatibility_dirty, uninitialized, integrity, or concurrent_update. Per-Plan unavailable states remain inside an available collection. Pass hours to control the lookback window.",
     );
   });
 
@@ -136,16 +136,14 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
     const xl = data.printers.find((p: { id: string }) => p.id === "prusa-xl");
     expect(xl.state).toBe("idle");
 
-    // CoreOne1 has no integration bound — surfaces as unknown, not a crash.
+    // CoreOne1 has no integration bound: not connected, with a reason, never offline.
     const coreone = data.printers.find((p: { id: string }) => p.id === "coreone1");
-    expect(coreone.state).toBe("unknown");
+    expect(coreone.state).toBe("not_connected");
+    expect(coreone.not_connected_reason).toBe("no printer host linked");
 
-    expect(data.printing).toBe(1);
-    expect(data.idle).toBe(1);
-    // "unknown" (no integration bound) is bucketed together with "offline"
-    // by get_farm_status's own aggregate logic — assert all 3 machines are
-    // accounted for across the three buckets, none silently dropped.
-    expect(data.idle + data.printing + data.offline).toBe(3);
+    expect(data.state_counts).toEqual({
+      idle: 1, printing: 1, paused: 0, complete: 0, error: 0, offline: 0, not_connected: 1,
+    });
   });
 
   it("get_print_stats aggregates print_jobs rows written via insertPrintJob", async () => {
@@ -544,7 +542,9 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
     );
     const xl = data.printers.find((p: { id: string }) => p.id === "prusa-xl");
     expect(xl.state).toBe("offline");
-    expect(data.offline).toBe(1);
+    expect(xl.not_connected_reason).toBeNull();
+    expect(data.state_counts.offline).toBe(1);
+    expect(data.state_counts.not_connected).toBe(0);
   });
 
   describe("filament remaining per spool/printer (Spoolman-backed)", () => {

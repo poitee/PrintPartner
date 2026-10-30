@@ -1103,8 +1103,12 @@ Job WebSocket admission at `/ws/jobs/{id}` is GRE-798 (`docs/gre-798-jobs-http.m
 Snapshot delivery and close reasons on that socket are GRE-799 (`docs/gre-799-jobs-http.md`).
 Reconnect after a lagged mailbox, and owner shutdown of live sockets, are GRE-800
 (`docs/gre-800-jobs-http.md`).
+No event is lost or repeated when a socket subscribes while the job is
+committing. That proof is GRE-511 (`docs/gre-511-job-stream.md`).
 Composing those routes on the opted-in rebuild router is GRE-821
 (`docs/gre-821-runtime-jobs.md`).
+Restart, resubscription, polling fallback, tenant and registry bounds for those
+streams are proved together by GRE-410 (`docs/gre-410-job-streams.md`).
 The browser job row follows that socket snapshot when health reports
 `tenant_feature_toggles`, and keeps HTTP polling otherwise. That wiring is
 GRE-822 (`docs/gre-822-job-context.md`).
@@ -2605,3 +2609,22 @@ Focused tests: `draft_aliases_and_workers_share_executor`,
 `rust_draft_failure_never_falls_back_to_node`.
 
 See `docs/gre-820-draft-mutations.md`.
+
+### D26 web app shell, GRE-621
+
+The web app reads the rebuild flag from one place,
+`desktopRebuildEnabled` in `web/apps/web/src/lib/desktopRebuild.ts`. It is true
+only when health advertises `tenant_feature_toggles`, which Node does only for
+`PP_DESKTOP_REBUILD` set to exactly `1` or `true`. `JobContext`, `planReview` and
+`PlanWorkspaceContext` call it in place of their copies of the same check.
+
+While the flag is on, `AppLayout` sets `data-desktop-rebuild` on `<html>` and
+removes it when the flag turns off or the shell unmounts. Rebuilt UI styles
+(GRE-1008 onward) scope under `:root[data-desktop-rebuild]`, which also covers
+dialogs and other portals. With the flag off the root gets no attribute and the
+shell markup is unchanged. This slice adds no tokens, screens or routes.
+
+```sh
+cd web/apps/web
+npx vitest run src/lib/desktopRebuild.test.ts src/layout/AppLayout.desktopRebuild.test.tsx
+```

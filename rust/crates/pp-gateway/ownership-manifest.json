@@ -1546,6 +1546,49 @@
         "resources": [
           {"kind": "table", "name": "app_settings"}
         ]
+      },
+      {
+        "operation": "tool.propose_assign_role_filament",
+        "resources": [
+          {"kind": "table", "name": "app_settings"},
+          {"kind": "table", "name": "build_profiles"}
+        ]
+      },
+      {
+        "operation": "tool.propose_restore_snapshot",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "table", "name": "plan_snapshots"}
+        ]
+      },
+      {
+        "operation": "tool.propose_exclude_replaced_parts",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
+      },
+      {
+        "operation": "tool.create_plan_snapshot",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
+      },
+      {
+        "operation": "tool.duplicate_plan",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
+      },
+      {
+        "operation": "tool.remove_layer",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"}
+        ]
       }
     ],
     "unresolved": [
@@ -1893,9 +1936,7 @@
       "tool.apply_stack_preset",
       "tool.archive_plan",
       "tool.audit_build_coverage",
-      "tool.create_plan_snapshot",
       "tool.detect_build_decisions",
-      "tool.duplicate_plan",
       "tool.get_farm_status",
       "tool.import_guide_notes",
       "tool.ingest_guide_text",
@@ -1903,13 +1944,9 @@
       "tool.inspect_repo_tree",
       "tool.propose_add_build_checklist_items",
       "tool.propose_add_source",
-      "tool.propose_assign_role_filament",
       "tool.propose_edit_plan_draft_parts",
-      "tool.propose_exclude_replaced_parts",
       "tool.propose_import_build_inputs",
-      "tool.propose_restore_snapshot",
       "tool.propose_source_mapping",
-      "tool.remove_layer",
       "tool.set_base",
       "tool.set_source_git_ref",
       "tool.start_sync",
