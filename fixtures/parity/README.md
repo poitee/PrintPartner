@@ -6,7 +6,7 @@ Golden data captured from the TypeScript app, used as the reference for the Rust
 
 `pp_api::fixtures`, behind the default-off `desktop_rebuild` feature, replays copied fixtures against Rust routers on disposable data directories with no OAuth provider and no mailer. `Ledger` requires each Rust response to equal Node's status, complete JSON body and literal `Set-Cookie` headers, unless the case has a declared `Correction`. A correction names its kind (security, WebSocket, or durable-store) and reason, and holds the literal Rust response. It fails if Rust now matches Node, if it is never used, or if it is declared twice. `StateGraph` records every row of every SQLite table and the SHA-256 of every other file, so a test can compare state changes as well as responses.
 
-`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `jobs-ws`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http` and `catalog-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
+`rust/crates/pp-api/tests/ticket_t_10_fixtures.rs` runs `auth-login` (11 exact, 3 security corrections, no state change on any refusal) and `auth-session` (4 exact, 3 clearing-cookie corrections, Node's session row count, and only the `sessions` table changing when that count moves). It also runs `jobs-http`, `jobs-ws`, `plans-http`, `drafts-http`, `layers-http`, `manifest-http`, `catalog-http` and `accepted-http` (see below). Run it with `cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_10_fixtures)'`.
 
 ## jobs-http/node.json (GRE-451)
 
@@ -103,6 +103,24 @@ The fixture made three Rust fixes go red then green. Source naming refusals now 
 
 ```sh
 node fixtures/parity/catalog-http/generate.mjs --check
+```
+
+## accepted-http/node.json (GRE-451)
+
+`generate.mjs` builds Node's real app on a copy of `rust/crates/pp-storage/tests/fixtures/accepted-plan-node.db`, where Plan 1 has an accepted revision, Part 1 is excluded and Part 2 is included. It sends 32 requests to the Accepted Plan read routes Rust's `accepted_router` serves: Plan Checkoff on the flat, `/api/v1` and `/api/v2` mounts, and Part assembled units on the flat and `/api/v1` mounts (Node registers Part routes only there). The requests run in five phases, each on a fresh copy:
+
+- `ready`: both reads on every mount, ids that `Number()` reads as 1 or 2 (`1.0`, `1e0`, `+1`, `0x1`, `%201%20`), and ids that name nothing (`0`, `-1`, `1.5`, `abc`, `Infinity`, `9007199254740993`, an unknown id).
+- `foreign_plan`: Plan 1 moved to tenant `foreign`.
+- `foreign_parts`: every Part moved to tenant `foreign`.
+- `dirty`: Plan 1 with no accepted revision, which needs compatibility repair.
+- `corrupt`: every revision snapshot digest altered.
+
+A phase with a seed drops every trigger and turns foreign keys off before it runs its SQL, as `ticket_t_61_read_model_http` does. Each case records the complete response and the tables it changed; no read changes any.
+
+`ticket_t_10_fixtures` runs the same phases on its own copies with the database's session cookie and replays them against `accepted_router`: 31 exact matches and 1 declared security correction. With Plan 1 on another tenant, Node finds Part 2, its accepted read then fails and the route answers 500 "Internal Server Error". Rust answers 404 "Part not found", as it does for the Plan itself.
+
+```sh
+node fixtures/parity/accepted-http/generate.mjs --check
 ```
 
 ## auth-reset/node.json (GRE-864)
