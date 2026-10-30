@@ -26,7 +26,6 @@ data = fixture / "data"
 }) + "\n")
 environment = {
     **os.environ,
-    "PP_DESKTOP_RECOVERY_UI": "1",
     "WEBKIT_DISABLE_COMPOSITING_MODE": "1",
     "WEBKIT_DISABLE_DMABUF_RENDERER": "1",
     "WEBKIT_DMABUF_RENDERER_FORCE_SHM": "1",
