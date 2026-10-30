@@ -75,20 +75,26 @@ fn add_or_replay(data_dir: &Path, params: &Map<String, Value>) -> Result<(Value,
         .get("filaments")
         .and_then(Value::as_array)
         .ok_or_else(|| format!("{FILE_NAME} does not hold a filaments list"))?;
+    // Node calls toLowerCase on each field in `&&` order, so a non-string
+    // field it reaches throws and the apply fails without writing.
     let field = |entry: &Value, key: &str| {
         entry
             .get(key)
             .and_then(Value::as_str)
             .map(str::to_lowercase)
+            .ok_or_else(|| format!("{FILE_NAME} has a filament without a text {key}"))
     };
-    let existing = filaments.iter().find(|entry| {
-        field(entry, "display_name") == Some(display_name.to_lowercase())
-            && field(entry, "hex").map(|h| h.strip_prefix('#').unwrap_or(&h).to_owned())
-                == Some(hex.clone())
-            && field(entry, "product_line") == Some(product_line.to_lowercase())
-    });
-    if let Some(entry) = existing {
-        return Ok((entry.clone(), true));
+    for entry in filaments {
+        if field(entry, "display_name")? != display_name.to_lowercase() {
+            continue;
+        }
+        let entry_hex = field(entry, "hex")?;
+        if entry_hex.strip_prefix('#').unwrap_or(&entry_hex) != hex {
+            continue;
+        }
+        if field(entry, "product_line")? == product_line.to_lowercase() {
+            return Ok((entry.clone(), true));
+        }
     }
 
     // addCustomFilament re-validates what the propose step checked.

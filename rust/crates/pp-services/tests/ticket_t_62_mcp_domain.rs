@@ -544,6 +544,41 @@ fn ticket_t_62_mcp_domain_custom_filament_propose_validates_and_apply_is_idempot
 }
 
 #[test]
+fn ticket_t_62_mcp_domain_custom_filament_apply_fails_on_a_malformed_store_like_node() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = McpSession::new(UnportedDomain, Some(dir.path().to_path_buf()));
+    let confirm = |args: Value| {
+        let proposed: Value = serde_json::from_str(
+            &session
+                .call_tool("propose_add_custom_filament", &args)
+                .unwrap()
+                .text,
+        )
+        .unwrap();
+        let id = proposed["action"]["id"].as_str().unwrap().to_owned();
+        session
+            .call_tool("confirm_apply", &json!({ "action_id": id }))
+            .unwrap()
+    };
+    let store = dir.path().join("custom_filaments.json");
+    // Node: listCustomFilaments(...).find on undefined throws; nothing is written.
+    fs::write(&store, r#"{"other":1}"#).unwrap();
+    assert!(confirm(json!({ "display_name": "A", "hex": "#000000" })).is_error);
+    assert_eq!(fs::read_to_string(&store).unwrap(), r#"{"other":1}"#);
+    // Node: entry.display_name.toLowerCase() throws on a number.
+    fs::write(&store, r#"{"filaments":[{"display_name":5}]}"#).unwrap();
+    assert!(confirm(json!({ "display_name": "A", "hex": "#000000" })).is_error);
+    // An entry whose name differs is never read past display_name, as in Node.
+    fs::write(&store, r#"{"filaments":[{"display_name":"B","hex":7}]}"#).unwrap();
+    let added = confirm(json!({ "display_name": "A", "hex": "#000000" }));
+    assert!(!added.is_error, "{}", added.text);
+    // Unparsable JSON reads as an empty store.
+    fs::write(&store, "{").unwrap();
+    assert!(!confirm(json!({ "display_name": "A", "hex": "#000000" })).is_error);
+    assert_eq!(list_custom_filaments(dir.path()).len(), 1);
+}
+
+#[test]
 fn ticket_t_62_mcp_domain_custom_filament_apply_without_data_dir_keeps_the_proposal() {
     let session = McpSession::new(UnportedDomain, None);
     let proposed: Value = serde_json::from_str(
