@@ -1633,6 +1633,15 @@
           {"kind": "file", "name": "path-hints"},
           {"kind": "file", "name": "source-workspace"}
         ]
+      },
+      {
+        "operation": "tool.apply_stack_preset",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "file", "name": "assistant-domain"},
+          {"kind": "file", "name": "kit-catalog"}
+        ]
       }
     ],
     "unresolved": [
@@ -1976,7 +1985,6 @@
       "startup.seedStockSlicerInstancesIfEmpty",
       "startup.sweepExpiredTransferArtifacts",
       "tool.apply_build_recipe",
-      "tool.apply_stack_preset",
       "tool.archive_plan",
       "tool.audit_build_coverage",
       "tool.detect_build_decisions",
