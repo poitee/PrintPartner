@@ -172,6 +172,8 @@ enum ReviewedEntry {
     ProposeEditPlanDraftParts { resources: Vec<ResourceId> },
     #[serde(rename = "tool.archive_plan")]
     ArchivePlan { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.import_guide_notes")]
+    ImportGuideNotes { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -716,6 +718,19 @@ impl ReviewedEntry {
                 expected.insert(Table(PlanDecisions));
                 ("tool.archive_plan", resources, expected)
             }
+            // `sourceByName` lists Sources (twice when not found), the plan ownership check,
+            // then the dismissal lookup in `proposeChecked`.
+            Self::ImportGuideNotes { resources } => (
+                "tool.import_guide_notes",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -1037,6 +1052,7 @@ impl Declarations {
             "tool.propose_source_mapping",
             "tool.propose_edit_plan_draft_parts",
             "tool.archive_plan",
+            "tool.import_guide_notes",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

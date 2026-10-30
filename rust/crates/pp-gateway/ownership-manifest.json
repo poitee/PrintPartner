@@ -1693,6 +1693,16 @@
           {"kind": "table", "name": "source_revisions"},
           {"kind": "file", "name": "source-workspace"}
         ]
+      },
+      {
+        "operation": "tool.import_guide_notes",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "table", "name": "source_docs"},
+          {"kind": "file", "name": "source-workspace"}
+        ]
       }
     ],
     "unresolved": [
@@ -2039,7 +2049,6 @@
       "tool.audit_build_coverage",
       "tool.detect_build_decisions",
       "tool.get_farm_status",
-      "tool.import_guide_notes",
       "tool.ingest_guide_text",
       "tool.ingest_guide_url",
       "tool.inspect_repo_tree",
