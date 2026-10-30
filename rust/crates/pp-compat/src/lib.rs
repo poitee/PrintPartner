@@ -5,6 +5,7 @@ mod logs;
 pub use logs::{CoreLog, log_folder, recent_diagnostics, recent_logs};
 mod parent_death;
 pub mod redact;
+pub mod settings;
 use parent_death::{ParentDeathGuard, configure_child};
 mod release;
 use anyhow::{Context, Result, bail, ensure};
@@ -514,10 +515,7 @@ impl Process {
             )
             .env("PP_STORAGE_CORE_LOCK", "1")
             .env("PP_COMMIT", release::manifest()?.commit)
-            .env("PRINT_PARTNER_UPDATE_CHECK", "0")
-            .env("AI_ENABLED", "0")
-            .env("HOST", "127.0.0.1")
-            .env("DEPLOY_MODE", "self-host")
+            .envs(settings::fixed_env())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
