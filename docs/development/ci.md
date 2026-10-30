@@ -247,3 +247,43 @@ first when it fills.
 
 The web validation job keeps its 45-minute limit on same-repository PRs; fork
 PRs and non-PR runs keep 20 minutes.
+
+## Reviewer fallback
+
+A pull request needs a score from a reviewer on a different model vendor than its author. When no such reviewer has been available for 24 hours, [Reviewer fallback](definition-of-done.md#reviewer-fallback) lists the conditions under which it may merge anyway. That page holds the rule. Do not copy it here.
+
+## Measure CI wall time and cache warnings
+
+GRE-975's acceptance checks are a 50% drop in the median wall time of a Rust PR's required checks, and a week with no cache-eviction warnings on Rust jobs. Both come from the GitHub API, so anyone can rerun them.
+
+Median `Rust cross-OS` wall time per PR for a date range. Each PR counts once, at the median of its successful runs. Runs under three minutes skipped their Rust jobs and are left out:
+
+```sh
+range=2026-10-28..2026-10-30
+gh api -X GET repos/poitee/PrintPartner/actions/workflows/rust-cross-os.yml/runs \
+  -f event=pull_request -f status=success -f created="$range" -f per_page=100 \
+  --jq '.workflow_runs[] | [.head_branch, .run_started_at, .updated_at] | @tsv' |
+  python3 -c '
+import statistics, sys, datetime as d
+t = lambda s: d.datetime.fromisoformat(s.replace("Z", "+00:00"))
+per = {}
+for line in sys.stdin:
+    branch, start, end = line.rstrip("\n").split("\t")
+    minutes = (t(end) - t(start)).total_seconds() / 60
+    if minutes > 3:
+        per.setdefault(branch, []).append(minutes)
+print(len(per), "PRs, median", round(statistics.median(statistics.median(v) for v in per.values()), 1), "min")'
+```
+
+Cache warnings on Rust jobs of `main` runs in the last seven days. It prints the number of annotations that mention a cache:
+
+```sh
+since=$(date -u -d '7 days ago' +%F)
+gh api -X GET repos/poitee/PrintPartner/actions/workflows/rust-cross-os.yml/runs \
+  -f branch=main -f created=">=$since" -f per_page=100 --jq '.workflow_runs[].id' |
+  xargs -I{} gh api "repos/poitee/PrintPartner/actions/runs/{}/jobs?per_page=50" --jq '.jobs[] | select(.name|test("^rust")) | .id' |
+  xargs -I{} gh api "repos/poitee/PrintPartner/check-runs/{}/annotations" --jq '.[].message' |
+  grep -ci cache
+```
+
+Results on 2026-10-30. Before the GRE-975 changes (2026-10-14..2026-10-20): 84 PRs, median 207.1 min. After (2026-10-28..2026-10-30): 50 PRs, median 33.8 min. Over 2026-10-23..2026-10-30: 670 Rust jobs on `main`, and none of their annotations mention a cache. The earlier runs include self-hosted runner queues, which the move to hosted runners removed, so not all of the drop comes from GRE-975.
