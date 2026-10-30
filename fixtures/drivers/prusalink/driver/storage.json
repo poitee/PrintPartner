@@ -1,0 +1,22 @@
+{
+  "storage_list": [
+    {
+      "path": "/local/",
+      "name": "local",
+      "available": false
+    },
+    {
+      "name": "no path"
+    },
+    "junk",
+    {
+      "path": "/usb/",
+      "name": "usb",
+      "available": true
+    },
+    {
+      "path": "/sd/",
+      "name": "sd"
+    }
+  ]
+}

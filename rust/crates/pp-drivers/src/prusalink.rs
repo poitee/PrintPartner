@@ -1,18 +1,21 @@
 //! PrusaLink driver (T-22), ported from the Node adapter: HTTP Digest auth,
-//! connection test, status with the `/api/v1/job` fallback, filament used, and
-//! upload. Storage browse, download, cameras and `object_list` follow.
+//! connection test, status with the `/api/v1/job` fallback, filament used,
+//! upload, storage browse, the camera list and `object_list`. File download and
+//! camera snapshots follow with GRE-359, which streams replies above 2 MiB.
 //!
 //! Every request first sends a bodyless GET `/api/v1/status` for a fresh
 //! Digest challenge, never a write. A GET answered 401 is retried once with
 //! that reply's challenge, as in Node. Unlike Node, a PUT answered 401 is not
 //! resent: the upload body goes out at most once.
-//! Until GRE-359, HTTPS is refused and redirects are not followed.
+//! Until GRE-359, HTTPS is refused, redirects are not followed, and replies are
+//! bounded by the guard's 2 MiB limit (Node allows 8 MiB directory listings and
+//! reads only the first 64 KiB of a print file whose server ignores `Range`).
 use crate::digest;
 use crate::moonraker_driver::{
-    TestResult, UploadResult, UploadSource, encode_uri_component, error_text, js_trim,
-    safe_storage_path,
+    Camera, CameraView, StorageEntry, StorageListing, TestResult, UploadResult, UploadSource,
+    encode_uri_component, error_text, iso_time, js_trim, safe_storage_path,
 };
-use anyhow::{Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use pp_api_types::printer_status::{PrinterHostState as State, PrinterHostStatus as Status};
 use pp_net::outbound::{HttpGuard, HttpReply, PostBody, PostError};
 use serde_json::{Map, Value};
@@ -23,6 +26,12 @@ use url::Url;
 const PROBE: &str = "/api/v1/status";
 const READ_DEADLINE: Duration = Duration::from_secs(8);
 const UPLOAD_DEADLINE: Duration = Duration::from_secs(120);
+const STORAGE_DEADLINE: Duration = Duration::from_secs(10);
+const LISTING_DEADLINE: Duration = Duration::from_secs(15);
+const ACCEPT_JSON: (&str, &str) = ("accept", "application/json");
+const INVALID_PATH: &str = "Invalid PrusaLink storage path";
+/// The print-file prefix `object_list` reads for `objects_info=`.
+const OBJECTS_PREFIX: usize = 65_536;
 
 pub struct Driver {
     guard: HttpGuard,
@@ -67,13 +76,7 @@ impl Driver {
     }
 
     fn url(&self, path: &str) -> Result<Url> {
-        let url =
-            Url::parse(&format!("{}{path}", self.base()?)).map_err(|_| anyhow!("Invalid URL"))?;
-        match url.scheme() {
-            "http" => Ok(url),
-            "https" => bail!("HTTPS PrusaLink hosts are not supported until GRE-359"),
-            other => bail!("Unsupported URL protocol: {other}:"),
-        }
+        checked(&format!("{}{path}", self.base()?))
     }
 
     /// The challenge from a bodyless GET of `/api/v1/status` on the same origin.
@@ -103,6 +106,7 @@ impl Driver {
     }
 
     /// One Digest-authorized request. Only a GET is retried after a 401.
+    /// Without a password the request goes out once, unauthenticated, as in Node.
     async fn send(
         &self,
         method: &str,
@@ -112,6 +116,12 @@ impl Driver {
         deadline: Duration,
     ) -> Result<HttpReply, PostError> {
         let unsent = PostError::Unsent;
+        if self.password.is_none() {
+            return self
+                .guard
+                .request(method, url.as_str(), headers, body, deadline)
+                .await;
+        }
         let challenge = self.challenge(url).await?;
         let authorization = challenge
             .as_ref()
@@ -143,9 +153,214 @@ impl Driver {
     async fn get(&self, path: &str) -> Result<HttpReply> {
         let url = self.url(path)?;
         self.password()?;
-        self.send("GET", &url, &[], None, READ_DEADLINE)
+        self.fetch(&url, &[], READ_DEADLINE).await
+    }
+
+    async fn fetch(
+        &self,
+        url: &Url,
+        headers: &[(&str, &str)],
+        deadline: Duration,
+    ) -> Result<HttpReply> {
+        self.send("GET", url, headers, None, deadline)
             .await
             .map_err(|error| anyhow!("{error}"))
+    }
+
+    /// The pinned storage root, else the first storage the printer reports as
+    /// available. Node does not assume `usb` here.
+    async fn storage_root(&self) -> Result<String> {
+        if let Some(root) = &self.storage {
+            return Ok(root.clone());
+        }
+        let url = self.url("/api/v1/storage")?;
+        let reply = self.fetch(&url, &[ACCEPT_JSON], STORAGE_DEADLINE).await?;
+        ensure!(
+            ok(&reply),
+            "PrusaLink storage list returned HTTP {}",
+            reply.status
+        );
+        let body = json(&reply.body)?;
+        let storages = body.get("storage_list").and_then(Value::as_array);
+        for storage in storages.into_iter().flatten().filter_map(Value::as_object) {
+            if storage.get("available") == Some(&Value::Bool(false)) {
+                continue;
+            }
+            if let Some(root) = storage
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(safe_storage_path)
+            {
+                return Ok(root);
+            }
+        }
+        bail!("PrusaLink reported no available storage")
+    }
+
+    /// One directory, relative to the storage root. Children whose name is not
+    /// one safe segment, and entries that are neither folders nor print files,
+    /// are left out.
+    pub async fn browse(&self, path: &str) -> Result<StorageListing> {
+        self.base()?;
+        self.password()?;
+        let relative = if path.is_empty() {
+            String::new()
+        } else {
+            safe_storage_path(path).context(INVALID_PATH)?
+        };
+        let root = self.storage_root().await?;
+        let provider = if relative.is_empty() {
+            root
+        } else {
+            format!("{root}/{relative}")
+        };
+        let suffix = if provider.contains('/') { "" } else { "/" };
+        let encoded: Vec<_> = provider.split('/').map(encode_uri_component).collect();
+        let url = self.url(&format!("/api/v1/files/{}{suffix}", encoded.join("/")))?;
+        let reply = self.fetch(&url, &[ACCEPT_JSON], LISTING_DEADLINE).await?;
+        ensure!(
+            ok(&reply),
+            "PrusaLink file listing returned HTTP {}",
+            reply.status
+        );
+        let folder = json(&reply.body)?;
+        let children = folder.get("children").and_then(Value::as_array);
+        let mut entries = Vec::new();
+        for child in children.into_iter().flatten().filter_map(Value::as_object) {
+            let Some(name) = child
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(safe_storage_path)
+                .filter(|name| !name.contains('/'))
+            else {
+                continue;
+            };
+            let path = if relative.is_empty() {
+                name.clone()
+            } else {
+                format!("{relative}/{name}")
+            };
+            let modified_at = match child.get("m_timestamp").and_then(Value::as_f64) {
+                Some(seconds) if seconds.is_finite() => Some(iso_time(seconds * 1000.0)?),
+                _ => None,
+            };
+            let shown = match display_name(child) {
+                "" => name.clone(),
+                shown => shown.to_owned(),
+            };
+            match child.get("type").and_then(Value::as_str) {
+                Some("FOLDER") => entries.push(StorageEntry::Directory {
+                    path,
+                    name: shown,
+                    modified_at,
+                }),
+                Some("PRINT_FILE") => entries.push(StorageEntry::File {
+                    path,
+                    name: shown,
+                    // Absent stays absent: unknown must not read as zero.
+                    size_bytes: child
+                        .get("size")
+                        .and_then(Value::as_f64)
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .map(|v| v.round() as u64),
+                    modified_at,
+                }),
+                _ => {}
+            }
+        }
+        Ok(StorageListing {
+            path: relative,
+            entries,
+        })
+    }
+
+    /// Connected cameras as snapshot views. A 403, 404 or 503 means none.
+    pub async fn cameras(&self) -> Result<Vec<Camera>> {
+        let url = self.url("/api/v1/cameras")?;
+        let reply = self.fetch(&url, &[ACCEPT_JSON], STORAGE_DEADLINE).await?;
+        if !ok(&reply) {
+            if matches!(reply.status, 403 | 404 | 503) {
+                return Ok(Vec::new());
+            }
+            bail!("PrusaLink camera list returned HTTP {}", reply.status);
+        }
+        let body: Value = serde_json::from_slice(&reply.body)?;
+        let rows = body
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object);
+        Ok(rows
+            .enumerate()
+            .filter_map(|(index, camera)| {
+                let id = js_trim(camera.get("camera_id").and_then(Value::as_str)?);
+                if id.is_empty() || camera.get("connected") == Some(&Value::Bool(false)) {
+                    return None;
+                }
+                let name = camera
+                    .get("config")
+                    .and_then(|c| c.get("name"))
+                    .and_then(Value::as_str)
+                    .map(js_trim)
+                    .filter(|n| !n.is_empty())
+                    .map_or_else(|| format!("Camera {}", index + 1), str::to_owned);
+                Some(Camera {
+                    id: id.to_owned(),
+                    name,
+                    view: CameraView::Snapshot,
+                    service: Some("prusalink".into()),
+                    aspect_ratio: None,
+                })
+            })
+            .collect())
+    }
+
+    /// Object names from the active print file's `objects_info=` block. Any
+    /// failure, or a job that is not printing, paused or finished, gives none.
+    pub async fn object_list(&self) -> Vec<String> {
+        self.objects().await.unwrap_or_default()
+    }
+
+    async fn objects(&self) -> Result<Vec<String>> {
+        let base = self.base()?;
+        let reply = self
+            .fetch(&self.url("/api/v1/job")?, &[], READ_DEADLINE)
+            .await?;
+        if !ok(&reply) {
+            return Ok(Vec::new());
+        }
+        let job = json(&reply.body)?;
+        let state = job.get("state").and_then(Value::as_str).unwrap_or("");
+        if !matches!(
+            state.to_uppercase().as_str(),
+            "PRINTING" | "PAUSED" | "FINISHED"
+        ) {
+            return Ok(Vec::new());
+        }
+        let download = job
+            .get("refs")
+            .and_then(Value::as_object)
+            .and_then(|refs| refs.get("download"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if download.is_empty() {
+            return Ok(Vec::new());
+        }
+        let url = if download.starts_with("http") {
+            download.to_owned()
+        } else {
+            let slash = if download.starts_with('/') { "" } else { "/" };
+            format!("{base}{slash}{download}")
+        };
+        let range = [("range", "bytes=0-65535")];
+        let reply = self
+            .fetch(&checked(&url)?, &range, LISTING_DEADLINE)
+            .await?;
+        if !ok(&reply) {
+            return Ok(Vec::new());
+        }
+        let prefix = &reply.body[..reply.body.len().min(OBJECTS_PREFIX)];
+        Ok(objects_info(&windows_1252(prefix)).unwrap_or_default())
     }
 
     pub async fn test_connection(&self) -> TestResult {
@@ -347,6 +562,74 @@ impl Driver {
             outcome_unknown: false,
         }
     }
+}
+
+/// `url` if it is HTTP; HTTPS waits for GRE-359.
+fn checked(url: &str) -> Result<Url> {
+    let url = Url::parse(url).map_err(|_| anyhow!("Invalid URL"))?;
+    match url.scheme() {
+        "http" => Ok(url),
+        "https" => bail!("HTTPS PrusaLink hosts are not supported until GRE-359"),
+        other => bail!("Unsupported URL protocol: {other}:"),
+    }
+}
+
+/// A trimmed `display_name`, else the trimmed `name`, else empty.
+fn display_name(row: &Map<String, Value>) -> &str {
+    match row.get("display_name").and_then(Value::as_str).map(js_trim) {
+        Some(shown) if !shown.is_empty() => shown,
+        _ => row.get("name").and_then(Value::as_str).map_or("", js_trim),
+    }
+}
+
+/// What Node's `TextDecoder("latin1")` yields: WHATWG maps that label to
+/// windows-1252, which differs from Latin-1 in 0x80 to 0x9F.
+fn windows_1252(bytes: &[u8]) -> String {
+    const HIGH: [u32; 32] = [
+        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0x8D, 0x017D, 0x8F, 0x90, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013,
+        0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+    ];
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0x80..=0x9F => char::from_u32(HIGH[usize::from(b - 0x80)]).unwrap_or('\u{fffd}'),
+            _ => char::from(b),
+        })
+        .collect()
+}
+
+/// Names in the `objects_info={...}` JSON, found by counting braces as Node does.
+fn objects_info(text: &str) -> Option<Vec<String>> {
+    const MARKER: &str = "objects_info=";
+    let start = text.find(MARKER)? + MARKER.len();
+    let rest = &text[start..];
+    rest.starts_with('{').then_some(())?;
+    let mut depth = 0usize;
+    let mut end = None;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let parsed: Value = serde_json::from_str(&rest[..=end?]).ok()?;
+    let objects = parsed.as_object()?.get("objects")?.as_array()?;
+    Some(
+        objects
+            .iter()
+            .filter_map(|o| o.as_object()?.get("name")?.as_str())
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 struct Challenge {

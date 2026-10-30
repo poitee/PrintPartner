@@ -1,0 +1,12 @@
+{
+  "name": "SUB",
+  "type": "FOLDER",
+  "children": [
+    {
+      "name": "DEEP.GCO",
+      "display_name": "deep.gcode",
+      "type": "PRINT_FILE",
+      "size": 10
+    }
+  ]
+}

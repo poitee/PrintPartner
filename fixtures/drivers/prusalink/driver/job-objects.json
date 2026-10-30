@@ -1,0 +1,9 @@
+{
+  "state": "Printing",
+  "file": {
+    "name": "BENCHY~1.BGC"
+  },
+  "refs": {
+    "download": "/api/v1/files/usb/BENCHY~1.BGC/raw"
+  }
+}

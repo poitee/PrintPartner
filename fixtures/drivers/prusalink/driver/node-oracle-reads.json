@@ -1,0 +1,395 @@
+{
+  "recorded": {
+    "cameras": {
+      "ok": [
+        {
+          "id": "cam1",
+          "name": "Front",
+          "view": "snapshot",
+          "service": "prusalink"
+        },
+        {
+          "id": "cam2",
+          "name": "Camera 2",
+          "view": "snapshot",
+          "service": "prusalink"
+        },
+        {
+          "id": "cam4",
+          "name": "Camera 6",
+          "view": "snapshot",
+          "service": "prusalink"
+        }
+      ]
+    },
+    "object_list": [
+      "Benchy",
+      "Café € sign",
+      "Bracket {x}"
+    ],
+    "browse": {
+      "": {
+        "ok": {
+          "path": "",
+          "entries": [
+            {
+              "kind": "directory",
+              "path": "SUB",
+              "name": "Sub folder",
+              "modified_at": "2024-10-30T00:00:00.000Z"
+            },
+            {
+              "kind": "file",
+              "path": "BENCHY~1.BGC",
+              "name": "benchy.bgcode",
+              "size_bytes": 123457,
+              "modified_at": "2024-10-30T00:01:01.500Z"
+            },
+            {
+              "kind": "file",
+              "path": "NOSIZE.GCO",
+              "name": "NOSIZE.GCO"
+            },
+            {
+              "kind": "file",
+              "path": "NEG.GCO",
+              "name": "NEG.GCO",
+              "modified_at": "1969-12-30T23:59:59.750Z"
+            },
+            {
+              "kind": "file",
+              "path": "ZERO.GCO",
+              "name": "ZERO.GCO",
+              "size_bytes": 0,
+              "modified_at": "1970-01-01T00:00:00.000Z"
+            },
+            {
+              "kind": "file",
+              "path": " PAD.GCO ",
+              "name": "PAD.GCO"
+            }
+          ]
+        }
+      },
+      "SUB": {
+        "ok": {
+          "path": "SUB",
+          "entries": [
+            {
+              "kind": "file",
+              "path": "SUB/DEEP.GCO",
+              "name": "deep.gcode",
+              "size_bytes": 10
+            }
+          ]
+        }
+      },
+      "SUB/": {
+        "ok": {
+          "path": "SUB",
+          "entries": [
+            {
+              "kind": "file",
+              "path": "SUB/DEEP.GCO",
+              "name": "deep.gcode",
+              "size_bytes": 10
+            }
+          ]
+        }
+      },
+      "/SUB/": {
+        "ok": {
+          "path": "SUB",
+          "entries": [
+            {
+              "kind": "file",
+              "path": "SUB/DEEP.GCO",
+              "name": "deep.gcode",
+              "size_bytes": 10
+            }
+          ]
+        }
+      },
+      "FUT": {
+        "error": "Invalid time value"
+      },
+      "MISSING": {
+        "error": "PrusaLink file listing returned HTTP 404"
+      },
+      "../x": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a\\b": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a//b": {
+        "error": "Invalid PrusaLink storage path"
+      }
+    },
+    "requests": [
+      "GET /api/v1/status",
+      "GET /api/v1/cameras +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/job +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/BENCHY~1.BGC/raw +auth range=bytes=0-65535",
+      "GET /api/v1/status",
+      "GET /api/v1/storage +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/ +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/storage +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/SUB +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/storage +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/SUB +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/storage +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/SUB +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/storage +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/FUT +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/storage +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/MISSING +auth"
+    ]
+  },
+  "pinned": {
+    "cameras": {
+      "ok": [
+        {
+          "id": "cam1",
+          "name": "Front",
+          "view": "snapshot",
+          "service": "prusalink"
+        },
+        {
+          "id": "cam2",
+          "name": "Camera 2",
+          "view": "snapshot",
+          "service": "prusalink"
+        },
+        {
+          "id": "cam4",
+          "name": "Camera 6",
+          "view": "snapshot",
+          "service": "prusalink"
+        }
+      ]
+    },
+    "object_list": [
+      "Benchy",
+      "Café € sign",
+      "Bracket {x}"
+    ],
+    "browse": {
+      "": {
+        "ok": {
+          "path": "",
+          "entries": [
+            {
+              "kind": "file",
+              "path": "DEEP.GCO",
+              "name": "deep.gcode",
+              "size_bytes": 10
+            }
+          ]
+        }
+      },
+      "SUB": {
+        "error": "PrusaLink file listing returned HTTP 404"
+      },
+      "SUB/": {
+        "error": "PrusaLink file listing returned HTTP 404"
+      },
+      "/SUB/": {
+        "error": "PrusaLink file listing returned HTTP 404"
+      },
+      "FUT": {
+        "error": "PrusaLink file listing returned HTTP 404"
+      },
+      "MISSING": {
+        "error": "PrusaLink file listing returned HTTP 404"
+      },
+      "../x": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a\\b": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a//b": {
+        "error": "Invalid PrusaLink storage path"
+      }
+    },
+    "requests": [
+      "GET /api/v1/status",
+      "GET /api/v1/cameras +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/job +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/usb/BENCHY~1.BGC/raw +auth range=bytes=0-65535",
+      "GET /api/v1/status",
+      "GET /api/v1/files/local/ +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/local/SUB +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/local/SUB +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/local/SUB +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/local/FUT +auth",
+      "GET /api/v1/status",
+      "GET /api/v1/files/local/MISSING +auth"
+    ]
+  },
+  "no-password": {
+    "cameras": {
+      "error": "PrusaLink camera list returned HTTP 401"
+    },
+    "object_list": [],
+    "browse": {
+      "": {
+        "error": "username and password are required"
+      },
+      "SUB": {
+        "error": "username and password are required"
+      },
+      "SUB/": {
+        "error": "username and password are required"
+      },
+      "/SUB/": {
+        "error": "username and password are required"
+      },
+      "FUT": {
+        "error": "username and password are required"
+      },
+      "MISSING": {
+        "error": "username and password are required"
+      },
+      "../x": {
+        "error": "username and password are required"
+      },
+      "a\\b": {
+        "error": "username and password are required"
+      },
+      "a//b": {
+        "error": "username and password are required"
+      }
+    },
+    "requests": [
+      "GET /api/v1/cameras",
+      "GET /api/v1/job"
+    ]
+  },
+  "http-500": {
+    "cameras": {
+      "error": "PrusaLink camera list returned HTTP 500"
+    },
+    "object_list": [],
+    "browse": {
+      "": {
+        "error": "PrusaLink storage list returned HTTP 500"
+      },
+      "SUB": {
+        "error": "PrusaLink storage list returned HTTP 500"
+      },
+      "SUB/": {
+        "error": "PrusaLink storage list returned HTTP 500"
+      },
+      "/SUB/": {
+        "error": "PrusaLink storage list returned HTTP 500"
+      },
+      "FUT": {
+        "error": "PrusaLink storage list returned HTTP 500"
+      },
+      "MISSING": {
+        "error": "PrusaLink storage list returned HTTP 500"
+      },
+      "../x": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a\\b": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a//b": {
+        "error": "Invalid PrusaLink storage path"
+      }
+    },
+    "requests": [
+      "GET /api/v1/status",
+      "GET /api/v1/cameras",
+      "GET /api/v1/status",
+      "GET /api/v1/job",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage"
+    ]
+  },
+  "http-404": {
+    "cameras": {
+      "ok": []
+    },
+    "object_list": [],
+    "browse": {
+      "": {
+        "error": "PrusaLink storage list returned HTTP 404"
+      },
+      "SUB": {
+        "error": "PrusaLink storage list returned HTTP 404"
+      },
+      "SUB/": {
+        "error": "PrusaLink storage list returned HTTP 404"
+      },
+      "/SUB/": {
+        "error": "PrusaLink storage list returned HTTP 404"
+      },
+      "FUT": {
+        "error": "PrusaLink storage list returned HTTP 404"
+      },
+      "MISSING": {
+        "error": "PrusaLink storage list returned HTTP 404"
+      },
+      "../x": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a\\b": {
+        "error": "Invalid PrusaLink storage path"
+      },
+      "a//b": {
+        "error": "Invalid PrusaLink storage path"
+      }
+    },
+    "requests": [
+      "GET /api/v1/status",
+      "GET /api/v1/cameras",
+      "GET /api/v1/status",
+      "GET /api/v1/job",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage",
+      "GET /api/v1/status",
+      "GET /api/v1/storage"
+    ]
+  }
+}

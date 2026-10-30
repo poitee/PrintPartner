@@ -1,0 +1,35 @@
+[
+  {
+    "camera_id": "cam1",
+    "connected": true,
+    "config": {
+      "name": "Front"
+    }
+  },
+  "junk",
+  {
+    "camera_id": " cam2 ",
+    "config": {
+      "name": "  "
+    }
+  },
+  {
+    "camera_id": "cam3",
+    "connected": false,
+    "config": {
+      "name": "Off"
+    }
+  },
+  {
+    "camera_id": "",
+    "config": {
+      "name": "Blank"
+    }
+  },
+  {
+    "camera_id": 5
+  },
+  {
+    "camera_id": "cam4"
+  }
+]
