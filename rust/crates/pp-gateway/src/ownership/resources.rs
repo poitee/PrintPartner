@@ -178,6 +178,8 @@ enum ReviewedEntry {
     ProposeAddSource { resources: Vec<ResourceId> },
     #[serde(rename = "tool.audit_build_coverage")]
     AuditBuildCoverage { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.suggest_source_contributions")]
+    SuggestSourceContributions { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -764,6 +766,19 @@ impl ReviewedEntry {
                     Table(PlanDraftRequiredUnitAssignments),
                 ]),
             ),
+            // The brief, its hydration over every tenant Source, `getSource`, the kit catalog,
+            // then the printable-file scan of the pinned Source.
+            Self::SuggestSourceContributions { resources } => (
+                "tool.suggest_source_contributions",
+                resources,
+                BTreeSet::from([
+                    Table(AppSettings),
+                    Table(Projects),
+                    Table(SourceDocs),
+                    File(FileFamily::SourceWorkspace),
+                    File(FileFamily::KitCatalog),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -1088,6 +1103,7 @@ impl Declarations {
             "tool.import_guide_notes",
             "tool.propose_add_source",
             "tool.audit_build_coverage",
+            "tool.suggest_source_contributions",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",
