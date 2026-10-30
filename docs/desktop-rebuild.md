@@ -1103,6 +1103,8 @@ Job WebSocket admission at `/ws/jobs/{id}` is GRE-798 (`docs/gre-798-jobs-http.m
 Snapshot delivery and close reasons on that socket are GRE-799 (`docs/gre-799-jobs-http.md`).
 Reconnect after a lagged mailbox, and owner shutdown of live sockets, are GRE-800
 (`docs/gre-800-jobs-http.md`).
+No event is lost or repeated when a socket subscribes while the job is
+committing. That proof is GRE-511 (`docs/gre-511-job-stream.md`).
 Composing those routes on the opted-in rebuild router is GRE-821
 (`docs/gre-821-runtime-jobs.md`).
 The browser job row follows that socket snapshot when health reports

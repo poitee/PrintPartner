@@ -267,6 +267,12 @@ async fn job_ws_reconnect_returns_authoritative_snapshot() {
 
 #[cfg(not(feature = "desktop_rebuild"))]
 #[tokio::test]
+async fn job_ws_subscribe_during_commits_loses_and_repeats_nothing() {
+    feature_off_404().await;
+}
+
+#[cfg(not(feature = "desktop_rebuild"))]
+#[tokio::test]
 async fn jobs_router_shutdown_closes_subscriptions() {
     feature_off_404().await;
 }
@@ -1926,6 +1932,122 @@ async fn job_ws_reconnect_returns_authoritative_snapshot() {
     shutdown(owner, directory);
 }
 
+/// Sockets upgrade while a worker commits the claim, progress 1 through 12,
+/// and the finish. The first socket opens before the claim, so it sees every
+/// commit. Each later socket must see an exact suffix of that stream: its
+/// first frame is the snapshot current at subscribe, and every later commit
+/// arrives once, in order. A gap would be a lost event and a repeated frame a
+/// duplicate. A socket opened after the finish replays only the final
+/// snapshot, then closes 1000.
+#[cfg(feature = "desktop_rebuild")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn job_ws_subscribe_during_commits_loses_and_repeats_nothing() {
+    use pp_api::{
+        auth::{AuthHttpConfig, CookieTransport, ProviderClient, ResetMailer, auth_router},
+        jobs::{JobsHttpConfig, jobs_router},
+    };
+    use std::time::Duration;
+
+    let (directory, owner) = open();
+    let chosen = policy();
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let auth = owner.lock().unwrap().auth_with_policy(chosen).unwrap();
+    let mut bootstrap = Server::spawn(
+        bound,
+        auth_router(
+            AuthHttpConfig::new(&origin, CookieTransport::LoopbackHttp, false, None, false)
+                .unwrap(),
+            auth,
+            ProviderClient::new(None, None).unwrap(),
+            ResetMailer::disabled(),
+        ),
+    )
+    .await;
+    let cookie = register(&bootstrap, "job-ws-window@example.test").await;
+    let token = cookie.strip_prefix("pp_session=").unwrap().to_owned();
+    bootstrap.stop().await;
+
+    let job_id = enqueue_queued(&owner, chosen, &token).await;
+    let bound = bind().await;
+    let origin = format!("http://{}", bound.local_addr().unwrap());
+    let jobs = owner.lock().unwrap().jobs(chosen).unwrap();
+    let mut server = Server::spawn(
+        bound,
+        jobs_router(
+            JobsHttpConfig::from_startup(&origin, "default", Some("1")).unwrap(),
+            jobs,
+        ),
+    )
+    .await;
+    let path = format!("/ws/jobs/{job_id}");
+    let mut reference = open_socket(&server, &path, Some(&cookie)).await;
+    let queued = expect_text(&mut reference).await;
+    assert_eq!(queued["job_id"], job_id);
+    assert_ne!(queued["status"], "done");
+
+    let writer = {
+        let owner = owner.clone();
+        let job_id = job_id.clone();
+        tokio::task::spawn_blocking(move || {
+            progress_then_finish(&owner, chosen, &job_id, 12, Duration::from_millis(3))
+        })
+    };
+    let mut joined = Vec::new();
+    for _ in 0..10 {
+        joined.push(open_socket(&server, &path, Some(&cookie)).await);
+        tokio::time::sleep(Duration::from_millis(4)).await;
+    }
+    writer.await.unwrap();
+
+    let (rest, close) = frames_until_close(&mut reference).await;
+    assert_eq!(close, (1000, String::new()));
+    let mut full = vec![queued];
+    full.extend(rest);
+    let progress: Vec<_> = full
+        .iter()
+        .filter_map(|frame| frame["progress"].as_i64())
+        .collect();
+    assert!(
+        progress.windows(2).all(|pair| pair[0] < pair[1]),
+        "{progress:?}"
+    );
+    assert_eq!(
+        progress
+            .iter()
+            .copied()
+            .filter(|step| (1..=12).contains(step))
+            .collect::<Vec<_>>(),
+        (1..=12).collect::<Vec<_>>()
+    );
+    let done = full.last().unwrap().clone();
+    assert_eq!(done["status"], "done");
+    assert_eq!(
+        full.iter()
+            .filter(|frame| frame["status"] == "done")
+            .count(),
+        1
+    );
+
+    for mut socket in joined {
+        let (frames, close) = frames_until_close(&mut socket).await;
+        assert_eq!(close, (1000, String::new()));
+        assert!(!frames.is_empty());
+        assert!(
+            full.ends_with(&frames),
+            "frames {frames:?} are not a suffix of {full:?}"
+        );
+    }
+
+    let mut after = open_socket(&server, &path, Some(&cookie)).await;
+    assert_eq!(
+        frames_until_close(&mut after).await,
+        (vec![done], (1000, String::new()))
+    );
+    server.stop().await;
+    shutdown(owner, directory);
+}
+
 /// Owner shutdown closes every live job socket and a later upgrade is refused.
 #[cfg(feature = "desktop_rebuild")]
 #[tokio::test(flavor = "current_thread")]
@@ -2096,6 +2218,81 @@ fn publish_until_lag(
         worker
             .update(&mut lease, WorkerOperation::Progress(step))
             .unwrap();
+    }
+}
+
+/// Claims the job, commits progress 1 through `steps` with `pause` after each
+/// commit, then finishes it.
+#[cfg(feature = "desktop_rebuild")]
+fn progress_then_finish(
+    owner: &Arc<Mutex<WriterOwner>>,
+    chosen: pp_storage::auth::AuthPolicy,
+    job_id: &str,
+    steps: u8,
+    pause: std::time::Duration,
+) {
+    use pp_storage::jobs::{
+        CompletedResult, JobKind, SourceUpdatesResult, WorkerAdmission, WorkerOperation,
+    };
+
+    let worker = owner
+        .lock()
+        .unwrap()
+        .job_worker_with_policy(
+            chosen,
+            WorkerAdmission {
+                kinds: vec![(JobKind::CheckSourceUpdates, 1)],
+                total: 1,
+                per_resource: 1,
+                lease_seconds: 60,
+            },
+        )
+        .unwrap();
+    let mut lease = worker.claim().unwrap().unwrap().lease;
+    assert_eq!(lease.job_id(), job_id);
+    std::thread::sleep(pause);
+    for step in 1..=steps {
+        worker
+            .update(&mut lease, WorkerOperation::Progress(step))
+            .unwrap();
+        std::thread::sleep(pause);
+    }
+    worker
+        .update(
+            &mut lease,
+            WorkerOperation::FinishPublic {
+                artifact: None,
+                result: Box::new(CompletedResult::SourceUpdates(SourceUpdatesResult {
+                    checked: vec![],
+                    skipped: vec![],
+                    updates_available: 0,
+                    checked_count: 0,
+                })),
+            },
+        )
+        .unwrap();
+}
+
+/// Reads text frames until the close frame. Each read waits at most 30 s.
+#[cfg(feature = "desktop_rebuild")]
+async fn frames_until_close(
+    stream: &mut tokio::net::TcpStream,
+) -> (Vec<serde_json::Value>, (u16, String)) {
+    let mut frames = Vec::new();
+    loop {
+        let (opcode, payload) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), read_frame(stream))
+                .await
+                .expect("frame within 30 s");
+        match opcode {
+            1 => frames.push(serde_json::from_slice(&payload).unwrap()),
+            8 => {
+                let code = u16::from_be_bytes([payload[0], payload[1]]);
+                let reason = String::from_utf8(payload[2..].to_vec()).unwrap();
+                return (frames, (code, reason));
+            }
+            other => panic!("unexpected opcode {other}"),
+        }
     }
 }
 
