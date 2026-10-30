@@ -151,8 +151,8 @@ describe("product MCP wires an IntegrationPort into farm tools", () => {
     // The regression: this was "unknown" before the port was wired in.
     expect(data.printers[0].state).toBe("printing");
     expect(data.printers[0].active_job).toBe("plate_ldo.gcode");
-    expect(data.printing).toBe(1);
-    expect(data.offline).toBe(0);
+    expect(data.state_counts.printing).toBe(1);
+    expect(data.state_counts.offline).toBe(0);
   });
 
   it("builds a real port when none is injected, instead of leaving it undefined", async () => {
