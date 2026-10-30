@@ -64,6 +64,7 @@ The workspace is `rust/Cargo.toml`. A dependency marked "flagged" compiles only 
 | `pp-core` | Composition root for the storage lease, gateway and supervisor lifetimes. | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` (flagged), `pp-net` (flagged) |
 | `pp-desktop` | Tauri window and tray around `pp-core`. | `pp-core` |
 | `pp-server` | Headless launcher around `pp-core`. | `pp-core` |
+| `pp-perf` | Performance measurement records, the 10% regression gate and Linux process-tree PSS (T-53). | none |
 
 `rust/scripts/check-boundaries.py` rejects any crate dependency that its allow list does not name. [ADR 0007](adr/0007-rust-crate-layout.md) records the allowed edges and the planned ones.
 

@@ -1,0 +1,76 @@
+{
+  "cases": {
+    "absent": {
+      "absent": true
+    },
+    "directory": {
+      "directory": true
+    },
+    "empty-file": {
+      "text": ""
+    },
+    "node-written-store": {
+      "text": "{\n  \"filaments\": [\n    {\n      \"id\": \"custom-1a2b3c4d\",\n      \"display_name\": \"Galaxy Black\",\n      \"product_line\": \"Custom\",\n      \"hex\": \"#112233\",\n      \"combo_label\": \"Galaxy Black\"\n    },\n    {\n      \"id\": \"custom-9f8e7d6c\",\n      \"display_name\": \"Ünïcode “Teal”\",\n      \"product_line\": \"PLA+\",\n      \"hex\": \"#00AABB\",\n      \"combo_label\": \"Ünïcode “Teal”\"\n    }\n  ]\n}"
+    },
+    "empty-store": {
+      "text": "{\"filaments\":[]}"
+    },
+    "not-json": {
+      "text": "not json"
+    },
+    "trailing-garbage": {
+      "text": "{\"filaments\":[]} x"
+    },
+    "byte-order-mark": {
+      "base64": "77u/eyJmaWxhbWVudHMiOltdfQ=="
+    },
+    "invalid-utf8": {
+      "base64": "eyJmaWxhbWVudHMiOlt7ImRpc3BsYXlfbmFtZSI6Iv/+IGJhZCDDIn1dfQ=="
+    },
+    "literal-null": {
+      "text": "null"
+    },
+    "top-level-array": {
+      "text": "[{\"id\":\"custom-1\"}]"
+    },
+    "top-level-number": {
+      "text": "42"
+    },
+    "top-level-string": {
+      "text": "\"filaments\""
+    },
+    "top-level-true": {
+      "text": "true"
+    },
+    "no-filaments-key": {
+      "text": "{\"other\":[1,2]}"
+    },
+    "filaments-null": {
+      "text": "{\"filaments\":null}"
+    },
+    "filaments-object": {
+      "text": "{\"filaments\":{\"b\":1,\"2\":2,\"1\":3,\"a\":4}}"
+    },
+    "numbers": {
+      "text": "{\"filaments\":[1.50,-0,1e21,1e-7,0.1,12345678901234567890,1e400,-1e400,5e-324]}"
+    },
+    "duplicate-keys": {
+      "text": "{\"filaments\":[1],\"x\":0,\"filaments\":[{\"id\":\"a\",\"id\":\"b\"}]}"
+    },
+    "lone-surrogate": {
+      "text": "{\"filaments\":[\"\\ud800\",\"\\udc00x\",\"\\ud83d\\ude00\"]}"
+    },
+    "escapes": {
+      "text": "{\"filaments\":[\"\\u00e9\\u2028\\u2029\\u0000\\t\\/\\\"\",\"\\u007f\"]}"
+    },
+    "whitespace": {
+      "text": " \t\r\n{ \"filaments\" : [ ] } \n"
+    },
+    "proto-key": {
+      "text": "{\"filaments\":[{\"__proto__\":{\"x\":1},\"constructor\":2}]}"
+    },
+    "deep-nesting": {
+      "text": "{\"filaments\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+    }
+  }
+}

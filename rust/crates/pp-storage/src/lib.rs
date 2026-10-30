@@ -1,6 +1,9 @@
 #[cfg(feature = "desktop_rebuild")]
 pub mod production;
 
+#[cfg(feature = "desktop_rebuild")]
+pub mod admin;
+
 pub mod archive;
 #[cfg(feature = "desktop_rebuild")]
 mod auth_scheduler;

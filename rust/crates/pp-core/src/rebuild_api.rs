@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow};
 use axum::Router;
 use pp_api::{
     accepted::{AcceptedHttpConfig, accepted_router},
+    admin::{AdminHttpConfig, admin_router},
     auth::auth_router,
     builds::{BuildHttpConfig, build_router},
     catalog::{CatalogHttpConfig, admit_catalog_routes},
@@ -125,7 +126,7 @@ pub fn router(
 }
 
 /// Compose authenticated read routers (auth, Plan builds, catalog, Accepted
-/// Plan Checkoff) from one
+/// Plan Checkoff, legal documents and custom filaments) from one
 /// `WriterOwner` when the stored rebuild setting is on. Aliases share that
 /// owner. Returns `None` before creating clients or mounting when the setting
 /// is off. Does not cut over production gateway ownership (GRE-593).
@@ -150,6 +151,7 @@ pub fn read_router(
             builds: builds_client,
         },
         accepted_client,
+        admin_files,
     ) = {
         let guard = owner
             .lock()
@@ -158,6 +160,7 @@ pub fn read_router(
             clients(rebuild, &guard, policy, auth.lifetimes)?
                 .ok_or_else(|| anyhow!("flag on constructs clients"))?,
             guard.accepted_reads_with_policy(policy)?,
+            guard.admin_files()?,
         )
     };
     // `_drafts` is opened with the bundle for GRE-818 parity; draft HTTP uses
@@ -170,13 +173,22 @@ pub fn read_router(
         CatalogHttpConfig::from_startup(origin, api_key_tenant, policy, Some("1"))?,
         Arc::clone(&owner),
     );
+    let admin = admin_router(
+        AdminHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
+        accepted_client.clone(),
+        admin_files,
+    );
     let accepted = accepted_router(
         AcceptedHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
         accepted_client,
     );
     let auth_routes = auth_router(auth.http, auth_client, auth.providers, auth.mail);
     Ok(Some(
-        auth_routes.merge(builds).merge(catalog).merge(accepted),
+        auth_routes
+            .merge(builds)
+            .merge(catalog)
+            .merge(accepted)
+            .merge(admin),
     ))
 }
 
