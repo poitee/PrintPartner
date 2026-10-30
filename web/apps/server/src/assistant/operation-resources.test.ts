@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -6178,5 +6178,84 @@ for (const isolated of [false, true]) {
       expect([...unions.get(tool) ?? []].sort()).toEqual(union);
       expect(declared(`tool.${tool}`)).toEqual(["file:source-workspace", ...tables]);
     }
+  });
+}
+
+const ADDON_UNION = ["file:assistant-domain", "file:kit-catalog", "file:source-workspace", "table:build_profiles", "table:plan_decisions", "table:profile_layers", "table:projects", "table:source_docs"];
+
+async function traceAddon(input: Record<string, unknown>, options: { repository: AppRepository; roots: { domain: string[]; catalog: string[]; workspace: string[] }; tenantId?: string; activePlanId?: number }) {
+  const { repository, roots, tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("add_addon", input, { repo: repository, dataDir, activePlanId })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  // Layer reads use the stack shapes; Source listing and dismissal reads use the shared shapes.
+  const tables = [...new Set(statements.map((sql) => {
+    try { return stackSelect(sql, tenantId); } catch { return tableForObservedSelect(sql, tenantId); }
+  }))].sort();
+  const files = interactionFileResources(observer.state.files, roots);
+  const body = z.record(z.string(), z.unknown()).parse(JSON.parse(output.content));
+  return { body, resources: [...files, ...tables].sort(), calls: observer.state.files.length };
+}
+
+for (const isolated of [false, true]) {
+  it(`traces add_addon plan checks, Source lookup, sync gate, stack warnings and dismissals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { roots } = interactionDomainFixture();
+    const repos = join(dataDir, "repos");
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, repos, schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const toolhead = repo.createSource({ name: "Toolhead-A", source_kind: "local" }).id;
+    for (const id of [sourceId, toolhead]) {
+      const workspace = join(repos, String(id));
+      fs.mkdirSync(workspace, { recursive: true });
+      sqlite.prepare("UPDATE projects SET local_path = ?, last_synced_at = ? WHERE id = ?").run(workspace, "2026-01-01T00:00:00.000Z", id);
+    }
+    sqlite.prepare("UPDATE projects SET local_path = NULL WHERE id = ?").run(unsyncedId);
+    const plan = repo.createProfile("Addon plan", sourceId);
+    const idle = repo.createProfile("Addon idle", sourceId);
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign addon"));
+    const workspace = isolated ? ["file:source-workspace"] : [];
+    const identity = ["table:build_profiles"];
+    const lookup = [...workspace, "table:build_profiles", "table:projects", "table:source_docs"].sort();
+    const proposing = [...workspace, "file:assistant-domain", "file:kit-catalog", "table:build_profiles", "table:plan_decisions", "table:profile_layers", "table:projects", "table:source_docs"].sort();
+    const union = new Set<string>();
+    vi.stubEnv("PRINT_PARTNER_DATA_DIR", dataDir);
+    try {
+      async function trace(input: Record<string, unknown>, resources: string[], options: { tenantId?: string; activePlanId?: number } = {}) {
+        const traced = await traceAddon(input, { repository, roots, ...options });
+        expect(traced.resources).toEqual(resources);
+        for (const resource of traced.resources) union.add(resource);
+        return traced.body;
+      }
+      const required = { error: "plan_id and source_name required" };
+      for (const source_name of [undefined, "", "  ", 7]) expect(await trace({ plan_id: plan.id, source_name }, identity)).toEqual(required);
+      expect(await trace({ source_name: "Toolhead-A" }, [])).toEqual(required);
+      for (const plan_id of [999999, foreign.id]) expect(await trace({ plan_id, source_name: "Toolhead-A" }, identity)).toEqual(required);
+      // A foreign active plan passes resolution but fails the identity re-read.
+      expect(await trace({ source_name: "Toolhead-A" }, identity, { activePlanId: foreign.id })).toEqual({ error: "Plan not found" });
+      expect(await trace({ plan_id: plan.id, source_name: "Absent" }, lookup)).toEqual({ error: 'Source not found: "Absent". Call list_sources and use an existing name — do not invent sources.' });
+      expect(await trace({ plan_id: plan.id, source_name: "Unsynced" }, lookup)).toEqual({ error: 'Source "Unsynced" exists but is not synced. Ask the user to sync it before adding as an addon.', synced: false });
+      // Sources are tenant scoped, and the other tenant has no Source roots to probe.
+      expect(await trace({ plan_id: foreign.id, source_name: "Toolhead-A" }, ["table:build_profiles", "table:projects", "table:source_docs"], { tenantId: "other" })).toEqual({ error: 'Source not found: "Toolhead-A". Call list_sources and use an existing name — do not invent sources.' });
+
+      const proposal = z.object({ status: z.literal("proposed"), action: z.object({ type: z.literal("add_addon"), plan_id: z.number(), label: z.string(), params: z.record(z.string(), z.unknown()) }).passthrough(), warnings: z.array(z.object({ code: z.string() }).passthrough()), suggested_excludes: z.array(z.string()) }).passthrough();
+      const added = proposal.parse(await trace({ plan_id: plan.id, source_name: " toolhead-a " }, proposing));
+      expect(added.action).toMatchObject({ plan_id: plan.id, label: "Add addon Toolhead-A", params: { source_name: "Toolhead-A", suggested_excludes: ["hotend_mount.stl"] } });
+      // Toolhead-A is not_for the Fixture base and replaces a stock part.
+      expect(added.warnings.map(({ code }) => code)).toContain("compat_not_for");
+      expect(added.suggested_excludes).toEqual(["hotend_mount.stl"]);
+      expect(proposal.parse(await trace({ source_name: "Toolhead-A" }, proposing, { activePlanId: idle.id })).action.plan_id).toBe(idle.id);
+      expect(proposal.parse(await trace({ plan_id: foreign.id, source_name: "Toolhead-A" }, proposing, { activePlanId: idle.id })).action.plan_id).toBe(idle.id);
+
+      repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "add_addon", params: added.action.params });
+      expect(await trace({ plan_id: plan.id, source_name: "Toolhead-A" }, proposing)).toEqual(dismissed("add_addon", added.action.params));
+      expect(proposal.parse(await trace({ plan_id: idle.id, source_name: "Toolhead-A" }, proposing)).action.plan_id).toBe(idle.id);
+    } finally { vi.unstubAllEnvs(); }
+    expect([...union].sort()).toEqual(isolated ? ADDON_UNION : ADDON_UNION.filter((resource) => resource !== "file:source-workspace"));
+    expect(declared("tool.add_addon")).toEqual(ADDON_UNION);
+    expect(repo.getProfileLayers(plan.id).map((layer) => layer.project_name)).toEqual(["Fixture"]);
   });
 }
