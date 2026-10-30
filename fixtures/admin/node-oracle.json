@@ -1,0 +1,670 @@
+{
+  "legal": {
+    "/legal/summary": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "868",
+      "body_sha256": "c4aaebd57e1838c89315747caf686e519500b5ec4dcacf398e6a4aeb7b61c317",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "868",
+        "body_length": 0
+      }
+    },
+    "/api/v1/legal/summary": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "868",
+      "body_sha256": "c4aaebd57e1838c89315747caf686e519500b5ec4dcacf398e6a4aeb7b61c317",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "868",
+        "body_length": 0
+      }
+    },
+    "/legal/license": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "19951",
+      "body_sha256": "1c131f73acdfc9b80d5b75df849e38430f8de24afa6ed7a0ed8cab3ee44bba1c",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "19951",
+        "body_length": 0
+      }
+    },
+    "/api/v1/legal/license": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "19951",
+      "body_sha256": "1c131f73acdfc9b80d5b75df849e38430f8de24afa6ed7a0ed8cab3ee44bba1c",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "19951",
+        "body_length": 0
+      }
+    },
+    "/legal/attribution": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "887",
+      "body_sha256": "cbf8a6c62862dd4e9aa707ff6227e7ee618b710b4c289ef90ca5ce4e53bb138d",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "887",
+        "body_length": 0
+      }
+    },
+    "/api/v1/legal/attribution": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "887",
+      "body_sha256": "cbf8a6c62862dd4e9aa707ff6227e7ee618b710b4c289ef90ca5ce4e53bb138d",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "887",
+        "body_length": 0
+      }
+    },
+    "/legal/third-party": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "8495",
+      "body_sha256": "4db640e2f39f0bfe5a7284f06f7e7510b98816e21ede6d3cb88fa14d5eb17991",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "8495",
+        "body_length": 0
+      }
+    },
+    "/api/v1/legal/third-party": {
+      "status": 200,
+      "content_type": "text/plain; charset=utf-8",
+      "cache_control": "private, no-store",
+      "content_length": "8495",
+      "body_sha256": "4db640e2f39f0bfe5a7284f06f7e7510b98816e21ede6d3cb88fa14d5eb17991",
+      "head": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "8495",
+        "body_length": 0
+      }
+    }
+  },
+  "custom_filaments": {
+    "absent": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "directory": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "empty-file": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "node-written-store": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "277",
+        "body": "{\"filaments\":[{\"id\":\"custom-1a2b3c4d\",\"display_name\":\"Galaxy Black\",\"product_line\":\"Custom\",\"hex\":\"#112233\",\"combo_label\":\"Galaxy Black\"},{\"id\":\"custom-9f8e7d6c\",\"display_name\":\"Ünïcode “Teal”\",\"product_line\":\"PLA+\",\"hex\":\"#00AABB\",\"combo_label\":\"Ünïcode “Teal”\"}]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "277",
+        "body": "{\"filaments\":[{\"id\":\"custom-1a2b3c4d\",\"display_name\":\"Galaxy Black\",\"product_line\":\"Custom\",\"hex\":\"#112233\",\"combo_label\":\"Galaxy Black\"},{\"id\":\"custom-9f8e7d6c\",\"display_name\":\"Ünïcode “Teal”\",\"product_line\":\"PLA+\",\"hex\":\"#00AABB\",\"combo_label\":\"Ünïcode “Teal”\"}]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "277",
+        "body_length": 0
+      }
+    },
+    "empty-store": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "not-json": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "trailing-garbage": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "byte-order-mark": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "invalid-utf8": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "49",
+        "body": "{\"filaments\":[{\"display_name\":\"�� bad �\"}]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "49",
+        "body": "{\"filaments\":[{\"display_name\":\"�� bad �\"}]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "49",
+        "body_length": 0
+      }
+    },
+    "literal-null": {
+      "/": {
+        "status": 500,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "115",
+        "body": "{\"statusCode\":500,\"error\":\"Internal Server Error\",\"message\":\"Cannot read properties of null (reading 'filaments')\"}"
+      },
+      "/api/v1": {
+        "status": 500,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "115",
+        "body": "{\"statusCode\":500,\"error\":\"Internal Server Error\",\"message\":\"Cannot read properties of null (reading 'filaments')\"}"
+      },
+      "head": {
+        "status": 500,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "115",
+        "body_length": 0
+      }
+    },
+    "top-level-array": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body_length": 0
+      }
+    },
+    "top-level-number": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body_length": 0
+      }
+    },
+    "top-level-string": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body_length": 0
+      }
+    },
+    "top-level-true": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body_length": 0
+      }
+    },
+    "no-filaments-key": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body": "{}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "2",
+        "body_length": 0
+      }
+    },
+    "filaments-null": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "18",
+        "body": "{\"filaments\":null}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "18",
+        "body": "{\"filaments\":null}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "18",
+        "body_length": 0
+      }
+    },
+    "filaments-object": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "39",
+        "body": "{\"filaments\":{\"1\":3,\"2\":2,\"b\":1,\"a\":4}}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "39",
+        "body": "{\"filaments\":{\"1\":3,\"2\":2,\"b\":1,\"a\":4}}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "39",
+        "body_length": 0
+      }
+    },
+    "numbers": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "74",
+        "body": "{\"filaments\":[1.5,0,1e+21,1e-7,0.1,12345678901234567000,null,null,5e-324]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "74",
+        "body": "{\"filaments\":[1.5,0,1e+21,1e-7,0.1,12345678901234567000,null,null,5e-324]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "74",
+        "body_length": 0
+      }
+    },
+    "duplicate-keys": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "26",
+        "body": "{\"filaments\":[{\"id\":\"b\"}]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "26",
+        "body": "{\"filaments\":[{\"id\":\"b\"}]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "26",
+        "body_length": 0
+      }
+    },
+    "lone-surrogate": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "41",
+        "body": "{\"filaments\":[\"\\ud800\",\"\\udc00x\",\"😀\"]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "41",
+        "body": "{\"filaments\":[\"\\ud800\",\"\\udc00x\",\"😀\"]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "41",
+        "body_length": 0
+      }
+    },
+    "escapes": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "41",
+        "body": "{\"filaments\":[\"é  \\u0000\\t/\\\"\",\"\"]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "41",
+        "body": "{\"filaments\":[\"é  \\u0000\\t/\\\"\",\"\"]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "41",
+        "body_length": 0
+      }
+    },
+    "whitespace": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body": "{\"filaments\":[]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "16",
+        "body_length": 0
+      }
+    },
+    "proto-key": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "53",
+        "body": "{\"filaments\":[{\"__proto__\":{\"x\":1},\"constructor\":2}]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "53",
+        "body": "{\"filaments\":[{\"__proto__\":{\"x\":1},\"constructor\":2}]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "53",
+        "body_length": 0
+      }
+    },
+    "deep-nesting": {
+      "/": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "274",
+        "body": "{\"filaments\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+      },
+      "/api/v1": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "274",
+        "body": "{\"filaments\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+      },
+      "head": {
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "cache_control": "private, no-store",
+        "content_length": "274",
+        "body_length": 0
+      }
+    }
+  }
+}

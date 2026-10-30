@@ -19,6 +19,7 @@ use std::{
 };
 mod drain;
 mod origin;
+pub mod perf_launch;
 mod preferences;
 mod rebuild;
 mod state_file;
@@ -73,6 +74,7 @@ pub use pp_gateway::LaunchTarget as DesktopLaunchTarget;
 pub struct CoreHandle {
     compat: CompatHandle,
     monitoring: pp_gateway::MonitoringControl,
+    bootstrap: pp_gateway::BootstrapMinter,
     gate: ShutdownGate,
     preferences: preferences::Client,
 }
@@ -81,6 +83,7 @@ impl Clone for CoreHandle {
         Self {
             compat: self.compat.clone(),
             monitoring: self.monitoring.clone(),
+            bootstrap: self.bootstrap.clone(),
             gate: self.gate.clone(),
             preferences: self.preferences.clone(),
         }
@@ -105,6 +108,12 @@ impl CoreHandle {
     }
     pub fn resume_monitoring(&self) {
         self.monitoring.resume();
+    }
+
+    /// A fresh single-use 60-second bootstrap URL for the default browser.
+    /// Fails once the runtime starts stopping.
+    pub fn browser_launch_target(&self) -> Result<DesktopLaunchTarget> {
+        self.bootstrap.mint()
     }
 
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<pp_compat::Status> {
@@ -342,6 +351,7 @@ impl CoreRuntime {
                             CoreHandle {
                                 compat: resources.supervisor.handle.clone(),
                                 monitoring: resources.gateway.monitoring_control(),
+                                bootstrap: resources.gateway.bootstrap_minter(),
                                 gate: resources.gate.clone(),
                                 preferences,
                             },

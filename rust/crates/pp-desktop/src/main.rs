@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, ensure};
-use pp_core::{CoreHandle, CoreRuntime, CoreStatus};
+use pp_core::{CoreHandle, CoreRuntime};
 use pp_desktop::{AllowedOrigin, ResourceLayout, desktop_data_dir, startup_diagnostic};
 use std::path::PathBuf;
 use tauri::{
     Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-    menu::{Menu, MenuItem},
+    image::Image,
+    menu::{IsMenuItem, Menu, MenuItem},
     tray::TrayIconBuilder,
     webview::{DownloadEvent, NewWindowResponse},
 };
@@ -186,6 +187,7 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
     }
     let setup = (|| -> Result<_> {
         let origin = AllowedOrigin::parse(core.origin())?;
+        let browser_origin = origin.clone();
         let launch_url = core.take_launch_target()?.into_url();
         #[cfg(feature = "desktop_rebuild")]
         let (sponsor, origin_bridge) = {
@@ -287,8 +289,8 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
                 let _ = hide.hide();
             }
         });
-        let watch =
-            build_tray(&app, core.handle(), data).context("Native tray initialization failed")?;
+        let watch = build_tray(&app, core.handle(), browser_origin, data)
+            .context("Native tray initialization failed")?;
         Ok((window, watch, origin_notice))
     })();
     let (window, status_watch, origin_notice) = match setup {
@@ -367,35 +369,50 @@ fn run(core_log: &pp_core::CoreLog) -> Result<u8> {
 fn build_tray(
     app: &tauri::App,
     handle: CoreHandle,
+    origin: AllowedOrigin,
     data: PathBuf,
 ) -> Result<tauri::async_runtime::JoinHandle<()>> {
     let show = MenuItem::with_id(app, "show", "Show Print Partner", true, None::<&str>)?;
+    let browser = MenuItem::with_id(app, "browser", "Open in browser", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Service ready", false, None::<&str>)?;
     let recover = MenuItem::with_id(app, "recover", "Restart service", false, None::<&str>)?;
     let logs = MenuItem::with_id(app, "logs", "View logs", true, None::<&str>)?;
     let folder = MenuItem::with_id(app, "data", "Open data folder", true, None::<&str>)?;
     let log_folder = MenuItem::with_id(app, "log_folder", "Reveal log folder", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
-    let recovery_ui = std::env::var("PP_DESKTOP_RECOVERY_UI").is_ok_and(|value| value == "1");
-    let menu = if recovery_ui {
-        Menu::with_items(
-            app,
-            &[&show, &status, &logs, &log_folder, &recover, &folder, &quit],
-        )?
-    } else {
-        Menu::with_items(app, &[&show, &status, &recover, &quit])?
-    };
+    let all = [
+        &show,
+        &browser,
+        &status,
+        &logs,
+        &log_folder,
+        &recover,
+        &folder,
+        &quit,
+    ];
+    let items = pp_desktop::tray::menu_ids()
+        .iter()
+        .map(|id| {
+            all.iter()
+                .find(|item| item.id().as_ref() == *id)
+                .map(|item| *item as &dyn IsMenuItem<_>)
+                .with_context(|| format!("Tray menu item {id} missing"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let menu = Menu::with_items(app, &items)?;
     let status_receiver = handle.subscribe();
     let recovery = handle.clone();
+    let browser_handle = handle.clone();
     let gate = std::sync::Arc::new(recovery::RecoveryGate::default());
     let recovery_gate = gate.clone();
     let diagnostics = recovery::RecoveryUi::new(data);
-    TrayIconBuilder::with_id("printpartner")
-        .icon(
-            app.default_window_icon()
-                .context("Desktop icon missing")?
-                .clone(),
-        )
+    let icon = app
+        .default_window_icon()
+        .context("Desktop icon missing")?
+        .clone()
+        .to_owned();
+    let tray = TrayIconBuilder::with_id("printpartner")
+        .icon(icon.clone())
         .tooltip("Print Partner")
         .menu(&menu)
         .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -405,12 +422,13 @@ fn build_tray(
                     let _ = window.set_focus();
                 }
             }
+            "browser" => recovery::open_in_browser(app, &browser_handle, &origin),
             "recover" => {
                 recovery::restart(app, recovery.clone(), recovery_gate.clone());
             }
-            "logs" if recovery_ui => diagnostics.view_logs(app),
-            "data" if recovery_ui => diagnostics.open_data(app),
-            "log_folder" if recovery_ui => diagnostics.reveal_logs(app),
+            "logs" => diagnostics.view_logs(app),
+            "data" => diagnostics.open_data(app),
+            "log_folder" => diagnostics.reveal_logs(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -418,28 +436,32 @@ fn build_tray(
     let app_handle = app.handle().clone();
     let watch = tauri::async_runtime::spawn(async move {
         let mut receiver = status_receiver;
+        let mut shown_tone = None;
         loop {
             let state = receiver.borrow_and_update().clone();
-            let text = match state {
-                CoreStatus::Starting => "Service starting",
-                CoreStatus::Ready { .. } => "Service ready",
-                CoreStatus::Backoff { .. } => "Service reconnecting",
-                CoreStatus::Guarded => "Service stopped after repeated failures",
-                CoreStatus::Stopping => "Service stopping",
-                CoreStatus::Stopped => "Service stopped",
-                CoreStatus::Failed => "Service failed",
-            };
+            let (text, tone) = pp_desktop::tray::status(&state);
+            let badged = (shown_tone != Some(tone)).then(|| {
+                Image::new_owned(
+                    pp_desktop::tray::badge(icon.rgba(), icon.width(), icon.height(), tone),
+                    icon.width(),
+                    icon.height(),
+                )
+            });
             let guarded = gate.observe(&state);
-            let (status, recover) = (status.clone(), recover.clone());
+            let (status, recover, tray) = (status.clone(), recover.clone(), tray.clone());
             if app_handle
                 .run_on_main_thread(move || {
                     let _ = status.set_text(text);
                     let _ = recover.set_enabled(guarded);
+                    if let Some(badged) = badged {
+                        let _ = tray.set_icon(Some(badged));
+                    }
                 })
                 .is_err()
             {
                 break;
             }
+            shown_tone = Some(tone);
             if receiver.changed().await.is_err() {
                 break;
             }

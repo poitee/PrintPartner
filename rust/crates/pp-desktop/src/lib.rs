@@ -4,11 +4,13 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tauri::Url;
 
+pub mod browser;
 pub mod downloads;
 #[cfg(feature = "desktop_rebuild")]
 pub mod native_actions;
 #[cfg(feature = "desktop_rebuild")]
 pub mod origin_change;
+pub mod tray;
 
 pub fn desktop_data_dir(
     explicit_data: Option<PathBuf>,

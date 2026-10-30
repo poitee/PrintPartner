@@ -105,6 +105,7 @@ jobs:
           esac
       - name: Verify GRE-451 parity Node fixtures
         run: |
+          TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/accepted-http/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/catalog-http/generate.mjs --check
           TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/drafts-http/generate.mjs --check
           node ../fixtures/parity/github-sync/generate.mjs --check

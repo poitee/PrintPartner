@@ -1,10 +1,9 @@
 import type { StatusExecution } from "../integrations/status-execution.js";
-import { desktopContext } from "../desktop-context.js";
 /**
  * Streamable HTTP MCP on the live app process (same tools as stdio).
  * Mounted under /api/v1/mcp.
  *
- * Fail-closed: PRINT_PARTNER_API_KEY is required unless HOST is loopback.
+ * Fail-closed: every request needs a valid API key, whatever the bind host or peer.
  * Pending proposes are bound to the MCP session (mcp-session-id) — one client
  * cannot list/confirm/dismiss another's.
  * Sessions are bounded (max count + idle/absolute TTL); evict closes transport.
@@ -30,10 +29,7 @@ import type { AppRepository } from "../db/repository.js";
 import type { InProcessJobRunner } from "../services/job-runner.js";
 import { sendProblem } from "../lib/api-error.js";
 import { MAX_ASSISTANT_ACTION_BODY_BYTES } from "../services/upload-limits.js";
-import {
-  createProductMcpServer,
-  isLoopbackBindHost,
-} from "./product-mcp.js";
+import { createProductMcpServer } from "./product-mcp.js";
 import { createMcpSessionCapacity } from "./http-session-capacity.js";
 
 type McpHttpDeps = {
@@ -75,7 +71,7 @@ function extractApiKey(request: FastifyRequest): string | null {
   return null;
 }
 
-/** MCP auth: always require API key when configured; when unset, only loopback binds may expose MCP. */
+/** MCP auth: a valid API key is required for desktop, loopback and LAN peers alike. */
 function assertMcpHttpAllowed(
   config: ServerConfig,
   request: FastifyRequest,
@@ -90,12 +86,11 @@ function assertMcpHttpAllowed(
   }
 
   if (!config.integrationApiKey) {
-    if (!desktopContext() && isLoopbackBindHost(config.host)) return true;
     void sendProblem(
       reply,
       503,
       "Service Unavailable",
-      "Configure an API key in Settings or PRINT_PARTNER_API_KEY before exposing /api/v1/mcp on a non-loopback host",
+      "Configure an API key in Settings or PRINT_PARTNER_API_KEY before using /api/v1/mcp",
     );
     return false;
   }

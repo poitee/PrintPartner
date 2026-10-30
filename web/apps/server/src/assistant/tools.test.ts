@@ -668,6 +668,47 @@ option_groups:
     expect(after.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId).printed_count).toBe(1);
   });
 
+  it("shows live layers as stale in get_plan_snapshot until rebuild while get_plan_review stays accepted", async () => {
+    const localSource = (name: string, file: string, sha: string) => {
+      const source = repo.createSource({ name, source_kind: "local" });
+      const sourcePath = join(dataDir, name);
+      mkdirSync(sourcePath, { recursive: true });
+      writeFileSync(join(sourcePath, file), `solid ${file}\nendsolid ${file}\n`);
+      repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: sha.repeat(64) });
+      repo.updateImportRules(source.id, [file]);
+      return source;
+    };
+    const base = localSource("Stale base", "frame.stl", "e");
+    const addon = localSource("Stale addon", "toolhead.stl", "f");
+    const plan = repo.createProfile("Stale plan", base.id);
+    acceptPlanForTest(repo, plan.id);
+    const read = async (tool: string) =>
+      JSON.parse((await invokeAssistantTool(tool, { plan_id: plan.id }, { repo })).content);
+    const sources = (layers: { source: string }[]) => layers.map((layer) => layer.source);
+
+    const acceptedSnapshot = await read("get_plan_snapshot");
+    const acceptedReview = await read("get_plan_review");
+    expect(acceptedSnapshot.build_stale).toBe(false);
+    expect(sources(acceptedSnapshot.layers)).toEqual(["Stale base"]);
+    expect(sources(acceptedReview.layers)).toEqual(["Stale base"]);
+
+    repo.addAddonLayer(plan.id, addon.id);
+
+    const editedSnapshot = await read("get_plan_snapshot");
+    expect(editedSnapshot.build_stale).toBe(true);
+    expect(sources(editedSnapshot.layers)).toEqual(["Stale base", "Stale addon"]);
+    expect(await read("get_plan_review")).toEqual(acceptedReview);
+
+    acceptPlanForTest(repo, plan.id);
+
+    const rebuiltSnapshot = await read("get_plan_snapshot");
+    const rebuiltReview = await read("get_plan_review");
+    expect(rebuiltSnapshot.build_stale).toBe(false);
+    expect(sources(rebuiltSnapshot.layers)).toEqual(["Stale base", "Stale addon"]);
+    expect(sources(rebuiltReview.layers)).toEqual(["Stale base", "Stale addon"]);
+    expect(rebuiltReview.totals.included_parts).toBe(acceptedReview.totals.included_parts + 1);
+  });
+
   it("keeps dismissed unattributed prints out of assistant reads", async () => {
     const open = createUnattributedPrint(
       "prusa-open",

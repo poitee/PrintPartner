@@ -1321,13 +1321,14 @@ mod ticket_t_10_fixtures {
             .0
     }
 
-    /// Replays every case in order with the fixture session, comparing each
-    /// response and the tables it changed. A corrected case is a Rust refusal,
-    /// so it must change nothing, whatever Node wrote.
+    /// Replays every case in order with `cookie`, comparing each response and
+    /// the tables it changed. A corrected case is a Rust refusal, so it must
+    /// change nothing, whatever Node wrote.
     async fn replay_seeded(
         served: &Served,
         sandbox: &Sandbox,
-        fixture: &SeededFixture,
+        cookie: &str,
+        cases: &[HttpCase],
         corrections: Vec<Correction>,
     ) -> Report {
         let refused: Vec<&str> = corrections
@@ -1336,9 +1337,8 @@ mod ticket_t_10_fixtures {
             .collect();
         let mut ledger = Ledger::new(corrections).unwrap();
         let data = sandbox.path().to_str().unwrap();
-        for case in &fixture.cases {
-            let (mut actual, changed) =
-                send_case(served, FIXTURE_COOKIE, sandbox, case, &case.path).await;
+        for case in cases {
+            let (mut actual, changed) = send_case(served, cookie, sandbox, case, &case.path).await;
             // Node's generators write their scratch data directory as `{data}`.
             if let Ok(text) = serde_json::to_string(&actual.body) {
                 actual.body = serde_json::from_str(&text.replace(data, "{data}")).unwrap();
@@ -1381,7 +1381,7 @@ mod ticket_t_10_fixtures {
         })
         .await
         .unwrap();
-        let report = replay_seeded(&served, &sandbox, &fixture, vec![]).await;
+        let report = replay_seeded(&served, &sandbox, FIXTURE_COOKIE, &fixture.cases, vec![]).await;
         served.stop().await.unwrap();
         owner.shutdown().unwrap();
         print_report("drafts-http", &report);
@@ -1410,7 +1410,7 @@ mod ticket_t_10_fixtures {
         })
         .await
         .unwrap();
-        let report = replay_seeded(&served, &sandbox, &fixture, vec![]).await;
+        let report = replay_seeded(&served, &sandbox, FIXTURE_COOKIE, &fixture.cases, vec![]).await;
         served.stop().await.unwrap();
         owner.shutdown().unwrap();
         print_report("layers-http", &report);
@@ -1464,7 +1464,14 @@ mod ticket_t_10_fixtures {
         })
         .await
         .unwrap();
-        let report = replay_seeded(&served, &sandbox, &fixture, corrections).await;
+        let report = replay_seeded(
+            &served,
+            &sandbox,
+            FIXTURE_COOKIE,
+            &fixture.cases,
+            corrections,
+        )
+        .await;
         served.stop().await.unwrap();
         owner.shutdown().unwrap();
         print_report("manifest-http", &report);
@@ -1538,13 +1545,148 @@ mod ticket_t_10_fixtures {
         })
         .await
         .unwrap();
-        let report = replay_seeded(&served, &sandbox, &fixture, corrections).await;
+        let report = replay_seeded(
+            &served,
+            &sandbox,
+            FIXTURE_COOKIE,
+            &fixture.cases,
+            corrections,
+        )
+        .await;
         served.stop().await.unwrap();
         let owner = Arc::into_inner(owner).unwrap().into_inner().unwrap();
         owner.shutdown().unwrap();
         print_report("catalog-http", &report);
         assert_eq!(report.matched, 53);
         assert_eq!(report.corrected.len(), 3);
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AcceptedFixture {
+        generated: String,
+        sources: Vec<String>,
+        database: String,
+        phases: Vec<AcceptedPhase>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AcceptedPhase {
+        name: String,
+        #[serde(default)]
+        seed: Option<String>,
+        cases: Vec<HttpCase>,
+    }
+
+    /// The Node session in `accepted-plan-node.db`, tenant `default`.
+    const ACCEPTED_COOKIE: &str = "pp_session=read-fixture-secret";
+
+    /// Copies `accepted-plan-node.db` into `sandbox` with the revision
+    /// directory Plan 1 names. A seed runs with every trigger dropped and
+    /// foreign keys off, as the generator ran it.
+    fn open_accepted(sandbox: &Sandbox, seed: Option<&str>) -> WriterOwner {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(sandbox.path().join("repos/1/revisions/accepted"))
+            .unwrap();
+        let path = sandbox.path().join("print-partner.db");
+        std::fs::write(
+            &path,
+            include_bytes!("../../pp-storage/tests/fixtures/accepted-plan-node.db"),
+        )
+        .unwrap();
+        if let Some(seed) = seed {
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.pragma_update(None, "foreign_keys", false).unwrap();
+            let triggers = db
+                .prepare("SELECT name FROM sqlite_schema WHERE type = 'trigger'")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            for trigger in triggers {
+                db.execute_batch(&format!("DROP TRIGGER \"{trigger}\";"))
+                    .unwrap();
+            }
+            db.execute_batch(seed).unwrap();
+        }
+        WriterOwner::open(sandbox.path(), Limits::default())
+            .unwrap()
+            .0
+    }
+
+    #[tokio::test]
+    async fn accepted_flat_v1_v2_match_node_responses_and_changed_tables() {
+        use pp_api::accepted::{AcceptedHttpConfig, accepted_router};
+
+        let fixture: AcceptedFixture = serde_json::from_str(include_str!(
+            "../../../../fixtures/parity/accepted-http/node.json"
+        ))
+        .unwrap();
+        assert!(fixture.generated.contains("accepted-http/generate.mjs"));
+        assert_eq!(fixture.sources.len(), 3);
+        assert_eq!(
+            fixture.database,
+            "rust/crates/pp-storage/tests/fixtures/accepted-plan-node.db"
+        );
+        let names: Vec<&str> = fixture.phases.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["ready", "foreign_plan", "foreign_parts", "dirty", "corrupt"]
+        );
+        let (mut matched, mut corrected) = (0, vec![]);
+        for phase in &fixture.phases {
+            let corrections = match phase.name.as_str() {
+                // Node finds the Part, then its Plan's accepted read fails for
+                // the wrong tenant and the route answers 500. Rust hides a Part
+                // whose Plan belongs to another tenant, as it hides the Plan.
+                "foreign_plan" => vec![Correction {
+                    case: "foreign_assembled_v1",
+                    kind: CorrectionKind::Security,
+                    reason: "Rust answers a Part on another tenant's Plan as missing \
+                             instead of Node's internal error",
+                    rust: Exchange {
+                        status: 404,
+                        body: json!({"detail": "Part not found"}),
+                        set_cookie: vec![],
+                    },
+                }],
+                _ => vec![],
+            };
+            let sandbox = Sandbox::new(&format!("t10-accepted-{}", phase.name)).unwrap();
+            let owner = open_accepted(&sandbox, phase.seed.as_deref());
+            let reads = owner.accepted_reads().unwrap();
+            let served = Served::start(|origin| {
+                accepted_router(
+                    AcceptedHttpConfig::from_startup(origin, "default", Some("1")).unwrap(),
+                    reads,
+                )
+            })
+            .await
+            .unwrap();
+            let report = replay_seeded(
+                &served,
+                &sandbox,
+                ACCEPTED_COOKIE,
+                &phase.cases,
+                corrections,
+            )
+            .await;
+            served.stop().await.unwrap();
+            owner.shutdown().unwrap();
+            print_report(&format!("accepted-http/{}", phase.name), &report);
+            matched += report.matched;
+            corrected.extend(report.corrected);
+        }
+        assert_eq!(matched, 31);
+        assert_eq!(
+            corrected,
+            [("foreign_assembled_v1".to_owned(), CorrectionKind::Security)]
+        );
     }
 
     #[test]

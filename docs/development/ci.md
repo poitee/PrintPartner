@@ -141,6 +141,34 @@ These failures are common:
 - `unused variable` or `function is never used` on one OS only. A value is used only inside a `#[cfg]` block. Compute the value inside that block, or gate the function with the same `#[cfg]`.
 - A test that fails on one OS only. Run that test locally on the same OS with `cargo nextest run -E 'test(<name>)'`.
 
+## Test groups and flaky tests
+
+`rust/.config/nextest.toml` sets both rules below in the `default` profile, which CI and `just ci` use.
+
+Tests that start real Node children run in the `process-heavy` test group, and at most two of them run at once. The group holds every `pp-core` `runtime_m0` test and the `pp-compat` `ticket_t_2::` supervisor tests. On a busy runner, four of these at once timed out (GRE-956). Other tests keep running on the remaining threads. To see which tests a build puts in the group, run `cargo nextest show-config test-groups --manifest-path rust/Cargo.toml`.
+
+A test that fails at random goes on the flaky list, the override with `retries = 1`. The rules:
+
+1. Add a test to the list only with an open Linear ticket that names it and an owner. Put the ticket id in a comment next to the filter.
+2. nextest runs a failed test on the list once more. A pass on the second try passes the job, and the log shows the test as `FLAKY`.
+3. If a test needs that retry in two runs within seven days, the owner quarantines it. In one pull request they remove the test from the flaky list and add it to `default-filter` under `[profile.default]`, as `default-filter = 'not (binary(=<bin>) & test(=<name>))'` with the ticket id in a comment. nextest applies `default-filter` on top of the `-E` filter that CI passes, so the test no longer runs anywhere that uses the `default` profile. The comment in `nextest.toml` shows both forms. To count retries, run this from the repository root. It prints, for each test, the number of `Rust cross-OS` runs in the last seven days that logged it as `FLAKY`:
+
+   ```sh
+   since=$(date -u -d '7 days ago' +%F)
+   gh run list -R poitee/PrintPartner -w "Rust cross-OS" --created ">=$since" -L 500 --json databaseId --jq '.[].databaseId' |
+     while read -r id; do
+       gh run view "$id" -R poitee/PrintPartner --log 2>/dev/null |
+         sed -E 's/(\x1b|\^\[)\[[0-9;]*m//g' | grep -oE 'FLAKY [0-9]+/[0-9]+ \[ *[0-9.]+s\] .*' |
+         sed -E 's/^FLAKY [^]]*\] +//' | sort -u
+     done | sort | uniq -c | sort -rn
+   ```
+
+   A count of 2 or more means quarantine, unless rule 4 applies.
+4. Never quarantine a test of a core guarantee: no orphan processes and no data loss. It stays required. Fix it or make its wait longer.
+5. When the ticket is fixed, remove the test from the list in the same pull request.
+
+The list is empty while no flaky ticket is open.
+
 ## Keep platform code in cfg modules
 
 Put code that differs by OS in one module for each platform, and select the module once:

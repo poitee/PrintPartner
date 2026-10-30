@@ -35,7 +35,7 @@ API keys created through Print Partner are shown in plaintext once and stored as
 
 ## MCP
 
-The HTTP MCP endpoint is `/api/v1/mcp`. A non-loopback deployment without an API key fails closed. Use HTTPS or an authenticated tunnel for a remote MCP client.
+The HTTP MCP endpoint is `/api/v1/mcp`. Every request needs a valid API key, including loopback and LAN clients. Use HTTPS or an authenticated tunnel for a remote MCP client.
 
 Mutating MCP tools create a proposal and require `confirm_apply`. The server does not expose an unconditional print-start tool.
 

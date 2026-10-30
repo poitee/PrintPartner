@@ -3,6 +3,8 @@ pub mod auth;
 #[cfg(feature = "desktop_rebuild")]
 pub mod accepted;
 #[cfg(feature = "desktop_rebuild")]
+pub mod admin;
+#[cfg(feature = "desktop_rebuild")]
 pub mod builds;
 #[cfg(feature = "desktop_rebuild")]
 pub mod catalog;
