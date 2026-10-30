@@ -53,6 +53,8 @@ pub enum CaptureError {
     /// CPU ticks and PSS are read from Linux `/proc`.
     NoClockTicks,
     Proc(PssError),
+    /// Seeding simulated printers into the app failed.
+    Seed(String),
 }
 
 impl fmt::Display for CaptureError {
@@ -64,6 +66,7 @@ impl fmt::Display for CaptureError {
             Self::NotReady(timeout) => write!(f, "no ready line within {timeout:?}"),
             Self::NoClockTicks => write!(f, "clock ticks per second are unavailable"),
             Self::Proc(error) => write!(f, "{error}"),
+            Self::Seed(detail) => write!(f, "seeding simulated printers: {detail}"),
         }
     }
 }
@@ -76,26 +79,37 @@ impl From<PssError> for CaptureError {
     }
 }
 
-/// Starts the command in its own process group, waits for its ready line,
-/// counts CPU over the idle window and samples PSS. The app is then stopped
-/// on every path, success or error: SIGTERM, SIGKILL after `stop_timeout`,
-/// then SIGKILL to whatever is left in its group.
-pub fn capture_run(options: &CaptureOptions) -> Result<RunSample, CaptureError> {
-    let (program, args) = options
-        .command
-        .split_first()
-        .ok_or(CaptureError::EmptyCommand)?;
-    let ticks_per_second = clock_ticks_per_second().ok_or(CaptureError::NoClockTicks)?;
+/// The launched app once it has printed its ready line.
+#[derive(Clone, Debug)]
+pub struct ReadyApp {
+    pub pid: u32,
+    /// The first stdout line, such as the origin `pp-server` announces.
+    pub ready_line: String,
+    /// From just before spawn to the ready line.
+    pub startup: Duration,
+}
+
+/// Starts the command in its own process group, waits for its first stdout
+/// line, then runs `while_ready` against the live app. The app is stopped on
+/// every path, success or error: SIGTERM, SIGKILL after `stop_timeout`, then
+/// SIGKILL to whatever is left in its group.
+pub fn with_ready_app<T>(
+    command: &[OsString],
+    ready_timeout: Duration,
+    stop_timeout: Duration,
+    while_ready: impl FnOnce(&ReadyApp) -> Result<T, CaptureError>,
+) -> Result<T, CaptureError> {
+    let (program, args) = command.split_first().ok_or(CaptureError::EmptyCommand)?;
     let started = Instant::now();
-    let mut command = Command::new(program);
-    command
+    let mut process = Command::new(program);
+    process
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
     #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    let mut child = command.spawn().map_err(CaptureError::Spawn)?;
+    std::os::unix::process::CommandExt::process_group(&mut process, 0);
+    let mut child = process.spawn().map_err(CaptureError::Spawn)?;
     let (ready, ready_rx) = mpsc::channel();
     // Keep draining stdout after the ready line so the app never blocks on a
     // full pipe while it is measured. Not joined: a process outside the app's
@@ -108,44 +122,47 @@ pub fn capture_run(options: &CaptureOptions) -> Result<RunSample, CaptureError> 
             for _ in lines.map_while(Result::ok) {}
         });
     }
-    let result = measure(&child, &ready_rx, started, ticks_per_second, options);
-    stop(&mut child, options.stop_timeout);
+    let result = match ready_rx.recv_timeout(ready_timeout) {
+        Ok(Some(ready_line)) => while_ready(&ReadyApp {
+            pid: child.id(),
+            ready_line,
+            startup: started.elapsed(),
+        }),
+        Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(CaptureError::ExitedBeforeReady)
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(CaptureError::NotReady(ready_timeout)),
+    };
+    stop(&mut child, stop_timeout);
     result
 }
 
-fn measure(
-    child: &Child,
-    ready_rx: &mpsc::Receiver<Option<String>>,
-    started: Instant,
-    ticks_per_second: u64,
-    options: &CaptureOptions,
-) -> Result<RunSample, CaptureError> {
-    let ready_line = match ready_rx.recv_timeout(options.ready_timeout) {
-        Ok(Some(line)) => line,
-        Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-            return Err(CaptureError::ExitedBeforeReady);
-        }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            return Err(CaptureError::NotReady(options.ready_timeout));
-        }
-    };
-    let startup_ready_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let pid = child.id();
-    let before = tree_cpu_ticks(pid)?;
-    let window = Instant::now();
-    std::thread::sleep(options.idle);
-    let after = tree_cpu_ticks(pid)?;
-    let seconds = window.elapsed().as_secs_f64();
-    // A descendant that exits takes its ticks out of the sum, so the count can
-    // only be undercounted, never negative.
-    let used = after.saturating_sub(before) as f64 / ticks_per_second as f64;
-    let pss = sample_process_tree(pid)?;
-    Ok(RunSample {
-        startup_ready_ms,
-        idle_cpu_percent: used / seconds * 100.0,
-        pss_bytes: pss.pss_bytes,
-        ready_line,
-    })
+/// One measured run: [`with_ready_app`], then process-tree CPU over the idle
+/// window and PSS.
+pub fn capture_run(options: &CaptureOptions) -> Result<RunSample, CaptureError> {
+    let ticks_per_second = clock_ticks_per_second().ok_or(CaptureError::NoClockTicks)?;
+    with_ready_app(
+        &options.command,
+        options.ready_timeout,
+        options.stop_timeout,
+        |app| {
+            let before = tree_cpu_ticks(app.pid)?;
+            let window = Instant::now();
+            std::thread::sleep(options.idle);
+            let after = tree_cpu_ticks(app.pid)?;
+            let seconds = window.elapsed().as_secs_f64();
+            // A descendant that exits takes its ticks out of the sum, so the
+            // count can only be undercounted, never negative.
+            let used = after.saturating_sub(before) as f64 / ticks_per_second as f64;
+            let pss = sample_process_tree(app.pid)?;
+            Ok(RunSample {
+                startup_ready_ms: app.startup.as_secs_f64() * 1000.0,
+                idle_cpu_percent: used / seconds * 100.0,
+                pss_bytes: pss.pss_bytes,
+                ready_line: app.ready_line.clone(),
+            })
+        },
+    )
 }
 
 fn stop(child: &mut Child, timeout: Duration) {
@@ -186,9 +203,11 @@ pub struct CaptureRequest {
     pub runs: usize,
     pub options: CaptureOptions,
     pub noise_tolerance_pct: f64,
-    /// How many simulated printers the command was given. Recorded only; the
-    /// capture starts none.
-    pub simulated_printers: u32,
+    /// Simulated Moonraker printers to seed before the measured runs (0 for
+    /// none). Seeding is `pp-server`-specific: see [`crate::perf_seed`]. The
+    /// command must name a data directory the setup launch and the measured
+    /// runs share.
+    pub printers: u32,
     pub toolchain: Toolchain,
     pub out: PathBuf,
 }
@@ -201,10 +220,22 @@ pub const CAPTURE_FILES: [(&str, Metric); 4] = [
     ("package_bytes.json", Metric::PackageBytes),
 ];
 
-/// Repeats [`capture_run`] and writes one Measurement per metric into
-/// `out`. Each file is created new, so an earlier capture is never
-/// overwritten. Returns the paths written.
-pub fn write_capture(request: &CaptureRequest) -> Result<Vec<PathBuf>, String> {
+/// What [`write_capture`] wrote, and how much the simulators were asked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptureSummary {
+    pub files: Vec<PathBuf>,
+    /// Printers the app listed after seeding; recorded in every Measurement.
+    pub simulated_printers: u32,
+    /// Requests the simulators answered during the measured runs. Their CPU
+    /// is the harness's, outside the measured tree.
+    pub simulator_requests: usize,
+}
+
+/// Seeds `printers` simulated printers if asked, then repeats
+/// [`capture_run`] with the simulators answering and writes one Measurement
+/// per metric into `out`. Each file is created new, so an earlier capture is
+/// never overwritten.
+pub fn write_capture(request: &CaptureRequest) -> Result<CaptureSummary, String> {
     if request.runs == 0 {
         return Err("at least one run is required".into());
     }
@@ -222,6 +253,22 @@ pub fn write_capture(request: &CaptureRequest) -> Result<Vec<PathBuf>, String> {
             .map_err(|e| format!("{}: {e}", request.artifact.display()))?,
     };
     let package = request.package.as_deref().unwrap_or(&request.artifact);
+    let simulators = crate::perf_seed::SimulatedPrinters::start(request.printers as usize)
+        .map_err(|e| format!("starting simulated printers: {e}"))?;
+    let simulated_printers = if request.printers == 0 {
+        0
+    } else {
+        let options = &request.options;
+        let seeded = crate::perf_seed::seed_printers(
+            &options.command,
+            &simulators,
+            options.ready_timeout,
+            options.stop_timeout,
+        )
+        .map_err(|e| format!("setup run: {e}"))?;
+        u32::try_from(seeded).map_err(|_| "too many seeded printers".to_owned())?
+    };
+    let before_runs = simulators.requests();
     let mut samples: [Vec<f64>; 4] = Default::default();
     for run in 1..=request.runs {
         let sample = capture_run(&request.options).map_err(|e| format!("run {run}: {e}"))?;
@@ -231,6 +278,8 @@ pub fn write_capture(request: &CaptureRequest) -> Result<Vec<PathBuf>, String> {
         samples[2].push(sample.pss_bytes as f64);
         samples[3].push(size as f64);
     }
+    let simulator_requests = simulators.requests() - before_runs;
+    drop(simulators);
     let captured_at = utc_timestamp(SystemTime::now());
     let machine = this_machine();
     std::fs::create_dir_all(&request.out).map_err(|e| format!("{}: {e}", request.out.display()))?;
@@ -241,7 +290,7 @@ pub fn write_capture(request: &CaptureRequest) -> Result<Vec<PathBuf>, String> {
             metric,
             samples,
             noise_tolerance_pct: request.noise_tolerance_pct,
-            simulated_printers: request.simulated_printers,
+            simulated_printers,
             captured_at: captured_at.clone(),
             machine: machine.clone(),
             artifact: artifact.clone(),
@@ -254,7 +303,11 @@ pub fn write_capture(request: &CaptureRequest) -> Result<Vec<PathBuf>, String> {
             .map_err(|e| format!("{}: {e}", path.display()))?;
         written.push(path);
     }
-    Ok(written)
+    Ok(CaptureSummary {
+        files: written,
+        simulated_printers,
+        simulator_requests,
+    })
 }
 
 fn sha256_file(path: &Path) -> std::io::Result<String> {

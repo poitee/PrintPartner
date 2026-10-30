@@ -118,17 +118,21 @@ fn ticket_t_53_capture_writes_one_record_per_metric() {
         runs: 5,
         options: options("echo ready; exec sleep 30", 200),
         noise_tolerance_pct: 50.0,
-        simulated_printers: 5,
+        printers: 0,
         toolchain: Toolchain {
             rustc: Some("1.99.0".into()),
             node: None,
         },
         out: out.clone(),
     };
-    let written = write_capture(&request).unwrap();
+    let summary = write_capture(&request).unwrap();
     assert_eq!(
-        written,
+        summary.files,
         CAPTURE_FILES.map(|(file, _)| out.join(file)).to_vec()
+    );
+    assert_eq!(
+        (summary.simulated_printers, summary.simulator_requests),
+        (0, 0)
     );
 
     let read = |file: &str| -> Measurement {
@@ -138,7 +142,7 @@ fn ticket_t_53_capture_writes_one_record_per_metric() {
         let record = read(file);
         assert_eq!(record.metric, metric);
         assert_eq!(record.samples.len(), 5);
-        assert_eq!(record.simulated_printers, 5);
+        assert_eq!(record.simulated_printers, 0);
         assert_eq!(record.machine.os, "linux");
         assert_eq!(record.artifact.kind, "rust-server");
         assert_eq!(
