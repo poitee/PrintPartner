@@ -56,6 +56,15 @@ impl JobKind {
             _ => EffectClass::LocalStaging,
         }
     }
+    /// What restart recovery does with an interrupted attempt of this kind
+    /// (T-28-recovery). Derived from [`Self::effect_class`].
+    pub fn recovery_policy(self) -> RecoveryPolicy {
+        match self.effect_class() {
+            EffectClass::UncertainExternal => RecoveryPolicy::NeverResendAfterEffect,
+            EffectClass::RecoverableExternal => RecoveryPolicy::RequeueUntilEffect,
+            EffectClass::ReadOnly | EffectClass::LocalStaging => RecoveryPolicy::RequeueLocal,
+        }
+    }
     pub fn name(self) -> &'static str {
         match self {
             Self::Sync => "sync",
@@ -70,6 +79,28 @@ impl JobKind {
             Self::PrinterUpload => "printer-upload",
             #[cfg(feature = "desktop_rebuild")]
             Self::SuppliedSourceImport => "supplied-source-import",
+        }
+    }
+}
+/// Named restart-recovery policy for an interrupted job attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryPolicy {
+    /// Local work only: an interrupted attempt is queued again.
+    RequeueLocal,
+    /// External reads: queued again until an effect is recorded; a recorded
+    /// effect needs explicit reconciliation.
+    RequeueUntilEffect,
+    /// External writes such as printer sends: once an effect is admitted the
+    /// job is never resent automatically; the user reconciles it.
+    NeverResendAfterEffect,
+}
+impl RecoveryPolicy {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::RequeueLocal => "requeue_local",
+            Self::RequeueUntilEffect => "requeue_until_effect",
+            Self::NeverResendAfterEffect => "never_resend_after_effect",
         }
     }
 }
