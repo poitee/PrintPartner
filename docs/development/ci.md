@@ -242,15 +242,23 @@ below. Each hosted job gets a fresh VM.
 ### Linux Rust runner
 
 `rust (linux) build`, `rust (linux) rebuild m/3` and the `rust (linux)` aggregate
-run on `[self-hosted, linux, x64, pp-local]` for same-repository PRs, pushes to
-`main`, merge groups and manual runs. pp-local is six ephemeral JIT slots, two on
-each of three VMs, and each job runs in a fresh `pp-slot-N` container. Job names do
-not change with the runner, so the required checks stay the same.
+run on `[self-hosted, linux, x64, pp-local]` for pushes to `main`, merge groups and
+manual runs. Every pull request runs them on GitHub-hosted `ubuntu-latest`. pp-local
+is six ephemeral JIT slots, two on each of three VMs, and each job runs in a fresh
+`pp-slot-N` container. Job names do not change with the runner, so the required
+checks stay the same.
+
+PRs stay hosted because pp-local ran the PR suite more slowly than hosted. On PR
+#1349, `rust (linux) build` took 60m02s on pp-local with a 99.57 % sccache hit rate,
+and 87m42s with a cold cache, against 33m40s hosted. Compiling was as fast as hosted;
+the nextest steps were 2.0-2.6x slower. On `main`, pp-local still moves the Linux
+jobs off the hosted pool that PRs wait for. The 3 rebuild jobs start within seconds
+there, instead of after the 13-17 minute hosted waits seen on main pushes.
 
 The `changes` job picks the runner with `scripts/ci-rust-runner.py` and passes it
 on as a job output. It picks `ubuntu-latest` when:
 
-- the event is a fork PR or the nightly schedule;
+- the event is a pull request (same-repository or fork) or the nightly schedule;
 - the `PP_RUST_RUNNER` repository variable is `hosted` (unset or `local` means pp-local;
   any other value means hosted);
 - the optional `PP_RUNNER_READ_TOKEN` secret can list runners and no online pp-local

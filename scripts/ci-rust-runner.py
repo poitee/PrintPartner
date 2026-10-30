@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Pick the runner for the Linux Rust jobs: the pp-local fleet or ubuntu-latest.
 
-Same-repository PRs, main pushes, merge groups and manual runs use pp-local unless
-the PP_RUST_RUNNER repository variable says hosted or the fleet looks unavailable.
-Fork PRs and the nightly schedule stay hosted. GITHUB_TOKEN cannot list runners,
+Main pushes, merge groups and manual runs use pp-local unless the PP_RUST_RUNNER
+repository variable says hosted or the fleet looks unavailable. Every pull request
+and the nightly schedule stay on GitHub-hosted runners (Chad, Oct 30: "Keep PR
+builds on GitHub's runners"). GITHUB_TOKEN cannot list runners,
 so the idle-runner check needs the optional PP_RUNNER_READ_TOKEN secret. Without
 it, a pp-local Rust job queued for STALE_MINUTES or more marks the fleet as
 unavailable. See docs/development/ci.md.
@@ -19,7 +20,7 @@ import urllib.request
 
 LOCAL = ["self-hosted", "linux", "x64", "pp-local"]
 HOSTED = "ubuntu-latest"
-LOCAL_EVENTS = {"pull_request", "push", "merge_group", "workflow_dispatch"}
+LOCAL_EVENTS = {"push", "merge_group", "workflow_dispatch"}
 STALE_MINUTES = 15
 # Only these jobs run on pp-local; their names keep the required check names.
 LOCAL_JOBS = ("rust (linux)",)
@@ -56,8 +57,6 @@ def choose(env, fetch, now):
     event = env.get("EVENT_NAME", "")
     if event not in LOCAL_EVENTS:
         return HOSTED, f"{event or 'unknown'} events stay hosted"
-    if event == "pull_request" and env.get("HEAD_REPO") != env.get("REPOSITORY"):
-        return HOSTED, "fork pull requests stay hosted"
     mode = env.get("PP_RUST_RUNNER", "").strip().lower() or "local"
     if mode == "hosted":
         return HOSTED, "PP_RUST_RUNNER=hosted"

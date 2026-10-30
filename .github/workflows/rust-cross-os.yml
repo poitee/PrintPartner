@@ -9,9 +9,10 @@ name: Rust cross-OS
 # all(). On main push, merge_group, and workflow_dispatch, Linux archives
 # desktop_rebuild nextest once and runs --partition slice:m/3 across three
 # runners. Schedule keeps the in-job monolithic desktop_rebuild nextest.
-# The Linux jobs run on the pp-local fleet for same-repo PRs and non-schedule
-# runs, and on ubuntu-latest for forks, schedule, PP_RUST_RUNNER=hosted or an
-# unavailable fleet (scripts/ci-rust-runner.py; docs/development/ci.md).
+# The Linux jobs run on the pp-local fleet for main pushes, merge groups and
+# manual runs, and on ubuntu-latest for every pull request, the schedule,
+# PP_RUST_RUNNER=hosted or an unavailable fleet (scripts/ci-rust-runner.py;
+# docs/development/ci.md).
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review, converted_to_draft]
@@ -78,7 +79,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           RUN_ID: ${{ github.run_id }}
           PP_RUST_RUNNER: ${{ vars.PP_RUST_RUNNER }}
           # Optional: a read-only token that can list self-hosted runners.

@@ -16,8 +16,7 @@ spec.loader.exec_module(runner)
 
 NOW = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
 REPO = "poitee/PrintPartner"
-BASE = {"EVENT_NAME": "pull_request", "REPOSITORY": REPO, "HEAD_REPO": REPO,
-        "GH_TOKEN": "actions-token", "RUN_ID": "1"}
+BASE = {"EVENT_NAME": "push", "REPOSITORY": REPO, "GH_TOKEN": "actions-token", "RUN_ID": "1"}
 
 
 def pp_runner(status="online", busy=False, label="pp-local"):
@@ -54,8 +53,9 @@ class RustRunnerTests(unittest.TestCase):
     def choose(self, api=None, **env):
         return runner.choose({**BASE, **env}, api or Api(), NOW)
 
-    def test_events_and_forks_that_stay_hosted(self):
-        for env in ({"EVENT_NAME": "schedule"}, {"HEAD_REPO": "someone/PrintPartner"},
+    def test_pull_requests_and_other_events_that_stay_hosted(self):
+        for env in ({"EVENT_NAME": "pull_request"}, {"EVENT_NAME": "pull_request_target"},
+                    {"EVENT_NAME": "schedule"}, {"EVENT_NAME": ""},
                     {"PP_RUST_RUNNER": "hosted"}, {"PP_RUST_RUNNER": " Hosted "},
                     {"PP_RUST_RUNNER": "maybe"}):
             with self.subTest(env=env):
@@ -64,12 +64,11 @@ class RustRunnerTests(unittest.TestCase):
                 self.assertEqual(api.calls, [])
 
     def test_local_events_use_pp_local_by_default(self):
-        for event in ("pull_request", "push", "merge_group", "workflow_dispatch"):
+        for event in ("push", "merge_group", "workflow_dispatch"):
             for mode in ("", "local", "LOCAL"):
                 with self.subTest(event=event, mode=mode):
-                    head = REPO if event == "pull_request" else ""
-                    self.assertEqual(self.choose(EVENT_NAME=event, HEAD_REPO=head,
-                                                 PP_RUST_RUNNER=mode)[0], runner.LOCAL)
+                    self.assertEqual(self.choose(EVENT_NAME=event, PP_RUST_RUNNER=mode)[0],
+                                     runner.LOCAL)
 
     def test_runner_token_needs_an_online_idle_pp_local_runner(self):
         for runners, expected in (
