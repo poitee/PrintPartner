@@ -61,14 +61,41 @@ fn ticket_t_53_capture_counts_a_busy_child_in_the_process_tree() {
 }
 
 #[test]
+fn ticket_t_53_capture_kills_an_app_that_ignores_sigterm() {
+    // Both the ready shell and its child ignore SIGTERM, so the stop timeout,
+    // the kill fallback and the group SIGKILL all run.
+    let mut stubborn = options(
+        "trap '' TERM; (exec sleep 30) & echo $!; exec sleep 30",
+        100,
+    );
+    stubborn.stop_timeout = Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    let sample = capture_run(&stubborn).unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert!(
+        gone(&sample.ready_line),
+        "child {} survived",
+        sample.ready_line
+    );
+}
+
+#[test]
 fn ticket_t_53_capture_refuses_apps_that_never_get_ready() {
     assert!(matches!(
         capture_run(&options("exit 0", 0)),
         Err(CaptureError::ExitedBeforeReady)
     ));
-    let mut slow = options("exec sleep 30", 0);
+    // Never ready: the shell records its pid, then sleeps without a line.
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let mut slow = options(
+        &format!("echo $$ > '{}'; exec sleep 30", pid_file.display()),
+        0,
+    );
     slow.ready_timeout = Duration::from_millis(300);
     assert!(matches!(capture_run(&slow), Err(CaptureError::NotReady(_))));
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    assert!(gone(pid.trim()), "never-ready app {pid} still running");
     let mut empty = options("", 0);
     empty.command.clear();
     assert!(matches!(

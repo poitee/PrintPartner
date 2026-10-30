@@ -34,7 +34,8 @@ pub struct CaptureOptions {
 pub struct RunSample {
     pub startup_ready_ms: f64,
     /// Process-tree CPU time over the idle window, as a percentage of one
-    /// core. A tree busy on two cores reads 200.
+    /// core. A tree busy on two cores reads 200. Ticks of a descendant that
+    /// exits during the window leave the sum with it, so this can undercount.
     pub idle_cpu_percent: f64,
     /// Linux PSS of the process tree, sampled after the idle window.
     pub pss_bytes: u64,
