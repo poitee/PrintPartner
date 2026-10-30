@@ -36,7 +36,9 @@ else
     "$wrapper" --version
   else
     echo "::warning::sccache not found on this pp-local runner; building without a compiler cache"
-    find /opt -maxdepth 2 \( -path '/opt/*/*' -prune -name '*sccache*' -o -maxdepth 1 \) -print 2>/dev/null | head -40 || true
+    echo "Top level of /opt, then any *sccache* path up to three levels down:"
+    find /opt -mindepth 1 -maxdepth 1 2>/dev/null | head -40 || true
+    find /opt /usr/local -maxdepth 3 -iname '*sccache*' 2>/dev/null | head -40 || true
   fi
 fi
 
