@@ -120,6 +120,7 @@ STEPS = [
           "node ../fixtures/parity/auth-registration/generate.mjs --check",
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/catalog-http/generate.mjs --check',
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/drafts-http/generate.mjs --check',
+          "node ../fixtures/parity/github-sync/generate.mjs --check",
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/jobs-http/generate.mjs --check',
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/jobs-ws/generate.mjs --check',
           'TMPDIR="$RUNNER_TEMP" node ../fixtures/parity/layers-http/generate.mjs --check',
