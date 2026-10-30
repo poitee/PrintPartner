@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.add_addon", "tool.update_kit_selections", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -6257,5 +6257,89 @@ for (const isolated of [false, true]) {
     expect([...union].sort()).toEqual(isolated ? ADDON_UNION : ADDON_UNION.filter((resource) => resource !== "file:source-workspace"));
     expect(declared("tool.add_addon")).toEqual(ADDON_UNION);
     expect(repo.getProfileLayers(plan.id).map((layer) => layer.project_name)).toEqual(["Fixture"]);
+  });
+}
+
+async function traceKitSelections(input: Record<string, unknown>, options: { repository: AppRepository; planId?: number; tenantId?: string; activePlanId?: number }) {
+  const { repository, planId, tenantId = "default", activePlanId } = options;
+  const before = sqlite.serialize();
+  statements = [];
+  observer.state.files = [];
+  observer.state.active = true;
+  let output: Awaited<ReturnType<typeof invokeAssistantTool>>;
+  try { output = await tenantStorage.run(tenantId, () => invokeAssistantTool("update_kit_selections", input, { repo: repository, activePlanId, dataDir })); }
+  finally { observer.state.active = false; }
+  expect(sqlite.serialize().equals(before)).toBe(true);
+  const tables = [...new Set(statements.map((sql) => optionGroupSelect(sql, tenantId, planId)))];
+  const files = optionGroupFileResources(observer.state.files.map(({ api, args }) => [api, ...args]));
+  return { body: z.record(z.string(), z.unknown()).parse(JSON.parse(output.content)), resources: [...tables, ...files].sort() };
+}
+
+const KIT_SELECTION_UNION = ["file:path-hints", "file:source-workspace", "table:build_profiles", "table:plan_decisions", "table:profile_layers", "table:projects"];
+
+for (const isolated of [false, true]) {
+  it(`traces update_kit_selections plan checks, option-group validation and dismissals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const declaredSource = optionGroupCheckout("Declared");
+    const inferred = optionGroupCheckout("Inferred", true);
+    fs.writeFileSync(join(inferred.checkout, "print-partner.manifest.yaml"), "format: print-partner-manifest-v2\nversion: 2\n");
+    fs.writeFileSync(join(dataDir, "path-hints.yaml"), "version: 1\nrules:\n  - path: chosen.stl\n    option_group: fixture_hint\n    variant_id: custom\n    label: Custom\n");
+    // A community slug is set, but selection validation never reads community manifests.
+    observer.state.virtual.set(COMMUNITY_MANIFEST, join(inferred.checkout, "print-partner.manifest.yaml"));
+    sqlite.prepare("UPDATE projects SET manifest_community_slug = ? WHERE id = ?").run("gre402-fixture", inferred.id);
+    const plan = repo.createProfile("Options", declaredSource.id);
+    repo.addAddonLayer(plan.id, inferred.id);
+    const empty = repo.createProfile("Empty");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign"));
+    repo.setSetting(`kit_manifest_${plan.id}`, JSON.stringify({ selections: { fixture_mode: "ignored" } }));
+    const before = repo.getSetting(`kit_manifest_${plan.id}`);
+    const repository = isolated ? new AppRepository(drizzle(sqlite, { schema }), undefined, join(dataDir, "repos"), schema, { sourceFilesystemPolicy: ISOLATED_SOURCE_FILESYSTEM }) : repo;
+    const identity = ["table:build_profiles"];
+    const groups = ["file:path-hints", "file:source-workspace", "table:build_profiles", "table:profile_layers", "table:projects"];
+    const proposing = [...groups, "table:plan_decisions"].sort();
+    const union = new Set<string>();
+    async function trace(input: Record<string, unknown>, resources: string[], options: { planId?: number; tenantId?: string; activePlanId?: number } = {}) {
+      const traced = await traceKitSelections(input, { repository, ...options });
+      expect(traced.resources).toEqual(resources);
+      for (const resource of traced.resources) union.add(resource);
+      return traced.body;
+    }
+    const proposal = async (input: Record<string, unknown>, planId: number, selections: Record<string, unknown>, resources = proposing, options: { activePlanId?: number } = {}) => {
+      const body = await trace(input, resources, { planId, ...options });
+      const action = z.object({ id: z.uuid() }).passthrough().parse(body.action);
+      const { id: _id, ...rest } = action;
+      expect({ ...body, action: rest }).toEqual({ status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.", action: {
+        type: "update_kit_selections", plan_id: planId, label: "Update kit selections",
+        summary: `Merge kit selections: ${Object.entries(selections).map(([group, value]) => `${group}=${Array.isArray(value) ? value.join("+") : value}`).join(", ")}`,
+        params: { selections },
+      } });
+    };
+
+    const required = { error: "plan_id and selections required" };
+    expect(await trace({ selections: { fixture_mode: "chosen" } }, [])).toEqual(required);
+    expect(await trace({ plan_id: plan.id }, identity, { planId: plan.id })).toEqual(required);
+    // A missing or foreign plan falls back to no plan.
+    for (const plan_id of [999999, foreign.id]) expect(await trace({ plan_id, selections: { fixture_mode: "chosen" } }, identity)).toEqual(required);
+    // Parsing fails before the option groups are built.
+    for (const [selections, error] of [["bad", "selections must be an object"], [[], "selections must be an object"], [{ " ": "chosen" }, "selections group ids must not be empty"]] as const) {
+      expect(await trace({ plan_id: plan.id, selections }, identity, { planId: plan.id })).toEqual({ error });
+    }
+    // A pick_one group refuses several variants after the option-group reads and before the dismissal lookup.
+    const many = await trace({ plan_id: plan.id, selections: { fixture_mode: ["chosen", "ignored"] } }, groups, { planId: plan.id });
+    expect(z.object({ error: z.string() }).parse(many).error).toContain("fixture_mode");
+    await proposal({ plan_id: plan.id, selections: { fixture_mode: "chosen" } }, plan.id, { fixture_mode: "chosen" });
+    await proposal({ plan_id: String(plan.id), selections: { fixture_mode: "chosen", fixture_hint: "custom" } }, plan.id, { fixture_mode: "chosen", fixture_hint: "custom" });
+    // Unknown groups are skipped, and pick_one does not check variant ids.
+    await proposal({ plan_id: plan.id, selections: { unknown_group: "x", fixture_mode: "nope" } }, plan.id, { unknown_group: "x", fixture_mode: "nope" });
+    await proposal({ selections: { fixture_mode: "chosen" } }, plan.id, { fixture_mode: "chosen" }, proposing, { activePlanId: plan.id });
+    // A plan without layers reads no Source files.
+    await proposal({ plan_id: empty.id, selections: { fixture_mode: "chosen" } }, empty.id, { fixture_mode: "chosen" }, ["table:build_profiles", "table:plan_decisions", "table:profile_layers"]);
+
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "update_kit_selections", params: { selections: { fixture_mode: "chosen" } } });
+    expect(await trace({ plan_id: plan.id, selections: { fixture_mode: "chosen" } }, proposing, { planId: plan.id })).toEqual(dismissed("update_kit_selections", { selections: { fixture_mode: "chosen" } }));
+    await proposal({ plan_id: plan.id, selections: { fixture_mode: "ignored" } }, plan.id, { fixture_mode: "ignored" });
+
+    expect(repo.getSetting(`kit_manifest_${plan.id}`)).toBe(before);
+    expect([...union].sort()).toEqual(KIT_SELECTION_UNION);
+    expect(declared("tool.update_kit_selections")).toEqual(KIT_SELECTION_UNION);
   });
 }
