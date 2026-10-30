@@ -56,33 +56,7 @@ pub fn sample_process_tree(root: u32) -> Result<ProcessTreePss, PssError> {
 /// tree only once its process set has settled. Other read errors fail the
 /// sample rather than shrinking the tree.
 pub fn sample_process_tree_at(proc_root: &Path, root: u32) -> Result<ProcessTreePss, PssError> {
-    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    let entries = std::fs::read_dir(proc_root).map_err(|e| io(proc_root, &e))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| io(proc_root, &e))?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        if let Some(parent) =
-            read_optional(&entry.path().join("stat"))?.map(|stat| parent_pid(&stat))
-        {
-            let parent = parent.map_err(|detail| malformed(entry.path().join("stat"), detail))?;
-            children.entry(parent).or_default().push(pid);
-        }
-    }
-    let mut tree = BTreeSet::from([root]);
-    let mut pending = vec![root];
-    while let Some(pid) = pending.pop() {
-        for &child in children.get(&pid).into_iter().flatten() {
-            if tree.insert(child) {
-                pending.push(child);
-            }
-        }
-    }
+    let tree = process_tree_at(proc_root, root)?;
     let mut pids = Vec::with_capacity(tree.len());
     let mut pss_bytes = 0u64;
     for pid in tree {
@@ -111,11 +85,44 @@ pub fn sample_process_tree_at(proc_root: &Path, root: u32) -> Result<ProcessTree
     })
 }
 
-fn malformed(path: PathBuf, detail: String) -> PssError {
+/// `root` and every process descending from it, read from each
+/// `<pid>/stat` under `proc_root`. A process that exits mid-scan is skipped.
+pub(crate) fn process_tree_at(proc_root: &Path, root: u32) -> Result<BTreeSet<u32>, PssError> {
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    let entries = std::fs::read_dir(proc_root).map_err(|e| io(proc_root, &e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| io(proc_root, &e))?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if let Some(parent) =
+            read_optional(&entry.path().join("stat"))?.map(|stat| parent_pid(&stat))
+        {
+            let parent = parent.map_err(|detail| malformed(entry.path().join("stat"), detail))?;
+            children.entry(parent).or_default().push(pid);
+        }
+    }
+    let mut tree = BTreeSet::from([root]);
+    let mut pending = vec![root];
+    while let Some(pid) = pending.pop() {
+        for &child in children.get(&pid).into_iter().flatten() {
+            if tree.insert(child) {
+                pending.push(child);
+            }
+        }
+    }
+    Ok(tree)
+}
+
+pub(crate) fn malformed(path: PathBuf, detail: String) -> PssError {
     PssError::Malformed { path, detail }
 }
 
-fn io(path: &Path, error: &std::io::Error) -> PssError {
+pub(crate) fn io(path: &Path, error: &std::io::Error) -> PssError {
     PssError::Io {
         path: path.to_path_buf(),
         detail: error.to_string(),
@@ -123,7 +130,7 @@ fn io(path: &Path, error: &std::io::Error) -> PssError {
 }
 
 /// Reads a per-process file; `None` when the process has already exited.
-fn read_optional(path: &Path) -> Result<Option<String>, PssError> {
+pub(crate) fn read_optional(path: &Path) -> Result<Option<String>, PssError> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         // ESRCH surfaces as an uncategorized error when the task exits mid-read.

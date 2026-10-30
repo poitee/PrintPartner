@@ -11,6 +11,7 @@ desktop_rebuild = ["pp-compat/desktop_rebuild", "pp-storage/desktop_rebuild", "d
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
+pp-perf = { path = "../pp-perf" }
 anyhow.workspace = true
 tokio.workspace = true
 serde.workspace = true
