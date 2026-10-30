@@ -348,7 +348,11 @@ fn supervise_reexec(
             Ok(_) => {}
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(status) = child.try_wait().unwrap() {
-                    return finish_reexec(entered.is_some(), status);
+                    // The child prints the entry line and exits at once, so the
+                    // reader can still hold that line after the exit is visible
+                    // (GRE-1032). Drain it before deciding.
+                    let entered = entered.is_some() || drained_entry(&lines, remaining);
+                    return finish_reexec(entered, status);
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -369,6 +373,39 @@ fn supervise_reexec(
             }
         }
     }
+}
+
+/// Whether the entry line arrives before the reader ends or `limit` passes.
+fn drained_entry(lines: &std::sync::mpsc::Receiver<String>, limit: Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match lines.recv_timeout(left) {
+            Ok(line) if line.trim_end().ends_with(CHILD_ENTERED) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+}
+
+#[test]
+fn reexec_entry_line_read_after_exit_still_counts() {
+    // GRE-1032: the line reaches the channel after the exit was observed.
+    let (sender, lines) = std::sync::mpsc::channel();
+    let late = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(30));
+        sender.send("noise".to_owned()).unwrap();
+        sender.send(format!("prefix {CHILD_ENTERED}\n")).unwrap();
+    });
+    assert!(drained_entry(&lines, Duration::from_secs(2)));
+    late.join().unwrap();
+
+    // A reader that ends without the line, or a quiet one past the limit, is no entry.
+    let (sender, lines) = std::sync::mpsc::channel::<String>();
+    drop(sender);
+    assert!(!drained_entry(&lines, Duration::from_secs(2)));
+    let (_sender, lines) = std::sync::mpsc::channel::<String>();
+    assert!(!drained_entry(&lines, Duration::from_millis(20)));
 }
 
 fn finish_reexec(entered: bool, status: std::process::ExitStatus) -> Result<(), ReexecError> {
