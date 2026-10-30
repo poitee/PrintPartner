@@ -1,0 +1,236 @@
+[
+  {
+    "name": "rfc2617-section-3.5",
+    "params": {
+      "realm": "testrealm@host.com",
+      "qop": "auth,auth-int",
+      "nonce": "dcd98b7102dd2f0e8b11d0f600bfb0c093",
+      "opaque": "5ccc069c403ebaf9f0171e9517f40e41"
+    },
+    "authorization": "Digest username=\"Mufasa\", realm=\"testrealm@host.com\", nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\", uri=\"/dir/index.html\", response=\"6629fae49393a05397450978507c4ef1\", qop=auth, nc=00000001, cnonce=\"0a4f113b\", opaque=\"5ccc069c403ebaf9f0171e9517f40e41\", algorithm=MD5"
+  },
+  {
+    "name": "fixture-challenge",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "fixture-nonce",
+      "qop": "auth",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"fixture-nonce\", uri=\"/api/v1/status\", response=\"435ead8a5e80f29e92cb2429017f86e2\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "fixture-challenge-put",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "fixture-nonce",
+      "qop": "auth",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"fixture-nonce\", uri=\"/api/v1/files/usb/benchy.gcode\", response=\"e0acfd3c39adb83c597f910cd60e08ba\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "stale-challenge",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "fixture-nonce-2",
+      "qop": "auth",
+      "algorithm": "MD5",
+      "stale": "true"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"fixture-nonce-2\", uri=\"/api/v1/status\", response=\"7d454cea3f8d0351e6c5ebe9794d5548\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "mixed-case-names",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "abc123",
+      "qop": "auth",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"abc123\", uri=\"/api/v1/status\", response=\"1708e71190df2fdfaf4faa7314456910\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "escaped-quoted-values",
+    "params": {
+      "realm": "Print\"er",
+      "nonce": "a\\b",
+      "qop": "auth"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Print\\\"er\", nonce=\"a\\\\b\", uri=\"/api/v1/status\", response=\"525cfc6bd2ffb0810517709a7b43be27\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "prefers-auth-over-auth-int",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "qop": "auth-int, auth",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"a817e7d692b5ca1115beabc033d5079f\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "only-auth-int",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "qop": "auth-int",
+      "algorithm": "MD5"
+    },
+    "error": "Unsupported digest qop: auth-int"
+  },
+  {
+    "name": "no-qop",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"45b9bd69c8cf107136c332fc93058eb4\", algorithm=MD5"
+  },
+  {
+    "name": "nc-is-lowercase-hex",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "qop": "auth",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"5d3806f3e11a824a6a15b36a4f5c893e\", qop=auth, nc=0000000a, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "md5-sess-without-qop",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "algorithm": "MD5-SESS"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"c2042705789efed4db13a05d89119cbf\", cnonce=\"00112233deadbeef\", algorithm=MD5-SESS"
+  },
+  {
+    "name": "md5-sess-with-qop",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "qop": "auth",
+      "algorithm": "md5-sess",
+      "opaque": "op"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"4b60f33da58a83bb881bb57d32bdc43b\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", opaque=\"op\", algorithm=MD5-SESS"
+  },
+  {
+    "name": "unsupported-algorithm",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "qop": "auth",
+      "algorithm": "SHA-256"
+    },
+    "error": "Unsupported digest algorithm: SHA-256"
+  },
+  {
+    "name": "quote-in-username",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"ma\\\"ker\", realm=\"Printer API\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"38d192ec00f407993030538bd4001637\", algorithm=MD5"
+  },
+  {
+    "name": "newline-in-username",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "algorithm": "MD5"
+    },
+    "error": "Invalid digest parameter"
+  },
+  {
+    "name": "empty-opaque-dropped",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "n1",
+      "qop": "auth",
+      "opaque": ""
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"a817e7d692b5ca1115beabc033d5079f\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "unterminated-quote",
+    "params": {
+      "realm": "\"abc",
+      "nonce": "n1",
+      "qop": "auth"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"\\\"abc\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"972e1d6fa05493f2b902939f35faffdf\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "basic-scheme",
+    "params": {},
+    "authorization": "Digest username=\"fixture-user\", realm=\"\", nonce=\"\", uri=\"/api/v1/status\", response=\"9119cd4e7ce4ea7726c9f4738a8dec7e\", algorithm=MD5"
+  },
+  {
+    "name": "query-in-uri",
+    "params": {
+      "realm": "Printer API",
+      "nonce": "fixture-nonce",
+      "qop": "auth",
+      "algorithm": "MD5"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"Printer API\", nonce=\"fixture-nonce\", uri=\"/api/v1/files/usb/a%20b.gcode?x=1\", response=\"9b18cc2835c718e02f4434230a689497\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "stray-words-and-empty-value",
+    "params": {
+      "realm": "R",
+      "nonce": "n1",
+      "x": "",
+      "qop": "auth"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"R\", nonce=\"n1\", uri=\"/api/v1/status\", response=\"e63a99a5bfb2ea6b6cbfe27cda69595f\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "newline-after-scheme",
+    "params": {
+      "realm": "R",
+      "nonce": "n"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"R\", nonce=\"n\", uri=\"/api/v1/status\", response=\"cf3302a7a88cb0e20527cf636f600d3d\", algorithm=MD5"
+  },
+  {
+    "name": "newline-inside-value",
+    "params": {},
+    "authorization": "Digest username=\"fixture-user\", realm=\"\", nonce=\"\", uri=\"/api/v1/status\", response=\"9119cd4e7ce4ea7726c9f4738a8dec7e\", algorithm=MD5"
+  },
+  {
+    "name": "trailing-backslash-in-quotes",
+    "params": {
+      "realm": "ab\\",
+      "nonce": "\"n\\"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"ab\\\\\", nonce=\"\\\"n\\\\\", uri=\"/api/v1/status\", response=\"b5bbdd9c5da1e47f390b0a412c54c0b8\", algorithm=MD5"
+  },
+  {
+    "name": "tab-and-unicode-spaces",
+    "params": {
+      "realm": "R",
+      "nonce": "né",
+      "qop": "auth"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"R\", nonce=\"né\", uri=\"/api/v1/status\", response=\"8635189ac91e0d6c409314153dd581ae\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  },
+  {
+    "name": "lowercase-scheme-no-space",
+    "params": {},
+    "authorization": "Digest username=\"fixture-user\", realm=\"\", nonce=\"\", uri=\"/api/v1/status\", response=\"9119cd4e7ce4ea7726c9f4738a8dec7e\", algorithm=MD5"
+  },
+  {
+    "name": "duplicate-name-last-wins",
+    "params": {
+      "nonce": "b",
+      "qop": "auth"
+    },
+    "authorization": "Digest username=\"fixture-user\", realm=\"\", nonce=\"b\", uri=\"/api/v1/status\", response=\"ac103263bf64a1d5ad3cc9285e2ecf01\", qop=auth, nc=00000001, cnonce=\"00112233deadbeef\", algorithm=MD5"
+  }
+]
