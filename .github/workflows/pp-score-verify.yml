@@ -20,8 +20,13 @@ on:
 
 permissions: {}
 
+# A group keeps one running and one pending run; a newer queued run cancels
+# the pending one even with cancel-in-progress false. A per-PR group let a
+# comment run cancel the pull_request_target run on the latest head, so the
+# required check sat cancelled. pull_request_target runs group by PR and head
+# SHA; comment and dispatch runs get their own run_id group and never collide.
 concurrency:
-  group: pp-score-verify-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+  group: pp-score-verify-${{ github.event_name }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
