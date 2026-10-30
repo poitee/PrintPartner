@@ -7,7 +7,14 @@ license.workspace = true
 publish = false
 
 [dependencies]
+icu_collator = "=2.3.1"
 plist = "=1.10.1"
+pp-source = { path = "../pp-source" }
+regress = "=0.11.1"
+serde.workspace = true
+url = "=2.5.8"
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile = "=3.27.0"
+tokio.workspace = true

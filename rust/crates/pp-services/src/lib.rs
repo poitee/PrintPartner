@@ -2,3 +2,4 @@
 
 pub mod discovery;
 pub mod native_slicers;
+pub mod sync;

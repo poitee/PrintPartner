@@ -145,3 +145,14 @@ From `web/`, after `npm ci`, with Node 22.23.3 or 24.21.0:
 ```sh
 TMPDIR=<scratch> node --conditions=development --import tsx ../fixtures/parity/required-unit-decisions/generate.mjs [--check]
 ```
+
+## github-sync/node.json (GRE-429)
+
+`generate.mjs` runs Node's GitHub sync code under web's tsx loader: `parseGithubUrl`, `githubRefName`, `normalizeGithubSourceLocation` and `resolveGithubUrlRef` on 33 URLs, `parseReposTxtLine` on 16 lines, `parseReposTxtText` and `importReposTxt`'s skip count on 3 files, `listGithubBranches` and `listGithubTags` on 7 URLs each, `syncGithubSource` on 36 cases, and one `checkAllSourceUpdates` run over 13 Source rows. A `globalThis.fetch` stub answers Octokit from the `world` object in the golden and logs every GitHub read. A stubbed `LocalSourceSnapshotStore.materialize` records the snapshot request (revision key, files and selection) and publishes nothing, so no file is downloaded. Each case records its result or error and the reads it made. An error that carries an HTTP status records only the status, because Octokit's message text is not part of the contract.
+
+`rust/crates/pp-services/tests/ticket_t_59_sync.rs` serves the same `world` through a `GithubPort` stub and compares every case, including the read log, with `pp_services::sync`. The results are 101 exact matches and 2 declared corrections (the update check counts as one case). `colon-path` and `manifest-dir` are GitHub paths that Node selects and Rust refuses with "Unsafe Source snapshot path", because `pp_source::SourcePath` refuses `:` and the snapshot manifest name as a first component (see `rust/crates/pp-source/README.md`).
+
+```sh
+node fixtures/parity/github-sync/generate.mjs --check
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_59_sync)'
+```
