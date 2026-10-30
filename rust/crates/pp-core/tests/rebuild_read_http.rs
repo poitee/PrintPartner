@@ -311,6 +311,18 @@ mod with_feature {
             );
         }
 
+        // MCP is mounted on both aliases and takes API keys only, so a
+        // signed-in same-origin session is refused (GRE-348).
+        for path in ["/mcp", "/api/v1/mcp"] {
+            assert_eq!(
+                server
+                    .json(Method::POST, path, &headers, Some(&json!({})))
+                    .await,
+                (401, json!({"detail": "Valid API key required"})),
+                "{path}"
+            );
+        }
+
         let (status, created) = server
             .json(
                 Method::POST,
