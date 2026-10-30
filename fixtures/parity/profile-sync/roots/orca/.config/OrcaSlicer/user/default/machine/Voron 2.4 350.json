@@ -1,0 +1,12 @@
+{
+    "from": "User",
+    "inherits": "Voron 2.4 350 0.4 nozzle",
+    "name": "Voron 2.4 350",
+    "nozzle_diameter": [
+        "0.6",
+        "0.6"
+    ],
+    "extruder_count": "2.7",
+    "printer_settings_id": "Voron 2.4 350",
+    "version": "2.3.2.60"
+}

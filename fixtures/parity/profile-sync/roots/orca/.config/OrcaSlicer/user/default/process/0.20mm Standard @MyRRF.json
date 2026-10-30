@@ -1,0 +1,12 @@
+{
+    "type": "process",
+    "name": "0.20mm Standard @MyRRF",
+    "from": "system",
+    "layer_height": "0.2",
+    "wall_loops": "2",
+    "sparse_infill_density": "15%",
+    "compatible_printers": [
+        "MyRRF 0.4 nozzle"
+    ],
+    "version": "2.3.2.60"
+}
