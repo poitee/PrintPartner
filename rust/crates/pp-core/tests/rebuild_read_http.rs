@@ -302,6 +302,14 @@ mod with_feature {
                 "{path}"
             );
         }
+        // Custom filaments read the owner's data dir, which has no store yet.
+        for path in ["/filaments/custom", "/api/v1/filaments/custom"] {
+            assert_eq!(
+                server.json(Method::GET, path, &headers, None).await,
+                (200, json!({"filaments": []})),
+                "{path}"
+            );
+        }
 
         let (status, created) = server
             .json(
