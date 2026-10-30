@@ -160,6 +160,8 @@ enum ReviewedEntry {
     SetSourceGitRef { resources: Vec<ResourceId> },
     #[serde(rename = "tool.add_addon")]
     AddAddon { resources: Vec<ResourceId> },
+    #[serde(rename = "tool.update_kit_selections")]
+    UpdateKitSelections { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_job_status")]
     GetJobStatus { resources: Vec<ResourceId> },
     #[serde(rename = "tool.get_plan_decisions")]
@@ -642,6 +644,18 @@ impl ReviewedEntry {
                     File(FileFamily::SourceWorkspace),
                 ]),
             ),
+            Self::UpdateKitSelections { resources } => (
+                "tool.update_kit_selections",
+                resources,
+                BTreeSet::from([
+                    Table(BuildProfiles),
+                    Table(PlanDecisions),
+                    Table(ProfileLayers),
+                    Table(Projects),
+                    File(FileFamily::PathHints),
+                    File(FileFamily::SourceWorkspace),
+                ]),
+            ),
             Self::GetJobStatus { resources } => ("tool.get_job_status", resources, BTreeSet::new()),
             Self::GetPlanDecisions { resources } => (
                 "tool.get_plan_decisions",
@@ -957,6 +971,7 @@ impl Declarations {
             "tool.set_base",
             "tool.set_source_git_ref",
             "tool.add_addon",
+            "tool.update_kit_selections",
             "tool.get_plan_decisions",
             "tool.read_source_file",
             "tool.search_source_files",

@@ -1622,6 +1622,17 @@
           {"kind": "file", "name": "kit-catalog"},
           {"kind": "file", "name": "source-workspace"}
         ]
+      },
+      {
+        "operation": "tool.update_kit_selections",
+        "resources": [
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_decisions"},
+          {"kind": "table", "name": "profile_layers"},
+          {"kind": "table", "name": "projects"},
+          {"kind": "file", "name": "path-hints"},
+          {"kind": "file", "name": "source-workspace"}
+        ]
       }
     ],
     "unresolved": [
@@ -1980,8 +1991,7 @@
       "tool.propose_import_build_inputs",
       "tool.propose_source_mapping",
       "tool.start_sync",
-      "tool.suggest_source_contributions",
-      "tool.update_kit_selections"
+      "tool.suggest_source_contributions"
     ]
   },
   "live_formats": {
