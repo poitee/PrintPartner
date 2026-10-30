@@ -1075,10 +1075,12 @@ mod ticket_t_10_draftreads {
             }
         }
         write(
+            // ast-grep-ignore: no-writer-family-literal -- Test fixture for Node's custom hints file; production only reads it.
             "path-hints.yaml",
             b"version: 1\nrules:\n  - path: \"**/rail_mount.stl\"\n    option_group: rail_mounts\n    variant_id: printed_mount\n",
         );
         write(
+            // ast-grep-ignore: no-writer-family-literal -- Test fixture community manifest; production only reads it.
             "manifests/oracle-kit.yaml",
             b"selections:\n  beta: x\n  toolhead: custom\n",
         );
@@ -1101,6 +1103,7 @@ mod ticket_t_10_draftreads {
                 [data.join("repos/6/../1").to_str().unwrap()],
             )
             .unwrap();
+        // ast-grep-ignore: no-writer-family-literal -- Names the fixture community-manifest root to read.
         let reads = SourceReads::new(&data).with_community_manifests(data.join("manifests"));
         let captured = database.capture(TENANT, 1).unwrap();
         let observed =

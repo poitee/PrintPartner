@@ -44,6 +44,7 @@ mod siblings;
 mod siblings_tests;
 pub mod source_reads;
 #[cfg(test)]
+#[path = "working_drafts/tests/ticket_t_10_draftreads.rs"]
 mod ticket_t_10_draftreads;
 mod yaml;
 #[cfg(test)]

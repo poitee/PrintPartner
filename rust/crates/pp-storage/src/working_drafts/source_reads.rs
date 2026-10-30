@@ -18,6 +18,7 @@ const MANIFEST: &str = "print-partner.manifest.yaml";
 /// `loadShippedPathHintRules` tries. Its second candidate is the same file in
 /// the source tree, so `ShippedHintsSecond` reads as missing.
 const SHIPPED_HINTS: &[u8] =
+    // ast-grep-ignore: no-writer-family-literal -- Embeds the shipped hints Node reads; Rust writes no path-hints file.
     include_bytes!("../../../../../web/apps/server/src/data/path-hints.yaml");
 const CHUNK: usize = 64 * 1024;
 
@@ -37,6 +38,7 @@ impl SourceReads {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             repos: data_dir.join("repos"),
+            // ast-grep-ignore: no-writer-family-literal -- Node's custom hints file, read only; Rust never writes it.
             custom_hints: data_dir.join("path-hints.yaml"),
             community: None,
         }

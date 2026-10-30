@@ -274,7 +274,7 @@ fn ticket_t_10_draftreads_catalog_documents_match_node_locations() {
     let mut b = PreparationBudget::new(&cancelled, PreparationLimits::default()).unwrap();
     assert_eq!(
         document(reads.read_catalog_document(&catalog(CatalogPurpose::ShippedHintsFirst), &mut b)),
-        include_str!("../../../../../web/apps/server/src/data/path-hints.yaml")
+        include_str!("../../../../../../web/apps/server/src/data/path-hints.yaml")
     );
     for purpose in [
         CatalogPurpose::ShippedHintsSecond,
