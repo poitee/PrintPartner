@@ -28,6 +28,8 @@ Use one of these endpoints:
 
 Every MCP request needs a valid API key, from the desktop app, another process on the same computer, or a LAN peer. A loopback bind no longer skips the key. A request with no key gets `503` when the host has no deployment key, and `401 Valid API key required` when it has one. An invalid or revoked key gets `401`. Use HTTPS or an authenticated tunnel when the client is on another machine.
 
+The desktop rebuild (`PP_DESKTOP_REBUILD=1`) serves `/mcp` and `/api/v1/mcp` from Rust through rmcp on its loopback listener. It accepts an API key only: a session cookie alone gets `401 Valid API key required`, and Host and Origin must match the listener. LAN peers are not served there yet.
+
 ## Choose the credential
 
 On open self-host, or with `SINGLE_USER_AUTH=1`, connect to `/api/v1/mcp` with `PRINT_PARTNER_API_KEY` or with a Settings API key. `SINGLE_USER_AUTH=1` accepts either key on that MCP route without a browser session. Other API routes still require the administrator session.

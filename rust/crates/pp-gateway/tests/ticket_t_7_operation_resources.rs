@@ -673,6 +673,52 @@ fn ticket_t_7_ownership_source_ref_proposals_have_complete_node_owned_resources(
 }
 
 #[test]
+fn ticket_t_7_ownership_add_addon_proposal_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.add_addon";
+    let index = admit_bundled_manifest().unwrap();
+    let expected = ResourceSet::from([
+        Table(BuildProfiles),
+        Table(PlanDecisions),
+        Table(ProfileLayers),
+        Table(Projects),
+        Table(SourceDocs),
+        File(FileFamily::AssistantDomain),
+        File(FileFamily::KitCatalog),
+        File(FileFamily::SourceWorkspace),
+    ]);
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    assert_formats_refuse_rollback(
+        id,
+        &expected,
+        &[
+            ("assistant-domain", 1),
+            ("kit-catalog", 1),
+            ("sqlite-schema", 34),
+            ("source-revision-workspace", 1),
+        ],
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_add_addon_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.add_addon");
+}
+
+#[test]
 fn ticket_t_7_ownership_source_ref_proposals_refuse_invalid_admission_before_effects() {
     for id in ["tool.set_base", "tool.set_source_git_ref"] {
         assert_tool_invalid_admission(id);
@@ -1036,6 +1082,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.remove_layer",
         "tool.set_base",
         "tool.set_source_git_ref",
+        "tool.add_addon",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1063,8 +1110,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 71);
-    assert_eq!(unresolved.len(), 358);
+    assert_eq!(reviewed.len(), 72);
+    assert_eq!(unresolved.len(), 357);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1369,6 +1416,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.remove_layer",
         "tool.set_base",
         "tool.set_source_git_ref",
+        "tool.add_addon",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1541,6 +1589,7 @@ fn reviewed_participants_cannot_swap_operations() {
         ("tool.duplicate_plan", "tool.remove_layer"),
         ("tool.remove_layer", "tool.set_base"),
         ("tool.set_base", "tool.set_source_git_ref"),
+        ("tool.set_source_git_ref", "tool.add_addon"),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),
         ("tool.get_kit_catalog", "tool.analyze_build_request"),

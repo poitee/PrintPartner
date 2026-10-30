@@ -12,10 +12,14 @@ desktop_rebuild = [
     "dep:http-body",
     "dep:ryu-js",
     "dep:rusqlite",
+    "dep:pp-services",
+    "dep:rmcp",
 ]
 
 [dependencies]
 pp-storage = { path = "../pp-storage" }
+pp-services = { path = "../pp-services", optional = true }
+rmcp = { version = "=3.5.0", default-features = false, features = ["server", "transport-streamable-http-server"], optional = true }
 anyhow.workspace = true
 log = "=0.4.34"
 axum.workspace = true
