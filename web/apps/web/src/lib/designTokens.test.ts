@@ -95,6 +95,26 @@ describe("design token check", () => {
     expect(result.output).toContain("@media (prefers-contrast: more) :root: must be under :root[data-desktop-rebuild]");
   });
 
+  it("fails when a dark rebuild rule misses a token its light twin sets", () => {
+    const result = check(({ css }) => replaceIn(css, "    --printer-not-connected: hsl(320 65% 82%);\n", ""));
+    expect(result.output).toContain("@media (prefers-contrast: more): :root[data-desktop-rebuild].dark does not set --printer-not-connected");
+  });
+
+  it("fails when a background alias stops pointing at a measured surface", () => {
+    const result = check(({ css }) => replaceIn(css, "--card: var(--surface-raised);", "--card: hsl(0 0% 100%);"));
+    expect(result.output).toContain("Light: --card must be var(--surface-raised)");
+  });
+
+  it("follows imports out of src/rebuild/", () => {
+    const result = check(({ rebuild }) => {
+      mkdirSync(rebuild);
+      mkdirSync(join(rebuild, "../shared"));
+      writeFileSync(join(rebuild, "Screen.tsx"), 'import { Chip } from "@/shared/Chip";\nexport const x = <Chip />;\n');
+      writeFileSync(join(rebuild, "../shared/Chip.tsx"), 'export const Chip = () => <span className="duration-300" />;\n');
+    });
+    expect(result.output).toContain('shared/Chip.tsx: raw duration class "duration-300"');
+  });
+
   it("fails when rebuilt UI uses a raw value", () => {
     const result = check(({ css, rebuild }) => {
       replaceIn(css, "scroll-behavior: auto !important;", "scroll-behavior: auto !important;\n    outline-width: 3px;");

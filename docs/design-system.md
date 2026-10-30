@@ -247,17 +247,20 @@ words with the color. A printer color may match a workflow tone (`complete` and
 
 - High contrast (`prefers-contrast: more`) darkens inks in light and lightens them in
   dark, and strengthens `--border` and `--border-strong`. Surfaces do not change.
-- Forced colors (`forced-colors: active`) maps every printer status to `CanvasText`,
+- Forced colors (`forced-colors: active`) is the one variant where printer states share a
+  color. The browser replaces authored colors with system colors there, so it maps every
+  printer status to `CanvasText`,
   `--border-strong` to `CanvasText`, `--border` to `GrayText` and `--ring` to
   `Highlight`. The icon and words carry the status.
 - Reduced motion sets `--motion-fast`, `--motion-base` and `--motion-slow` to 0 ms, and
   every animation and transition duration and delay reads `--motion-base`, so nothing
-  animates.
+  animates. Motion driven from script (`requestAnimationFrame`, `element.animate`) must
+  check `prefers-reduced-motion` itself.
 
 ### Tokens only
 
-Rebuilt screens live under `web/apps/web/src/rebuild/`. `--check` fails when a file there
-uses a hex color, `rgb()` or `hsl()`, a Tailwind arbitrary value such as `p-[13px]`, a raw
+Rebuilt screens live under `web/apps/web/src/rebuild/`. `--check` fails when a file there,
+or any file it imports through a relative or `@/` path, uses a hex color, `rgb()` or `hsl()`, a Tailwind arbitrary value such as `p-[13px]`, a raw
 palette class, a `duration-*` class, or a raw px, rem or ms value. Rules scoped under
 `:root[data-desktop-rebuild]` may only set custom properties to raw values; every other
 property reads a token.
