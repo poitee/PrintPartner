@@ -158,3 +158,14 @@ From the repo root, after `npm --prefix web ci`:
 node fixtures/parity/kit-bundle/generate.mjs [--check]
 cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_58_kit)'
 ```
+
+## github-sync/node.json (GRE-429)
+
+`generate.mjs` runs Node's GitHub sync code under web's tsx loader: `parseGithubUrl`, `githubRefName`, `normalizeGithubSourceLocation` and `resolveGithubUrlRef` on 33 URLs, `parseReposTxtLine` on 16 lines, `parseReposTxtText` and `importReposTxt`'s skip count on 3 files, `listGithubBranches` and `listGithubTags` on 7 URLs each, `syncGithubSource` on 36 cases, and one `checkAllSourceUpdates` run over 13 Source rows. A `globalThis.fetch` stub answers Octokit from the `world` object in the golden and logs every GitHub read. A stubbed `LocalSourceSnapshotStore.materialize` records the snapshot request (revision key, files and selection) and publishes nothing, so no file is downloaded. Each case records its result or error and the reads it made. An error that carries an HTTP status records only the status, because Octokit's message text is not part of the contract.
+
+`rust/crates/pp-services/tests/ticket_t_59_sync.rs` serves the same `world` through a `GithubPort` stub and compares every case, including the read log, with `pp_services::sync`. All 103 cases match exactly (the update check counts as one case). The plan applies Node's `sourceRelativePath` rules, so `colon-path` and `manifest-dir` match Node too. `pp_source`'s stricter path rules (see `rust/crates/pp-source/README.md`) apply later, when the snapshot store publishes the files.
+
+```sh
+node fixtures/parity/github-sync/generate.mjs --check
+cargo nextest run --locked --manifest-path rust/Cargo.toml --no-tests=fail -E 'test(ticket_t_59_sync)'
+```
