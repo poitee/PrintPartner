@@ -3477,8 +3477,14 @@ dependencies = [
 name = "pp-services"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "hex",
  "plist",
+ "ryu-js",
+ "serde_json",
+ "sha2",
  "tempfile",
+ "zip",
 ]
 
 [[package]]

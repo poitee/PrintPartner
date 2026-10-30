@@ -145,3 +145,16 @@ From `web/`, after `npm ci`, with Node 22.23.3 or 24.21.0:
 ```sh
 TMPDIR=<scratch> node --conditions=development --import tsx ../fixtures/parity/required-unit-decisions/generate.mjs [--check]
 ```
+
+## kit-bundle/kit-bundle.json (GRE-425)
+
+`generate.mjs` runs Node's `export-kit.ts` and `kit-bundle-share.ts` and records 54 kit uploads (raw `kit.json` and zips) with what `parseKitBundleBuffer` returned or threw, 13 bundles through `collectKitBundleSourceRefs` and the unmatched, patch and export records built from each reference, 9 project rows through `kitSourceRefFromProject`, and one editable bundle as `JSON.stringify(data, null, 2)` and as an fflate zip. Inputs over 1 MiB are recipes that both sides build; results over 1 MiB are a SHA-256 of their JSON text.
+
+`rust/crates/pp-services/tests/ticket_t_58_kit.rs` replays the file against `pp_services::kit`. Successes and refusal messages must match exactly. Rust reports its own text for JSON syntax errors (V8 wording), archive errors (adm-zip wording) and non-iterable `sources` or `layers` (a V8 `TypeError` naming the source expression); the test checks only that the refusal is the same kind. One project case is a declared difference: Node maps the role `constructor` to `Object`'s constructor, so its export drops `category` and its patch writes `metadata: {}`. Rust reads it as an unknown role, category `unassigned`.
+
+From the repo root, after `npm --prefix web ci`:
+
+```sh
+node fixtures/parity/kit-bundle/generate.mjs [--check]
+cargo nextest run --locked --manifest-path rust/Cargo.toml --features desktop_rebuild --no-tests=fail -E 'test(ticket_t_58_kit)'
+```
