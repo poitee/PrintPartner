@@ -865,23 +865,43 @@ fn ticket_t_28_recovery_cancel_cannot_undo_acknowledged_effects() {
         );
         owner.shutdown().unwrap();
     }
-    // Cancelling before admission still ends cancelled with no effect.
-    let (_, owner) = fixture();
-    let before = enqueue(&owner, "printer-before-admission", printer("printer-c"));
-    let worker = owner.job_worker(admission()).unwrap();
-    let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
-    let cancelled = job_after_cancel(&owner, &before.job_id);
-    assert_eq!(cancelled.state, PersistentState::Cancelled);
-    assert!(cancelled.effects.is_empty() && cancelled.recovery.is_none());
-    assert!(
-        worker
-            .update(
-                &mut lease,
-                WorkerOperation::BeginEffect(intent(EffectOperation::PrinterUpload, "printer-c"))
-            )
-            .is_err()
-    );
-    owner.shutdown().unwrap();
+    // Cancelling before admission still ends cancelled with no effect, for
+    // both external-effect kinds.
+    for (key, payload, operation, target) in [
+        (
+            "printer-before-admission",
+            printer("printer-c"),
+            EffectOperation::PrinterUpload,
+            "printer-c",
+        ),
+        (
+            "refresh-before-admission",
+            Payload::CheckSourceUpdates {},
+            EffectOperation::SourceRefresh,
+            "source:3",
+        ),
+    ] {
+        let (_, owner) = fixture();
+        let before = enqueue(&owner, key, payload);
+        let worker = owner.job_worker(admission()).unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
+        let cancelled = job_after_cancel(&owner, &before.job_id);
+        assert_eq!(cancelled.state, PersistentState::Cancelled, "{key}");
+        assert!(
+            cancelled.effects.is_empty() && cancelled.recovery.is_none(),
+            "{key}"
+        );
+        assert!(
+            worker
+                .update(
+                    &mut lease,
+                    WorkerOperation::BeginEffect(intent(operation, target))
+                )
+                .is_err(),
+            "{key}"
+        );
+        owner.shutdown().unwrap();
+    }
 }
 fn job_after_cancel(owner: &WriterOwner, job_id: &str) -> JobRecord {
     job(call(
