@@ -25,6 +25,7 @@ rfd = { version = "=0.17.2", default-features = false, features = ["gtk3"] }
 gtk = "=0.18.2"
 
 [dev-dependencies]
+pp-storage = { path = "../pp-storage" }
 tempfile = "=3.27.0"
 
 [build-dependencies]

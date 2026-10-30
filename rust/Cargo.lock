@@ -3426,6 +3426,7 @@ dependencies = [
  "anyhow",
  "gtk",
  "pp-core",
+ "pp-storage",
  "rfd",
  "serde",
  "serde_json",
