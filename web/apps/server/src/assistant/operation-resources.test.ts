@@ -83,7 +83,7 @@ const manifest = z.object({ live_formats: z.object({
   "accepted-thumbnails": z.object({ node_reads: z.number() }),
 }), resources: z.object({ reviewed: z.array(z.discriminatedUnion("operation", [
   z.object({ operation: z.literal("source.sync"), import: z.literal("source.sync") }).strict(),
-  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
+  z.object({ operation: z.enum(["tool.read_source_file", "tool.list_sources", "tool.list_source_categories", "tool.search_source_files", "tool.preview_source_naming", "tool.get_workflow_help", "tool.web_search", "tool.fetch_web_page", "tool.check_hardware_interfaces", "tool.propose_add_custom_filament", "tool.propose_create_build", "tool.propose_create_source_category", "tool.propose_rename_source_category", "tool.propose_delete_source_category", "tool.propose_set_source_category", "tool.propose_update_source", "tool.propose_update_source_naming", "tool.propose_import_source_files", "tool.propose_set_plan_progress", "tool.propose_set_plan_assembly", "tool.propose_verify_printer_checkoff", "tool.get_plan_checkoff", "tool.get_remaining", "tool.get_plan_review", "tool.find_filament_matches", "tool.search_plan_parts", "tool.get_interaction_graph", "tool.check_stack_compatibility", "tool.list_example_builds", "tool.get_print_stats", "tool.get_printer_checkoff", "tool.propose_import_3mf_checkoff", "tool.get_build_planning_state", "tool.list_build_differences", "tool.get_plan_draft", "tool.propose_update_build_brief", "tool.propose_resolve_build_differences", "tool.propose_set_build_source_roles", "tool.propose_rebuild_plan", "tool.propose_apply_plan_draft", "tool.propose_assign_role_filament", "tool.propose_restore_snapshot", "tool.propose_exclude_replaced_parts", "tool.create_plan_snapshot", "tool.duplicate_plan", "tool.remove_layer", "tool.set_base", "tool.set_source_git_ref", "tool.get_plan_decisions", "tool.list_plans", "tool.get_job_status", "tool.list_plan_snapshots", "tool.get_plan_snapshot", "tool.get_kit_catalog", "tool.analyze_build_request", "tool.get_build_recipe", "tool.get_build_workflow", "tool.compare_plans", "tool.get_plan_option_groups", "tool.ui_highlight_part", "tool.ui_focus_stl_search", "tool.ui_navigate", "tool.ui_open_source", "tool.ui_open_docs", "tool.ui_focus_kit_option", "tool.get_source_docs", "tool.get_source_inventory", "tool.compare_source_revisions", "tool.audit_source_provenance", "tool.analyze_stl_mesh"]),
     resources: z.array(z.object({ kind: z.enum(["table", "file"]), name: z.string() }).strict()),
   }).strict(),
 ])) }) }).parse(JSON.parse(fs.readFileSync(new URL("../../../../../rust/crates/pp-gateway/ownership-manifest.json", import.meta.url), "utf8")));
@@ -1001,6 +1001,7 @@ it("traces propose_create_source_category paths, plan dismissals and tenants aga
 type CategoryTool = "propose_rename_source_category" | "propose_delete_source_category" | "propose_set_source_category";
 type SourceProposalTool = "propose_update_source" | "propose_update_source_naming" | "propose_import_source_files";
 type CategoryProbe = [string, ...unknown[]];
+type SourceRefTool = "set_base" | "set_source_git_ref";
 const CATEGORY_TABLES = ["table:app_settings", "table:build_profiles", "table:plan_decisions", "table:projects", "table:source_docs"];
 const CATEGORY_UNION = ["file:source-workspace", ...CATEGORY_TABLES];
 const CATEGORY_SAVED = ["Printers", "Printers/Core", "Tools"];
@@ -1012,7 +1013,7 @@ function sourceCategoryProposal(type: CategoryTool, planId: number, label: strin
   };
 }
 
-async function traceCategory(tool: CategoryTool | SourceProposalTool | "list_sources" | "list_source_categories", input: Record<string, unknown>, tables: string[], options: {
+async function traceCategory(tool: CategoryTool | SourceProposalTool | SourceRefTool | "list_sources" | "list_source_categories", input: Record<string, unknown>, tables: string[], options: {
   repository?: AppRepository; files?: CategoryProbe[]; tenantId?: string; activePlanId?: number;
 } = {}) {
   const { repository = repo, files = [], tenantId = "default", activePlanId } = options;
@@ -6108,3 +6109,74 @@ it("traces create_plan_snapshot, duplicate_plan and remove_layer selectors, vali
     expect(declared(`tool.${tool}`)).toEqual(tables);
   }
 });
+
+function sourceRefProposal(type: SourceRefTool, planId: number, label: string, summary: string, params: Record<string, unknown>) {
+  return { status: "proposed", note: "Not applied yet — user must confirm via Apply in the UI.", action: { type, plan_id: planId, label, summary, params } };
+}
+
+for (const isolated of [false, true]) {
+  it(`traces set_base and set_source_git_ref selectors, sync gate and dismissals under ${isolated ? "isolated" : "trusted"} policy`, async () => {
+    const { repository, files } = categoryTraceFixture(isolated);
+    const options = { repository, files };
+    const plan = repo.createProfile("Base plan");
+    const idle = repo.createProfile("Base idle");
+    const foreign = tenantStorage.run("other", () => repo.createProfile("Foreign base"));
+    const identity = ["table:build_profiles"];
+    const sources = ["table:projects", "table:source_docs"];
+    const lookup = ["table:build_profiles", ...sources];
+    const tables = ["table:build_profiles", "table:plan_decisions", ...sources];
+    const base = (planId: number, ref = "", sync = false, params: Record<string, unknown> = {}) => sourceRefProposal("set_base", planId, `Set base to Fixture${ref}`,
+      `Set the base layer to “Fixture”${ref}.${sync ? " After Apply, Sync this Source, then review the Plan before rebuilding." : " May invalidate addon assumptions."}`, { source_name: "Fixture", ...params });
+    const unsyncedBase = (planId: number, tag: string) => sourceRefProposal("set_base", planId, `Set base to Unsynced@${tag}`,
+      `Set the base layer to “Unsynced”@${tag}. After Apply, Sync this Source, then review the Plan before rebuilding.`, { source_name: "Unsynced", tag });
+    const gitRef = (planId: number, bits: string, params: Record<string, unknown>) => sourceRefProposal("set_source_git_ref", planId, `Set Fixture → ${bits}`,
+      `Update Git ref on “Fixture” (${bits}). You must Sync the source after Apply so files match.`, { source_name: "Fixture", ...params });
+
+    // set_base resolves the plan, re-reads its identity, then looks up the Source.
+    for (const source_name of [undefined, "", "  ", 7]) {
+      expect(await traceCategory("set_base", { plan_id: plan.id, source_name }, identity, { repository })).toEqual({ error: "plan_id and source_name required" });
+    }
+    expect(await traceCategory("set_base", { source_name: "Fixture" }, [], { repository })).toEqual({ error: "plan_id and source_name required" });
+    expect(await traceCategory("set_base", { plan_id: 999999, source_name: "Fixture" }, identity, { repository })).toEqual({ error: "plan_id and source_name required" });
+    expect(await traceCategory("set_base", { plan_id: foreign.id, source_name: "Fixture" }, identity, { repository })).toEqual({ error: "plan_id and source_name required" });
+    // A foreign active plan passes resolution but fails the identity re-read.
+    expect(await traceCategory("set_base", { source_name: "Fixture" }, identity, { repository, activePlanId: foreign.id })).toEqual({ error: "Plan not found" });
+    const missing = await traceCategory("set_base", { plan_id: plan.id, source_name: "Absent" }, lookup, { repository, files: [...files, ...files] });
+    expect(missing).toEqual({ error: 'Source not found: "Absent". Call list_sources and use an existing name — do not invent sources.' });
+    expect(await traceCategory("set_base", { plan_id: plan.id, source_name: "Unsynced" }, lookup, options)).toEqual({ error: 'Source "Unsynced" exists but is not synced. Ask the user to sync it before setting it as base.', synced: false });
+    expect(await traceCategory("set_base", { plan_id: plan.id, source_name: "Unsynced", tag: " v2 " }, tables, options)).toEqual(unsyncedBase(plan.id, "v2"));
+    expect(await traceCategory("set_base", { plan_id: plan.id, source_name: " fixture " }, tables, options)).toEqual(base(plan.id));
+    // The Fixture branch is already main, so only a different ref asks for a Sync.
+    expect(await traceCategory("set_base", { plan_id: String(plan.id), source_name: "Fixture", branch: " main " }, tables, options)).toEqual(base(plan.id, "@main", false, { branch: "main" }));
+    expect(await traceCategory("set_base", { plan_id: plan.id, source_name: "Fixture", branch: "dev" }, tables, options)).toEqual(base(plan.id, "@dev", true, { branch: "dev" }));
+    expect(await traceCategory("set_base", { source_name: "Fixture" }, tables, { ...options, activePlanId: idle.id })).toEqual(base(idle.id));
+    expect(await traceCategory("set_base", { plan_id: foreign.id, source_name: "Fixture" }, tables, { ...options, activePlanId: idle.id })).toEqual(base(idle.id));
+    // Sources are tenant scoped, so the default tenant's Fixture is absent for another tenant.
+    expect(await traceCategory("set_base", { plan_id: foreign.id, source_name: "Fixture" }, lookup, { repository, tenantId: "other" })).toEqual({ error: 'Source not found: "Fixture". Call list_sources and use an existing name — do not invent sources.' });
+
+    // set_source_git_ref validates input, looks up the Source, then resolves an optional plan.
+    for (const input of [{}, { source_name: "Fixture" }, { source_name: " ", tag: "v1" }, { source_name: "Fixture", tag: " ", branch: " " }]) {
+      expect(await traceCategory("set_source_git_ref", input, [], { repository })).toEqual({ error: "source_name and tag or branch required" });
+    }
+    expect(await traceCategory("set_source_git_ref", { source_name: "Absent", tag: "v1" }, sources, { repository, files: [...files, ...files] })).toEqual({ error: 'Source not found: "Absent". Call list_sources first.' });
+    // Without a plan the proposal uses plan 0 and skips the dismissal lookup.
+    expect(await traceCategory("set_source_git_ref", { source_name: "fixture", tag: " v1 " }, sources, options)).toEqual(gitRef(0, "tag=v1", { tag: "v1" }));
+    expect(await traceCategory("set_source_git_ref", { source_name: "Fixture", tag: "v1", plan_id: foreign.id }, lookup, options)).toEqual(gitRef(0, "tag=v1", { tag: "v1" }));
+    expect(await traceCategory("set_source_git_ref", { source_name: "Fixture", tag: "v1", branch: "dev", plan_id: plan.id }, tables, options)).toEqual(gitRef(plan.id, "tag=v1, branch=dev", { tag: "v1", branch: "dev" }));
+    expect(await traceCategory("set_source_git_ref", { source_name: "Fixture", branch: "dev" }, ["table:plan_decisions", ...sources], { ...options, activePlanId: idle.id })).toEqual(gitRef(idle.id, "branch=dev", { branch: "dev" }));
+
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "set_base", params: { source_name: "Fixture" } });
+    repo.createPlanDecision({ planId: plan.id, actor: "user", kind: "dismissed_action", actionType: "set_source_git_ref", params: { source_name: "Fixture", tag: "v1" } });
+    expect(await traceCategory("set_base", { plan_id: plan.id, source_name: "Fixture" }, tables, options)).toEqual(dismissed("set_base", { source_name: "Fixture" }));
+    expect(await traceCategory("set_source_git_ref", { source_name: "Fixture", tag: "v1", plan_id: plan.id }, tables, options)).toEqual(dismissed("set_source_git_ref", { source_name: "Fixture", tag: "v1" }));
+    // The other ref and the other plan still propose.
+    expect(await traceCategory("set_source_git_ref", { source_name: "Fixture", tag: "v2", plan_id: plan.id }, tables, options)).toEqual(gitRef(plan.id, "tag=v2", { tag: "v2" }));
+    expect(await traceCategory("set_base", { plan_id: idle.id, source_name: "Fixture" }, tables, options)).toEqual(base(idle.id));
+
+    const union = isolated ? ["file:source-workspace", ...tables] : tables;
+    for (const tool of ["set_base", "set_source_git_ref"] as const) {
+      expect([...unions.get(tool) ?? []].sort()).toEqual(union);
+      expect(declared(`tool.${tool}`)).toEqual(["file:source-workspace", ...tables]);
+    }
+  });
+}

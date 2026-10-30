@@ -3392,6 +3392,7 @@ dependencies = [
  "pp-compat",
  "pp-gateway",
  "pp-net",
+ "pp-perf",
  "pp-source",
  "pp-storage",
  "rand 0.9.5",
@@ -3492,6 +3493,7 @@ dependencies = [
 name = "pp-perf"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

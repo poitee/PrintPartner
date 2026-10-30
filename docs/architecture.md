@@ -61,10 +61,10 @@ The workspace is `rust/Cargo.toml`. A dependency marked "flagged" compiles only 
 | `pp-api` | Rust HTTP API. Holds the auth module today. | `pp-storage` |
 | `pp-gateway` | Loopback listener, sessions, route ownership, web UI assets and the proxy to Node. | `pp-compat`, `pp-drivers`, `pp-net` |
 | `pp-compat` | Supervises the Node compatibility server and its private socket. Goes away with Node. | none |
-| `pp-core` | Composition root for the storage lease, gateway and supervisor lifetimes. | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` (flagged), `pp-net` (flagged) |
+| `pp-core` | Composition root for the storage lease, gateway and supervisor lifetimes. Also launches the app under test for T-53 captures (`perf_launch`, `pp-perf-capture`). | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-perf`, `pp-source` (flagged), `pp-net` (flagged) |
 | `pp-desktop` | Tauri window and tray around `pp-core`. | `pp-core` |
 | `pp-server` | Headless launcher around `pp-core`. | `pp-core` |
-| `pp-perf` | Performance measurement records, the 10% regression gate and Linux process-tree PSS (T-53). | none |
+| `pp-perf` | Performance measurement records, the 10% regression gate, and Linux process-tree PSS and CPU ticks (T-53). Spawns no processes. | none |
 
 `rust/scripts/check-boundaries.py` rejects any crate dependency that its allow list does not name. [ADR 0007](adr/0007-rust-crate-layout.md) records the allowed edges and the planned ones.
 

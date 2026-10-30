@@ -82,20 +82,9 @@ fn ticket_t_29_tray_badge_handles_tiny_icons_without_panicking() {
 }
 
 #[test]
-fn ticket_t_29_tray_menu_always_offers_show_status_restart_and_quit() {
-    for recovery_ui in [false, true] {
-        let ids = menu_ids(recovery_ui);
-        for id in ["show", "status", "recover", "quit"] {
-            assert!(
-                ids.contains(&id),
-                "{id} missing with recovery_ui={recovery_ui}"
-            );
-        }
-        assert_eq!(ids.first(), Some(&"show"));
-        assert_eq!(ids.last(), Some(&"quit"), "Quit stays last");
-    }
+fn ticket_t_29_tray_menu_offers_status_logs_restart_data_and_quit_by_default() {
     assert_eq!(
-        menu_ids(true),
+        menu_ids(),
         [
             "show",
             "browser",
@@ -107,5 +96,4 @@ fn ticket_t_29_tray_menu_always_offers_show_status_restart_and_quit() {
             "quit"
         ]
     );
-    assert!(!menu_ids(false).contains(&"logs") && !menu_ids(false).contains(&"data"));
 }
