@@ -66,6 +66,8 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("OLLAMA_URL", Owner::Database),
     ("OPENAI_API_KEY", Owner::Credential),
     ("OPENAI_BASE_URL", Owner::Database),
+    // No effect yet: the route also turns the UI on while NODE_ENV is not
+    // "production", and the child leaves NODE_ENV unset (GRE-1037).
     ("OPENAPI_UI", Owner::DesktopToml),
     ("PASSWORD_RESET_DEV_EXPOSE", Owner::Hidden),
     ("PORT", Owner::Core),
