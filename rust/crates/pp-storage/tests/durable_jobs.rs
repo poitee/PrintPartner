@@ -737,6 +737,181 @@ fn ticket_t_28_recovery_orderly_restart_and_subject_bound_reconciliation() {
     );
     owner.shutdown().unwrap();
 }
+/// Cancellation cannot undo an acknowledged remote effect, for every
+/// external-effect kind, before or after the effect is confirmed, and a
+/// restart does not re-queue or resend it either.
+#[test]
+fn ticket_t_28_recovery_cancel_cannot_undo_acknowledged_effects() {
+    let external: Vec<_> = JobKind::ALL
+        .into_iter()
+        .filter(|kind| kind.effect_class() != EffectClass::LocalStaging)
+        .collect();
+    assert_eq!(
+        external,
+        [JobKind::CheckSourceUpdates, JobKind::PrinterUpload],
+        "a new external-effect kind needs a case below"
+    );
+    let cases = [
+        (
+            "printer-admitted",
+            printer("printer-a"),
+            EffectOperation::PrinterUpload,
+            "printer-a",
+            false,
+        ),
+        (
+            "printer-confirmed",
+            printer("printer-b"),
+            EffectOperation::PrinterUploadAndStart,
+            "printer-b",
+            true,
+        ),
+        (
+            "refresh-admitted",
+            Payload::CheckSourceUpdates {},
+            EffectOperation::SourceRefresh,
+            "source:1",
+            false,
+        ),
+        (
+            "refresh-confirmed",
+            Payload::CheckSourceUpdates {},
+            EffectOperation::SourceRefresh,
+            "source:2",
+            true,
+        ),
+    ];
+    // Each case gets its own store: a job awaiting reconciliation keeps its
+    // kind's capacity, so a second job of the same kind would not be claimed.
+    for (key, payload, operation, target, confirm) in cases {
+        let (path, owner) = fixture();
+        let record = enqueue(&owner, key, payload);
+        let worker = owner.job_worker(admission()).unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
+        worker
+            .update(
+                &mut lease,
+                WorkerOperation::BeginEffect(intent(operation, target)),
+            )
+            .unwrap();
+        if confirm {
+            worker
+                .update(&mut lease, WorkerOperation::ConfirmEffect(receipt(target)))
+                .unwrap();
+        }
+        let cancelled = job_after_cancel(&owner, &record.job_id);
+        assert_eq!(
+            cancelled.state,
+            PersistentState::ReconciliationRequired,
+            "{key}"
+        );
+        assert_eq!(
+            cancelled.recovery.as_deref(),
+            Some("Cancellation cannot undo an admitted effect"),
+            "{key}"
+        );
+        assert_eq!(cancelled.snapshot().status, "error", "{key}");
+        assert_eq!(cancelled.effects.len(), 1, "{key}");
+        assert_eq!(cancelled.effects[0].intent.target, target, "{key}");
+        assert_eq!(cancelled.effects[0].confirmed, confirm, "{key}");
+        assert_eq!(
+            cancelled.effects[0]
+                .receipt
+                .as_ref()
+                .map(|r| r.target.as_str()),
+            confirm.then_some(target),
+            "{key}"
+        );
+        // The cancelled attempt can neither finish nor admit another effect.
+        assert!(
+            worker
+                .update(&mut lease, WorkerOperation::ConfirmEffect(receipt(target)))
+                .is_err(),
+            "{key}"
+        );
+        assert!(
+            worker
+                .update(
+                    &mut lease,
+                    WorkerOperation::BeginEffect(intent(operation, "other"))
+                )
+                .is_err(),
+            "{key}"
+        );
+        // A second cancel changes nothing.
+        let again = job_after_cancel(&owner, &record.job_id);
+        assert_eq!(again.state_version, cancelled.state_version, "{key}");
+        owner.shutdown().unwrap();
+        // A restart keeps the effect for reconciliation and resends nothing.
+        let (owner, _) = WriterOwner::open(&path, Limits::default()).unwrap();
+        let after = get(&owner, &record.job_id);
+        assert_eq!(
+            after.state,
+            PersistentState::ReconciliationRequired,
+            "{key}"
+        );
+        assert_eq!(after.attempt, cancelled.attempt, "{key}");
+        assert_eq!(after.generation, cancelled.generation, "{key}");
+        assert_eq!(after.recovery, cancelled.recovery, "{key}");
+        assert_eq!(after.effects, cancelled.effects, "{key}");
+        assert!(
+            owner
+                .job_worker(admission())
+                .unwrap()
+                .claim()
+                .unwrap()
+                .is_none(),
+            "{key}"
+        );
+        owner.shutdown().unwrap();
+    }
+    // Cancelling before admission still ends cancelled with no effect, for
+    // both external-effect kinds.
+    for (key, payload, operation, target) in [
+        (
+            "printer-before-admission",
+            printer("printer-c"),
+            EffectOperation::PrinterUpload,
+            "printer-c",
+        ),
+        (
+            "refresh-before-admission",
+            Payload::CheckSourceUpdates {},
+            EffectOperation::SourceRefresh,
+            "source:3",
+        ),
+    ] {
+        let (_, owner) = fixture();
+        let before = enqueue(&owner, key, payload);
+        let worker = owner.job_worker(admission()).unwrap();
+        let claimed_attempt!(_, mut lease) = worker.claim().unwrap().unwrap();
+        let cancelled = job_after_cancel(&owner, &before.job_id);
+        assert_eq!(cancelled.state, PersistentState::Cancelled, "{key}");
+        assert!(
+            cancelled.effects.is_empty() && cancelled.recovery.is_none(),
+            "{key}"
+        );
+        assert!(
+            worker
+                .update(
+                    &mut lease,
+                    WorkerOperation::BeginEffect(intent(operation, target))
+                )
+                .is_err(),
+            "{key}"
+        );
+        owner.shutdown().unwrap();
+    }
+}
+fn job_after_cancel(owner: &WriterOwner, job_id: &str) -> JobRecord {
+    job(call(
+        owner,
+        UserOperation::Cancel {
+            job_id: job_id.into(),
+        },
+    )
+    .unwrap())
+}
 #[test]
 fn ticket_t_28_recovery_receipts_duplicate_effects_and_finish() {
     let (_, owner) = fixture();
