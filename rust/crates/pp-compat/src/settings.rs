@@ -51,6 +51,8 @@ pub const ENVIRONMENT: &[(&str, Owner)] = &[
     ("GITHUB_CLIENT_SECRET", Owner::Hidden),
     ("GITHUB_REPO", Owner::Hidden),
     ("GOOGLE_CLIENT_ID", Owner::Hidden),
+    // Core owns the real listener and hands the child a socket path in the setup
+    // pipe (PORT is Core). The child still reads HOST, so it stays pinned to loopback.
     ("HOST", Owner::Fixed("127.0.0.1")),
     ("INTEGRATION_API_KEY", Owner::Credential),
     ("MULTI_USER", Owner::Core),
@@ -104,25 +106,36 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    /// Names read as `process.env.NAME`. Any other access fails, except the whole
+    /// environment handed to the assistant resolver, which reads outside config.ts.
     fn config_names() -> BTreeSet<String> {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../web/apps/server/src/config.ts"
         );
         let text = std::fs::read_to_string(path).unwrap();
-        text.match_indices("process.env.")
-            .map(|(at, prefix)| {
-                text[at + prefix.len()..]
-                    .chars()
-                    .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
-                    .collect::<String>()
-            })
-            .filter(|name| !name.is_empty())
-            .collect()
+        let mut names = BTreeSet::new();
+        for (at, prefix) in text.match_indices("process.env") {
+            let rest = &text[at + prefix.len()..];
+            let Some(rest) = rest.strip_prefix('.') else {
+                assert!(
+                    text[..at].ends_with("env: ") && rest.starts_with(','),
+                    "unrecognized process.env access at byte {at}"
+                );
+                continue;
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                .collect();
+            assert!(!name.is_empty(), "unreadable process.env name at byte {at}");
+            names.insert(name);
+        }
+        names
     }
 
     #[test]
-    fn ticket_t_33_every_node_config_setting_has_one_desktop_owner() {
+    fn ticket_t_33_every_config_ts_setting_has_one_desktop_owner() {
         let mapped: Vec<&str> = ENVIRONMENT.iter().map(|(name, _)| *name).collect();
         let unique: BTreeSet<String> = mapped.iter().map(|name| name.to_string()).collect();
         assert_eq!(unique.len(), mapped.len(), "a setting is listed twice");
