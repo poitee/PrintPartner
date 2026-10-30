@@ -20,6 +20,7 @@
     "test:build-tools": "node --test scripts/atomic-package-build.test.mjs",
     "test:runtime": "node --test scripts/server-runtime.test.mjs ../scripts/verify-print-partner/control-print-partner.test.mjs",
     "test:browser": "npm run test:browser -w @print-partner/web",
+    "test:e2e": "playwright test",
     "test:workflow-smoke": "python3 -m unittest scripts.test_workflow_smoke",
     "audit:cleanup": "node ../scripts/audit-cleanup.mjs",
     "audit:public": "node ../scripts/audit-public-release.mjs",
@@ -41,7 +42,9 @@
     "contracts:verify": "node scripts/desktop-contracts/verify.mjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
     "@print-partner/contracts": "*",
     "ajv": "6.15.0",
     "better-sqlite3": "13.0.3",

@@ -15,6 +15,8 @@ on:
       - 'web/package.json'
       - 'web/package-lock.json'
       - 'web/scripts/**'
+      - 'web/playwright.config.ts'
+      - 'web/test/e2e/**'
       - 'scripts/verify-rust-gateway/**'
       - '.github/workflows/desktop-runtime.yml'
   push:
@@ -30,6 +32,8 @@ on:
       - 'web/package.json'
       - 'web/package-lock.json'
       - 'web/scripts/**'
+      - 'web/playwright.config.ts'
+      - 'web/test/e2e/**'
       - 'scripts/verify-rust-gateway/**'
       - '.github/workflows/desktop-runtime.yml'
 
@@ -50,7 +54,7 @@ jobs:
   runtime:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 55
     env:
       VITE_PRINT_PARTNER_DESKTOP: '1'
       CARGO_INCREMENTAL: '0'
@@ -135,6 +139,16 @@ jobs:
       - name: Verify gateway streaming and shutdown
         run: |
           python3 rust/tests/gateway_product.py --streams 2>&1 | tee "$PP_EVIDENCE/gateway-streams.log"
+      - name: Run Playwright specs against pp-server
+        working-directory: web
+        env:
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE: /usr/bin/google-chrome
+        run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee "$PP_EVIDENCE/playwright.log"
+          # verify.py checks pp-server's shutdown; Playwright does not fail on it, so check here.
+          grep -q 'STOP: exit=0; compatibility reservation removed' "$PP_EVIDENCE/playwright.log"
+          if pgrep -x pp-server; then echo '::error::pp-server survived the Playwright run'; exit 1; fi
       - name: Preserve final inventory and lockfile state
         if: always()
         run: |

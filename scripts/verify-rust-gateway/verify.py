@@ -3,7 +3,8 @@
 
 Modes: `verify` (default) runs the full proof. `launch` builds, starts pp-server
 on loopback, prints `PP_SERVER_URL=...` and stays up until SIGTERM, SIGINT or SIGHUP,
-then stops it cleanly.
+then stops it cleanly. `launch --binary` skips the build and starts a pp-server built
+against the existing rust/bundle-manifest.json.
 """
 import argparse
 import fcntl
@@ -597,14 +598,19 @@ def unpublish_credential(target, handle):
         handle.close()
 
 
-def launch(root, credentials):
+def launch(root, credentials, binary=None):
     # Fast refusal before a long build; publish_credential() is the authoritative check.
     if credentials is not None and (credentials.exists() or credentials.is_symlink()):
         raise SystemExit(f"credential file already exists: {credentials}")
     try:
         install_stop_handlers()
         commit, node = checkout(root)
-        binary = build(root, node, commit)
+        if binary is None:
+            binary = build(root, node, commit)
+        else:
+            # pp-server verifies its bundle against the manifest it was built with, so a
+            # prebuilt server needs that manifest's commit, not the current checkout's.
+            commit = json.loads((root / "rust/bundle-manifest.json").read_text())["commit"]
         serve(binary, root, node, commit, credentials)
     except Stop as stop:
         print(f"STOP: {stop} received before pp-server started", flush=True)
@@ -691,14 +697,20 @@ def main():
                         help="checkout root (default: git top-level for this helper)")
     parser.add_argument("--credential-file", type=Path,
                         help="launch only: pp-server writes the one-use bootstrap credential here")
+    parser.add_argument("--binary", type=Path,
+                        help="launch only: start this prebuilt pp-server instead of building one")
     args = parser.parse_args()
     if args.credential_file is not None and args.mode != "launch":
         parser.error("--credential-file applies only to launch")
+    if args.binary is not None and args.mode != "launch":
+        parser.error("--binary applies only to launch")
+    if args.binary is not None and not (args.binary.is_file() and os.access(args.binary, os.X_OK)):
+        parser.error(f"--binary is not an executable file: {args.binary}")
     root = args.repo.resolve() if args.repo is not None else default_repo_root()
     if args.mode == "launch":
         # Resolve the directory only: a symlink at the final component is an existing entry to refuse.
         credentials = args.credential_file.parent.resolve() / args.credential_file.name if args.credential_file else None
-        launch(root, credentials)
+        launch(root, credentials, args.binary.resolve() if args.binary else None)
     else:
         # Cancelled proofs remain nonzero, after their owned processes have been cleaned up.
         install_stop_handlers()
