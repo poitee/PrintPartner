@@ -87,6 +87,9 @@ async function parseInputs(fflate) {
       Buffer.from([0x61, 0xff, 0x62, 0xc3, 0x63, 0xe2, 0x82, 0x64, 0xf0, 0x9f, 0x98, 0x65, 0xed, 0xa0, 0x80, 0x66, 0xc0, 0x80, 0x67]),
       Buffer.from('"}'),
     ])],
+    ["version_overflow", "kit.json", Buffer.from('{"format":"print-partner-kit","version":1e999}')],
+    ["overflowing_numbers", "kit.json", Buffer.from('{"format":"print-partner-kit","version":3,"layers":[{"w":1e999,"v":-2E+400,"s":"1e999","u":1e-999}]}')],
+    ["overflow_in_invalid_json", "kit.json", Buffer.from('{"format":"print-partner-kit","version":3,"w":01e999}')],
     ["escapes", "kit.json", Buffer.from('{"format":"print-partner-kit","version":3,"s":"\\u0041\\n\\u2028\\ud83d\\ude00\\/"}')],
     ["zip", "Bundle.print-partner-kit.zip", zip({ "kit.json": kit({ profile: { name: "Z" } }) })],
     ["zip_by_magic", "upload.bin", zip({ "kit.json": kit({}) })],
@@ -175,7 +178,10 @@ const projectRows = [
   { id: "category_blank", row: { name: "A", url: "u", branch: null, tag: null, sourceKind: null, sourceType: null, role: "addon", importedPaths: " [] ", metadataJson: '{"category":"   "}', manifestCommunitySlug: "" } },
   { id: "metadata_not_json", row: { name: "A", url: "u", branch: null, tag: null, sourceKind: null, sourceType: null, role: " Base ", importedPaths: null, metadataJson: "not json", manifestCommunitySlug: null } },
   { id: "metadata_number_category", row: { name: "A", url: "u", branch: null, tag: null, sourceKind: null, sourceType: null, role: "base", importedPaths: null, metadataJson: '{"category":5}', manifestCommunitySlug: null } },
-  { id: "role_prototype_name", row: { name: "A", url: "u", branch: null, tag: null, sourceKind: null, sourceType: null, role: "constructor", importedPaths: null, metadataJson: null, manifestCommunitySlug: null } },
+  ...["constructor", "__proto__", "__defineGetter__", "toString", "valueOf"].map((role) => ({
+    id: `role_${role.toLowerCase()}`,
+    row: { name: "A", url: "u", branch: null, tag: null, sourceKind: null, sourceType: null, role, importedPaths: null, metadataJson: null, manifestCommunitySlug: null },
+  })),
 ];
 
 if (process.argv.includes("--probe")) {

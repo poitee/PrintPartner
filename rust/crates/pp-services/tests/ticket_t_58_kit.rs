@@ -89,7 +89,7 @@ mod ticket_t_58_kit {
             Some(MAX_KIT_JSON_BYTES)
         );
         let cases = golden["parse"].as_array().unwrap();
-        assert_eq!(cases.len(), 54);
+        assert_eq!(cases.len(), 57);
         for case in cases {
             let id = case["id"].as_str().unwrap();
             let bytes = input_bytes(case);
@@ -199,41 +199,49 @@ mod ticket_t_58_kit {
     fn ticket_t_58_kit_project_export_records_match_node() {
         let golden = golden();
         let cases = golden["projects"].as_array().unwrap();
-        assert_eq!(cases.len(), 9);
+        assert_eq!(cases.len(), 13);
         for case in cases {
             let id = case["id"].as_str().unwrap();
             let source = KitSourceRef::from_project(&project(&case["row"]));
             let (export, patch) = (source.to_export_record(), source.matched_patch());
-            if id == "role_prototype_name" {
-                // Declared difference: Node looks the role up on a plain object,
-                // so "constructor" resolves to Object's constructor function.
-                // JSON.stringify drops that category from the export and writes
-                // `metadata: {}` in the patch. Rust treats it as an unknown role.
-                assert!(case["export"].get("category").is_none());
-                assert_eq!(case["patch"]["metadata"], json!({}));
-                assert_eq!(export["category"], json!("unassigned"));
-                assert!(patch.get("metadata").is_none());
-                let mut node_export = case["export"].clone();
-                node_export
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("category".into(), json!("unassigned"));
-                let mut node_patch = case["patch"].clone();
-                node_patch.as_object_mut().unwrap().remove("metadata");
-                assert_eq!(export, node_export, "{id}");
-                assert_eq!(patch, node_patch, "{id}");
-                continue;
-            }
+            // Declared difference: Node looks the lowercased role up on a plain
+            // object, so "constructor" and "__proto__" resolve to members of
+            // Object.prototype. JSON.stringify drops the function category (or
+            // writes the prototype as {}), and the patch gets that metadata.
+            // Rust treats both as unknown roles.
+            let prototype_category = match id {
+                "role_constructor" => None,
+                "role___proto__" => Some(json!({})),
+                _ => {
+                    assert_eq!(
+                        stringify(&export, false),
+                        stringify(&case["export"], false),
+                        "{id}"
+                    );
+                    assert_eq!(
+                        stringify(&patch, false),
+                        stringify(&case["patch"], false),
+                        "{id}"
+                    );
+                    continue;
+                }
+            };
             assert_eq!(
-                stringify(&export, false),
-                stringify(&case["export"], false),
+                case["export"].get("category"),
+                prototype_category.as_ref(),
                 "{id}"
             );
-            assert_eq!(
-                stringify(&patch, false),
-                stringify(&case["patch"], false),
-                "{id}"
-            );
+            let node_metadata =
+                prototype_category.map_or_else(|| json!({}), |c| json!({ "category": c }));
+            assert_eq!(case["patch"]["metadata"], node_metadata, "{id}");
+            assert_eq!(export["category"], json!("unassigned"), "{id}");
+            assert!(patch.get("metadata").is_none(), "{id}");
+            let mut node_export = case["export"].clone();
+            node_export["category"] = json!("unassigned");
+            let mut node_patch = case["patch"].clone();
+            node_patch.as_object_mut().unwrap().remove("metadata");
+            assert_eq!(export, node_export, "{id}");
+            assert_eq!(patch, node_patch, "{id}");
         }
     }
 

@@ -101,6 +101,75 @@ fn string_to_number(s: &str) -> f64 {
     s.parse().unwrap_or(f64::NAN)
 }
 
+/// `text` with every JSON number literal that overflows f64 replaced by
+/// `null`, or `None` when there is none. Only grammatical literals outside
+/// strings are replaced, so invalid JSON stays invalid.
+pub(crate) fn overflowing_numbers_to_null(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let (mut copied, mut i, mut in_string, mut replaced) = (0, 0, false, false);
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            match b {
+                b'\\' => i += 1,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        if b != b'-' && !b.is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_digit() || b"+-.eE".contains(&bytes[i])) {
+            i += 1;
+        }
+        let token = &text[start..i];
+        if is_json_number(token) && token.parse::<f64>().is_ok_and(f64::is_infinite) {
+            out.push_str(&text[copied..start]);
+            out.push_str("null");
+            copied = i;
+            replaced = true;
+        }
+    }
+    replaced.then(|| out + &text[copied..])
+}
+
+/// The JSON number grammar: `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?`.
+fn is_json_number(token: &str) -> bool {
+    let digits = |s: &str| s.bytes().take_while(u8::is_ascii_digit).count();
+    let s = token.strip_prefix('-').unwrap_or(token);
+    let int = digits(s);
+    if int == 0 || (int > 1 && s.starts_with('0')) {
+        return false;
+    }
+    let mut rest = &s[int..];
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let n = digits(fraction);
+        if n == 0 {
+            return false;
+        }
+        rest = &fraction[n..];
+    }
+    if let Some(exponent) = rest.strip_prefix(['e', 'E']) {
+        let exponent = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+        let n = digits(exponent);
+        if n == 0 {
+            return false;
+        }
+        rest = &exponent[n..];
+    }
+    rest.is_empty()
+}
+
 /// `JSON.stringify(value)`, or `JSON.stringify(value, null, 2)` when `pretty`.
 /// Objects list array-index keys first in ascending order, as JavaScript
 /// objects do, then the other keys in insertion order.
@@ -232,6 +301,19 @@ mod tests {
         assert_eq!(
             stringify(&json!({"a": [1, {"b": []}]}), true),
             "{\n  \"a\": [\n    1,\n    {\n      \"b\": []\n    }\n  ]\n}"
+        );
+    }
+
+    #[test]
+    fn overflowing_literals_become_null_only_when_grammatical() {
+        assert_eq!(
+            overflowing_numbers_to_null(r#"{"a":[1e999,-2E+400,"1e999\"",1.5],"b":1e999}"#)
+                .as_deref(),
+            Some(r#"{"a":[null,null,"1e999\"",1.5],"b":null}"#)
+        );
+        assert_eq!(
+            overflowing_numbers_to_null("[01e999, 1e999.5, 1.e999, 1e-999]"),
+            None
         );
     }
 }

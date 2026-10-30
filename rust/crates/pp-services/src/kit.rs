@@ -119,8 +119,14 @@ fn parse_kit_json(bytes: &[u8]) -> Result<Map<String, Value>, KitBundleError> {
     }
     // Buffer#toString("utf8") replaces invalid sequences with U+FFFD.
     let text = String::from_utf8_lossy(bytes);
-    let data: Value =
-        serde_json::from_str(&text).map_err(|error| KitBundleError::Json(error.to_string()))?;
+    let data: Value = match serde_json::from_str(&text) {
+        Ok(data) => data,
+        // JSON.parse reads a literal past f64 range as ±Infinity, which
+        // JSON.stringify writes as null; serde_json refuses it.
+        Err(error) => js::overflowing_numbers_to_null(&text)
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .ok_or_else(|| KitBundleError::Json(error.to_string()))?,
+    };
     let data = match data {
         Value::Null => return Err(KitBundleError::NullDocument),
         Value::Object(map) if map.get("format").and_then(Value::as_str) == Some(KIT_FORMAT) => map,
@@ -144,6 +150,7 @@ pub struct KitBundlePart {
     pub role: String,
     pub filament_color_id: Option<String>,
     pub filament_custom_hex: Option<String>,
+    /// Quantities are integers: Node reads them from integer columns.
     pub quantity_inferred: i64,
     pub quantity_override: Option<i64>,
     pub quantity_effective: i64,
