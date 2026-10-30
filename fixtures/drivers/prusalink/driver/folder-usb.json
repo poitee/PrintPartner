@@ -1,0 +1,63 @@
+{
+  "name": "usb",
+  "type": "FOLDER",
+  "children": [
+    {
+      "name": "SUB",
+      "display_name": "Sub folder",
+      "type": "FOLDER",
+      "m_timestamp": 1730246400
+    },
+    {
+      "name": "BENCHY~1.BGC",
+      "display_name": "benchy.bgcode",
+      "type": "PRINT_FILE",
+      "size": 123456.6,
+      "m_timestamp": 1730246461.5
+    },
+    {
+      "name": "NOSIZE.GCO",
+      "display_name": "  ",
+      "type": "PRINT_FILE"
+    },
+    {
+      "name": "NEG.GCO",
+      "type": "PRINT_FILE",
+      "size": -1,
+      "m_timestamp": -86400.25
+    },
+    {
+      "name": "ZERO.GCO",
+      "type": "PRINT_FILE",
+      "size": 0,
+      "m_timestamp": 0
+    },
+    {
+      "name": "../escape",
+      "type": "PRINT_FILE"
+    },
+    {
+      "name": "a/b",
+      "type": "PRINT_FILE"
+    },
+    {
+      "name": "..",
+      "type": "FOLDER"
+    },
+    {
+      "name": "notes.txt",
+      "type": "FILE",
+      "size": 5
+    },
+    {
+      "display_name": "no name",
+      "type": "PRINT_FILE"
+    },
+    "junk",
+    {
+      "name": " PAD.GCO ",
+      "type": "PRINT_FILE",
+      "size": "12"
+    }
+  ]
+}

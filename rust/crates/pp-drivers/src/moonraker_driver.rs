@@ -636,13 +636,18 @@ fn modified_at(raw: Option<&Value>) -> Result<Option<String>> {
     else {
         return Ok(None);
     };
-    let millis = (seconds * 1000.0).trunc();
-    ensure!(millis <= 8.64e15, "Invalid time value");
+    iso_time(seconds * 1000.0).map(Some)
+}
+
+/// `new Date(millis).toISOString()`, including its "Invalid time value" error.
+pub(crate) fn iso_time(millis: f64) -> Result<String> {
+    let millis = millis.trunc();
+    ensure!(millis.abs() <= 8.64e15, "Invalid time value");
     let millis = millis as i64;
-    let (days, rest) = (millis / 86_400_000, millis % 86_400_000);
-    // Howard Hinnant's civil_from_days, for days since 1970-01-01 (non-negative).
+    let (days, rest) = (millis.div_euclid(86_400_000), millis.rem_euclid(86_400_000));
+    // Howard Hinnant's civil_from_days, for days since 1970-01-01.
     let z = days + 719_468;
-    let era = z / 146_097;
+    let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
@@ -650,18 +655,18 @@ fn modified_at(raw: Option<&Value>) -> Result<Option<String>> {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    let year = if year > 9999 {
-        format!("+{year:06}")
-    } else {
-        format!("{year:04}")
+    let year = match year {
+        0..=9999 => format!("{year:04}"),
+        _ if year < 0 => format!("-{:06}", -year),
+        _ => format!("+{year:06}"),
     };
-    Ok(Some(format!(
+    Ok(format!(
         "{year}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
         rest / 3_600_000,
         rest / 60_000 % 60,
         rest / 1000 % 60,
         rest % 1000
-    )))
+    ))
 }
 
 #[cfg(test)]

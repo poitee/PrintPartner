@@ -1,0 +1,30 @@
+{
+  "note": "Request path -> fixture file for authorized requests. Unauthorized requests get digest-401.json; unlisted requests answer 404 with {}.",
+  "routes": {
+    "/api/v1/storage": "storage.json",
+    "/api/v1/files/usb/": "folder-usb.json",
+    "/api/v1/files/usb/SUB": "folder-sub.json",
+    "/api/v1/files/usb/FUT": "folder-far-future.json",
+    "/api/v1/files/local/": "folder-sub.json",
+    "/api/v1/cameras": "cameras.json",
+    "/api/v1/job": "job-objects.json",
+    "/api/v1/files/usb/BENCHY~1.BGC/raw": "print-file.gcode"
+  },
+  "browse": [
+    "",
+    "SUB",
+    "SUB/",
+    "/SUB/",
+    "FUT",
+    "MISSING",
+    "../x",
+    "a\\b",
+    "a//b"
+  ],
+  "configs": {
+    "auto": {},
+    "pinned": {
+      "storage": "/local/"
+    }
+  }
+}
