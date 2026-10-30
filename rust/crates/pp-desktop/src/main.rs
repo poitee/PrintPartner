@@ -379,11 +379,15 @@ fn build_tray(
     let quit = MenuItem::with_id(app, "quit", "Quit Print Partner", true, None::<&str>)?;
     let recovery_ui = std::env::var("PP_DESKTOP_RECOVERY_UI").is_ok_and(|value| value == "1");
     let all = [&show, &status, &logs, &log_folder, &recover, &folder, &quit];
-    let items: Vec<&dyn IsMenuItem<_>> = pp_desktop::tray::menu_ids(recovery_ui)
+    let items = pp_desktop::tray::menu_ids(recovery_ui)
         .iter()
-        .filter_map(|id| all.iter().find(|item| item.id().as_ref() == *id))
-        .map(|item| *item as &dyn IsMenuItem<_>)
-        .collect();
+        .map(|id| {
+            all.iter()
+                .find(|item| item.id().as_ref() == *id)
+                .map(|item| *item as &dyn IsMenuItem<_>)
+                .with_context(|| format!("Tray menu item {id} missing"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let menu = Menu::with_items(app, &items)?;
     let status_receiver = handle.subscribe();
     let recovery = handle.clone();
@@ -419,26 +423,32 @@ fn build_tray(
     let app_handle = app.handle().clone();
     let watch = tauri::async_runtime::spawn(async move {
         let mut receiver = status_receiver;
+        let mut shown_tone = None;
         loop {
             let state = receiver.borrow_and_update().clone();
             let (text, tone) = pp_desktop::tray::status(&state);
-            let badged = Image::new_owned(
-                pp_desktop::tray::badge(icon.rgba(), icon.width(), icon.height(), tone),
-                icon.width(),
-                icon.height(),
-            );
+            let badged = (shown_tone != Some(tone)).then(|| {
+                Image::new_owned(
+                    pp_desktop::tray::badge(icon.rgba(), icon.width(), icon.height(), tone),
+                    icon.width(),
+                    icon.height(),
+                )
+            });
             let guarded = gate.observe(&state);
             let (status, recover, tray) = (status.clone(), recover.clone(), tray.clone());
             if app_handle
                 .run_on_main_thread(move || {
                     let _ = status.set_text(text);
                     let _ = recover.set_enabled(guarded);
-                    let _ = tray.set_icon(Some(badged));
+                    if let Some(badged) = badged {
+                        let _ = tray.set_icon(Some(badged));
+                    }
                 })
                 .is_err()
             {
                 break;
             }
+            shown_tone = Some(tone);
             if receiver.changed().await.is_err() {
                 break;
             }

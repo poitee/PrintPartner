@@ -49,13 +49,17 @@ pub fn menu_ids(recovery_ui: bool) -> &'static [&'static str] {
     }
 }
 
-/// Copies an RGBA icon and paints a status dot in its bottom-right quarter.
+/// Copies an RGBA icon and paints an opaque status dot in its bottom-right quarter.
+/// A buffer that does not hold width * height RGBA pixels comes back unchanged.
 pub fn badge(rgba: &[u8], width: u32, height: u32, tone: Tone) -> Vec<u8> {
     let mut out = rgba.to_vec();
-    if out.len() != (width as usize) * (height as usize) * 4 {
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4));
+    if expected != Some(out.len()) {
         return out;
     }
-    let radius = (width.min(height) / 4) as i64;
+    let radius = (width.min(height) / 4).max(1) as i64;
     let (cx, cy) = (width as i64 - radius - 1, height as i64 - radius - 1);
     let color = tone.rgba();
     for y in (cy - radius).max(0)..=(cy + radius).min(height as i64 - 1) {
