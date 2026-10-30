@@ -8,7 +8,8 @@
 # P0 Oct 30: this file is the ONLY source for scorer seat order, pick, claim, close-out and lane-state rules; any
 # seat list in lane-brief-common.md, CLAUDE.md or a skill defers here. Other fleet rules stay in the brief. Tell Dev Foreman about any conflict.
 version: 2
-updated: "2026-10-30T10:15:00-04:00"   # scorer_policy: size-based seat (Chad 9:56 AM ET via Alfred)
+updated: "2026-10-30T12:00:00-04:00"   # claude_guard: Claude weekly pace guard + Fable council (Chad via Alfred 11:47/11:48 AM ET)
+# prev updated: "2026-10-30T10:15:00-04:00"   # scorer_policy: size-based seat (Chad 9:56 AM ET via Alfred)
 # prev updated: "2026-10-30T09:45:00-04:00"   # P0 auto-pipeline: one seat order, Fixes-only close-out, no update-branch unblock, lane_state
 # prev updated: "2026-10-30T08:30:00-04:00"   # wakefix + tailnet wake (scorer-hint trial removed 2026-10-30 09:00 ET)
 # prev updated: "2026-10-30T04:30:00-04:00"   # selfclaim fix: umbrella blockers ignored, GRE-595 excluded, GRE-1029 waits on GRE-365   # v2: claim, linear_access, picker (Chad 11:58 PM ET Oct 29: self-driving intake)
@@ -94,9 +95,11 @@ caps:
 runtime_mode: full-access        # every thread, no exceptions
 models:
   author: {instanceId: claudeAgent, model: claude-opus-5-5, options: {effort: high}}
-  author_overflow:
-    model: grok-4.7
-    only_if: {grok_cursor_pool_used_pct_lt: 60, claude_near_cap: true}
+  author_overflow:                 # Chad 12:09 PM ET Oct 30: only when claude-guard says CAP1 (no slot) or PARK
+    modelSelection: {provider: grok, instanceId: grok, model: grok-4.7}   # T3 grok provider on all 4 VMs (Oct 30 12:10 ET)
+    only_if: {pool_readout: ~/fleet/usage/pool.json, pool_max_age_hours: 4, pool_used_pct_lt: 60}   # strict <; stale/missing -> no overflow, park
+    scorer: "~/bin/scorer-seat <pr> --author grok-4.7 (never the author's model: small -> Qwen, complex -> cursor composer-2.5)"
+  council: {instanceId: claudeAgent, model: claude-fable-5-1, options: {effort: high}, runtimeMode: full-access}   # council + design-review asks go to Fable, not Opus
   chores: {instanceId: pi, model: halo/qwen38-flash}
   scorers:
     must_differ_from_author: true   # different model and vendor than the author (Opus); a Grok score never counts
@@ -148,6 +151,15 @@ usage_guard:
   grok_cursor_pool_stop_pct: 75     # stop all Grok and Cursor use
   pool_reset: "Monday 17:55 America/New_York"
   claude_headroom_min_pct: 25       # required before heavy Fable or Opus launches
+claude_guard:   # Chad via Alfred, Oct 30 11:48 AM ET. Applied by ~/bin/claude-guard; gates NEW Opus authoring (M5-M7, AUTO-NEXT 4).
+  readout: ~/fleet/usage/claude.json   # {"left_pct", "read_at" UTC Z, "resets_at" UTC Z, "source"}; Dev Foreman refreshes it (no safe VM self-read)
+  time_left_pct: "hours_to_reset / 168 * 100"
+  allow: "left_pct >= time_left_pct - 5 -> normal lane count"
+  cap1: "below pace, or readout missing/stale (> 6 h) -> 1 Opus authoring lane fleet-wide; others finish in-flight work then park 'claude-weekly-cap1'"
+  cap1_slot: "VM 133 only, lock ~/fleet/usage/cap1-slot.lock (atomic create); first VM133 lane to run claude-guard --thread <id> holds it; freed by --release <id> at M3/park, by holder phase done/parked, or after 24 h"
+  park: "left_pct <= 10 -> no new authoring on any lane; in-flight finishes; each lane ends with one 'PARK: claude-weekly-park' block line"
+  in_flight: "always finishes the current ticket: fix rounds, scoring, merge"
+  grok_overflow: "claude-guard prints overflow=grok:grok-4.7 when allowed; see models.author_overflow"
   missing_readout: seat_unavailable
 
 merge_gate:
