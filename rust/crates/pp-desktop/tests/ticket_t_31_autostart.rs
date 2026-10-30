@@ -195,3 +195,57 @@ fn ticket_t_31_release_launch_still_refuses_other_arguments() {
     assert_eq!(debug.data.as_deref(), Some(Path::new("/tmp/data")));
     assert_eq!(debug.test_exit, Some(3));
 }
+
+#[test]
+fn ticket_t_31_open_at_login_toggle_turns_the_agent_on_and_off() {
+    use pp_desktop::tray::toggle_open_at_login;
+    let home = tempfile::tempdir().unwrap();
+    let agent = LaunchAgent::new(home.path(), Path::new(EXECUTABLE)).unwrap();
+    assert!(
+        toggle_open_at_login(&agent).unwrap(),
+        "first toggle turns it on"
+    );
+    assert!(agent.path().exists());
+    assert!(
+        !toggle_open_at_login(&agent).unwrap(),
+        "second toggle turns it off"
+    );
+    assert!(!agent.path().exists());
+
+    // An agent left by a moved app counts as off; toggling rewrites it for this app.
+    let moved = LaunchAgent::new(
+        home.path(),
+        Path::new("/Applications/Old.app/Contents/MacOS/pp-desktop"),
+    )
+    .unwrap();
+    moved.enable().unwrap();
+    assert!(!agent.is_enabled());
+    assert!(toggle_open_at_login(&agent).unwrap());
+    assert!(agent.is_enabled());
+}
+
+#[test]
+fn ticket_t_31_open_at_login_toggle_reports_a_failure() {
+    use pp_desktop::tray::toggle_open_at_login;
+    let home = tempfile::tempdir().unwrap();
+    // A directory where the agent file belongs makes enable fail.
+    let agent = LaunchAgent::new(home.path(), Path::new(EXECUTABLE)).unwrap();
+    fs::create_dir_all(agent.path()).unwrap();
+    assert!(toggle_open_at_login(&agent).is_err());
+    assert!(!agent.is_enabled());
+}
+
+#[test]
+fn ticket_t_31_open_at_login_sits_before_quit_on_macos_only() {
+    use pp_desktop::tray::{OPEN_AT_LOGIN, menu_ids, menu_ids_with_open_at_login};
+    let ids = menu_ids_with_open_at_login();
+    assert_eq!(ids.len(), menu_ids().len() + 1);
+    assert_eq!(&ids[ids.len() - 2..], [OPEN_AT_LOGIN, "quit"]);
+    let without: Vec<_> = ids
+        .iter()
+        .copied()
+        .filter(|id| *id != OPEN_AT_LOGIN)
+        .collect();
+    assert_eq!(without, menu_ids(), "the default order is unchanged");
+    assert!(!menu_ids().contains(&OPEN_AT_LOGIN));
+}
