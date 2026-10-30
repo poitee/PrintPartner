@@ -818,6 +818,48 @@ fn ticket_t_7_ownership_build_checklist_proposal_refuses_invalid_admission_befor
 }
 
 #[test]
+fn ticket_t_7_ownership_edit_plan_draft_parts_proposal_has_complete_node_owned_resources() {
+    use pp_gateway::ownership::{Owner, manifest::Disposition};
+    let id = "tool.propose_edit_plan_draft_parts";
+    let index = admit_bundled_manifest().unwrap();
+    let expected = ResourceSet::from([
+        Table(AppSettings),
+        Table(BuildProfiles),
+        Table(PlanDrafts),
+        Table(PlanDraftInputs),
+        Table(PlanDraftParts),
+        Table(PlanDraftRequiredUnitReconciliations),
+        Table(PlanDraftRequiredUnitDecisions),
+        Table(PlanDraftRequiredUnitAssignments),
+    ]);
+    assert_eq!(index.resources_for(id), Ok(&expected));
+    assert_eq!(
+        index.lookup(id).unwrap().disposition,
+        Disposition::Owned(Owner::Node)
+    );
+    assert_eq!(
+        index.admit_rollback(id),
+        Err(AdmissionError::IncompatibleLiveFormat {
+            operation: id.into(),
+            format: "sqlite-schema".into(),
+            node_reads: 34,
+            rust_writes: Some(35),
+        })
+    );
+    let mut sqlite_compatible = manifest();
+    sqlite_compatible["live_formats"]["sqlite-schema"]["node_reads"] = json!(35);
+    assert_eq!(
+        admit(&sqlite_compatible).unwrap().admit_rollback(id),
+        Ok(&expected)
+    );
+}
+
+#[test]
+fn ticket_t_7_ownership_edit_plan_draft_parts_proposal_refuses_invalid_admission_before_effects() {
+    assert_tool_invalid_admission("tool.propose_edit_plan_draft_parts");
+}
+
+#[test]
 fn ticket_t_7_ownership_apply_stack_preset_proposal_refuses_invalid_admission_before_effects() {
     assert_tool_invalid_admission("tool.apply_stack_preset");
 }
@@ -1200,6 +1242,7 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.update_kit_selections",
         "tool.apply_stack_preset",
         "tool.propose_add_build_checklist_items",
+        "tool.propose_edit_plan_draft_parts",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1227,8 +1270,8 @@ fn reviewed_sets_aliases_and_complete_unresolved_partition() {
         "tool.audit_source_provenance",
         "tool.analyze_stl_mesh",
     ]);
-    assert_eq!(reviewed.len(), 75);
-    assert_eq!(unresolved.len(), 354);
+    assert_eq!(reviewed.len(), 76);
+    assert_eq!(unresolved.len(), 353);
     let resolved: BTreeSet<_> = index
         .claims()
         .values()
@@ -1537,6 +1580,7 @@ fn reviewed_participants_cannot_move_to_unresolved_operations() {
         "tool.update_kit_selections",
         "tool.apply_stack_preset",
         "tool.propose_add_build_checklist_items",
+        "tool.propose_edit_plan_draft_parts",
         "tool.get_plan_decisions",
         "tool.list_plans",
         "tool.list_plan_snapshots",
@@ -1715,6 +1759,10 @@ fn reviewed_participants_cannot_swap_operations() {
         (
             "tool.apply_stack_preset",
             "tool.propose_add_build_checklist_items",
+        ),
+        (
+            "tool.propose_add_build_checklist_items",
+            "tool.propose_edit_plan_draft_parts",
         ),
         ("tool.list_plans", "tool.list_plan_snapshots"),
         ("tool.list_plan_snapshots", "tool.get_plan_snapshot"),

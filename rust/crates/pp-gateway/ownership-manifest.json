@@ -1648,6 +1648,19 @@
         "resources": [
           {"kind": "table", "name": "app_settings"}
         ]
+      },
+      {
+        "operation": "tool.propose_edit_plan_draft_parts",
+        "resources": [
+          {"kind": "table", "name": "app_settings"},
+          {"kind": "table", "name": "build_profiles"},
+          {"kind": "table", "name": "plan_drafts"},
+          {"kind": "table", "name": "plan_draft_inputs"},
+          {"kind": "table", "name": "plan_draft_parts"},
+          {"kind": "table", "name": "plan_draft_required_unit_reconciliations"},
+          {"kind": "table", "name": "plan_draft_required_unit_decisions"},
+          {"kind": "table", "name": "plan_draft_required_unit_assignments"}
+        ]
       }
     ],
     "unresolved": [
@@ -2000,7 +2013,6 @@
       "tool.ingest_guide_url",
       "tool.inspect_repo_tree",
       "tool.propose_add_source",
-      "tool.propose_edit_plan_draft_parts",
       "tool.propose_import_build_inputs",
       "tool.propose_source_mapping",
       "tool.start_sync",
