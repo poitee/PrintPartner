@@ -1,6 +1,6 @@
 {
   "scope": "Observed desktop self-host registration; Node owns domain/background/file effects",
-  "registry_sha256": "ed814e0fdeb94ab53b2c83256fb7eeabdff3e6a553c7eba2b7bb0cc56199d79c",
+  "registry_sha256": "3efaec825fa02f1bb539ba1a229777a62fa1271bb31d7758517344ff90c07285",
   "gateway_owned": [
     {
       "method": "POST",
