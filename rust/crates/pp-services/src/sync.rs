@@ -62,7 +62,8 @@ impl From<PortError> for SyncError {
 /// The GitHub REST reads a sync makes. `owner` and `repo` come from
 /// [`parse_github_url`]; list reads return every page.
 pub trait GithubPort: Sync {
-    /// `GET /repos/{owner}/{repo}`: the repository's default branch.
+    /// `GET /repos/{owner}/{repo}`: the repository's default branch. `None`
+    /// only when GitHub's field is null or absent; an empty string stays `Some`.
     fn default_branch(
         &self,
         owner: &str,
