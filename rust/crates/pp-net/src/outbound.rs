@@ -122,8 +122,8 @@ pub struct HttpGuard {
 pub struct HttpReply {
     pub status: u16,
     pub body: Vec<u8>,
-    /// The `WWW-Authenticate` header, for Digest challenges. Other response
-    /// headers are not kept.
+    /// The `WWW-Authenticate` values joined with ", ", for Digest challenges.
+    /// Other response headers are not kept.
     pub www_authenticate: Option<String>,
 }
 
@@ -431,11 +431,14 @@ impl HttpGuard {
         written.store(true, Ordering::SeqCst);
         let response = sender.send_request(request).await?;
         let status = response.status().as_u16();
-        let www_authenticate = response
+        // Repeated values are joined with ", ", as fetch's `Headers.get` does.
+        let challenges: Vec<_> = response
             .headers()
-            .get("www-authenticate")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
+            .get_all("www-authenticate")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
+        let www_authenticate = (!challenges.is_empty()).then(|| challenges.join(", "));
         if response.status().is_redirection() {
             return Ok(HttpReply {
                 status,
@@ -943,7 +946,7 @@ mod tests {
                 bytes.extend_from_slice(&chunk[..count]);
             }
             socket
-                .write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest nonce=\"n\"\r\nContent-Length: 0\r\n\r\n")
+                .write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest nonce=\"n\"\r\nWWW-Authenticate: Basic\r\nContent-Length: 0\r\n\r\n")
                 .await
                 .unwrap();
             String::from_utf8(bytes).unwrap()
@@ -962,7 +965,7 @@ mod tests {
         assert_eq!(reply.status, 401);
         assert_eq!(
             reply.www_authenticate.as_deref(),
-            Some("Digest nonce=\"n\"")
+            Some("Digest nonce=\"n\", Basic")
         );
         let request = server.await.unwrap();
         assert!(
