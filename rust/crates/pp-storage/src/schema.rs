@@ -35,6 +35,11 @@ pub struct SchemaReady {
     pub version: u64,
     pub previous_version: u64,
     pub backup: Option<PathBuf>,
+    /// Older verified pre-upgrade copies removed after this upgrade committed.
+    pub pruned_backups: Vec<PathBuf>,
+    /// Retention problems, such as an unverified copy that was kept. They
+    /// never fail startup.
+    pub backup_warnings: Vec<String>,
 }
 
 struct PreflightCopy(PathBuf);
@@ -392,7 +397,7 @@ pub(crate) fn initialize(
     // Steps run after the common restoration and tenant repair, whose writes
     // their triggers would refuse, and before starter seeding.
     #[cfg(feature = "desktop_rebuild")]
-    let backup_path = {
+    let (backup_path, step_copies) = {
         if version < legacy_version {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("plan_publication/schema.sql"))?;
@@ -401,6 +406,8 @@ pub(crate) fn initialize(
         }
         install_steps(&mut conn, path, version, populated, backup_path)?
     };
+    #[cfg(not(feature = "desktop_rebuild"))]
+    let step_copies: Vec<PathBuf> = Vec::new();
     #[cfg(feature = "desktop_rebuild")]
     {
         crate::plan_publication::validate_schema(&conn, CURRENT_VERSION)?;
@@ -456,12 +463,21 @@ pub(crate) fn initialize(
         }
         tx.commit()?;
     }
+    // The upgrade has committed, so retention may now drop copies left by
+    // earlier upgrades. This upgrade's copies all stay, including the
+    // from-version copy, the only one the previous release opens.
+    let pruned = match &backup_path {
+        Some(rollback) => crate::backup_retention::prune(rollback, &step_copies),
+        None => Default::default(),
+    };
     Ok((
         conn,
         SchemaReady {
             version: CURRENT_VERSION,
             previous_version: version,
             backup: backup_path,
+            pruned_backups: pruned.removed,
+            backup_warnings: pruned.warnings,
         },
     ))
 }
@@ -476,8 +492,9 @@ fn install_steps(
     version: u64,
     populated: bool,
     first: Option<PathBuf>,
-) -> Result<Option<PathBuf>> {
+) -> Result<(Option<PathBuf>, Vec<PathBuf>)> {
     let mut first = first;
+    let mut written = Vec::new();
     let install_scan: fn(&Connection) -> Result<()> =
         |connection| Ok(connection.execute_batch(include_str!("source_scan/schema.sql"))?);
     let install_sync: fn(&Connection) -> Result<()> =
@@ -493,6 +510,7 @@ fn install_steps(
                 && first.as_ref() != Some(target)
             {
                 backup(conn, target, true)?;
+                written.push(target.clone());
             }
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             install(&tx)?;
@@ -507,7 +525,7 @@ fn install_steps(
             first = first.or(target);
         }
     }
-    Ok(first)
+    Ok((first, written))
 }
 
 pub(crate) fn sql_identity(sql: &str) -> String {

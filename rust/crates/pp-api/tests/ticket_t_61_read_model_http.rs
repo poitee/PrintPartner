@@ -7,7 +7,7 @@ use pp_storage::{
     Limits, WriterOwner,
     auth::Secret,
     read_model::{
-        Credential,
+        AcceptedRead, Credential,
         views::{self, CatalogOnly},
     },
 };
@@ -109,6 +109,39 @@ impl Fixture {
             response.status().as_u16(),
             response.bytes().await.unwrap().to_vec(),
         )
+    }
+
+    /// Every Part's id and `views::assembled` body, read straight from storage.
+    fn direct_assembled(&self) -> Vec<(i64, bool, Value)> {
+        let batch = self
+            .owner
+            .as_ref()
+            .unwrap()
+            .accepted_reads()
+            .unwrap()
+            .read(
+                Credential::Session(Secret::new("read-fixture-secret".into())),
+                &[1],
+                &AtomicBool::new(false),
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        let accepted = &batch.builds[0].accepted;
+        let AcceptedRead::Ready { snapshot } = accepted else {
+            panic!("fixture is ready")
+        };
+        snapshot
+            .parts
+            .iter()
+            .map(|part| {
+                let id = part.projection_part_id;
+                (
+                    id,
+                    part.included,
+                    views::assembled(id, accepted)["body"].clone(),
+                )
+            })
+            .collect()
     }
 
     /// The same projection read straight from storage, for comparison.
@@ -323,9 +356,15 @@ async fn ticket_t_61_read_model_http_checkoff_unavailable_and_corrupt_states() {
 async fn ticket_t_61_read_model_http_flag_off_mounts_nothing() {
     for flag in [None, Some("0"), Some("TRUE")] {
         let f = Fixture::new(None, flag).await;
-        for alias in ALIASES {
-            let path = format!("{alias}/plans/1/checkoff");
-            // Mounted, this valid session reads Plan 1 (200) and a POST is
+        for path in ALIASES
+            .iter()
+            .map(|alias| format!("{alias}/plans/1/checkoff"))
+            .chain([
+                "/parts/2/assembled".into(),
+                "/api/v1/parts/2/assembled".into(),
+            ])
+        {
+            // Mounted, this valid session reads the row (200) and a POST is
             // refused as 405. Unmounted, both reach the empty fallback 404.
             for method in [Method::GET, Method::POST] {
                 let (status, body) = f.send(method.clone(), &path, &[("Cookie", SESSION)]).await;
@@ -391,4 +430,116 @@ async fn ticket_t_61_read_model_http_checkoff_survives_restart() {
     );
     assert_eq!(dump, f.dump(), "neither run wrote to the store");
     f.stop().await;
+}
+
+#[tokio::test]
+async fn ticket_t_61_read_model_http_assembled_matches_storage_for_every_part() {
+    let f = Fixture::new(None, Some("1")).await;
+    let before = f.dump();
+    let parts = f.direct_assembled();
+    // Node finds the Part in the whole snapshot, excluded Parts included.
+    assert_eq!(
+        parts
+            .iter()
+            .map(|(_, included, _)| *included)
+            .collect::<Vec<_>>(),
+        [false, true]
+    );
+    for (id, _, body) in &parts {
+        assert_eq!(body["part_id"], *id);
+        assert_eq!(body["assembled_units"], json!([false]));
+        for prefix in ["", "/api/v1"] {
+            for raw in [id.to_string(), format!("{id}.0"), format!("0x{id:x}")] {
+                let path = format!("{prefix}/parts/{raw}/assembled");
+                assert_eq!(
+                    f.get(&path, &[("Cookie", SESSION)]).await,
+                    (200, body.clone()),
+                    "{path}"
+                );
+            }
+            let path = format!("{prefix}/parts/{id}/assembled");
+            let (status, bytes) = f.send(Method::HEAD, &path, &[("Cookie", SESSION)]).await;
+            assert_eq!((status, bytes.len()), (200, 0), "HEAD {path}");
+        }
+        // Node has no `/api/v2` Part routes.
+        let (status, bytes) = f
+            .send(
+                Method::GET,
+                &format!("/api/v2/parts/{id}/assembled"),
+                &[("Cookie", SESSION)],
+            )
+            .await;
+        assert_eq!((status, bytes.len()), (404, 0));
+    }
+    let missing = (404, json!({"detail":"Part not found"}));
+    for id in ["999", "0", "abc", "1.5"] {
+        assert_eq!(
+            f.get(&format!("/parts/{id}/assembled"), &[("Cookie", SESSION)])
+                .await,
+            missing,
+            "{id}"
+        );
+    }
+    let refused = (401, json!({"detail":"Authentication required"}));
+    for id in ["2", "abc"] {
+        assert_eq!(
+            f.get(
+                &format!("/parts/{id}/assembled"),
+                &[("Cookie", "pp_session=wrong")]
+            )
+            .await,
+            refused,
+            "{id}"
+        );
+    }
+    assert_eq!(before, f.dump(), "assembled reads write nothing");
+    f.stop().await;
+}
+
+#[tokio::test]
+async fn ticket_t_61_read_model_http_assembled_states_follow_node() {
+    let missing = (404, json!({"detail":"Part not found"}));
+    // Another tenant's Part row, and a Part whose Plan belongs to another
+    // tenant, both read as missing.
+    for sql in [
+        "UPDATE parts SET tenant_id='foreign'",
+        "UPDATE build_profiles SET tenant_id='foreign' WHERE id=1",
+    ] {
+        let f = Fixture::new(Some(sql), Some("1")).await;
+        assert_eq!(
+            f.get("/parts/2/assembled", &[("Cookie", SESSION)]).await,
+            missing,
+            "{sql}"
+        );
+        f.stop().await;
+    }
+    let dirty = Fixture::new(
+        Some("UPDATE build_profiles SET accepted_plan_revision_id=NULL WHERE id=1"),
+        Some("1"),
+    )
+    .await;
+    assert_eq!(
+        dirty
+            .get("/parts/2/assembled", &[("Cookie", SESSION)])
+            .await,
+        (
+            409,
+            json!({"detail":"Accepted Plan requires compatibility repair"})
+        )
+    );
+    dirty.stop().await;
+    let corrupt = Fixture::new(
+        Some("UPDATE plan_revisions SET snapshot_digest=replace(snapshot_digest,'a','b')"),
+        Some("1"),
+    )
+    .await;
+    let before = corrupt.dump();
+    assert_eq!(
+        corrupt
+            .get("/api/v1/parts/2/assembled", &[("Cookie", SESSION)])
+            .await,
+        (500, json!({"detail":"Accepted Plan data is inconsistent"}))
+    );
+    assert_eq!(before, corrupt.dump());
+    corrupt.stop().await;
 }
