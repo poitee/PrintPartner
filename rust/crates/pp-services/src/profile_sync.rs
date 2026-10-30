@@ -137,13 +137,32 @@ impl FlatConfig {
             if i > 0 {
                 out.push(',');
             }
-            out.push_str(&serde_json::to_string(k).expect("string serializes"));
+            push_json_string(&mut out, k);
             out.push(':');
-            out.push_str(&serde_json::to_string(v).expect("string serializes"));
+            push_json_string(&mut out, v);
         }
         out.push('}');
         out
     }
+}
+
+/// A string literal as `JSON.stringify` writes it.
+fn push_json_string(out: &mut String, s: &str) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 /// A JavaScript array index: the canonical decimal form of 0..=2^32-2.
@@ -183,10 +202,11 @@ pub fn js_number_string(x: f64) -> String {
     }
     let sign = if x < 0.0 { "-" } else { "" };
     let sci = format!("{:e}", x.abs());
-    let (mantissa, exp) = sci.split_once('e').expect("exponent form");
+    // `{:e}` always writes `<digits>e<exponent>`.
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
     let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
     let k = digits.len() as i32;
-    let n = exp.parse::<i32>().expect("exponent") + 1;
+    let n = exp.parse::<i32>().unwrap_or(0) + 1;
     let body = if k <= n && n <= 21 {
         format!("{digits}{}", "0".repeat((n - k) as usize))
     } else if 0 < n && n <= 21 {
@@ -820,6 +840,17 @@ mod tests {
         assert_eq!(js_round(-2.5), -2.0);
         assert_eq!(js_round(2.5), 3.0);
         assert_eq!(js_round(0.49999999999999994), 0.0);
+    }
+
+    #[test]
+    fn json_strings_escape_like_json_stringify() {
+        let all: String = (0u32..0x80)
+            .filter_map(char::from_u32)
+            .chain(['\u{2028}', '\u{fffd}', '😀'])
+            .collect();
+        let mut out = String::new();
+        push_json_string(&mut out, &all);
+        assert_eq!(out, serde_json::to_string(&all).unwrap());
     }
 
     #[test]
