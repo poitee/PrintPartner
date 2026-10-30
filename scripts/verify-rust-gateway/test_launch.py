@@ -334,6 +334,35 @@ class StartupStopTest(unittest.TestCase):
                                     os.kill(child_pid, signal.SIGKILL)
 
 
+class PrebuiltBinaryTest(unittest.TestCase):
+    def test_binary_skips_build_and_uses_manifest_commit(self):
+        with tempfile.TemporaryDirectory(prefix="pp-prebuilt-test-") as temporary:
+            temp = Path(temporary)
+            root = make_fixture_repo(temp / "repo")
+            (root / "rust/bundle-manifest.json").write_text(json.dumps({"commit": "f" * 40}))
+            binary = temp / "server"
+            argv_file = temp / "argv.json"
+            # Exits before printing an origin, so launch stops at the startup check.
+            write_executable(binary, f"#!{sys.executable}\nimport json, sys\nfrom pathlib import Path\n"
+                                     f"Path({str(argv_file)!r}).write_text(json.dumps(sys.argv[1:]))\n")
+            built = temp / "built"
+            driver = (f"import sys; from pathlib import Path; sys.path.insert(0, {str(HELPER.parent)!r}); "
+                      f"import verify; verify.build = lambda *args: Path({str(built)!r}).touch(); verify.main()")
+            result = subprocess.run([sys.executable, "-c", driver, "launch", "--repo", str(root),
+                                     "--binary", str(binary)], capture_output=True, text=True, timeout=60)
+            output = result.stdout + result.stderr
+            self.assertFalse(built.exists(), output)
+            self.assertIn("Rust startup failed", output)
+            argv = json.loads(argv_file.read_text())
+            self.assertEqual(argv[argv.index("--commit") + 1], "f" * 40)
+
+    def test_binary_is_launch_only(self):
+        result = subprocess.run([sys.executable, str(HELPER), "verify", "--binary", sys.executable],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--binary applies only to launch", result.stderr)
+
+
 class StopAfterOriginTest(unittest.TestCase):
     def test_stop_after_origin_runs_shutdown_checks(self):
         self.assertIn("data lock reacquired", self.launch_stopped_after_origin(exit_status=0))
