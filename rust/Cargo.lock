@@ -3479,12 +3479,12 @@ version = "0.1.0"
 dependencies = [
  "icu_collator",
  "plist",
- "pp-source",
  "regress 0.11.1",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "unicode-normalization",
  "url",
 ]
 

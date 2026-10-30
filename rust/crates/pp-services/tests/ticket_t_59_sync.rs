@@ -1,12 +1,11 @@
 //! Replays `fixtures/parity/github-sync/node.json` (GRE-429) against
-//! `pp_services::sync`. A case passes when Rust's JSON equals Node's, or when
-//! it carries a declared correction below that Rust still needs.
+//! `pp_services::sync`. Every case must produce Node's JSON and GitHub reads.
 
 use pp_services::sync::{
     self, GitSourceRow, GithubPort, PortError, RawTree, RemoteUpdateStatus, SyncError, SyncLimits,
 };
 use serde_json::{Map, Value, json};
-use std::{collections::BTreeSet, sync::Mutex};
+use std::sync::Mutex;
 
 fn golden() -> Value {
     let path = concat!(
@@ -120,55 +119,17 @@ fn outcome<T: serde::Serialize>(key: &str, result: Result<T, SyncError>) -> Map<
     map
 }
 
-/// A Rust result that differs from Node's on purpose.
-struct Correction {
-    id: String,
-    reason: &'static str,
-    rust: Value,
-}
-
-/// Compares Node's cases with Rust's and returns (exact, corrected).
-fn ledger(
-    section: &str,
-    node: &[Value],
-    rust: &[Value],
-    corrections: &[Correction],
-) -> (usize, usize) {
+/// Requires every Rust case to equal Node's and returns the count.
+fn ledger(section: &str, node: &[Value], rust: &[Value]) -> usize {
     assert_eq!(node.len(), rust.len(), "{section}: case count");
-    let mut used = BTreeSet::new();
-    let (mut exact, mut corrected) = (0, 0);
     for (index, (node, rust)) in node.iter().zip(rust).enumerate() {
         let id = node["input"]["id"]
             .as_str()
             .map_or_else(|| index.to_string(), str::to_owned);
-        let correction = corrections.iter().find(|correction| correction.id == id);
-        match correction {
-            Some(correction) => {
-                assert_ne!(
-                    node, rust,
-                    "{section}/{id}: Rust now matches Node; drop the correction"
-                );
-                assert_eq!(
-                    rust, &correction.rust,
-                    "{section}/{id}: Rust differs from its correction ({})",
-                    correction.reason
-                );
-                assert!(used.insert(id), "{section}: duplicate correction");
-                corrected += 1;
-            }
-            None => {
-                assert_eq!(rust, node, "{section}/{id}: Rust differs from Node");
-                exact += 1;
-            }
-        }
+        assert_eq!(rust, node, "{section}/{id}: Rust differs from Node");
     }
-    assert_eq!(
-        used.len(),
-        corrections.len(),
-        "{section}: an unused correction"
-    );
-    println!("{section}: {exact} exact, {corrected} corrected");
-    (exact, corrected)
+    println!("{section}: {} exact", node.len());
+    node.len()
 }
 
 fn opt_str(value: &Value) -> Option<&str> {
@@ -203,7 +164,7 @@ fn ticket_t_59_sync_github_urls_match_node() {
             })
         })
         .collect::<Vec<_>>();
-    assert_eq!(ledger("urls", node, &rust, &[]), (33, 0));
+    assert_eq!(ledger("urls", node, &rust), 33);
 }
 
 #[test]
@@ -217,7 +178,7 @@ fn ticket_t_59_sync_repos_txt_matches_node() {
             json!({ "line": line, "parsed": sync::parse_repos_txt_line(line) })
         })
         .collect::<Vec<_>>();
-    assert_eq!(ledger("repos_lines", node, &rust, &[]), (16, 0));
+    assert_eq!(ledger("repos_lines", node, &rust), 16);
 
     let node = golden["repos_texts"].as_array().unwrap();
     let rust = node
@@ -233,7 +194,7 @@ fn ticket_t_59_sync_repos_txt_matches_node() {
             })
         })
         .collect::<Vec<_>>();
-    assert_eq!(ledger("repos_texts", node, &rust, &[]), (3, 0));
+    assert_eq!(ledger("repos_texts", node, &rust), 3);
 }
 
 #[tokio::test]
@@ -254,7 +215,7 @@ async fn ticket_t_59_sync_branch_and_tag_listings_match_node() {
             map.insert("calls".into(), world.take_calls());
             rust.push(Value::Object(map));
         }
-        assert_eq!(ledger(section, node, &rust, &[]), (7, 0));
+        assert_eq!(ledger(section, node, &rust), 7);
     }
 }
 
@@ -294,28 +255,7 @@ async fn ticket_t_59_sync_snapshot_plans_match_node() {
         map.insert("calls".into(), world.take_calls());
         rust.push(Value::Object(map));
     }
-    let refused = |id: &str, path: &str, reason| Correction {
-        id: id.to_owned(),
-        reason,
-        rust: json!({
-            "input": node.iter().find(|case| case["input"]["id"] == id).unwrap()["input"],
-            "error": { "message": format!("Unsafe Source snapshot path: {path}") },
-            "calls": node.iter().find(|case| case["input"]["id"] == id).unwrap()["calls"],
-        }),
-    };
-    let corrections = [
-        refused(
-            "colon-path",
-            "part.stl:stream.md",
-            "pp-source refuses `:` so a path never names a Windows drive or NTFS stream (rust/crates/pp-source/README.md)",
-        ),
-        refused(
-            "manifest-dir",
-            ".printpartner-source-snapshot.json/x.stl",
-            "pp-source refuses the snapshot manifest name as a first component; Node fails it later at materialization (rust/crates/pp-source/README.md)",
-        ),
-    ];
-    assert_eq!(ledger("syncs", node, &rust, &corrections), (34, 2));
+    assert_eq!(ledger("syncs", node, &rust), 36);
 }
 
 #[tokio::test]

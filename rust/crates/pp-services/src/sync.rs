@@ -15,7 +15,10 @@ pub use github_url::{
     GithubRepoRef, SourceLocation, github_ref_name, normalize_github_source_location,
     parse_github_url, resolve_github_url_ref,
 };
-pub use plan::{RawTree, RawTreeItem, SnapshotPlan, SyncLimits, classify_doc_path, plan_snapshot};
+pub use plan::{
+    FileKind, OmissionReason, PlannedFile, PlannedOmission, PlannedSelection, RawTree, RawTreeItem,
+    SnapshotPlan, SyncLimits, classify_doc_path, plan_snapshot,
+};
 pub use repos_txt::{
     ReposTxtLine, parse_repos_txt_line, parse_repos_txt_text, repos_txt_skipped_names,
 };

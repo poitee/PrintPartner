@@ -2,8 +2,8 @@
 //! and the selection half of `syncGithubSource` in `github-sync.ts`.
 
 use super::SyncError;
-use pp_source::{FileKind, OmissionReason, OmittedFile, SelectedFile, Selection, SourcePath};
 use std::{cmp::Ordering, collections::HashMap};
+use unicode_normalization::UnicodeNormalization;
 
 pub const SOURCE_MANIFEST_FILENAME: &str = "print-partner.manifest.yaml";
 pub const SOURCE_PHASE_MANIFEST_FILENAME: &str = "pp-phases.json";
@@ -11,6 +11,54 @@ pub const MAX_PHASE_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MANIFEST_SNAPSHOT_FORMAT_VERSION: u32 = 2;
 const PHASE_SNAPSHOT_FORMAT_VERSION: u32 = 3;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+const SOURCE_SNAPSHOT_MANIFEST_FILE: &str = ".printpartner-source-snapshot.json";
+
+/// A snapshot file's kind. Serializes like `pp_source::FileKind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileKind {
+    Stl,
+    Artifact,
+    Readme,
+    Md,
+    Pdf,
+}
+
+/// A file to download. Serializes like `pp_source::SelectedFile`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedFile {
+    pub path: String,
+    pub kind: FileKind,
+    pub size_hint_bytes: Option<u64>,
+}
+
+/// Why a document stays out of the snapshot. Serializes like `pp_source::OmissionReason`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OmissionReason {
+    DocumentationByteBudget,
+    UnknownDocumentSize,
+}
+
+/// A document left out. Serializes like `pp_source::OmittedFile`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedOmission {
+    pub path: String,
+    pub kind: FileKind,
+    pub size_hint_bytes: Option<u64>,
+    pub reason: OmissionReason,
+}
+
+/// The caps and omissions a snapshot records. Serializes like `pp_source::Selection`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannedSelection {
+    pub max_stl_files: u64,
+    pub max_documentation_bytes: u64,
+    pub omitted_files: Vec<PlannedOmission>,
+}
 
 /// One `git/trees?recursive=true` item as GitHub returned it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
@@ -105,8 +153,8 @@ pub struct SnapshotPlan {
     pub commit_sha: String,
     pub upstream_revision_key: String,
     /// STLs, then metadata, then the documents inside the budget.
-    pub files: Vec<SelectedFile>,
-    pub selection: Selection,
+    pub files: Vec<PlannedFile>,
+    pub selection: PlannedSelection,
 }
 
 /// `classifyDocPath`.
@@ -140,9 +188,27 @@ fn snapshot_kind(path: &str) -> Option<FileKind> {
     }
 }
 
-fn source_path(path: &str) -> Result<SourcePath, SyncError> {
-    SourcePath::try_from(path.to_owned())
-        .map_err(|_| SyncError::Refused(format!("Unsafe Source snapshot path: {path}")))
+/// `sourceRelativePath`. The snapshot store applies its own, stricter path
+/// rules when it publishes these files (`rust/crates/pp-source/README.md`).
+fn source_path(path: &str) -> Result<&str, SyncError> {
+    let unsafe_path = path.is_empty()
+        || path.contains(['\\', '\0'])
+        || path.starts_with('/')
+        || path.nfc().collect::<String>() != path
+        || path
+            .split('/')
+            .any(|segment| matches!(segment, "" | "." | ".."));
+    if unsafe_path {
+        return Err(SyncError::Refused(format!(
+            "Unsafe Source snapshot path: {path}"
+        )));
+    }
+    if path == SOURCE_SNAPSHOT_MANIFEST_FILE {
+        return Err(SyncError::Refused(format!(
+            "Source content cannot use reserved path: {path}"
+        )));
+    }
+    Ok(path)
 }
 
 fn utf16_order(left: &str, right: &str) -> Ordering {
@@ -170,7 +236,7 @@ fn selected_tree_files(entries: &[TreeEntry]) -> Result<Vec<&TreeEntry>, SyncErr
                 entry.path
             )));
         }
-        let folded = source_path(&entry.path)?.as_str().to_lowercase();
+        let folded = source_path(&entry.path)?.to_lowercase();
         if let Some(prior) = by_folded_path.get(&folded) {
             if entry.blob_sha.is_some()
                 && entry.blob_sha == prior.blob_sha
@@ -205,9 +271,9 @@ fn collator() -> Result<icu_collator::CollatorBorrowed<'static>, SyncError> {
         .map_err(|error| SyncError::Refused(format!("{error}")))
 }
 
-fn selected(entry: &TreeEntry, kind: FileKind) -> Result<SelectedFile, SyncError> {
-    Ok(SelectedFile {
-        path: source_path(&entry.path)?,
+fn selected(entry: &TreeEntry, kind: FileKind) -> Result<PlannedFile, SyncError> {
+    Ok(PlannedFile {
+        path: source_path(&entry.path)?.to_owned(),
         kind,
         size_hint_bytes: entry.size,
     })
@@ -301,8 +367,8 @@ pub fn plan_snapshot(
             continue;
         };
         let Some(size) = entry.size else {
-            omitted_files.push(OmittedFile {
-                path: source_path(&entry.path)?,
+            omitted_files.push(PlannedOmission {
+                path: source_path(&entry.path)?.to_owned(),
                 kind,
                 size_hint_bytes: None,
                 reason: OmissionReason::UnknownDocumentSize,
@@ -310,8 +376,8 @@ pub fn plan_snapshot(
             continue;
         };
         if size > 0 && used.saturating_add(size) > max_docs {
-            omitted_files.push(OmittedFile {
-                path: source_path(&entry.path)?,
+            omitted_files.push(PlannedOmission {
+                path: source_path(&entry.path)?.to_owned(),
                 kind,
                 size_hint_bytes: Some(size),
                 reason: OmissionReason::DocumentationByteBudget,
@@ -336,7 +402,7 @@ pub fn plan_snapshot(
         commit_sha: commit_sha.to_owned(),
         upstream_revision_key: revision_key(commit_sha, &chosen),
         files,
-        selection: Selection {
+        selection: PlannedSelection {
             max_stl_files: limits.max_stl_files,
             max_documentation_bytes: max_docs,
             omitted_files,
