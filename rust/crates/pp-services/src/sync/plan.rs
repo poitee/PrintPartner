@@ -127,7 +127,8 @@ pub(crate) fn is_hex_sha(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Caps the caller applies to one GitHub snapshot.
+/// Caps the caller applies to one GitHub snapshot. Node also refuses negative
+/// limits; `u64` cannot hold one, so a caller converting from JSON refuses them first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SyncLimits {
     pub max_stl_files: u64,
@@ -266,6 +267,10 @@ fn revision_key(commit_sha: &str, selected: &[&TreeEntry]) -> String {
     }
 }
 
+/// The root collation order, which `en-US` shares and `pp_storage` uses for
+/// Source documents. Node's `localeCompare` follows the process's default
+/// locale, so a Node server under another locale can order documents, and pick
+/// which ones fit the budget, differently. Rust does not follow the system locale.
 fn collator() -> Result<icu_collator::CollatorBorrowed<'static>, SyncError> {
     icu_collator::Collator::try_new(Default::default(), Default::default())
         .map_err(|error| SyncError::Refused(format!("{error}")))
