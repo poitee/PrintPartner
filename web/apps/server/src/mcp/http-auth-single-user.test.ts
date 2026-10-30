@@ -47,7 +47,7 @@ afterEach(async () => {
   while (cleanup.length > 0) await cleanup.pop()?.();
 });
 
-/** Self-host app with SINGLE_USER_AUTH=1 bound to a non-loopback host. */
+/** Self-host app with SINGLE_USER_AUTH=1 bound to 0.0.0.0. */
 async function buildSingleUserApp(overrides: Partial<ServerConfig> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pp-mcp-single-user-"));
   const ports = createSelfHostPorts(dir);

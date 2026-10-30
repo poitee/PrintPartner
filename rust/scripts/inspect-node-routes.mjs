@@ -132,7 +132,7 @@ try {
         const url = (route.path === '*' ? '/*' : route.path).replace(/:[^/]+/g, '1').replace(/\*/g, 'inventory-probe');
         const response = await app.inject({ method: route.method, url,
           ...(route.method === 'POST' ? { payload: {} } : {}) });
-        // 503 is a fail-closed refusal (MCP without an API key on a non-loopback host).
+        // 503 is a fail-closed refusal (MCP without a key on a host with no deployment key).
         if ((response.statusCode >= 500 && response.statusCode !== 503) || response.statusCode === 429) {
           throw new Error(`Auth probe failed: ${mode.name} ${route.method} ${route.path}: ${response.statusCode}`);
         }
