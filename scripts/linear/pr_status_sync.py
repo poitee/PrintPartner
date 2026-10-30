@@ -217,7 +217,8 @@ def close_out(ident):
 
 def promote(done):
     """Backlog -> Todo for issues done blocked, once every non-umbrella blocker is Done. Never demotes."""
-    for blocked in blocking(done)[1]:
+    _, unblocked, _ = blocking(done)
+    for blocked in unblocked:
         if blocked["team"]["key"] != TEAM:
             continue
         node, _, blockers = blocking(blocked["identifier"])
