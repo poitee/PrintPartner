@@ -965,6 +965,22 @@ mod tests {
     }
 
     #[test]
+    fn overflow_rewrite_keeps_invalid_numbers_refused() {
+        // JSON.parse throws on each of these; f64::from_str accepts some.
+        for raw in [
+            "[-.5e999]",
+            "[.5e999]",
+            r#"{"v":-.5e999}"#,
+            "[1.e999]",
+            "[01e999]",
+            "[-01e999]",
+            "[+1e999]",
+        ] {
+            assert!(parse_slicer_json(raw).is_err(), "{raw} parsed");
+        }
+    }
+
+    #[test]
     fn flat_config_orders_index_keys_first() {
         let flat =
             parse_slicer_json(r#"{"b":"1","10":"x","a":"2","2":"y","b":"3","__proto__":"p"}"#)
