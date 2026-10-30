@@ -9,6 +9,7 @@ use pp_api::{
     catalog::{CatalogHttpConfig, admit_catalog_routes},
     drafts::{DraftHttpConfig, draft_router as api_draft_router},
     jobs::{JobsHttpConfig, jobs_router as api_jobs_router},
+    mcp::{McpHttpConfig, mcp_router},
 };
 // Re-export so desktop_rebuild integration tests can build AuthRoutes without a
 // non-optional pp-api [dev-dependencies] edge (gated boundary check).
@@ -126,7 +127,7 @@ pub fn router(
 }
 
 /// Compose authenticated read routers (auth, Plan builds, catalog, Accepted
-/// Plan Checkoff, legal documents and custom filaments) from one
+/// Plan Checkoff, legal documents, custom filaments and key-only MCP) from one
 /// `WriterOwner` when the stored rebuild setting is on. Aliases share that
 /// owner. Returns `None` before creating clients or mounting when the setting
 /// is off. Does not cut over production gateway ownership (GRE-593).
@@ -182,13 +183,18 @@ pub fn read_router(
         AcceptedHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
         accepted_client,
     );
+    let mcp = mcp_router(
+        McpHttpConfig::from_startup(origin, api_key_tenant, Some("1"))?,
+        auth_client.clone(),
+    );
     let auth_routes = auth_router(auth.http, auth_client, auth.providers, auth.mail);
     Ok(Some(
         auth_routes
             .merge(builds)
             .merge(catalog)
             .merge(accepted)
-            .merge(admin),
+            .merge(admin)
+            .merge(mcp),
     ))
 }
 

@@ -43,7 +43,7 @@ Copied from `ALLOWED` in `rust/scripts/check-boundaries.py` on `main`. A missing
 | `pp-source` | *(none)* |
 | `pp-core` | `pp-gateway`, `pp-compat`, `pp-storage`, `pp-source` and `pp-net` only through `desktop_rebuild` |
 | `pp-storage` | `pp-domain` and `pp-contracts`, only through `desktop_rebuild` |
-| `pp-api` | `pp-storage` |
+| `pp-api` | `pp-storage`, and `pp-services` only through `desktop_rebuild` (MCP transport, GRE-348) |
 | `pp-gateway` | `pp-compat`, `pp-drivers`, `pp-net` |
 | `pp-compat` | *(none)* |
 | `pp-server` | `pp-core` |
@@ -60,6 +60,7 @@ Graph form of the non-empty current edges:
 ```text
 pp-contracts → pp-api-types → pp-domain
 pp-api → pp-storage
+pp-api → pp-services                       (desktop_rebuild only)
 pp-gateway → pp-compat, pp-drivers, pp-net
 pp-drivers → pp-net, pp-api-types
 pp-core → pp-gateway, pp-compat, pp-storage
