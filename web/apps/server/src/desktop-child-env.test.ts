@@ -82,6 +82,14 @@ describe("desktop compatibility child environment", () => {
     expect(env).not.toHaveProperty("PASSWORD_RESET_DEV_EXPOSE");
   });
 
+  it("starts a mapped-account child without a session secret only under the desktop boundary", () => {
+    replaceEnv(childFixedEnv());
+    const config = { ...loadConfig(), multiUser: true, sessionSecret: null };
+
+    expect(() => validateProductionConfig(config, { desktop: true })).not.toThrow();
+    expect(() => validateProductionConfig(config)).toThrow("SESSION_SECRET is required");
+  });
+
   it("never returns a password reset link and serves no development routes", async () => {
     const { app, config, reset } = await startChild(childFixedEnv());
 
