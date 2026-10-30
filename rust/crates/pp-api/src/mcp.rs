@@ -19,7 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use pp_services::mcp_domain::{McpSession, UnportedDomain, server_info};
-use pp_storage::auth::{self, Secret, rebuild::RebuildAuthClient};
+use pp_storage::auth::{self, KeyPrincipal, Secret, rebuild::RebuildAuthClient};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
@@ -35,8 +35,11 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 const KEY_REQUIRED: &str = "Valid API key required";
+/// Concurrent key checks; the auth runtime's own lease pool bounds the work.
+const ADMISSION_PERMITS: usize = 64;
 
 #[derive(Clone)]
 pub struct McpHttpConfig {
@@ -48,14 +51,6 @@ pub struct McpHttpConfig {
 }
 
 impl McpHttpConfig {
-    pub fn new(origin: &str, api_key_tenant: &str) -> Result<Self> {
-        Self::from_startup(
-            origin,
-            api_key_tenant,
-            std::env::var("PP_DESKTOP_REBUILD").ok().as_deref(),
-        )
-    }
-
     pub fn from_startup(origin: &str, api_key_tenant: &str, flag: Option<&str>) -> Result<Self> {
         let listener = LoopbackOrigin::parse(origin)?;
         require_api_key_tenant(api_key_tenant)?;
@@ -73,6 +68,7 @@ impl McpHttpConfig {
 struct Guard {
     config: McpHttpConfig,
     auth: RebuildAuthClient,
+    admission: Arc<Semaphore>,
 }
 
 /// Mounts the MCP transport at `/mcp` and `/api/v1/mcp` when the rebuild flag
@@ -81,6 +77,8 @@ pub fn mcp_router(config: McpHttpConfig, auth: RebuildAuthClient) -> Router {
     if !config.enabled {
         return Router::new();
     }
+    // `admit` in the guard is the authoritative Host and Origin check. rmcp's
+    // own allowlists repeat the same exact listener values.
     let transport = StreamableHttpServerConfig::default()
         .with_allowed_hosts([config.host.clone()])
         .with_allowed_origins([config.origin.clone()]);
@@ -93,14 +91,22 @@ pub fn mcp_router(config: McpHttpConfig, auth: RebuildAuthClient) -> Router {
         .route_service("/mcp", service.clone())
         .route_service("/api/v1/mcp", service)
         .layer(middleware::from_fn_with_state(
-            Guard { config, auth },
+            Guard {
+                config,
+                auth,
+                admission: Arc::new(Semaphore::new(ADMISSION_PERMITS)),
+            },
             guard,
         ))
 }
 
 async fn guard(
-    axum::extract::State(Guard { config, auth }): axum::extract::State<Guard>,
-    request: axum::extract::Request,
+    axum::extract::State(Guard {
+        config,
+        auth,
+        admission,
+    }): axum::extract::State<Guard>,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
     if let Err((status, detail)) = admit(
@@ -115,6 +121,12 @@ async fn guard(
         principal(request.headers(), &config.api_key_tenant)
     else {
         return failure(StatusCode::UNAUTHORIZED, KEY_REQUIRED);
+    };
+    let Ok(permit) = admission.try_acquire_owned() else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "API key check temporarily unavailable",
+        );
     };
     let wait = config.wait;
     let resolved = tokio::task::spawn_blocking(move || {
@@ -133,15 +145,20 @@ async fn guard(
             .ok()?;
         match outcome {
             auth::Outcome::KeyResolved { principal, .. } => {
-                Some(principal.is_some_and(|key| key.tenant_id == tenant))
+                Some(principal.filter(|key| key.tenant_id == tenant))
             }
             _ => None,
         }
     })
     .await;
+    drop(permit);
     match resolved {
-        Ok(Some(true)) => next.run(request).await,
-        Ok(Some(false)) => failure(StatusCode::UNAUTHORIZED, KEY_REQUIRED),
+        Ok(Some(Some(key))) => {
+            // rmcp copies the request parts into each handler's context.
+            request.extensions_mut().insert(key);
+            next.run(request).await
+        }
+        Ok(Some(None)) => failure(StatusCode::UNAUTHORIZED, KEY_REQUIRED),
         _ => failure(
             StatusCode::SERVICE_UNAVAILABLE,
             "API key check temporarily unavailable",
@@ -189,8 +206,15 @@ impl ServerHandler for ProductMcp {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        // The guard attaches the resolved key; tool calls never run without it.
+        // GRE-441 scopes ported tools to this principal's tenant.
+        let _caller = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<KeyPrincipal>())
+            .ok_or_else(|| internal("MCP request has no resolved API key"))?;
         let arguments = request.arguments.map(Value::Object).unwrap_or(Value::Null);
         let result = self
             .0

@@ -38,6 +38,10 @@ struct McpServer {
 
 impl McpServer {
     async fn start(flag: Option<&str>) -> Self {
+        Self::routed(flag, "default").await
+    }
+
+    async fn routed(flag: Option<&str>, tenant: &str) -> Self {
         let directory = crate::scratch::Scratch::new("pp-mcp-http-");
         std::fs::write(
             directory.join("print-partner.db"),
@@ -49,7 +53,7 @@ impl McpServer {
             .0;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
-        let config = McpHttpConfig::from_startup(&origin, "default", flag).unwrap();
+        let config = McpHttpConfig::from_startup(&origin, tenant, flag).unwrap();
         let auth = owner
             .rebuild_auth_with_policy(policy(), Default::default())
             .unwrap();
@@ -350,5 +354,21 @@ async fn ticket_t_16_mcp_is_absent_without_the_rebuild_flag() {
             .post(path, &[("authorization", bearer.as_str())], &initialize())
             .await;
         assert_eq!(status, 404, "{path}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ticket_t_16_mcp_refuses_a_key_from_another_tenant() {
+    // The fixture session's key belongs to `default`; this listener routes `other`.
+    let server = McpServer::routed(Some("1"), "other").await;
+    let (_, key) = server.create_key().await;
+    let bearer = format!("Bearer {key}");
+    for path in ["/mcp", "/api/v1/mcp"] {
+        let (status, body, session) = server
+            .post(path, &[("authorization", bearer.as_str())], &initialize())
+            .await;
+        assert_eq!(status, 401, "{path}: {body}");
+        assert_eq!(rpc(&body), json!({ "detail": KEY_REQUIRED }), "{path}");
+        assert!(session.is_none(), "{path}");
     }
 }
