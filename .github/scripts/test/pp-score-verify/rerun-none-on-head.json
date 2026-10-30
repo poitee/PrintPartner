@@ -5,5 +5,5 @@
     {"id": 110, "event": "pull_request_target", "head_sha": "9a8b7c6d5e4f30211203f4e5d6c7b8a9f0e1d2c3", "status": "completed", "conclusion": "success"},
     {"id": 120, "event": "issue_comment", "head_sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090", "status": "completed", "conclusion": "success"}
   ],
-  "expect": {"run_id": null, "message_contains": ["no pull_request_target run on head 3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090"]}
+  "expect": {"action": "skip", "run_id": null, "message_contains": ["no pull_request_target run on head 3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090"]}
 }

@@ -14,8 +14,10 @@ scores do not pass, so the `pp/score-verified` job that runs it is the check.
 PR's current head.
 
 `rerun` re-runs the latest pull_request_target run of the workflow on the PR's
-current head, so a new or deleted score comment re-runs the check job. It needs
-GITHUB_TOKEN (actions: write, pull-requests: read).
+current head, so a new or deleted score comment re-runs the check job. If that
+run's check job has started but the run is not completed yet, it waits for the
+run (up to RERUN_WAIT_SECONDS) and then re-runs it. It needs GITHUB_TOKEN
+(actions: write, pull-requests: read).
 
 Rules:
 - A score is a line in a PR (issue) comment by `poitee` that reads exactly
@@ -34,6 +36,8 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -274,19 +278,31 @@ def verify(args):
 
 
 def pick_rerun(head_sha, runs):
-    """Return (run id or None, message) for the run that `rerun` should re-run.
+    """Return (action, run id or None, message) for what `rerun` should do.
 
-    Only a pull_request_target run on the PR's current head counts. If the
-    latest one has not finished, it reads the comments when it runs, so there
-    is nothing to re-run.
+    Only a pull_request_target run on the PR's current head counts. A run that
+    has not finished is judged by its pp/score-verified job (`verify_status`,
+    filled in by `rerun`): a job that has not started reads the comments when
+    it runs, so there is nothing to do. A started job may already have read
+    them, and GitHub can mark the run completed minutes after the job ends
+    (PR #1370: job done 20:37:27Z, score 20:37:35Z, run completed 20:40:05Z),
+    so wait for the run and re-run it.
     """
     mine = [r for r in runs if r.get("event") == "pull_request_target" and r.get("head_sha") == head_sha]
     if not mine:
-        return None, f"no pull_request_target run on head {head_sha}; push or edit the PR to start one"
+        return "skip", None, f"no pull_request_target run on head {head_sha}; push or edit the PR to start one"
     latest = max(mine, key=lambda r: r["id"])
-    if latest.get("status") != "completed":
-        return None, f"run {latest['id']} on head {head_sha} is {latest.get('status')}; it reads the comments when it runs"
-    return latest["id"], f"re-running run {latest['id']} on head {head_sha}"
+    if latest.get("status") == "completed":
+        return "rerun", latest["id"], f"re-running run {latest['id']} on head {head_sha}"
+    job = latest.get("verify_status")
+    if job in ("in_progress", "completed"):
+        return "wait", latest["id"], (f"run {latest['id']} on head {head_sha} is {latest.get('status')} but its "
+                                      f"{CHECK_NAME} job is {job}; waiting for the run to complete")
+    return "skip", None, f"run {latest['id']} on head {head_sha} is {latest.get('status')}; it reads the comments when it runs"
+
+
+RERUN_WAIT_SECONDS = 360
+RERUN_POLL_SECONDS = 15
 
 
 def rerun(args):
@@ -296,15 +312,44 @@ def rerun(args):
     gh = GitHub(token)
     api = f"https://api.github.com/repos/{args.repo}"
     head_sha = gh.request("GET", f"{api}/pulls/{args.pr}")[0]["head"]["sha"]
-    runs = gh.request("GET", f"{api}/actions/workflows/{args.workflow}/runs"
-                             f"?event=pull_request_target&head_sha={head_sha}&per_page=100")[0]["workflow_runs"]
-    run_id, message = pick_rerun(head_sha, runs)
-    print(message)
-    if run_id is None:
-        if not any(r.get("head_sha") == head_sha for r in runs):
-            sys.exit(1)
-        return
-    gh.request("POST", f"{api}/actions/runs/{run_id}/rerun")
+    deadline = time.monotonic() + RERUN_WAIT_SECONDS
+    while True:
+        runs = gh.request("GET", f"{api}/actions/workflows/{args.workflow}/runs"
+                                 f"?event=pull_request_target&head_sha={head_sha}&per_page=100")[0]["workflow_runs"]
+        mine = [r for r in runs if r.get("event") == "pull_request_target" and r.get("head_sha") == head_sha]
+        if mine:
+            latest = max(mine, key=lambda r: r["id"])
+            if latest.get("status") != "completed":
+                jobs = gh.request("GET", f"{api}/actions/runs/{latest['id']}/jobs")[0]["jobs"]
+                named = [j for j in jobs if j.get("name") == CHECK_NAME]
+                if jobs and not named:
+                    # A renamed job would read as "not started" forever and bring the skip back.
+                    sys.exit(f"run {latest['id']} has no {CHECK_NAME} job (jobs: {[j.get('name') for j in jobs]})")
+                latest["verify_status"] = named[0].get("status") if named else None
+        action, run_id, message = pick_rerun(head_sha, runs)
+        print(message, flush=True)
+        if action == "rerun":
+            try:
+                gh.request("POST", f"{api}/actions/runs/{run_id}/rerun")
+            except urllib.error.HTTPError as e:
+                # Another comment run re-ran it first; that attempt reads the comments when it runs.
+                if e.code not in (403, 409):
+                    raise
+                print(f"run {run_id} was not re-run ({e.code}); it is already re-running")
+            return
+        if action == "skip":
+            if not mine:
+                sys.exit(1)
+            return
+        if time.monotonic() >= deadline:
+            sys.exit(f"run {run_id} did not complete within {RERUN_WAIT_SECONDS}s; "
+                     f"re-run it by hand: gh run rerun {run_id} -R {args.repo}")
+        time.sleep(RERUN_POLL_SECONDS)
+        current = gh.request("GET", f"{api}/pulls/{args.pr}")[0]["head"]["sha"]
+        if current != head_sha:
+            # The new head's own pull_request_target run reads the comments.
+            print(f"head moved from {head_sha} to {current}; its own run reads the comments")
+            return
 
 
 def self_test(args):
@@ -315,13 +360,15 @@ def self_test(args):
         expect = case["expect"]
         errors = []
         if case.get("kind") == "rerun":
-            run_id, message = pick_rerun(case["head_sha"], case["runs"])
+            action, run_id, message = pick_rerun(case["head_sha"], case["runs"])
             if run_id != expect["run_id"]:
                 errors.append(f"run_id {run_id} != {expect['run_id']}")
+            if action != expect["action"]:
+                errors.append(f"action {action} != {expect['action']}")
             for text in expect.get("message_contains", []):
                 if text not in message:
                     errors.append(f"message lacks {text!r}")
-            print(f"{'ok  ' if not errors else 'FAIL'} {path.stem}: run_id={run_id} {message}")
+            print(f"{'ok  ' if not errors else 'FAIL'} {path.stem}: {action} run_id={run_id} {message}")
             for e in errors:
                 print(f"     {e}")
             failures += bool(errors)

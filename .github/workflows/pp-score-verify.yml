@@ -64,7 +64,8 @@ jobs:
       github.event.issue.pull_request && github.event.comment.user.login == 'poitee')
     name: Re-run pp/score-verified
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # rerun waits up to 6 minutes for a run whose check job already started.
+    timeout-minutes: 10
     permissions:
       actions: write
       contents: read
