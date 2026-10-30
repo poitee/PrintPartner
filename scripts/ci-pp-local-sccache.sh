@@ -23,7 +23,12 @@ if [ -n "${RUSTC_WRAPPER:-}" ]; then
   echo "RUSTC_WRAPPER is already $RUSTC_WRAPPER"
 else
   wrapper=
-  for candidate in "$(command -v sccache || true)" /opt/pp-sccache-bin/sccache /opt/pp-sccache-bin; do
+  # PATH first, then the fleet's install paths, then any sccache the image already
+  # ships under /opt, /usr/local or CARGO_HOME. Nothing is downloaded or installed.
+  mapfile -t found < <(find /opt /usr/local "${CARGO_HOME:-$HOME/.cargo}/bin" -maxdepth 4 \
+    -name sccache -type f -perm -u+x 2>/dev/null | sort || true)
+  for candidate in "$(command -v sccache || true)" /opt/pp-sccache-bin/sccache /opt/pp-sccache-bin \
+      /opt/sccache-bin/sccache "${found[@]}"; do
     if is_sccache "$candidate"; then wrapper=$candidate; break; fi
   done
   if [ -n "$wrapper" ]; then
@@ -31,6 +36,7 @@ else
     "$wrapper" --version
   else
     echo "::warning::sccache not found on this pp-local runner; building without a compiler cache"
+    find /opt -maxdepth 2 \( -path '/opt/*/*' -prune -name '*sccache*' -o -maxdepth 1 \) -print 2>/dev/null | head -40 || true
   fi
 fi
 

@@ -267,10 +267,12 @@ new run at once. To enable the idle check, store a fine-grained token with the
 repository's Administration read permission as `PP_RUNNER_READ_TOKEN`.
 
 The containers provide `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE` and a host-mounted Cargo
-registry. `scripts/ci-pp-local-sccache.sh` sets `RUSTC_WRAPPER` to `sccache` only
-when it is unset and sccache is on `PATH` (or at `/opt/pp-sccache-bin`), sets
-`CARGO_INCREMENTAL=0`, and never creates cache directories. The build and partition jobs end with
-`sccache --show-stats`. pp-local jobs skip `Swatinem/rust-cache`: the Actions cache
+registry. `scripts/ci-pp-local-sccache.sh` sets `RUSTC_WRAPPER` only when it is
+unset. It looks on `PATH`, then at `/opt/pp-sccache-bin`, `/opt/sccache-bin`, and any
+`sccache` file under `/opt`, `/usr/local` or `$CARGO_HOME/bin`, and takes the first one
+whose `--version` reports sccache. It never downloads sccache or creates cache
+directories; with none found it warns and lists `/opt`. It also sets
+`CARGO_INCREMENTAL=0`. The build and partition jobs end with `sccache --show-stats`. pp-local jobs skip `Swatinem/rust-cache`: the Actions cache
 is not needed there, and its post-job cleanup can delete registry sources that
 another container is compiling. `scripts/setup-ci-linux.sh` and
 `dtolnay/rust-toolchain` install the packages and Rust that hosted images ship.
