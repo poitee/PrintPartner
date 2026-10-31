@@ -66,7 +66,9 @@ release publish or edit, hook-bypass, secret-file edit, and generated-manifest e
 `git push` needs an explicit branch refspec and common options spelled in full.
 Write push destinations literally. The guard refuses a destination built from a
 shell expansion, the `:` matching refspec, and `HEAD` when the same command
-also switches branches. Git and gh subcommands and option names must be literal.
+also switches branches. When `push.followTags` is on, or a `remote.<name>.push`
+mapping exists, add `--no-follow-tags` or write `source:destination` refspecs.
+Git and gh subcommands and option names must be literal.
 After a `cd` in a subshell or pipeline, or under `env -C`, the guard treats the
 directory as unknown and refuses relative `gh api` input files.
 Through `gh api`, agents may read, write PR or issue comments, submit

@@ -67,7 +67,7 @@ class GuardHookTests(unittest.TestCase):
     def test_ordinary_commands_pass(self):
         for command in ("git push -u origin HEAD:chore/topic", "gh pr view 12",
                         "git push origin feature/maintenance", "npm --prefix web ci",
-                        "git -C /repo push origin main-fix",
+                        "git -C . push origin main-fix",
                         "git log --oneline main"):
             self.assertAllowed("Execute", {"command": command})
 
@@ -176,6 +176,23 @@ class GuardHookTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            for command, reason in (("git -c remote.origin.push=refs/heads/topic:refs/heads/main push origin topic",
+                                     "destination branch"),
+                                    ("git -c push.followTags=true push origin HEAD:topic", "follow-tags"),
+                                    ("GIT_CONFIG_COUNT=1 git push origin HEAD:topic", "follow-tags")):
+                payload["tool_input"]["command"] = command
+                result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 2, command)
+                self.assertIn(reason, result.stderr)
+            subprocess.run(["git", "-C", folder, "config", "push.followTags", "true"], check=True)
+            for command, code in (("git push origin HEAD:topic", 2), ("git push --no-follow-tags origin HEAD:topic", 0),
+                                  ("git -c push.followTags=false push origin HEAD:topic", 0)):
+                payload["tool_input"]["command"] = command
+                result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, code, command + result.stderr)
+            subprocess.run(["git", "-C", folder, "config", "--unset", "push.followTags"], check=True)
             for command in ("git branch --show-current && git push -u origin HEAD",
                             "git symbolic-ref --short HEAD && git push origin HEAD",
                             "git worktree list && git push origin HEAD"):
