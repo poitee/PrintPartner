@@ -17,6 +17,12 @@ Pushes to `main`, merge groups, nightly and manual runs execute all three jobs r
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
+## Agent guidance check
+
+The `agent-guidance` job in `actionlint.yml` checks the root `AGENTS.md` and the
+repo skills in `.factory/skills/`. It checks local file links (not heading
+anchors), each skill's `name` and `description`, and that Git does not ignore
+these files. It makes no network requests. Run it locally with `just guidance`.
 ## The OS jobs
 
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.
