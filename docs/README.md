@@ -48,6 +48,10 @@ Print Partner is moving its backend from Node to one Rust core. The core runs as
 - [Change a CI workflow](development/ci-controls.md)
 - [Run the stress-runner self-tests](development/stress-runner-self-tests.md)
 - [Definition of done](development/definition-of-done.md)
+- [Agent instructions](../AGENTS.md)
+- [Missions readiness and Rust migration gates](development/missions-readiness.md)
+- [Readiness gap-closure roadmap](development/readiness-roadmap.md)
+- [Bounded Mission QA](development/mission-qa.md)
 - [Gate evidence](contributing/gate-evidence.md)
 
 ## Setup and integrations

@@ -17,6 +17,25 @@ Pushes to `main`, merge groups, nightly and manual runs execute all three jobs r
 
 This page covers what the Rust jobs run and how to reproduce them. [Change a CI workflow](ci-controls.md) covers review, the actionlint and zizmor checks, action pins and required checks. Both apply to this workflow.
 
+## Shared agent guidance
+
+The `agent-guidance` job in `actionlint.yml` checks the root `AGENTS.md`, the
+repository readiness skill, and their linked readiness documents. It runs on
+ready pull requests, main pushes, merge groups, and manual runs without path
+filtering or dependency installation. It checks local file links (not heading
+anchors), the skill's name/description, and Git ignore rules. It makes no network
+requests and does not validate every Markdown page.
+
+Run `just guidance`, or:
+
+```sh
+python3 -B -m unittest discover -s scripts -p test_agent_guidance.py -v
+python3 -B scripts/check-agent-guidance.py
+```
+
+This job does not change branch protection or replace independent review and
+`pp/score-verified`. A hosted passing run still needs to be observed after push.
+
 ## The OS jobs
 
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.

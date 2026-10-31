@@ -152,7 +152,12 @@ class LocalCiTests(unittest.TestCase):
 
     def test_just_ci_runs_this_command_with_its_arguments_and_no_step_list_of_its_own(self):
         recipe = (ROOT / "justfile").read_text().split("\nci *args:\n", 1)[1]
-        commands = [line.strip() for line in recipe.splitlines() if line.startswith((" ", "\t"))]
+        commands = []
+        for line in recipe.splitlines():
+            if line and not line.startswith((" ", "\t")):
+                break
+            if line.strip():
+                commands.append(line.strip())
         self.assertEqual(commands, ['python3 scripts/local-ci.py "$@"'])
         self.assertIn("set positional-arguments", (ROOT / "justfile").read_text())
 
