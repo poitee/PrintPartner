@@ -54,6 +54,7 @@ jobs:
           python3 -B -m unittest discover -s scripts -p test_merge_group_workflows.py
           python3 -B -m unittest discover -s scripts -p 'test_*path_filter.py'
           python3 -B -m unittest discover -s scripts -p test_alert_macos_main.py
+          python3 -B -m unittest discover -s scripts -p test_devcontainer.py -v
           python3 scripts/ci-path-filter.py actions
 
   actionlint:
