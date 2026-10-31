@@ -163,9 +163,9 @@ claude_guard:   # Chad via Alfred, Oct 30 11:48 AM ET. Applied by ~/bin/claude-g
   missing_readout: seat_unavailable
 
 merge_gate:
-  score_min: 8                      # from a different model, on the exact head
+  review: droid-review              # Factory Droid review on the exact head; every review thread resolved
   ci: green
-  required_status: pp/score-verified
+  required_status: droid-review
   command: "gh pr merge <n> -R poitee/PrintPartner --squash --match-head-commit <sha>"
   on_wake: checks-passed
   pr_keyword: Fixes                 # never merge with "Refs" (close_out below)

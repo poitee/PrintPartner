@@ -105,19 +105,6 @@ class MergeGroupWorkflowTests(unittest.TestCase):
             self.assertNotIn("paths", workflow["on"][event])
             self.assertNotIn("paths-ignore", workflow["on"][event])
 
-    def test_dependabot_score_status_runs_only_for_dependabot_pull_request_runs(self):
-        workflow = yaml.load((ROOT / ".github/workflows/dependabot-score-status.yml").read_text(),
-                             Loader=yaml.BaseLoader)
-        self.assertEqual(workflow["permissions"], {})
-        job = workflow["jobs"]["post-pp-score"]
-        self.assertEqual(job["permissions"], {"contents": "read", "statuses": "write"})
-        guard = "(github.event_name != 'pull_request' || !github.event.pull_request.draft) && ("
-        self.assertTrue(job["if"].startswith(guard) and job["if"].endswith(")"))
-        for author, runs in (("dependabot[bot]", True), ("poitee", False)):
-            with self.subTest(author=author):
-                contexts = {"github": {"event": {"pull_request": {"user": {"login": author}}}}}
-                self.assertEqual(evaluate_if(job["if"][len(guard):-1], contexts), runs)
-
     def test_only_dependabot_pull_requests_skip_the_evidence_lint(self):
         workflow = yaml.load((ROOT / ".github/workflows/pr-evidence.yml").read_text(),
                              Loader=yaml.BaseLoader)
