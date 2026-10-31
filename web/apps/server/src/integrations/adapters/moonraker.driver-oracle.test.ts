@@ -71,8 +71,10 @@ describe("Moonraker driver oracle", () => {
           return;
         }
         const { port } = server.address() as AddressInfo;
-        const body = readFileSync(new URL(fixture, here), "utf8")
-          .replaceAll("{ORIGIN}", `http://localhost:${port}`);
+        const body = readFileSync(new URL(fixture, here), "utf8").replaceAll(
+          "{ORIGIN}",
+          `http://localhost:${port}`,
+        );
         res.writeHead(200, { "content-type": "application/json" }).end(body);
       });
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

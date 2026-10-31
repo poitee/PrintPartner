@@ -15,11 +15,7 @@ import {
   readBoundedJsonResponse,
   readBoundedResponseText,
 } from "../../lib/bounded-response.js";
-import {
-  encodeStoragePath,
-  joinStoragePath,
-  safeStoragePath,
-} from "./storage-path.js";
+import { encodeStoragePath, joinStoragePath, safeStoragePath } from "./storage-path.js";
 import { isRecord } from "../../lib/guards.js";
 
 const MAX_METADATA_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -114,8 +110,8 @@ type MoonrakerDirectoryRow = {
 
 function directoryRows(value: unknown): MoonrakerDirectoryRow[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((row): row is MoonrakerDirectoryRow =>
-    typeof row === "object" && row !== null
+  return value.filter(
+    (row): row is MoonrakerDirectoryRow => typeof row === "object" && row !== null,
   );
 }
 
@@ -186,27 +182,32 @@ async function browseStorage(
     const name = entryName(row.dirname);
     if (!name) return [];
     const modified = modifiedAt(row.modified);
-    return [{
-      kind: "directory",
-      path: `${prefix}${name}`,
-      name,
-      ...(modified === undefined ? {} : { modified_at: modified }),
-    }];
+    return [
+      {
+        kind: "directory",
+        path: `${prefix}${name}`,
+        name,
+        ...(modified === undefined ? {} : { modified_at: modified }),
+      },
+    ];
   });
   const files = fileRows.flatMap((row): PrinterStorageEntry[] => {
     const name = entryName(row.filename);
     if (!name) return [];
-    const size = typeof row.size === "number" && Number.isFinite(row.size) && row.size >= 0
-      ? Math.round(row.size)
-      : undefined;
+    const size =
+      typeof row.size === "number" && Number.isFinite(row.size) && row.size >= 0
+        ? Math.round(row.size)
+        : undefined;
     const modified = modifiedAt(row.modified);
-    return [{
-      kind: "file",
-      path: `${prefix}${name}`,
-      name,
-      ...(size === undefined ? {} : { size_bytes: size }),
-      ...(modified === undefined ? {} : { modified_at: modified }),
-    }];
+    return [
+      {
+        kind: "file",
+        path: `${prefix}${name}`,
+        name,
+        ...(size === undefined ? {} : { size_bytes: size }),
+        ...(modified === undefined ? {} : { modified_at: modified }),
+      },
+    ];
   });
 
   return { path: requested, entries: [...directories, ...files] };
@@ -225,11 +226,9 @@ type MoonrakerWebcam = {
 async function readWebcams(config: IntegrationConfig): Promise<MoonrakerWebcam[]> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) throw new Error("base_url is required");
-  const response = await moonrakerFetch(
-    `${baseUrl}/server/webcams/list`,
-    config,
-    { signal: AbortSignal.timeout(10_000) },
-  );
+  const response = await moonrakerFetch(`${baseUrl}/server/webcams/list`, config, {
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!response.ok) {
     await cancelResponseBody(response);
     if (response.status === 404) return [];
@@ -262,9 +261,13 @@ const CAMERA_VIEW_TIMEOUT_MS = 60_000;
  * Returns null when the value does not land on that origin, including when it
  * cannot be resolved at all. Either way it is not a URL this adapter will fetch.
  */
-function sameOriginCameraUrl(
-  { advertised, baseUrl }: { advertised: string; baseUrl: string },
-): string | null {
+function sameOriginCameraUrl({
+  advertised,
+  baseUrl,
+}: {
+  advertised: string;
+  baseUrl: string;
+}): string | null {
   try {
     const resolved = new URL(advertised, `${baseUrl}/`);
     return resolved.origin === new URL(baseUrl).origin ? resolved.toString() : null;
@@ -288,9 +291,13 @@ type CameraViewResolution =
  * back to its sibling URL: the same database row supplied both, so one bad
  * value discredits the other.
  */
-function resolveCameraView(
-  { baseUrl, camera }: { baseUrl: string; camera: MoonrakerWebcam },
-): CameraViewResolution {
+function resolveCameraView({
+  baseUrl,
+  camera,
+}: {
+  baseUrl: string;
+  camera: MoonrakerWebcam;
+}): CameraViewResolution {
   const streamUrl = typeof camera.stream_url === "string" ? camera.stream_url.trim() : "";
   const snapshotUrl = typeof camera.snapshot_url === "string" ? camera.snapshot_url.trim() : "";
   const service = typeof camera.service === "string" ? camera.service.trim().toLowerCase() : "";
@@ -302,9 +309,8 @@ function resolveCameraView(
   // MJPEG is the only continuous format this adapter proxies. Moonraker's
   // service names vary by camera stack, and an `action=stream` query is the
   // mjpg-streamer convention.
-  const mjpeg = service.includes("mjpeg")
-    || service.includes("ustreamer")
-    || /action=stream/i.test(streamUrl);
+  const mjpeg =
+    service.includes("mjpeg") || service.includes("ustreamer") || /action=stream/i.test(streamUrl);
   if (stream && mjpeg) return { outcome: "resolved", view: "mjpeg", url: stream };
   if (snapshot) return { outcome: "resolved", view: "snapshot", url: snapshot };
   return { outcome: "unsupported" };
@@ -319,19 +325,23 @@ async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> 
     const resolution = resolveCameraView({ baseUrl, camera });
     if (resolution.outcome !== "resolved") return [];
     const service = typeof camera.service === "string" ? camera.service.trim() : "";
-    const name = typeof camera.name === "string" && camera.name.trim()
-      ? camera.name.trim()
-      : `Camera ${index + 1}`;
-    const aspectRatio = typeof camera.aspect_ratio === "string" && camera.aspect_ratio.trim()
-      ? camera.aspect_ratio.trim()
-      : undefined;
-    return [{
-      id: cameraId(camera, index),
-      name,
-      view: resolution.view,
-      ...(service ? { service } : {}),
-      ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
-    }];
+    const name =
+      typeof camera.name === "string" && camera.name.trim()
+        ? camera.name.trim()
+        : `Camera ${index + 1}`;
+    const aspectRatio =
+      typeof camera.aspect_ratio === "string" && camera.aspect_ratio.trim()
+        ? camera.aspect_ratio.trim()
+        : undefined;
+    return [
+      {
+        id: cameraId(camera, index),
+        name,
+        view: resolution.view,
+        ...(service ? { service } : {}),
+        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+      },
+    ];
   });
 }
 
@@ -348,9 +358,15 @@ function mapPrintState(raw: string | undefined): PrinterHostStatus["state"] {
   return "unknown";
 }
 
-async function querySystemUptime(baseUrl: string, config: IntegrationConfig, permit: StatusPermit): Promise<number | undefined> {
+async function querySystemUptime(
+  baseUrl: string,
+  config: IntegrationConfig,
+  permit: StatusPermit,
+): Promise<number | undefined> {
   try {
-    const response = await moonrakerFetch(`${baseUrl}/machine/proc_stats`, config, { ...statusRequest(permit, 30_000) });
+    const response = await moonrakerFetch(`${baseUrl}/machine/proc_stats`, config, {
+      ...statusRequest(permit, 30_000),
+    });
     if (!response.ok) {
       await cancelResponseBody(response);
       return undefined;
@@ -366,16 +382,17 @@ async function querySystemUptime(baseUrl: string, config: IntegrationConfig, per
   }
 }
 
-async function queryStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
+async function queryStatus(
+  config: IntegrationConfig,
+  permit: StatusPermit,
+): Promise<PrinterHostStatus> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) return { state: "offline", message: "base_url is required" };
 
   const objects = "print_stats&virtual_sdcard&display_status&extruder&heater_bed";
-  const res = await moonrakerFetch(
-    `${baseUrl}/printer/objects/query?${objects}`,
-    config,
-    { ...statusRequest(permit, 30_000) },
-  );
+  const res = await moonrakerFetch(`${baseUrl}/printer/objects/query?${objects}`, config, {
+    ...statusRequest(permit, 30_000),
+  });
   if (!res.ok) {
     await cancelResponseBody(res);
     return { state: "offline", message: `Moonraker returned HTTP ${res.status}` };
@@ -388,15 +405,13 @@ async function queryStatus(config: IntegrationConfig, permit: StatusPermit): Pro
   const displayStatus = isRecord(status?.display_status) ? status.display_status : null;
   const extruder = isRecord(status?.extruder) ? status.extruder : null;
   const heaterBed = isRecord(status?.heater_bed) ? status.heater_bed : null;
-  const progressFraction =
-    virtualSdCard?.progress ?? displayStatus?.progress;
+  const progressFraction = virtualSdCard?.progress ?? displayStatus?.progress;
   const progress =
     typeof progressFraction === "number" && Number.isFinite(progressFraction)
       ? Math.round(Math.min(100, Math.max(0, progressFraction * 100)))
       : undefined;
-  const filename = typeof printStats?.filename === "string"
-    ? printStats.filename.trim() || undefined
-    : undefined;
+  const filename =
+    typeof printStats?.filename === "string" ? printStats.filename.trim() || undefined : undefined;
   const rawState = typeof printStats?.state === "string" ? printStats.state : undefined;
   const state = mapPrintState(rawState);
   const uptimeSeconds = await querySystemUptime(baseUrl, config, permit);
@@ -427,11 +442,9 @@ async function fetchObjectList(config: IntegrationConfig): Promise<string[]> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) return [];
   try {
-    const res = await moonrakerFetch(
-      `${baseUrl}/printer/objects/query?exclude_object`,
-      config,
-      { signal: AbortSignal.timeout(8_000) },
-    );
+    const res = await moonrakerFetch(`${baseUrl}/printer/objects/query?exclude_object`, config, {
+      signal: AbortSignal.timeout(8_000),
+    });
     if (!res.ok) {
       await cancelResponseBody(res);
       return [];
@@ -443,7 +456,9 @@ async function fetchObjectList(config: IntegrationConfig): Promise<string[]> {
     const objects = excludeObject?.objects;
     if (!Array.isArray(objects)) return [];
     return objects
-      .map((object) => isRecord(object) && typeof object.name === "string" ? object.name.trim() : "")
+      .map((object) =>
+        isRecord(object) && typeof object.name === "string" ? object.name.trim() : "",
+      )
       .filter((n) => n.length > 0);
   } catch {
     return [];
@@ -496,7 +511,10 @@ export const moonrakerAdapter: IntegrationAdapter = {
     },
   },
 
-  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
+  async testConnection(
+    config: IntegrationConfig,
+    permit: StatusPermit,
+  ): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) {
       return { ok: false, message: "base_url is required" };
@@ -558,11 +576,9 @@ export const moonrakerAdapter: IntegrationAdapter = {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) return null;
     try {
-      const res = await moonrakerFetch(
-        `${baseUrl}/printer/objects/query?print_stats`,
-        config,
-        { signal: AbortSignal.timeout(8_000) },
-      );
+      const res = await moonrakerFetch(`${baseUrl}/printer/objects/query?print_stats`, config, {
+        signal: AbortSignal.timeout(8_000),
+      });
       if (!res.ok) {
         await cancelResponseBody(res);
         return null;

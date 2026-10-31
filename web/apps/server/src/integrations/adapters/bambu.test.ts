@@ -19,12 +19,7 @@ class FakeMqttClient extends EventEmitter {
     return this;
   });
   publish = vi.fn(
-    (
-      _topic: string,
-      _payload: string,
-      _opts?: unknown,
-      cb?: (err?: Error | null) => void,
-    ) => {
+    (_topic: string, _payload: string, _opts?: unknown, cb?: (err?: Error | null) => void) => {
       cb?.(null);
       return this;
     },
@@ -50,12 +45,8 @@ function mockMqttThatReports(print: Record<string, unknown>): BambuMqttConnect {
       publish(topic, payload, o, cb);
       queueMicrotask(() => {
         const onMessage = client.listeners("message")[0] as
-          | ((topic: string, payload: Buffer) => void)
-          | undefined;
-        onMessage?.(
-          "device/report",
-          Buffer.from(JSON.stringify({ print })),
-        );
+          ((topic: string, payload: Buffer) => void) | undefined;
+        onMessage?.("device/report", Buffer.from(JSON.stringify({ print })));
       });
       return client;
     }) as typeof client.publish;
@@ -170,7 +161,9 @@ describe("bambuAdapter", () => {
     const execution = new StatusExecution();
     const client = new FakeMqttClient();
     let created!: () => void;
-    const connected = new Promise<void>((resolve) => { created = resolve; });
+    const connected = new Promise<void>((resolve) => {
+      created = resolve;
+    });
     let subscribed: (() => void) | undefined;
     let ended: (() => void) | undefined;
     client.subscribe.mockImplementation((_topic, done) => {
@@ -185,19 +178,32 @@ describe("bambuAdapter", () => {
       created();
       return client as unknown as ReturnType<BambuMqttConnect>;
     });
-    const rejected = expect(execution.probe(bambuAdapter, {
-      host: "192.168.1.60", serial: "ABC123456", access_code: "12345678",
-    })).rejects.toThrow("Printer status execution stopped");
+    const rejected = expect(
+      execution.probe(bambuAdapter, {
+        host: "192.168.1.60",
+        serial: "ABC123456",
+        access_code: "12345678",
+      }),
+    ).rejects.toThrow("Printer status execution stopped");
     await connected;
     client.emit("connect");
     subscribed?.();
     const stopped = execution.stop();
     client.emit("connect");
     subscribed?.();
-    expect(client.publish.mock.calls.map(([topic, payload, options]) => [topic, payload, options])).toEqual([
-      ["device/ABC123456/request", '{"pushing":{"sequence_id":"0","command":"pushall"}}', { qos: 0 }],
+    expect(
+      client.publish.mock.calls.map(([topic, payload, options]) => [topic, payload, options]),
+    ).toEqual([
+      [
+        "device/ABC123456/request",
+        '{"pushing":{"sequence_id":"0","command":"pushall"}}',
+        { qos: 0 },
+      ],
     ]);
-    expect(execution.snapshot()).toEqual({ state: "stopping", tasks: [{ id: 1, provider: "bambu", operation: "probe" }] });
+    expect(execution.snapshot()).toEqual({
+      state: "stopping",
+      tasks: [{ id: 1, provider: "bambu", operation: "probe" }],
+    });
     if (!ended) throw new Error("MQTT end was not requested");
     ended();
     await stopped;
@@ -207,9 +213,9 @@ describe("bambuAdapter", () => {
 
   it("requires host, access_code, and serial", async () => {
     expect((await execution.test(bambuAdapter, {})).ok).toBe(false);
-    expect(
-      (await execution.test(bambuAdapter, { host: "192.168.1.80" })).message,
-    ).toMatch(/access_code/i);
+    expect((await execution.test(bambuAdapter, { host: "192.168.1.80" })).message).toMatch(
+      /access_code/i,
+    );
     expect(
       (
         await execution.test(bambuAdapter, {
