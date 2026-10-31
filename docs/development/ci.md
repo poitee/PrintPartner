@@ -50,23 +50,22 @@ system Python:
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 npm --prefix web run format:check
-.venv/bin/ruff format --check scripts slicer-sidecar
+.venv/bin/ruff format --check scripts rust/scripts web/scripts slicer-sidecar .factory/hooks
 ```
 
 These are check-only commands. They return nonzero for unformatted source and
 never rewrite it. The Prettier command covers application, shared-package, and
 maintenance-script TypeScript, including tests. It skips generated
 `*.generated.ts` files because their generators are the source of truth. Ruff
-covers Python helpers and the legacy sidecar. Build outputs, dependency trees,
-and ignored scratch files are not source.
+covers repository scripts, hooks, and the legacy sidecar. Build outputs,
+dependency trees, and ignored scratch files are not source.
 
 Existing source has not been mechanically reformatted in this setup slice.
-On main `0bfdadbc`, Prettier reports 1,137 TypeScript files and Ruff reports 37
-Python files that need formatting. Both checks exit 1 until those mechanical
-changes land. Keep formatting in separate bounded PRs, then enforce the checks
-in CI and the opt-in hook. Do not treat configuration alone as a passing
-formatter readiness criterion or add broad source exclusions to manufacture a
-pass.
+On main `0bfdadbc`, Prettier reports 1,137 TypeScript files and Ruff reports 59
+Python files that need formatting. Both checks exit 1 until those changes land.
+Keep formatting in separate bounded PRs, then enforce the checks in CI and the
+opt-in hook. Do not treat configuration alone as a passing formatter readiness
+criterion or add broad source exclusions to manufacture a pass.
 
 ## The OS jobs
 
