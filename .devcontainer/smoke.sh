@@ -8,9 +8,7 @@ if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --runtime ) ]]; then
 fi
 
 test "$(id -u)" != 0
-test "$(node --version)" = v24.21.0
-test "$("${PP_SCHEMA_PARITY_NODE:?Parity Node must be configured}" --version)" = v22.23.3
-test "$(rustc --version | cut -d ' ' -f 2)" = 1.99.0
+bash .devcontainer/preflight.sh
 cargo fmt --version
 cargo clippy --version
 pkg-config --modversion gtk+-3.0 webkit2gtk-4.1 libsoup-3.0

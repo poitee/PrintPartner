@@ -46,16 +46,26 @@ class DevcontainerTests(unittest.TestCase):
             self.assertIn(f"v{version}", local_ci)
             self.assertTrue(any(image.startswith(f"node:{version}-bookworm@") for image in images))
         config = json.loads((DIRECTORY / "devcontainer.json").read_text())
-        self.assertEqual(config["containerEnv"]["PP_SCHEMA_PARITY_NODE"], "/opt/node22/bin/node")
+        self.assertNotIn("containerEnv", config)
+        self.assertIn('PP_SCHEMA_PARITY_NODE="/opt/node22/bin/node"', dockerfile)
+        self.assertIn('PLAYWRIGHT_CHROMIUM_EXECUTABLE="/usr/bin/chromium"', dockerfile)
+        self.assertIn('INSTA_UPDATE="no"', dockerfile)
         self.assertIn('PATH="/opt/node24/bin:${PATH}"', dockerfile)
 
     def test_scripts_parse_and_post_create_is_explicit(self):
         config = json.loads((DIRECTORY / "devcontainer.json").read_text())
         self.assertEqual(config["postCreateCommand"], "bash .devcontainer/post-create.sh")
-        for name in ("post-create.sh", "smoke.sh"):
+        for name in ("preflight.sh", "post-create.sh", "smoke.sh"):
             result = subprocess.run(["bash", "-n", str(DIRECTORY / name)],
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ("post-create.sh", "smoke.sh"):
+            script = (DIRECTORY / name).read_text()
+            self.assertIn("bash .devcontainer/preflight.sh", script)
+            self.assertNotIn("--version", script.split("bash .devcontainer/preflight.sh")[0])
+        setup = (DIRECTORY / "post-create.sh").read_text()
+        self.assertIn("npm --prefix web run predev", setup)
+        self.assertNotIn("run build -w", setup)
         smoke = (DIRECTORY / "smoke.sh").read_text()
         self.assertIn("-p pp-domain --lib", smoke)
         self.assertIn("--features desktop_rebuild", smoke)

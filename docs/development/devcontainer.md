@@ -34,8 +34,10 @@ Only the selected checkout is mounted for development. As with any developer
 environment, repository lifecycle scripts execute with access to that checkout.
 Use a trusted clone and keep real secrets and production data elsewhere.
 
-The post-create script performs `npm ci` under Node 24 and builds the contracts
-and domain packages. It neither launches a server nor runs the full test suites.
+Setup and smoke share `.devcontainer/preflight.sh` for toolchain checks.
+The post-create script performs `npm ci` under Node 24 and runs the existing
+`predev` command to build contracts and domain packages.
+It neither launches a server nor runs the full test suites.
 The root package's Node 22 engine warning is expected during this transition.
 
 ## Smoke checks and feature modes
