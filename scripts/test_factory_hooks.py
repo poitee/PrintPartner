@@ -179,7 +179,17 @@ class GuardHookTests(unittest.TestCase):
             for command, reason in (("git -c remote.origin.push=refs/heads/topic:refs/heads/main push origin topic",
                                      "destination branch"),
                                     ("git -c push.followTags=true push origin HEAD:topic", "follow-tags"),
-                                    ("GIT_CONFIG_COUNT=1 git push origin HEAD:topic", "follow-tags")):
+                                    ("git -c push.followTags push origin HEAD:topic", "follow-tags"),
+                                    ("git -c push.followTags=2 push origin HEAD:topic", "follow-tags"),
+                                    ("git config push.followTags true && git push origin HEAD:topic", "follow-tags"),
+                                    ("git remote add other /tmp/x && git push origin HEAD:topic", "follow-tags"),
+                                    ("git config remote.origin.push refs/heads/topic:refs/heads/main && "
+                                     "git push origin topic", "destination branch"),
+                                    ("GIT_CONFIG_COUNT=1 git push origin HEAD:topic", "GIT_CONFIG_"),
+                                    ("env GIT_CONFIG_GLOBAL=/tmp/c git push origin HEAD:topic", "GIT_CONFIG_"),
+                                    ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null "
+                                     "git commit -m change", "GIT_CONFIG_"),
+                                    ("export GIT_CONFIG_PARAMETERS=x; git commit -m change", "GIT_CONFIG_")):
                 payload["tool_input"]["command"] = command
                 result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                         capture_output=True, text=True, check=False)
@@ -194,6 +204,10 @@ class GuardHookTests(unittest.TestCase):
                 self.assertEqual(result.returncode, code, command + result.stderr)
             subprocess.run(["git", "-C", folder, "config", "--unset", "push.followTags"], check=True)
             for command in ("git branch --show-current && git push -u origin HEAD",
+                            "git config --get push.followTags; git push origin HEAD:topic",
+                            "git remote -v && git push origin HEAD:topic",
+                            "printf '%s\\n' 'GIT_CONFIG_COUNT=1'; git push origin HEAD:topic",
+                            "echo GIT_DIR=.git && git push origin HEAD",
                             "git symbolic-ref --short HEAD && git push origin HEAD",
                             "git worktree list && git push origin HEAD"):
                 payload["tool_input"]["command"] = command
@@ -205,6 +219,8 @@ class GuardHookTests(unittest.TestCase):
                             "(cd /tmp); git push origin HEAD", "GIT_DIR=/tmp/x/.git git push origin HEAD",
                             "env GIT_DIR=/tmp/x/.git git push origin HEAD",
                             "export GIT_WORK_TREE=/tmp/x; git push origin HEAD", "git branch -m main && git push origin HEAD",
+                            "git branch --mov --force main && git push origin HEAD",
+                            "git symbolic-ref --del HEAD && git push origin HEAD",
                             "git symbolic-ref HEAD refs/heads/main && git push origin HEAD",
                             "echo $(git checkout main) && git push origin HEAD"):
                 payload["tool_input"]["command"] = command

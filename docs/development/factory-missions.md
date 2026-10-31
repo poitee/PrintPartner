@@ -68,7 +68,10 @@ Write push destinations literally. The guard refuses a destination built from a
 shell expansion, the `:` matching refspec, and `HEAD` when the same command
 also switches branches. When `push.followTags` is on, or a `remote.<name>.push`
 mapping exists, add `--no-follow-tags` or write `source:destination` refspecs.
-Git and gh subcommands and option names must be literal.
+The guard treats both settings as unknown after a `git config` write or a
+`git remote` change in the same command. It refuses commits and pushes that run
+with `GIT_CONFIG_*` environment variables. Git and gh subcommands and option
+names must be literal.
 After a `cd` in a subshell or pipeline, or under `env -C`, the guard treats the
 directory as unknown and refuses relative `gh api` input files.
 Through `gh api`, agents may read, write PR or issue comments, submit

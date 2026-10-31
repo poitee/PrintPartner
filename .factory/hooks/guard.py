@@ -77,9 +77,11 @@ SAFE_PUSH_SHORT = set("46noquv")
 PUSH_OPTIONS = "Use common git push options spelled in full."
 PUSH_EXPLICIT = "Name the destination branch, for example `git push origin HEAD:topic`."
 FOLLOW_TAGS = "push.followTags may publish tags; add --no-follow-tags to the push."
+ENV_CONFIG = "GIT_CONFIG_* variables can disable hooks or redirect pushes; run git without them."
 # Environment assignments that add or replace git configuration.
 GIT_CONFIG_ENV = re.compile(r"^GIT_CONFIG\w*=")
-TRUE = {"true", "yes", "on", "1"}
+# Builtins whose arguments are assignments, such as export GIT_DIR=...
+DECLARATIONS = {"declare", "export", "local", "readonly", "typeset"}
 CONFIG_READ_OPTIONS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l"}
 CONFIG_READ_COMMANDS = {"get", "list"}
 # Environment assignments that point git at another repository.
@@ -362,17 +364,21 @@ def shell_commands(source):
 
 
 def program(args):
-    """Return the executed program name, its arguments, and whether a wrapper changed directory."""
-    i, moved = 0, False
+    """Return the executed program name, its arguments, whether a wrapper changed directory,
+    and the environment assignments the command makes."""
+    i, moved, assigned = 0, False, []
     while i < len(args):
         word = args[i]
         if ASSIGNMENT.match(word) or word in SHELL_PREFIXES:
             moved = moved or bool(GIT_LOCATION.match(word))
+            assigned += [word] if ASSIGNMENT.match(word) else []
             i += 1
             continue
         name = PurePosixPath(word).name
         if name not in WRAPPERS:
-            return name, args[i + 1:], moved
+            if name in DECLARATIONS:
+                assigned += [arg for arg in args[i + 1:] if ASSIGNMENT.match(arg)]
+            return name, args[i + 1:], moved, assigned
         i += 1
         while i < len(args) and args[i].startswith("-"):
             option = args[i]
@@ -384,7 +390,7 @@ def program(args):
             moved = moved or option.split("=", 1)[0] in WRAPPER_CHDIR or bool(re.match(r"^-[^-]*[CD]", option))
             i += 2 if option in WRAPPERS[name] else 1
         i += WRAPPER_OPERANDS.get(name, 0)
-    return None, [], moved
+    return None, [], moved, assigned
 
 
 def options(args, value_flags="", stop_flags="", value_long=()):
@@ -448,23 +454,21 @@ def push_config(cwd, location):
     """
     if cwd is None or any(EXPANDED in arg for arg in location):
         return None
-    try:
-        result = subprocess.run(["git", *location, "config", "--get-regexp", r"^(remote\..*\.push|push\.followtags)$"],
-                                cwd=cwd, capture_output=True, text=True, timeout=5, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode == 1 and not result.stdout:
-        return False, False
-    if result.returncode != 0:
-        return None
-    mappings, follow = False, False
-    for line in result.stdout.splitlines():
-        key, _, value = line.partition(" ")
-        if key.lower() == "push.followtags":
-            follow = value.strip().lower() in TRUE
+    found = []
+    # git config exits 1 when the key is unset; --type=bool applies Git's own boolean rules.
+    for query in (["--get-regexp", r"^remote\..*\.push$"], ["--type=bool", "--get", "push.followTags"]):
+        try:
+            result = subprocess.run(["git", *location, "config", *query],
+                                    cwd=cwd, capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode == 1 and not result.stdout:
+            found.append(False)
+        elif result.returncode == 0:
+            found.append(query[0] == "--get-regexp" or result.stdout.strip() == "true")
         else:
-            mappings = True
-    return mappings, follow
+            return None
+    return tuple(found)
 
 
 def push_reason(args, cwd, location, head_moves, config_unknown=False):
@@ -543,6 +547,32 @@ def git_command(args):
     return i, location, reason
 
 
+def long_prefix(arg, option, shortest):
+    """Git accepts any unambiguous prefix of a long option; shortest is the first unambiguous length."""
+    return len(arg) >= shortest and option.startswith(arg)
+
+
+def config_reads(rest):
+    # Read operations are options or the first operand; a value such as "get" is not one.
+    operands = [arg for arg in rest if not arg.startswith("-")]
+    return bool({arg.split("=", 1)[0] for arg in rest if arg.startswith("-")} & CONFIG_READ_OPTIONS
+                or operands[:1] and operands[0] in CONFIG_READ_COMMANDS)
+
+
+def writes_config(name, args):
+    """Whether a git config or git remote command may change push settings."""
+    if name != "git":
+        return False
+    i = git_command(args)[0]
+    if i >= len(args):
+        return False
+    command, rest = args[i], args[i + 1:]
+    if command == "config":
+        return not config_reads(rest)
+    operands = [arg for arg in rest if not arg.startswith("-")]
+    return command == "remote" and bool(operands) and operands[0] not in ("show", "get-url")
+
+
 def moves_head(name, args):
     if name == "git":
         i = git_command(args)[0]
@@ -551,27 +581,25 @@ def moves_head(name, args):
         command, rest = args[i], args[i + 1:]
         if command == "branch":
             # Only a rename of the current branch changes the name HEAD points to.
-            return any(arg in ("--move", "-m", "-M") or re.match(r"^-[^-]*[mM]", arg) for arg in rest)
+            return any(long_prefix(arg, "--move", 4) or re.match(r"^-[^-]*[mM]", arg) for arg in rest)
         if command == "symbolic-ref":
             operands = [arg for arg in rest if not arg.startswith("-")]
-            return len(operands) > 1 or any(arg in ("-d", "--delete") for arg in rest)
+            return len(operands) > 1 or any(arg == "-d" or long_prefix(arg, "--delete", 3) for arg in rest)
         return command in BRANCH_CHANGES
     return name == "gh" and without_repo_flags(args)[:2] == ["pr", "checkout"]
 
 
-def git_reason(args, cwd, head_moves=False, config_unknown=False):
+def git_reason(args, cwd, head_moves=False, config_unknown=False, env_config=False):
     i, location, reason = git_command(args)
     if reason or i >= len(args):
         return reason
     command, rest = args[i], args[i + 1:]
+    if env_config and command in {"commit", "push", *HOOK_COMMANDS}:
+        return ENV_CONFIG
     if command == "push":
         return push_reason(rest, cwd, location, head_moves, config_unknown)
     if command == "config":
-        # Read operations are options or the first operand; a value such as "get" is not one.
-        operands = [arg for arg in rest if not arg.startswith("-")]
-        reads = ({arg.split("=", 1)[0] for arg in rest if arg.startswith("-")} & CONFIG_READ_OPTIONS
-                 or operands[:1] and operands[0] in CONFIG_READ_COMMANDS)
-        if any(arg.lower() == "core.hookspath" for arg in rest) and not reads:
+        if any(arg.lower() == "core.hookspath" for arg in rest) and not config_reads(rest):
             return HOOKS
     if command == "commit":
         parsed = options(rest, value_flags="mFcCt", stop_flags="uS", value_long=COMMIT_VALUE_LONG)
@@ -780,13 +808,16 @@ def decide(payload):
         try:
             parsed = shell_commands(str(data.get("command", "")))
             commands = [(*program(args), scoped, conditional) for args, scoped, conditional in parsed]
+            assigned = [word for _, _, _, words, *_ in commands for word in words]
             # Substitutions run out of source order, so any branch change makes HEAD unknown.
             # An exported GIT_DIR or similar can also point a later push at another repository.
             head_moves = (any(moves_head(name, rest) for name, rest, *_ in commands)
-                          or any(GIT_LOCATION.match(arg) for args, *_ in parsed for arg in args))
-            config_unknown = head_moves or any(GIT_CONFIG_ENV.match(arg) for args, *_ in parsed for arg in args)
+                          or any(GIT_LOCATION.match(word) for word in assigned))
+            env_config = any(GIT_CONFIG_ENV.match(word) for word in assigned)
+            # The guard reads push settings before any of these commands run.
+            config_unknown = head_moves or any(writes_config(name, rest) for name, rest, *_ in commands)
             control = 0
-            for (args, *_), (name, rest, moved, scoped, conditional) in zip(parsed, commands):
+            for (args, *_), (name, rest, moved, _, scoped, conditional) in zip(parsed, commands):
                 control += args[0] in ("if", "while", "until", "for", "case", "select")
                 control -= args[0] in ("fi", "done", "esac")
                 if name in ("cd", "pushd", "popd"):
@@ -798,7 +829,7 @@ def decide(payload):
                     cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
                     continue
                 here = None if moved else cwd
-                reason = git_reason(rest, here, head_moves, config_unknown) if name == "git" else gh_reason(rest, here) if name == "gh" else None
+                reason = git_reason(rest, here, head_moves, config_unknown, env_config) if name == "git" else gh_reason(rest, here) if name == "gh" else None
                 if reason:
                     return reason
         except Unclear as error:
