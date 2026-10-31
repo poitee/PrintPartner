@@ -81,6 +81,11 @@ class GuardHookTests(unittest.TestCase):
                         "git log --grep 'gh pr merge'",
                         "gh pr list --search '--no-verify'",
                         "git log --grep --no-verify",
+                        "git log --format='%h %s'",
+                        'git commit --message="Fix guard"',
+                        "printf '%s\\n' /tmp/a\\ b",
+                        "git commit -m 'note; git push --force'",
+                        "git log # git push origin main",
                         "python3 - <<'PY'\nprint('git push --force')\nPY\n",
                         "python3 - <<'PY'\nprint(\"unmatched shell quote: '\")\nPY\n"):
             self.assertAllowed("Execute", {"command": command})
@@ -90,6 +95,10 @@ class GuardHookTests(unittest.TestCase):
         self.assertBlocked("Execute", {"command": 'git push origin "HEAD:main"'}, "main only")
         self.assertBlocked("Execute", {"command": "git push '--force' origin topic"}, "force-push")
         self.assertAllowed("Execute", {"command": "git push --force-if-includes origin HEAD:topic"})
+        for command in ("git push -fu origin topic", "git push -uvf origin topic", "git push -fuv origin topic"):
+            self.assertBlocked("Execute", {"command": command}, "force-push")
+        self.assertBlocked("Execute", {"command": "echo $(git push origin main)"}, "main only")
+        self.assertBlocked("Execute", {"command": "git push origin 'main"}, "Cannot parse")
 
     def test_generated_paths_are_normalized(self):
         for path in ("/repo/rust/./bundle-manifest.json", "/repo/rust//bundle-manifest.json"):

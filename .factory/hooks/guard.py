@@ -17,7 +17,7 @@ COMMAND_RULES = (
     (re.compile(r"^gh\s+pr\s+merge\b"), "Merging is the maintainer's job. Report readiness instead."),
     (re.compile(r"^gh\s+api\b(?=[^;&|\n]*(?:-X\s*|--method[= ])PUT\b)[^;&|\n]*/pulls/\d+/merge\b"),
      "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(GIT + r"push\b[^;&|\n]*(\s--force(?=\s|$)|\s--force-with-lease(?:=|\s|$)|\s-[a-zA-Z]*f\b|\s\+\S)"),
+    (re.compile(GIT + r"push\b[^;&|\n]*(\s--force(?=\s|$)|\s--force-with-lease(?:=|\s|$)|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+\S)"),
      "Never force-push. Add a commit instead."),
     (re.compile(GIT + r"push\b[^;&|\n]*[ \t](\S+:)?(refs/heads/)?main(?:\s|[;&|]|$)"), "Push a branch and open a PR; main only changes by merge."),
     (re.compile(GIT + r"push\b[^;&|\n]*\s--tags\b|^gh\s+release\s+create\b"), "Releases and tags need separate authorization."),
@@ -41,44 +41,81 @@ def protected_path(raw):
     return None
 
 
+SEPARATORS = ";&|\n()"
+HEREDOC = re.compile(r"""[ \t]*(?:'([^']*)'|"([^"]*)"|([^\s;&|<>()]+))""")
+
+
 def shell_commands(source):
-    """Extract simple commands, excluding quoted literals and heredoc bodies.
+    """Split shell source into simple commands of unquoted arguments.
 
-    This deliberately handles common shell shapes, not shell evaluation.
+    Handles quotes, escapes, separators, comments, and heredoc bodies. It does
+    not evaluate expansions, so it is a mistake guard rather than a sandbox.
     """
-    lines, pending = [], []
-    for line in source.splitlines(keepends=True):
-        if pending:
-            delimiter, tabs = pending[0]
-            if (line.lstrip("\t") if tabs else line).rstrip("\r\n") == delimiter:
-                pending.pop(0)
-            continue
-        lines.append(line)
-        lexer = shlex.shlex(line, posix=False, punctuation_chars="<>")
-        lexer.whitespace_split = True
-        try:
-            tokens = list(lexer)
-        except ValueError:
-            continue  # A multiline quoted string is parsed by the lexer below.
-        for i, token in enumerate(tokens[:-1]):
-            if token == "<<":
-                delimiter = tokens[i + 1]
-                tabs = delimiter.startswith("-")
-                pending.append((delimiter.lstrip("-").strip("'\""), tabs))
-    lexer = shlex.shlex("".join(lines), posix=False, punctuation_chars=";&|\n")
-    lexer.whitespace = " \t\r"
-    lexer.whitespace_split = True
-    command = []
-    for token in lexer:
-        if token and all(char in ";&|\n" for char in token):
-            if command:
-                yield command
-                command = []
-        else:
-            command.append(shlex.split(token)[0])
-    if command:
-        yield command
+    commands, args, word, heredocs = [], [], None, []
 
+    def finish_word():
+        nonlocal word
+        if word is not None:
+            args.append(word)
+            word = None
+
+    i = 0
+    while i < len(source):
+        char = source[i]
+        if char == "\\" and i + 1 < len(source):
+            word = (word or "") + source[i + 1]
+            i += 2
+        elif char in "'\"":
+            j, text = i + 1, []
+            while True:
+                if j >= len(source):
+                    raise ValueError("unterminated quote")
+                c = source[j]
+                if c == char:
+                    break
+                if char == '"' and c == "\\" and source[j + 1:j + 2] in ('$', '`', '"', "\\"):
+                    text.append(source[j + 1])
+                    j += 2
+                    continue
+                text.append(c)
+                j += 1
+            word = (word or "") + "".join(text)
+            i = j + 1
+        elif char == "#" and word is None:
+            newline = source.find("\n", i)
+            i = len(source) if newline < 0 else newline
+        elif source.startswith("<<", i) and not source.startswith("<<<", i):
+            finish_word()
+            i += 2
+            tabs = source.startswith("-", i)
+            i += tabs
+            match = HEREDOC.match(source, i)
+            if match:
+                heredocs.append((next(g for g in match.groups() if g is not None), tabs))
+                i = match.end()
+        elif char in " \t\r<>" or char in SEPARATORS:
+            finish_word()
+            if char in SEPARATORS and args:
+                commands.append(args)
+                args = []
+            i += 1
+            if char == "\n":
+                for delimiter, tabs in heredocs:
+                    while i < len(source):
+                        end = source.find("\n", i)
+                        end = len(source) if end < 0 else end
+                        line = source[i:end].rstrip("\r")
+                        i = end + 1
+                        if (line.lstrip("\t") if tabs else line) == delimiter:
+                            break
+                heredocs = []
+        else:
+            word = (word or "") + char
+            i += 1
+    finish_word()
+    if args:
+        commands.append(args)
+    return commands
 
 def decide(payload):
     if not isinstance(payload, dict):
