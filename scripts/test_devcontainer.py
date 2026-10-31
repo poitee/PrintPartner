@@ -73,6 +73,7 @@ class DevcontainerTests(unittest.TestCase):
         self.assertNotIn("--passWithNoTests", smoke)
         self.assertIn("vitest run src/services/gcode-object-parser.test.ts", smoke)
         self.assertIn("-m unittest test_sidecar.py test_shutdown.py", smoke)
+        self.assertIn("cargo_tests -p pp-server --bin pp-server", smoke)
         self.assertIn("cargo_tests -p pp-server --test cli", smoke)
         self.assertIn("cargo_tests -p pp-desktop --lib browser::tests", smoke)
         self.assertIn("[1-9][0-9]* passed;", smoke)

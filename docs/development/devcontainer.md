@@ -59,8 +59,9 @@ bash .devcontainer/smoke.sh --runtime
 ```
 
 It repeats the fast checks, builds the desktop web assets, generates the measured
-manifest at the checkout's HEAD, and runs three gateway CLI-refusal integration
-tests plus desktop browser-policy unit tests with `desktop_rebuild` off/on.
+manifest at the checkout's HEAD, and runs five gateway argument-parser unit
+tests, three gateway CLI-refusal integration tests, and desktop browser-policy
+unit tests with `desktop_rebuild` off/on.
 Each selected Rust run must execute at least one passing test. Missing matches
 fail even if Cargo exits zero. Budget 20 minutes for a cold build, depending on
 available CPU and registry access. The manifest remains generated and ignored;
@@ -68,8 +69,8 @@ do not replace it with a placeholder.
 
 These are headless tests, not installed-native acceptance or a running gateway
 journey. They do not prove runtime cutover, browser E2E, real Orca,
-Windows/macOS support, or release signing. The gateway has no separate unit
-suite; its CLI integration selector must not be reported as unit coverage.
+Windows/macOS support, or release signing. Gateway parser unit tests do not
+prove runtime startup; report the CLI integration selector separately.
 
 For a raw Docker build without an editor or CLI:
 

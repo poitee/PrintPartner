@@ -43,6 +43,7 @@ if [[ ${1:-} == --runtime ]]; then
     cargo test --manifest-path rust/Cargo.toml --locked "$@" | tee "$LOG"
     grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "$LOG"
   }
+  cargo_tests -p pp-server --bin pp-server
   cargo_tests -p pp-server --test cli
   cargo_tests -p pp-desktop --lib browser::tests
   cargo_tests -p pp-desktop --lib browser::tests --features desktop_rebuild

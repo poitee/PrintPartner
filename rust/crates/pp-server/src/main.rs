@@ -1,26 +1,18 @@
 use anyhow::{Context, Result, bail};
 use pp_core::{CoreRuntime, CoreStatus, DesktopLaunch, VerifiedBundle};
-use std::{io::Write, os::unix::fs::OpenOptionsExt, path::PathBuf};
+use std::{io::Write, os::unix::fs::OpenOptionsExt};
+
+mod args;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let mut data = None;
-    let mut web = None;
-    let mut node = None;
-    let mut commit = None;
-    let mut credential_file = None;
-    while let Some(arg) = args.next() {
-        let value = args.next().context("Argument value missing")?;
-        match arg.as_str() {
-            "--data" => data = Some(PathBuf::from(value)),
-            "--web" => web = Some(PathBuf::from(value)),
-            "--node" => node = Some(PathBuf::from(value)),
-            "--commit" => commit = Some(value),
-            "--test-credential-file" => credential_file = Some(PathBuf::from(value)),
-            _ => bail!("Unknown argument"),
-        }
-    }
+    let args::Arguments {
+        data,
+        web,
+        node,
+        commit,
+        credential_file,
+    } = args::parse(std::env::args().skip(1))?;
     let web = web.context("--web is required")?.canonicalize()?;
     let package: serde_json::Value =
         serde_json::from_slice(&std::fs::read(web.join("package.json"))?)?;
