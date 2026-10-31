@@ -30,7 +30,15 @@ Use the repository helper. Give each run its own state, evidence, and data folde
 - The helper opens and closes a fresh browser for each command. Do not chain its `click`, `snapshot`, and `screenshot` commands to capture an open dialog, dropdown, or other client-only state.
 - For those states, keep the app running inside the launch block above and use the `agent-browser` skill. Set `AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-$(agent-browser session id --scope worktree --prefix pp-verify)}"` and export it. Open `http://127.0.0.1:$UI_PORT/builds`, take a snapshot, interact, take another snapshot, and capture with `agent-browser screenshot "$ROOT/evidence/changed-state.png"`. Keep the same session throughout and close that session before the launch block exits. Do not reload between interaction and capture.
 - Open the image and check that it shows the change itself, not just the page loading.
-- The helper drives the Node server. For behavior served by Rust, launch the gateway with `python3 scripts/verify-rust-gateway/verify.py launch` and point the browser at its origin.
+
+### Rust gateway
+
+The helper above drives the Node server. For Rust-served behavior, use the existing authenticated gateway flow:
+
+1. Create a private temporary directory outside the checkout with `mktemp -d`. Run `python3 scripts/verify-rust-gateway/verify.py launch --credential-file "$PRIVATE_DIR/credential.json"` in a managed long-running process and keep it alive during capture. The credential path must not already exist.
+2. In a single Playwright program, read `bootstrap_url` from that JSON file and navigate the browser page to it. Let the redirect set the session cookie, then navigate to the printed gateway origin's `/builds` route in the same browser context. A bare origin without bootstrap returns `401 Desktop session required`.
+3. Interact and screenshot in that same context. Never print the credential, pass its URL on a command line, or include it in browser traces, screenshots, or PR evidence. Capture only after the redirect has removed the bootstrap URL.
+4. Close the browser and stop the launcher with SIGTERM. Remove any remaining credential file and the private directory you created. See [the launch test](../../../scripts/verify-rust-gateway/test_launch.py) for the bootstrap and shutdown contract.
 
 ## Desktop app
 
