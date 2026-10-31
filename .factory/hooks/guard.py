@@ -88,6 +88,8 @@ DECLARATIONS = {"declare", "export", "local", "readonly", "typeset"}
 CONFIG_READ_OPTIONS = {"--get", "--get-all", "--get-color", "--get-colorbool", "--get-regexp",
                        "--get-urlmatch", "--list", "-l"}
 CONFIG_READ_COMMANDS = {"get", "list"}
+CONFIG_WRITE_OPTIONS = {"--add", "--edit", "-e", "--remove-section", "--rename-section", "--replace-all",
+                        "--unset", "--unset-all"}
 # Environment assignments that point git at another repository.
 GIT_LOCATION = re.compile(r"^(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)=")
 GENERATED = {"rust/bundle-manifest.json"}
@@ -134,17 +136,29 @@ def closing_double_quote(source, i):
     raise ValueError("unterminated quote")
 
 
-def skip_heredoc_bodies(source, i, pending):
-    """Return the index after the bodies of pending heredocs that start at i."""
-    for delimiter, tabs in pending:
-        while i < len(source):
+def heredoc_body(source, i, delimiter, tabs, expands):
+    """Return the body lines of a heredoc that starts at i and the index after its delimiter."""
+    body = []
+    while i < len(source):
+        end = source.find("\n", i)
+        end = len(source) if end < 0 else end
+        line = source[i:end].rstrip("\r")
+        i = end + 1
+        # Bash joins backslash-newline in an unquoted heredoc before matching the delimiter.
+        while expands and (len(line) - len(line.rstrip("\\"))) % 2 and i < len(source):
             end = source.find("\n", i)
             end = len(source) if end < 0 else end
-            line = source[i:end].rstrip("\r")
+            line = line[:-1] + source[i:end].rstrip("\r")
             i = end + 1
-            if (line.lstrip("\t") if tabs else line) == delimiter:
-                break
-    return i
+        if (line.lstrip("\t") if tabs else line) == delimiter:
+            break
+        body.append(line)
+    return body, i
+
+
+def heredoc_delimiter(raw):
+    """Return the delimiter word and whether the heredoc body expands (the word is unquoted)."""
+    return HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", raw), not any(c in raw for c in "'\"\\")
 
 
 def command_position(source, start, i):
@@ -182,15 +196,21 @@ def closing_paren(source, i):
             i += 2
             continue
         # Heredoc bodies inside a substitution are data; their quotes and parentheses do not count.
-        if source.startswith("<<", i) and not source.startswith("<<<", i):
+        if source.startswith("<<<", i):
+            i += 3
+            continue
+        if source.startswith("<<", i):
             tabs = source.startswith("-", i + 2)
             match = HEREDOC.match(source, i + 2 + tabs)
             if match:
-                pending.append((HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", match.group(1)), tabs))
+                delimiter, expands = heredoc_delimiter(match.group(1))
+                pending.append((delimiter, tabs, expands))
                 i = match.end()
                 continue
         if char == "\n" and pending:
-            i = skip_heredoc_bodies(source, i + 1, pending)
+            i += 1
+            for delimiter, tabs, expands in pending:
+                i = heredoc_body(source, i, delimiter, tabs, expands)[1]
             pending = []
             continue
         if char == "'":
@@ -324,19 +344,21 @@ def shell_commands(source):
             i = len(source) if newline < 0 else newline
         elif source.startswith("<<<", i):
             # The here-string word is stdin data, not an argument.
+            if word is not None and word.isdigit():
+                word = None
             finish_word()
             i += 3
             drop_next = True
         elif source.startswith("<<", i):
+            if word is not None and word.isdigit():
+                word = None
             finish_word()
             i += 2
             tabs = source.startswith("-", i)
             i += tabs
             match = HEREDOC.match(source, i)
             if match:
-                raw = match.group(1)
-                delimiter = HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", raw)
-                heredocs.append((delimiter, tabs, not any(c in raw for c in "'\"\\")))
+                heredocs.append((*heredoc_delimiter(match.group(1)), tabs))
                 i = match.end()
         elif char in "<>" or source.startswith("&>", i):
             if word is not None and word.isdigit():
@@ -362,22 +384,8 @@ def shell_commands(source):
                 piped, after_logic = pipe, logic
             i += 1
             if char == "\n":
-                for delimiter, tabs, expands in heredocs:
-                    body = []
-                    while i < len(source):
-                        end = source.find("\n", i)
-                        end = len(source) if end < 0 else end
-                        line = source[i:end].rstrip("\r")
-                        i = end + 1
-                        # Bash joins backslash-newline in an unquoted heredoc before matching the delimiter.
-                        while expands and (len(line) - len(line.rstrip("\\"))) % 2 and i < len(source):
-                            end = source.find("\n", i)
-                            end = len(source) if end < 0 else end
-                            line = line[:-1] + source[i:end].rstrip("\r")
-                            i = end + 1
-                        if (line.lstrip("\t") if tabs else line) == delimiter:
-                            break
-                        body.append(line)
+                for delimiter, expands, tabs in heredocs:
+                    body, i = heredoc_body(source, i, delimiter, tabs, expands)
                     if expands:
                         nested.extend(substitutions("\n".join(body)))
                 heredocs = []
@@ -579,8 +587,10 @@ def long_prefix(arg, option, shortest):
 def config_reads(rest):
     # Read operations are options or the first operand; a value such as "get" is not one.
     operands = [arg for arg in rest if not arg.startswith("-")]
-    return bool({arg.split("=", 1)[0] for arg in rest if arg.startswith("-")} & CONFIG_READ_OPTIONS
-                or operands[:1] and operands[0] in CONFIG_READ_COMMANDS)
+    flags = {arg.split("=", 1)[0] for arg in rest if arg.startswith("-")}
+    # "git config <key>" with no value or write option is the legacy read form.
+    single_key = len(operands) == 1 and "." in operands[0] and not flags & CONFIG_WRITE_OPTIONS
+    return bool(flags & CONFIG_READ_OPTIONS or operands[:1] and operands[0] in CONFIG_READ_COMMANDS or single_key)
 
 
 def writes_config(name, args):

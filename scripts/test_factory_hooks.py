@@ -142,11 +142,14 @@ class GuardHookTests(unittest.TestCase):
                         "timeout -k 5 60 git push origin main", "nice -n 5 git push origin main",
                         "git push origin HEAD:main <<< --dry-run",
                         'output="$(case x in x) git push origin main;; esac)"',
-                        "x=$(if true; then case a in a) git push origin main;; esac; fi)"):
+                        "x=$(if true; then case a in a) git push origin main;; esac; fi)",
+                        "0<<EOF git push origin HEAD:main\nbody\nEOF"):
             self.assertBlocked("Execute", {"command": command}, "main only")
         self.assertBlocked("Execute", {"command": "<<< x gh pr merge 12"}, "maintainer")
+        self.assertBlocked("Execute", {"command": "0<<< x gh pr merge 12"}, "maintainer")
         for command in ("git push origin topic >main 2>&1", 'echo "$(case x in (y) echo ok;; esac)"',
-                        'echo "$(case a in esac)"',
+                        'echo "$(case a in esac)"', 'echo "$(cat <<< hello\n)"', 'echo "$(cat <<EOF\nE\\\nOF\n)"',
+                        "git config core.hooksPath",
                         "echo $(echo showcase) && git status"):
             self.assertAllowed("Execute", {"command": command})
         self.assertBlocked("Execute", {"command": "env -S 'git push origin main'"}, "Cannot classify")
@@ -213,6 +216,7 @@ class GuardHookTests(unittest.TestCase):
             for command in ("git branch --show-current && git push -u origin HEAD",
                             "git config --get push.followTags; git push origin HEAD:topic",
                             "git config --get-color color.diff; git push origin HEAD:topic",
+                            "git config push.followTags && git push origin HEAD:topic",
                             "git remote -v && git push origin HEAD:topic",
                             "printf '%s\\n' 'GIT_CONFIG_COUNT=1'; git push origin HEAD:topic",
                             "echo GIT_DIR=.git && git push origin HEAD",
