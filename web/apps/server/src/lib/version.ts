@@ -34,7 +34,9 @@ export function resolveRuntimeReleaseIdentity(input: {
   const runtimeVersion = `${input.packageVersion}-web`;
   const injectedVersion = optionalValue(input.env.PP_VERSION);
   if (injectedVersion !== null && injectedVersion !== runtimeVersion) {
-    throw new Error(`PP_VERSION ${injectedVersion} does not match package version ${runtimeVersion}`);
+    throw new Error(
+      `PP_VERSION ${injectedVersion} does not match package version ${runtimeVersion}`,
+    );
   }
 
   const commit = optionalValue(input.env.PP_COMMIT);
@@ -60,9 +62,7 @@ export function resolveRuntimeReleaseIdentity(input: {
     image_digest: imageDigest,
     deployment_mode: input.deployMode,
     github_release_url:
-      tag === null
-        ? null
-        : `https://github.com/poitee/PrintPartner/releases/tag/${tag}`,
+      tag === null ? null : `https://github.com/poitee/PrintPartner/releases/tag/${tag}`,
     build_date: optionalValue(input.env.PP_BUILD_DATE),
   };
 }

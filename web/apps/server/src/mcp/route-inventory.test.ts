@@ -23,7 +23,10 @@ type InventoryRoute = {
 };
 
 const inventory = JSON.parse(
-  readFileSync(new URL("../../../../../fixtures/http/routes-inventory.json", import.meta.url), "utf8"),
+  readFileSync(
+    new URL("../../../../../fixtures/http/routes-inventory.json", import.meta.url),
+    "utf8",
+  ),
 ) as { routes: InventoryRoute[] };
 
 const mcpRoute = (method: string) => {
@@ -56,7 +59,9 @@ const incompleteRoutes = (routes: InventoryRoute[]) =>
     .filter((entry) => entry.modes.length > 0);
 
 const inventoryRoute = (method: string, path: string) => {
-  const route = inventory.routes.find((candidate) => candidate.method === method && candidate.path === path);
+  const route = inventory.routes.find(
+    (candidate) => candidate.method === method && candidate.path === path,
+  );
   if (!route) throw new Error(`Missing inventory entry: ${method} ${path}`);
   return route;
 };
@@ -88,7 +93,9 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
 
   for (const path of ["/printers", "/api/v1/mcp"]) {
     it.each(["absent", "null"])(`rejects %s mode observations on GET ${path}`, (mutation) => {
-      const route = inventory.routes.find((candidate) => candidate.method === "GET" && candidate.path === path);
+      const route = inventory.routes.find(
+        (candidate) => candidate.method === "GET" && candidate.path === path,
+      );
       if (!route) throw new Error(`Missing inventory entry: GET ${path}`);
       const authByMode: Record<string, ModeProbe> = route.authByMode
         ? { ...route.authByMode }
@@ -160,7 +167,9 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
   it("records a complete registration map for every route absent from a mode", () => {
     const mapped = inventory.routes.filter((route) => route.registeredByMode !== undefined);
     const artificial = mapped
-      .filter((route) => allModes.every((mode) => route.registeredByMode?.[mode]?.registered === true))
+      .filter((route) =>
+        allModes.every((mode) => route.registeredByMode?.[mode]?.registered === true),
+      )
       .map((route) => `${route.method} ${route.path}`);
     expect(mapped).toHaveLength(28);
     expect(artificial).toEqual([]);
@@ -168,21 +177,24 @@ describe("golden route inventory: /api/v1/mcp auth per mode", () => {
   });
 
   for (const path of ["/board/posts", "/printers"]) {
-    it.each(["absent", "null"])(`rejects %s registration observations on GET ${path}`, (mutation) => {
-      const route = inventoryRoute("GET", path);
-      const registeredByMode: Record<string, ModeRegistration | null> = route.registeredByMode
-        ? { ...route.registeredByMode }
-        : Object.fromEntries(allModes.map((mode) => [mode, { registered: true, status: 401 }]));
-      const planted = inventory.routes.map((candidate) =>
-        candidate === route ? { ...route, registeredByMode } : candidate,
-      );
-      expect(incompleteRegistration(planted)).toEqual([]);
-      if (mutation === "absent") delete registeredByMode["self-host/api-key"];
-      else registeredByMode["self-host/api-key"] = null;
-      expect(incompleteRegistration(planted)).toEqual([
-        { route: `GET ${path}`, modes: ["self-host/api-key"] },
-      ]);
-    });
+    it.each(["absent", "null"])(
+      `rejects %s registration observations on GET ${path}`,
+      (mutation) => {
+        const route = inventoryRoute("GET", path);
+        const registeredByMode: Record<string, ModeRegistration | null> = route.registeredByMode
+          ? { ...route.registeredByMode }
+          : Object.fromEntries(allModes.map((mode) => [mode, { registered: true, status: 401 }]));
+        const planted = inventory.routes.map((candidate) =>
+          candidate === route ? { ...route, registeredByMode } : candidate,
+        );
+        expect(incompleteRegistration(planted)).toEqual([]);
+        if (mutation === "absent") delete registeredByMode["self-host/api-key"];
+        else registeredByMode["self-host/api-key"] = null;
+        expect(incompleteRegistration(planted)).toEqual([
+          { route: `GET ${path}`, modes: ["self-host/api-key"] },
+        ]);
+      },
+    );
   }
 
   it("HEAD is session-gated in every mode (MCP transport does not serve HEAD)", () => {

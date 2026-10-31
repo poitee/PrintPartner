@@ -61,13 +61,14 @@ function reconcileDraft(repo: AppRepository, draft: PlanDraftSnapshot): PlanDraf
 
 function applyDraft(repo: AppRepository, draft: PlanDraftSnapshot): void {
   const ready = reconcileDraft(repo, draft);
-  const expectedBase = ready.baseRevisionId == null
-    ? { kind: "empty" as const, planVersion: 0 as const }
-    : {
-        kind: "revision" as const,
-        revisionId: ready.baseRevisionId,
-        planVersion: ready.basePlanVersion,
-      };
+  const expectedBase =
+    ready.baseRevisionId == null
+      ? { kind: "empty" as const, planVersion: 0 as const }
+      : {
+          kind: "revision" as const,
+          revisionId: ready.baseRevisionId,
+          planVersion: ready.basePlanVersion,
+        };
   const result = repo.applyPlanChanges({
     profileId: ready.profileId,
     draftId: ready.id,
@@ -77,7 +78,11 @@ function applyDraft(repo: AppRepository, draft: PlanDraftSnapshot): void {
     actorId: "test:fixture",
     idempotencyKey: commandKey("apply"),
   });
-  if (result.kind !== "applied" && result.kind !== "existing" && result.kind !== "already_applied") {
+  if (
+    result.kind !== "applied" &&
+    result.kind !== "existing" &&
+    result.kind !== "already_applied"
+  ) {
     throw new Error(`Test Plan Apply failed: ${result.kind}`);
   }
 }
@@ -86,10 +91,7 @@ export function acceptPlanForTest(
   repo: AppRepository,
   profileId: number,
   options: {
-    readonly partChoicesBySourceId?: ReadonlyMap<
-      number,
-      ReadonlyMap<string, PlanDraftPartChoice>
-    >;
+    readonly partChoicesBySourceId?: ReadonlyMap<number, ReadonlyMap<string, PlanDraftPartChoice>>;
   } = {},
 ): {
   merged: boolean;
@@ -142,11 +144,13 @@ export function editAcceptedPartsForTest(
     if (!draftPartId) throw new Error("Test accepted Part is not present in the draft");
     return [
       ...(edit.quantityOverride !== undefined
-        ? [{
-            kind: "set_quantity_override" as const,
-            partIds: [draftPartId],
-            value: edit.quantityOverride,
-          }]
+        ? [
+            {
+              kind: "set_quantity_override" as const,
+              partIds: [draftPartId],
+              value: edit.quantityOverride,
+            },
+          ]
         : []),
       ...(edit.included !== undefined
         ? [{ kind: "set_included" as const, partIds: [draftPartId], value: edit.included }]

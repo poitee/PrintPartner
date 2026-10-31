@@ -35,19 +35,24 @@ export function withoutTenantDiskQuota<T>(work: () => T): T {
 }
 
 /** One writer per tenant. Rescan after each operation, counting abandoned staging too. */
-export async function runWithTenantDiskQuota<T>(input: {
-  dataDir: string;
-  reposDir: string;
-  tenantId: string;
-  sourceIds: () => readonly number[];
-  quotaBytes: number | null;
-}, work: () => Promise<T>): Promise<T> {
+export async function runWithTenantDiskQuota<T>(
+  input: {
+    dataDir: string;
+    reposDir: string;
+    tenantId: string;
+    sourceIds: () => readonly number[];
+    quotaBytes: number | null;
+  },
+  work: () => Promise<T>,
+): Promise<T> {
   if (input.quotaBytes == null) return withoutTenantDiskQuota(work);
   if (diskBudget.getStore()) throw new Error("Nested tenant disk quota operation");
   const key = JSON.stringify([resolve(input.dataDir), input.tenantId]);
   const previous = tenantWrites.get(key);
   let release!: () => void;
-  const current = new Promise<void>((done) => { release = done; });
+  const current = new Promise<void>((done) => {
+    release = done;
+  });
   tenantWrites.set(key, current);
   try {
     await previous;
@@ -178,4 +183,3 @@ export async function sendIfTenantDiskQuotaExceeded(
     throw error;
   }
 }
-

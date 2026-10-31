@@ -25,11 +25,7 @@ import type { ServerConfig } from "../config.js";
 import { createAssistantPort } from "../assistant/create-assistant.js";
 import { resolveAssistantRuntime } from "../assistant/resolve-assistant.js";
 import { ASSISTANT_TOOL_SPECS } from "../assistant/tool-specs.js";
-import {
-  applyAssistantAction,
-  invokeAssistantTool,
-  type ToolContext,
-} from "../assistant/tools.js";
+import { applyAssistantAction, invokeAssistantTool, type ToolContext } from "../assistant/tools.js";
 import type { InProcessJobRunner } from "../services/job-runner.js";
 import type { AppRepository } from "../db/repository.js";
 import { createIntegrationPort, type IntegrationPort } from "../integrations/store.js";
@@ -91,7 +87,9 @@ function jsonSchemaToMcp(spec: (typeof ASSISTANT_TOOL_SPECS)[number]) {
   return {
     name: spec.name,
     description:
-      spec.tier === "mutate" ? `${spec.description} (proposes only — call confirm_apply to mutate)` : spec.description,
+      spec.tier === "mutate"
+        ? `${spec.description} (proposes only — call confirm_apply to mutate)`
+        : spec.description,
     inputSchema: {
       type: "object" as const,
       properties: spec.input_schema.properties ?? {},
@@ -121,7 +119,7 @@ type ProductMcpDeps = {
    * Live printer-host access for farm tools (get_farm_status). Optional so
    * tests can inject a stub; when omitted a real port is built from the repo,
    * because without one get_farm_status reports every printer as "unknown".
-  */
+   */
   integrations?: IntegrationPort;
   /** Optional live access check, used by long-running stdio sessions. */
   isEnabled?: () => boolean;
@@ -183,7 +181,8 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
       prompts: [
         {
           name: "plan_build",
-          description: "Research and verify a customer Build before applying its printable-part draft.",
+          description:
+            "Research and verify a customer Build before applying its printable-part draft.",
           arguments: [
             {
               name: "customer_request",
@@ -198,7 +197,8 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
 
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     assertEnabled();
-    if (request.params.name !== "plan_build") throw new Error(`Unknown prompt: ${request.params.name}`);
+    if (request.params.name !== "plan_build")
+      throw new Error(`Unknown prompt: ${request.params.name}`);
     const customerRequest = request.params.arguments?.customer_request ?? "";
     return {
       description: "Print Partner's confirmation-first Build planning workflow",
@@ -207,7 +207,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
           role: "user" as const,
           content: {
             type: "text" as const,
-              text: `Plan this Build without choosing between conflicting sources on my behalf.\n\n${customerRequest}\n\nAnalyze the request and links first. Treat Printables, MakerWorld, and other model pages as provenance. If their printable files are not already attached, ask me to download and upload them. For uploaded ZIP, STL, 3MF, or supporting files, attach the completed Source by source_id with propose_import_build_inputs. If a sliced 3MF comes from a slicer that cannot integrate with Print Partner, use propose_import_3mf_checkoff to map its objects into the verify-first Checkoff flow, then expose the result with get_plan_checkoff and get_printer_checkoff. Use the kit catalog's functional slots to propose path-scoped Source contributions with evidence and confidence; keep Library Source categories organizational only. Propose every persistent change and wait for confirm_apply. Sync and pin repository and uploaded Source evidence, record all overlapping-source differences, and ask me to resolve every group. Verify compatibility and exact filament inventory. Rebuild and review the Working Plan. Treat get_build_planning_state as advisory Preparation. Publish with propose_apply_plan_draft. Native Working Plan checks decide whether publish succeeds. After confirmation, call get_build_workflow and verify that accepted_plan is ready and working_plan is none. Do not start printing, exporting, or queueing.`,
+            text: `Plan this Build without choosing between conflicting sources on my behalf.\n\n${customerRequest}\n\nAnalyze the request and links first. Treat Printables, MakerWorld, and other model pages as provenance. If their printable files are not already attached, ask me to download and upload them. For uploaded ZIP, STL, 3MF, or supporting files, attach the completed Source by source_id with propose_import_build_inputs. If a sliced 3MF comes from a slicer that cannot integrate with Print Partner, use propose_import_3mf_checkoff to map its objects into the verify-first Checkoff flow, then expose the result with get_plan_checkoff and get_printer_checkoff. Use the kit catalog's functional slots to propose path-scoped Source contributions with evidence and confidence; keep Library Source categories organizational only. Propose every persistent change and wait for confirm_apply. Sync and pin repository and uploaded Source evidence, record all overlapping-source differences, and ask me to resolve every group. Verify compatibility and exact filament inventory. Rebuild and review the Working Plan. Treat get_build_planning_state as advisory Preparation. Publish with propose_apply_plan_draft. Native Working Plan checks decide whether publish succeeds. After confirmation, call get_build_workflow and verify that accepted_plan is ready and working_plan is none. Do not start printing, exporting, or queueing.`,
           },
         },
       ],
@@ -236,7 +236,8 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
         {
           uriTemplate: "print-partner://build-workflow/{build_id}",
           name: "Build Workflow",
-          description: "Shared Sources, Working Plan, Accepted Plan, Production, and Checkoff status with the next safe action",
+          description:
+            "Shared Sources, Working Plan, Accepted Plan, Production, and Checkoff status with the next safe action",
           mimeType: "application/json",
         },
         {
@@ -267,9 +268,7 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
         ],
       };
     }
-    const workflowMatch = /^print-partner:\/\/build-workflow\/(\d+)$/.exec(
-      request.params.uri,
-    );
+    const workflowMatch = /^print-partner:\/\/build-workflow\/(\d+)$/.exec(request.params.uri);
     if (workflowMatch) {
       const result = readBuildWorkflowWorkspace(getRepo(), Number(workflowMatch[1]));
       if (result.kind === "missing") throw new Error("Build not found");
@@ -314,8 +313,9 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
     return {
       tools: [
         ...productToolSpecs()
-          .filter((tool) =>
-            (tool.name !== "get_farm_status" && tool.name !== "get_print_stats") || farmListed,
+          .filter(
+            (tool) =>
+              (tool.name !== "get_farm_status" && tool.name !== "get_print_stats") || farmListed,
           )
           .map(jsonSchemaToMcp),
         ...META_TOOLS.map((t) => ({
@@ -407,7 +407,9 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
               ...action,
               params: {
                 ...action.params,
-                suggested_excludes: args.suggested_excludes.map((x) => String(x).trim()).filter(Boolean),
+                suggested_excludes: args.suggested_excludes
+                  .map((x) => String(x).trim())
+                  .filter(Boolean),
               },
             }
           : action;
@@ -449,10 +451,12 @@ export function createProductMcpServer(deps: ProductMcpDeps): Server {
         const access = readFarmAccess(getRepo);
         if (access.kind !== "allowed") {
           return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({ error: access.error, code: access.code }),
-            }],
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ error: access.error, code: access.code }),
+              },
+            ],
             isError: true,
           };
         }

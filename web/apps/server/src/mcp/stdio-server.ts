@@ -26,9 +26,7 @@ import { beginSourceSyncAdmission } from "../ownership/source-sync-admission.js"
 import { createProductMcpServer } from "./product-mcp.js";
 import { mcpAccessEnabled } from "@print-partner/contracts";
 import { readExternalAccessSettings } from "../services/external-access.js";
-import {
-  migrateLegacySourceManifestOverridesForTenant,
-} from "../services/source-manifest-migration.js";
+import { migrateLegacySourceManifestOverridesForTenant } from "../services/source-manifest-migration.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -51,9 +49,15 @@ async function main(): Promise<void> {
     releaseOwner();
     process.exit(0);
   };
-  process.stdin.once("end", () => { void stop(); });
-  process.once("SIGTERM", () => { void stop(); });
-  process.once("SIGINT", () => { void stop(); });
+  process.stdin.once("end", () => {
+    void stop();
+  });
+  process.once("SIGTERM", () => {
+    void stop();
+  });
+  process.once("SIGINT", () => {
+    void stop();
+  });
   try {
     // Null when Rust owns Source Sync; Rust then runs the migration.
     const nodeOwnsSourceSync =
@@ -101,8 +105,7 @@ async function main(): Promise<void> {
       config,
       defaultPlanId,
       pending,
-      isEnabled: () =>
-        mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode),
+      isEnabled: () => mcpAccessEnabled(readExternalAccessSettings(getRepo()).mode),
     });
 
     const transport = new StdioServerTransport();

@@ -63,7 +63,9 @@ export function createSaasPorts(dataDir: string): SaasPorts {
 
   const getRepo = () => getRepository(defaultTenant);
 
-  const jobs = createJobRunner(getRepo, dataDir, { tenantDiskQuotaBytes: HOSTED_TENANT_DISK_QUOTA_BYTES });
+  const jobs = createJobRunner(getRepo, dataDir, {
+    tenantDiskQuotaBytes: HOSTED_TENANT_DISK_QUOTA_BYTES,
+  });
 
   return {
     db: dbStore,
