@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Arguments {
     pub(crate) data: Option<PathBuf>,
     pub(crate) web: Option<PathBuf>,
@@ -75,15 +75,13 @@ mod tests {
 
     #[test]
     fn missing_value_is_rejected() {
-        let error = parse_args(&["--data"]).err().expect("missing value");
+        let error = parse_args(&["--data"]).expect_err("missing value");
         assert_eq!(error.to_string(), "Argument value missing");
     }
 
     #[test]
     fn unknown_option_is_rejected() {
-        let error = parse_args(&["--unknown", "value"])
-            .err()
-            .expect("unknown option");
+        let error = parse_args(&["--unknown", "value"]).expect_err("unknown option");
         assert_eq!(error.to_string(), "Unknown argument");
     }
 }
