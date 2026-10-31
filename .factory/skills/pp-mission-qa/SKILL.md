@@ -24,54 +24,26 @@ Keep `desktop_rebuild` off unless the slice explicitly tests its on mode.
 
 ## Node server and shared React UI
 
-Use the launch block in [pp-verify](../pp-verify/SKILL.md#web-ui), with fresh
-`PP_VERIFY_STATE_DIR`, `PP_VERIFY_EVIDENCE_DIR`, data directory, and two free
-loopback ports. The start command is:
-
-```sh
-node scripts/verify-print-partner/control-print-partner.mjs launch \
-  --mode npm --data-dir "$ROOT/data" --api-port "$API_PORT" --ui-port "$UI_PORT"
-node scripts/verify-print-partner/control-print-partner.mjs doctor
-```
+Use the launch, browser-session, and cleanup instructions in
+[pp-verify](../pp-verify/SKILL.md#web-ui). Do not maintain a second launch recipe.
 
 Keep those environment variables unchanged through cleanup. The launcher waits
 for readiness. Its JSON state is `$PP_VERIFY_STATE_DIR/state.json`; the service
 log is `$PP_VERIFY_STATE_DIR/<project>/npm-dev.log`, where `project` comes from
 that state. Inspect only relevant, non-secret log lines.
 
-Invoke `agent-browser` before driving the UI. Use a worktree-scoped browser
-session, keep the same session through interactions and capture, and assert
-the expected visible state. Do not reload to capture an open dialog.
-Close that browser session, then run:
-
-```sh
-node scripts/verify-print-partner/control-print-partner.mjs cleanup
-```
-
-Register cleanup before launch so failures also stop owned services. Keep
-evidence outside disposable data; remove only directories created by this run.
+Assert the slice's expected visible state, not just a successful click or
+navigation. Retain its non-secret logs and evidence outside disposable data.
 
 ## Rust gateway
 
 Follow [pp-verify's authenticated gateway flow](../pp-verify/SKILL.md#rust-gateway).
-Create a private temporary directory outside the checkout. Launch in a managed
-long-running process and redirect stdout/stderr to a private file:
-
-```sh
-python3 scripts/verify-rust-gateway/verify.py launch \
-  --credential-file "$PRIVATE_DIR/credential.json" >"$PRIVATE_DIR/gateway.log" 2>&1
-```
-
-The credential path must not exist. Wait for `PP_SERVER_URL` in the log, not
-merely for a successful build. Use one Playwright context to read `bootstrap_url`
-from the credential file and establish the session. Never print that URL or
-pass it to a browser CLI, shell argument, trace, or evidence upload. Capture
-only after the redirect removes the bootstrap URL.
+Keep launcher stdout/stderr in a private log. Wait for `PP_SERVER_URL` there,
+not merely for a successful build.
 
 Assert the slice's result through that authenticated context. A bare `401`
-does not prove that the operation works. When done, close the browser, send
-SIGTERM to the owned launcher, and wait for its cleanup. Delete the credential
-file and private directory after retaining only scrubbed evidence.
+does not prove that the operation works. Record the shutdown and cleanup
+outcome along with the result.
 
 ## Report
 

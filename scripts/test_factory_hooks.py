@@ -67,6 +67,13 @@ class GuardHookTests(unittest.TestCase):
                         "git log --oneline main"):
             self.assertAllowed("Execute", {"command": command})
 
+    def test_push_rules_stop_at_shell_command_boundaries(self):
+        for separator in (" && ", "; ", "\n", " | "):
+            for following in ("gh pr create --base main", "echo --force", "echo --tags"):
+                self.assertAllowed("Execute", {"command": f"git push -u origin HEAD{separator}{following}"})
+            self.assertBlocked("Execute", {"command": f"echo ok{separator}git push origin HEAD:main"}, "main only")
+            self.assertBlocked("Execute", {"command": f"git push origin HEAD:main{separator}echo ok"}, "main only")
+
     def test_protected_files_are_blocked_for_each_edit_tool(self):
         self.assertBlocked("Create", {"file_path": "/repo/.env"}, "environment files")
         self.assertBlocked("Edit", {"file_path": "/repo/web/.env.local"}, "environment files")

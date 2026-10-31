@@ -5,15 +5,6 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 RUSTUP_VERSION=1.29.2
-node_versions="$(python3 - <<'PY'
-from pathlib import Path
-import re
-dockerfile = Path(".devcontainer/Dockerfile").read_text()
-for stage in ("runtime-node", "parity-node"):
-    print(re.search(rf"^FROM node:([0-9.]+)-\S+ AS {stage}$", dockerfile, re.M)[1])
-PY
-)"
-read -r NODE_RUNTIME NODE_PARITY <<<"$(echo "$node_versions" | tr '\n' ' ')"
 PREFIX="$HOME/.local/print-partner"
 
 case "$(uname -m)" in
@@ -44,6 +35,16 @@ fi
 "${as_root[@]}" apt-get update
 "${as_root[@]}" env DEBIAN_FRONTEND=noninteractive \
   apt-get install -y --no-install-recommends "${packages[@]}"
+
+node_versions="$(python3 - <<'PY'
+from pathlib import Path
+import re
+dockerfile = Path(".devcontainer/Dockerfile").read_text()
+for stage in ("runtime-node", "parity-node"):
+    print(re.search(rf"^FROM node:([0-9.]+)-\S+ AS {stage}$", dockerfile, re.M)[1])
+PY
+)"
+read -r NODE_RUNTIME NODE_PARITY <<<"$(echo "$node_versions" | tr '\n' ' ')"
 
 download() { # url sha256 destination
   curl -fsSL --retry 3 -o "$3" "$1"
@@ -106,6 +107,5 @@ test "$(node --version)" = "v$NODE_RUNTIME"
 test "$("$PP_SCHEMA_PARITY_NODE" --version)" = "v$NODE_PARITY"
 rustc --version
 cargo clippy --version
-npm --prefix web ci
-npm --prefix web run predev
+bash .devcontainer/post-create.sh
 echo "Print Partner environment ready. New shells load $PREFIX/env.sh."

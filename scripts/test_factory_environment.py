@@ -47,15 +47,22 @@ class EnvironmentSetupTests(unittest.TestCase):
             self.assertNotIn(pin, setup)
         self.assertIn('"${sidecar_requirements[@]}"', setup)
 
-    def test_qa_launch_uses_the_linked_fixture_variable(self):
+    def test_qa_launch_defers_to_existing_verification_skill(self):
         skill = (ROOT / ".factory/skills/pp-mission-qa/SKILL.md").read_text()
-        self.assertIn('--data-dir "$ROOT/data"', skill)
+        self.assertIn("../pp-verify/SKILL.md#web-ui", skill)
+        self.assertIn("../pp-verify/SKILL.md#rust-gateway", skill)
+        self.assertNotIn("control-print-partner.mjs", skill)
+        self.assertNotIn("verify.py launch", skill)
         self.assertNotIn("$QA_ROOT", skill)
+
+    def test_python_is_installed_before_version_extraction(self):
+        setup = SETUP.read_text()
+        self.assertLess(setup.index("apt-get install"), setup.index("node_versions="))
 
     def test_setup_builds_packages_without_starting_services(self):
         setup = SETUP.read_text()
-        self.assertIn("npm --prefix web ci", setup)
-        self.assertIn("npm --prefix web run predev", setup)
+        self.assertIn("bash .devcontainer/post-create.sh", setup)
+        self.assertNotIn("npm --prefix web", setup)
         self.assertNotRegex(setup, r"systemctl|docker run|run dev(?:\s|$)")
 
 

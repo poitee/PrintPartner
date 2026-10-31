@@ -16,10 +16,10 @@ COMMAND_RULES = (
     (re.compile(r"\bgh\s+pr\s+merge\b"), "Merging is the maintainer's job. Report readiness instead."),
     (re.compile(r"\bgh\s+api\b(?=[^;&|\n]*(?:-X\s*|--method[= ])PUT\b)[^;&|\n]*/pulls/\d+/merge\b"),
      "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(GIT + r"push\b.*(\s--force\b|\s--force-with-lease\b|\s-[a-zA-Z]*f\b|\s\+\S)"),
+    (re.compile(GIT + r"push\b[^;&|\n]*(\s--force\b|\s--force-with-lease\b|\s-[a-zA-Z]*f\b|\s\+\S)"),
      "Never force-push. Add a commit instead."),
-    (re.compile(GIT + r"push\b.*\s(\S+:)?(refs/heads/)?main(?:\s|$)"), "Push a branch and open a PR; main only changes by merge."),
-    (re.compile(GIT + r"push\b.*\s--tags\b|\bgh\s+release\s+create\b"), "Releases and tags need separate authorization."),
+    (re.compile(GIT + r"push\b[^;&|\n]*[ \t](\S+:)?(refs/heads/)?main(?:\s|[;&|]|$)"), "Push a branch and open a PR; main only changes by merge."),
+    (re.compile(GIT + r"push\b[^;&|\n]*\s--tags\b|\bgh\s+release\s+create\b"), "Releases and tags need separate authorization."),
     (re.compile(r"--no-verify\b"), "Do not bypass Git hooks."),
 )
 
