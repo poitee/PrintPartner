@@ -11,13 +11,14 @@ from pathlib import PurePosixPath
 import re
 import sys
 
+GIT = r"\bgit(?:\s+-C\s+(?:\"[^\"]*\"|'[^']*'|\S+))*\s+"
 COMMAND_RULES = (
     (re.compile(r"\bgh\s+pr\s+merge\b"), "Merging is the maintainer's job. Report readiness instead."),
     (re.compile(r"\bgh\s+api\b.*/pulls/\d+/merge\b"), "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(r"\bgit\s+push\b.*(\s--force\b|\s--force-with-lease\b|\s-[a-zA-Z]*f\b|\s\+\S)"),
+    (re.compile(GIT + r"push\b.*(\s--force\b|\s--force-with-lease\b|\s-[a-zA-Z]*f\b|\s\+\S)"),
      "Never force-push. Add a commit instead."),
-    (re.compile(r"\bgit\s+push\b.*\s(\S+:)?(refs/heads/)?main\b"), "Push a branch and open a PR; main only changes by merge."),
-    (re.compile(r"\bgit\s+push\b.*\s--tags\b|\bgh\s+release\s+create\b"), "Releases and tags need separate authorization."),
+    (re.compile(GIT + r"push\b.*\s(\S+:)?(refs/heads/)?main(?:\s|$)"), "Push a branch and open a PR; main only changes by merge."),
+    (re.compile(GIT + r"push\b.*\s--tags\b|\bgh\s+release\s+create\b"), "Releases and tags need separate authorization."),
     (re.compile(r"--no-verify\b"), "Do not bypass Git hooks."),
 )
 
@@ -38,8 +39,12 @@ def protected_path(raw):
 
 
 def decide(payload):
+    if not isinstance(payload, dict):
+        return "Expected a JSON object."
     tool = payload.get("tool_name", "")
-    data = payload.get("tool_input") or {}
+    data = payload.get("tool_input", {})
+    if not isinstance(data, dict) and not (tool == "ApplyPatch" and isinstance(data, str)):
+        return "Expected object tool input, or a patch string for ApplyPatch."
     if tool == "Execute":
         command = str(data.get("command", ""))
         for pattern, reason in COMMAND_RULES:

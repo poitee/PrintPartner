@@ -40,6 +40,8 @@ class GuardHookTests(unittest.TestCase):
             self.assertBlocked("Execute", {"command": command}, "force-push")
         self.assertBlocked("Execute", {"command": "git push origin HEAD:main"}, "main only")
         self.assertBlocked("Execute", {"command": "git push origin main"}, "main only")
+        self.assertBlocked("Execute", {"command": 'git -C "/repo with spaces" push origin HEAD:main'}, "main only")
+        self.assertBlocked("Execute", {"command": "git -C /repo push --force origin topic"}, "force-push")
 
     def test_releases_and_hook_bypass_are_blocked(self):
         self.assertBlocked("Execute", {"command": "gh release create v1"}, "authorization")
@@ -49,6 +51,7 @@ class GuardHookTests(unittest.TestCase):
     def test_ordinary_commands_pass(self):
         for command in ("git push -u origin HEAD:chore/topic", "gh pr view 12",
                         "git push origin feature/maintenance", "npm --prefix web ci",
+                        "git -C /repo push origin main-fix",
                         "git log --oneline main"):
             self.assertAllowed("Execute", {"command": command})
 
@@ -69,9 +72,10 @@ class GuardHookTests(unittest.TestCase):
         self.assertAllowed("ApplyPatch", {"input": patch})
 
     def test_unreadable_input_fails_closed(self):
-        result = subprocess.run([sys.executable, "-B", str(GUARD)], input="not json",
-                                capture_output=True, text=True, check=False)
-        self.assertEqual(result.returncode, 2)
+        for payload in ("not json", "[]", "null", '{"tool_name":"Execute","tool_input":[]}'):
+            result = subprocess.run([sys.executable, "-B", str(GUARD)], input=payload,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, payload)
 
 
 if __name__ == "__main__":
