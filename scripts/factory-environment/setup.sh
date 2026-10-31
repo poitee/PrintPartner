@@ -65,6 +65,8 @@ if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
 fi
 # rust-toolchain.toml names the version and components.
 "$CARGO_HOME/bin/rustup" toolchain install
+# Outside the checkout no toolchain file applies, so make the pinned one the default.
+"$CARGO_HOME/bin/rustup" default "$("$CARGO_HOME/bin/rustup" show active-toolchain | cut -d" " -f1)"
 
 python3 -m venv "$PREFIX/sidecar-venv"
 "$PREFIX/sidecar-venv/bin/pip" install --quiet flask==3.1.3 waitress==3.0.2

@@ -23,6 +23,7 @@ class EnvironmentSetupTests(unittest.TestCase):
             self.assertIn(f"v{version}", ci)
         self.assertIn('"$CARGO_HOME/bin/rustup" toolchain install', setup)
         self.assertNotIn("toolchain install stable", setup)
+        self.assertIn('rustup" default "$(', setup)
 
     def test_downloads_have_architecture_specific_checksums(self):
         setup = SETUP.read_text()
