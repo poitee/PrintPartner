@@ -50,3 +50,8 @@ Follow the [definition of done](docs/development/definition-of-done.md):
 - Run the `unslop` skill on docs, comments, and PR text. Use the `grilling` skill to stress-test a plan before large or risky work.
 
 Repo skills live in `.factory/skills/`: [pp-verify](.factory/skills/pp-verify/SKILL.md) for screenshots and video, and [pp-readiness](.factory/skills/pp-readiness/SKILL.md) for agent-readiness work.
+
+For local and cloud Missions, follow [Factory setup](docs/development/factory-missions.md).
+Use [pp-mission-qa](.factory/skills/pp-mission-qa/SKILL.md) for runtime launch,
+logs, driving, and cleanup. Keep scrutiny and user testing enabled. The project
+guard hook blocks common maintainer-only actions, but does not replace review.

@@ -13,6 +13,8 @@ DOCUMENTS = (
     "AGENTS.md",
     ".factory/skills/pp-readiness/SKILL.md",
     ".factory/skills/pp-verify/SKILL.md",
+    ".factory/skills/pp-mission-qa/SKILL.md",
+    "docs/development/factory-missions.md",
 )
 LINK = re.compile(r"\[[^\]]+\]\(([^)\s]+)\)")
 

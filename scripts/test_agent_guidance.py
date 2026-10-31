@@ -82,7 +82,7 @@ class AgentGuidanceTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(SCRIPT)], cwd=self.root,
                                 capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("3 documents", result.stdout)
+        self.assertIn(f"{len(GUIDANCE.DOCUMENTS)} documents", result.stdout)
 
     def test_real_ignore_rules_allow_templates_but_not_secrets(self):
         cases = {
