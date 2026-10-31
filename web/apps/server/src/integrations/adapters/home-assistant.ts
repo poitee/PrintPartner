@@ -141,7 +141,12 @@ async function queryEntityStatus(
     return { state: "offline", message: "token is required" };
   }
 
-  const res = await inspectEntity(`${baseUrl}/api/states/${encodeURIComponent(eid)}`, config, permit, 10_000);
+  const res = await inspectEntity(
+    `${baseUrl}/api/states/${encodeURIComponent(eid)}`,
+    config,
+    permit,
+    10_000,
+  );
 
   if (res.status === 404) {
     await cancelResponseBody(res);
@@ -170,10 +175,9 @@ async function queryEntityStatus(
       : typeof rawProgress === "string"
         ? parseFloat(rawProgress)
         : NaN;
-  const progress =
-    Number.isFinite(progressNum)
-      ? Math.round(Math.min(100, Math.max(0, progressNum)))
-      : undefined;
+  const progress = Number.isFinite(progressNum)
+    ? Math.round(Math.min(100, Math.max(0, progressNum)))
+    : undefined;
 
   const filename =
     typeof attrs.filename === "string" ? attrs.filename.trim() || undefined : undefined;
@@ -200,7 +204,10 @@ async function queryEntityStatus(
 export const homeAssistantAdapter: IntegrationAdapter = {
   type: "home_assistant",
 
-  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
+  async testConnection(
+    config: IntegrationConfig,
+    permit: StatusPermit,
+  ): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) {
       return { ok: false, message: "base_url is required" };
@@ -231,7 +238,12 @@ export const homeAssistantAdapter: IntegrationAdapter = {
       // Optionally verify entity_id is readable if provided
       const eid = entityId(config);
       if (eid) {
-        const stateRes = await inspectEntity(`${baseUrl}/api/states/${encodeURIComponent(eid)}`, config, permit, 8_000).catch(() => null);
+        const stateRes = await inspectEntity(
+          `${baseUrl}/api/states/${encodeURIComponent(eid)}`,
+          config,
+          permit,
+          8_000,
+        ).catch(() => null);
         if (!stateRes) {
           return {
             ok: true,
@@ -253,9 +265,8 @@ export const homeAssistantAdapter: IntegrationAdapter = {
           };
         }
         const stateBody = await readBoundedJsonResponse(stateRes, MAX_METADATA_RESPONSE_BYTES);
-        const state = isRecord(stateBody) && typeof stateBody.state === "string"
-          ? stateBody.state
-          : "unknown";
+        const state =
+          isRecord(stateBody) && typeof stateBody.state === "string" ? stateBody.state : "unknown";
         return {
           ok: true,
           message: `Connected${versionPart} · ${eid}: ${state}`,
@@ -319,8 +330,7 @@ export const homeAssistantAdapter: IntegrationAdapter = {
     if (!baseUrl) {
       return { ok: false, message: "base_url is required" };
     }
-    const webhookId =
-      typeof config.webhook_id === "string" ? config.webhook_id.trim() : "";
+    const webhookId = typeof config.webhook_id === "string" ? config.webhook_id.trim() : "";
     if (!webhookId) {
       return {
         ok: false,

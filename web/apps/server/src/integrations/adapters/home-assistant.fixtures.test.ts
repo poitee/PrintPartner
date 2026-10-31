@@ -61,10 +61,12 @@ const config = {
 };
 
 function mockFixtureResponse(name: string) {
-  const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(
-    readFileSync(new URL(name, fixtureDirectory), "utf8"),
-    { headers: { "Content-Type": "application/json" } },
-  ));
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+    async () =>
+      new Response(readFileSync(new URL(name, fixtureDirectory), "utf8"), {
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -82,20 +84,20 @@ describe(`Home Assistant JSON fixtures (${fixtureNames.length} fixtures)`, () =>
   });
 
   it.each(fixtureNames)("parses %s", (name) => {
-    const payload: unknown = JSON.parse(
-      readFileSync(new URL(name, fixtureDirectory), "utf8"),
-    );
+    const payload: unknown = JSON.parse(readFileSync(new URL(name, fixtureDirectory), "utf8"));
     expect(payload).toBeTypeOf("object");
     expect(payload).not.toBeNull();
     expect(Array.isArray(payload)).toBe(false);
   });
 
   it("has adapter replay coverage for every fixture", () => {
-    expect([
-      ...Object.keys(expectedStatuses),
-      ...Object.keys(expectedConnections),
-      ...webhookFixtures,
-    ].sort()).toStrictEqual(fixtureNames);
+    expect(
+      [
+        ...Object.keys(expectedStatuses),
+        ...Object.keys(expectedConnections),
+        ...webhookFixtures,
+      ].sort(),
+    ).toStrictEqual(fixtureNames);
   });
 
   it.each(Object.keys(expectedStatuses))("maps adapter status for %s", async (name) => {
@@ -120,12 +122,12 @@ describe(`Home Assistant JSON fixtures (${fixtureNames.length} fixtures)`, () =>
   });
 
   it("replays webhook upload and response fixtures through the adapter", async () => {
-    const fixture = JSON.parse(readFileSync(
-      new URL("webhook-upload.json", fixtureDirectory), "utf8",
-    )) as WebhookUploadFixture;
-    const responsePayload: unknown = JSON.parse(readFileSync(
-      new URL("webhook-response.json", fixtureDirectory), "utf8",
-    ));
+    const fixture = JSON.parse(
+      readFileSync(new URL("webhook-upload.json", fixtureDirectory), "utf8"),
+    ) as WebhookUploadFixture;
+    const responsePayload: unknown = JSON.parse(
+      readFileSync(new URL("webhook-response.json", fixtureDirectory), "utf8"),
+    );
     expect(responsePayload).toStrictEqual({});
     const fetchMock = mockFixtureResponse("webhook-response.json");
     // Inputs and expected output are independent of the fixture's request fields.

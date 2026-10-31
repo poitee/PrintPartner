@@ -10,12 +10,18 @@ import { bambuAdapter } from "./adapters/bambu.js";
 
 function barrier() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
-async function httpHost(handle: (path: string, response: ServerResponse, authorization?: string) => void) {
-  const host = createServer((request, response) => handle(request.url ?? "", response, request.headers.authorization));
+async function httpHost(
+  handle: (path: string, response: ServerResponse, authorization?: string) => void,
+) {
+  const host = createServer((request, response) =>
+    handle(request.url ?? "", response, request.headers.authorization),
+  );
   await new Promise<void>((resolve) => host.listen(0, "127.0.0.1", resolve));
   const address = host.address();
   if (!address || typeof address === "string") throw new Error("Missing fixture port");
@@ -48,13 +54,21 @@ it("joins a redirected Moonraker body and does not start uptime work after cance
     const result = execution.probe(moonrakerAdapter, { base_url: host.url });
     const rejected = expect(result).rejects.toThrow("Printer status execution stopped");
     await entered.promise;
-    expect(execution.snapshot()).toEqual({ state: "running", tasks: [{ id: 1, provider: "moonraker", operation: "probe" }] });
+    expect(execution.snapshot()).toEqual({
+      state: "running",
+      tasks: [{ id: 1, provider: "moonraker", operation: "probe" }],
+    });
     await execution.stop();
     await rejected;
     await disconnected.promise;
     expect(execution.snapshot()).toEqual({ state: "stopped", tasks: [] });
-    expect(paths).toEqual(["/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed", "/held"]);
-    await expect(execution.probe(moonrakerAdapter, { base_url: host.url })).rejects.toThrow("Printer status execution stopped");
+    expect(paths).toEqual([
+      "/printer/objects/query?print_stats&virtual_sdcard&display_status&extruder&heater_bed",
+      "/held",
+    ]);
+    await expect(execution.probe(moonrakerAdapter, { base_url: host.url })).rejects.toThrow(
+      "Printer status execution stopped",
+    );
   } finally {
     await execution.stop();
     await host.close();
@@ -72,9 +86,13 @@ it("cancels PrusaLink during its real Digest challenge without sending an authen
   });
   const execution = new StatusExecution();
   try {
-    const rejected = expect(execution.probe(prusalinkAdapter, {
-      base_url: host.url, username: "maker", password: "secret",
-    })).rejects.toThrow("Printer status execution stopped");
+    const rejected = expect(
+      execution.probe(prusalinkAdapter, {
+        base_url: host.url,
+        username: "maker",
+        password: "secret",
+      }),
+    ).rejects.toThrow("Printer status execution stopped");
     await entered.promise;
     await execution.stop();
     await rejected;
@@ -104,14 +122,24 @@ it("keeps raw Home Assistant entity text and cancels an in-flight entity inspect
   const execution = new StatusExecution();
   const config = { base_url: host.url, token: "fixture", entity_id: "sensor.printer" };
   try {
-    expect(await execution.test(homeAssistantAdapter, config)).toEqual({ ok: true, message: "Connected (HA 2026.10) · sensor.printer: Warming bed" });
+    expect(await execution.test(homeAssistantAdapter, config)).toEqual({
+      ok: true,
+      message: "Connected (HA 2026.10) · sensor.printer: Warming bed",
+    });
     hold = true;
-    const rejected = expect(execution.test(homeAssistantAdapter, config)).rejects.toThrow("Printer status execution stopped");
+    const rejected = expect(execution.test(homeAssistantAdapter, config)).rejects.toThrow(
+      "Printer status execution stopped",
+    );
     await entered.promise;
     await execution.stop();
     await rejected;
     await disconnected.promise;
-    expect(requests).toEqual(["/api/", "/api/states/sensor.printer", "/api/", "/api/states/sensor.printer"]);
+    expect(requests).toEqual([
+      "/api/",
+      "/api/states/sensor.printer",
+      "/api/",
+      "/api/states/sensor.printer",
+    ]);
     expect(execution.snapshot()).toEqual({ state: "stopped", tasks: [] });
   } finally {
     await execution.stop();
@@ -131,11 +159,19 @@ it("joins a real MQTT TLS connection cancelled before the handshake completes", 
   if (!address || typeof address === "string") throw new Error("Missing fixture port");
   const execution = new StatusExecution();
   try {
-    const rejected = expect(execution.probe(bambuAdapter, {
-      host: "127.0.0.1", port: address.port, serial: "ABC123456", access_code: "12345678",
-    })).rejects.toThrow("Printer status execution stopped");
+    const rejected = expect(
+      execution.probe(bambuAdapter, {
+        host: "127.0.0.1",
+        port: address.port,
+        serial: "ABC123456",
+        access_code: "12345678",
+      }),
+    ).rejects.toThrow("Printer status execution stopped");
     await entered.promise;
-    expect(execution.snapshot()).toEqual({ state: "running", tasks: [{ id: 1, provider: "bambu", operation: "probe" }] });
+    expect(execution.snapshot()).toEqual({
+      state: "running",
+      tasks: [{ id: 1, provider: "bambu", operation: "probe" }],
+    });
     await execution.stop();
     await rejected;
     await disconnected.promise;
@@ -160,11 +196,18 @@ it("retains work until cleanup joins, rejects late results, and isolates another
   };
   const execution = new StatusExecution(1);
   const other = new StatusExecution();
-  const rejected = expect(execution.probe(adapter, {})).rejects.toThrow("Printer status execution stopped");
+  const rejected = expect(execution.probe(adapter, {})).rejects.toThrow(
+    "Printer status execution stopped",
+  );
   await entered.promise;
-  await expect(execution.probe(adapter, {})).rejects.toThrow("Printer status execution capacity reached");
+  await expect(execution.probe(adapter, {})).rejects.toThrow(
+    "Printer status execution capacity reached",
+  );
   const joined = execution.stop();
-  expect(execution.snapshot()).toEqual({ state: "stopping", tasks: [{ id: 1, provider: "moonraker", operation: "probe" }] });
+  expect(execution.snapshot()).toEqual({
+    state: "stopping",
+    tasks: [{ id: 1, provider: "moonraker", operation: "probe" }],
+  });
   expect(await other.test(adapter, {})).toEqual({ ok: true, message: "Connected" });
   cleanup.resolve();
   await joined;

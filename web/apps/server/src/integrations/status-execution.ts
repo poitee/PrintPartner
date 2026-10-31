@@ -18,9 +18,7 @@ type StatusWork = {
 };
 
 type Lifecycle =
-  | { kind: "running" }
-  | { kind: "stopping"; joined: Promise<void> }
-  | { kind: "stopped" };
+  { kind: "running" } | { kind: "stopping"; joined: Promise<void> } | { kind: "stopped" };
 
 export function statusRequest(permit: StatusPermit, timeoutMs: number) {
   permit.signal.throwIfAborted();
@@ -42,7 +40,11 @@ export class StatusExecution {
   snapshot() {
     return {
       state: this.lifecycle.kind,
-      tasks: [...this.work.values()].map(({ id, provider, operation }) => ({ id, provider, operation })),
+      tasks: [...this.work.values()].map(({ id, provider, operation }) => ({
+        id,
+        provider,
+        operation,
+      })),
     };
   }
 
@@ -54,7 +56,8 @@ export class StatusExecution {
       this.lifecycle = { kind: "stopped" };
     });
     this.lifecycle = { kind: "stopping", joined };
-    for (const task of pending) task.controller.abort(new Error("Printer status execution stopped"));
+    for (const task of pending)
+      task.controller.abort(new Error("Printer status execution stopped"));
     return joined;
   }
 
@@ -72,7 +75,11 @@ export class StatusExecution {
 
   devices(adapter: IntegrationAdapter, config: IntegrationConfig) {
     if (!adapter.getStatus) return adapter.listDevices?.(config) ?? Promise.resolve([]);
-    return this.run(adapter, "devices", (permit) => adapter.listDevices?.(config, permit) ?? Promise.resolve([]));
+    return this.run(
+      adapter,
+      "devices",
+      (permit) => adapter.listDevices?.(config, permit) ?? Promise.resolve([]),
+    );
   }
 
   private async run<T>(
@@ -81,11 +88,14 @@ export class StatusExecution {
     acquire: (permit: StatusPermit) => Promise<T>,
   ): Promise<T> {
     if (this.lifecycle.kind !== "running") throw new Error("Printer status execution stopped");
-    if (this.work.size >= this.capacity) throw new Error("Printer status execution capacity reached");
+    if (this.work.size >= this.capacity)
+      throw new Error("Printer status execution capacity reached");
     const id = ++this.nextId;
     const controller = new AbortController();
     let complete!: () => void;
-    const joined = new Promise<void>((resolve) => { complete = resolve; });
+    const joined = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
     this.work.set(id, { id, provider: adapter.type, operation, controller, joined });
     const transports: Promise<void>[] = [];
     try {
@@ -94,7 +104,9 @@ export class StatusExecution {
         result = await acquire({
           [permitBrand]: true,
           signal: controller.signal,
-          joinTransport: (closed) => { transports.push(closed); },
+          joinTransport: (closed) => {
+            transports.push(closed);
+          },
         });
       } finally {
         await Promise.allSettled(transports);

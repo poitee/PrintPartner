@@ -36,14 +36,18 @@ describe("homeAssistantAdapter", () => {
     it("returns ok with version when /api/ is reachable and entity_id is valid", async () => {
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(jsonResponse({
-          message: "API running.",
-          version: "2024.1.0",
-        }))
-        .mockResolvedValueOnce(jsonResponse({
+        .mockResolvedValueOnce(
+          jsonResponse({
+            message: "API running.",
+            version: "2024.1.0",
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
             state: "idle",
             attributes: { friendly_name: "Printer State" },
-          }));
+          }),
+        );
       vi.stubGlobal("fetch", fetchMock);
 
       const result = await execution.test(homeAssistantAdapter, makeConfig());
@@ -57,9 +61,7 @@ describe("homeAssistantAdapter", () => {
       const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: "API running." }));
       vi.stubGlobal("fetch", fetchMock);
 
-      await execution.test(homeAssistantAdapter,
-        makeConfig({ entity_id: undefined }),
-      );
+      await execution.test(homeAssistantAdapter, makeConfig({ entity_id: undefined }));
 
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       const headers = new Headers(init.headers);
@@ -67,17 +69,13 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns ok=false when base_url is missing", async () => {
-      const result = await execution.test(homeAssistantAdapter,
-        makeConfig({ base_url: "" }),
-      );
+      const result = await execution.test(homeAssistantAdapter, makeConfig({ base_url: "" }));
       expect(result.ok).toBe(false);
       expect(result.message).toContain("base_url");
     });
 
     it("returns ok=false when token is missing", async () => {
-      const result = await execution.test(homeAssistantAdapter,
-        makeConfig({ token: undefined }),
-      );
+      const result = await execution.test(homeAssistantAdapter, makeConfig({ token: undefined }));
       expect(result.ok).toBe(false);
       expect(result.message).toContain("token");
     });
@@ -111,29 +109,28 @@ describe("homeAssistantAdapter", () => {
     it("does not forward token on cross-origin redirect", async () => {
       const fetchMock = vi
         .fn()
-        .mockResolvedValueOnce(new Response(null, {
-          status: 302,
-          headers: { location: "http://192.168.1.99:8123/api/" },
-        }))
+        .mockResolvedValueOnce(
+          new Response(null, {
+            status: 302,
+            headers: { location: "http://192.168.1.99:8123/api/" },
+          }),
+        )
         .mockResolvedValueOnce(jsonResponse({ message: "API running." }));
       vi.stubGlobal("fetch", fetchMock);
 
-      const result = await execution.test(homeAssistantAdapter,
+      const result = await execution.test(
+        homeAssistantAdapter,
         makeConfig({ entity_id: undefined }),
       );
       expect(result.ok).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(2);
 
       // First hop — token present (same origin)
-      const firstHeaders = new Headers(
-        (fetchMock.mock.calls[0]![1] as RequestInit).headers,
-      );
+      const firstHeaders = new Headers((fetchMock.mock.calls[0]![1] as RequestInit).headers);
       expect(firstHeaders.get("Authorization")).toBe(`Bearer ${TOKEN}`);
 
       // Second hop — cross-origin, token must be stripped
-      const secondHeaders = new Headers(
-        (fetchMock.mock.calls[1]![1] as RequestInit).headers,
-      );
+      const secondHeaders = new Headers((fetchMock.mock.calls[1]![1] as RequestInit).headers);
       expect(secondHeaders.get("Authorization")).toBeNull();
     });
   });
@@ -145,10 +142,12 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'printing' state with progress and filename", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue(jsonResponse({
+        vi.fn().mockResolvedValue(
+          jsonResponse({
             state: "printing",
             attributes: { progress: 42, filename: "benchy.gcode" },
-          })),
+          }),
+        ),
       );
 
       const status = await execution.probe(homeAssistantAdapter, makeConfig());
@@ -161,10 +160,12 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'paused' state and keeps progress", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue(jsonResponse({
+        vi.fn().mockResolvedValue(
+          jsonResponse({
             state: "paused",
             attributes: { progress: 67 },
-          })),
+          }),
+        ),
       );
 
       const status = await execution.probe(homeAssistantAdapter, makeConfig());
@@ -175,10 +176,12 @@ describe("homeAssistantAdapter", () => {
     it("maps HA 'done' state to complete and clears progress", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue(jsonResponse({
+        vi.fn().mockResolvedValue(
+          jsonResponse({
             state: "done",
             attributes: { progress: 100, filename: "test.gcode" },
-          })),
+          }),
+        ),
       );
 
       const status = await execution.probe(homeAssistantAdapter, makeConfig());
@@ -223,7 +226,8 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns offline when entity_id is missing from config", async () => {
-      const status = await execution.probe(homeAssistantAdapter,
+      const status = await execution.probe(
+        homeAssistantAdapter,
         makeConfig({ entity_id: undefined }),
       );
       expect(status.state).toBe("offline");
@@ -231,9 +235,7 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns offline when token is missing", async () => {
-      const status = await execution.probe(homeAssistantAdapter,
-        makeConfig({ token: undefined }),
-      );
+      const status = await execution.probe(homeAssistantAdapter, makeConfig({ token: undefined }));
       expect(status.state).toBe("offline");
       expect(status.message).toContain("token");
     });
@@ -241,10 +243,12 @@ describe("homeAssistantAdapter", () => {
     it("normalises progress expressed as a string percentage", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue(jsonResponse({
+        vi.fn().mockResolvedValue(
+          jsonResponse({
             state: "printing",
             attributes: { progress: "75.8" },
-          })),
+          }),
+        ),
       );
 
       const status = await execution.probe(homeAssistantAdapter, makeConfig());
@@ -253,10 +257,7 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("catches fetch errors and returns offline", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
-      );
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
 
       const status = await execution.probe(homeAssistantAdapter, makeConfig());
       expect(status.state).toBe("offline");
@@ -282,7 +283,8 @@ describe("homeAssistantAdapter", () => {
     });
 
     it("returns empty array when entity_id is missing", async () => {
-      const devices = await execution.devices(homeAssistantAdapter,
+      const devices = await execution.devices(
+        homeAssistantAdapter,
         makeConfig({ entity_id: undefined }),
       );
       expect(devices).toHaveLength(0);
@@ -310,9 +312,7 @@ describe("homeAssistantAdapter", () => {
 
       expect(result.ok).toBe(true);
       expect(result.message).toContain("part.gcode");
-      expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
-        "/api/webhook/print_received",
-      );
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/api/webhook/print_received");
       const init = fetchMock.mock.calls[0]![1] as RequestInit;
       expect(init.method).toBe("POST");
       expect(init.body).toBeInstanceOf(FormData);
@@ -373,9 +373,7 @@ describe("homeAssistantAdapter", () => {
         expect(fetchMock.mock.calls[0]![1] as RequestInit).toMatchObject({
           method: "POST",
         });
-        expect(
-          (fetchMock.mock.calls[0]![1] as RequestInit).body,
-        ).toBeInstanceOf(FormData);
+        expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBeInstanceOf(FormData);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

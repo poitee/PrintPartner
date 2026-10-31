@@ -51,7 +51,10 @@ export type IntegrationAdapter = {
 } & (
   | {
       getStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus>;
-      testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult>;
+      testConnection(
+        config: IntegrationConfig,
+        permit: StatusPermit,
+      ): Promise<IntegrationTestResult>;
       listDevices?(config: IntegrationConfig, permit: StatusPermit): Promise<DeviceSummary[]>;
     }
   | {
