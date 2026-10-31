@@ -3,3 +3,4 @@
 **/coverage/
 web/test-results/
 .audit/
+**/*.generated.ts
