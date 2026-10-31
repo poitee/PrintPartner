@@ -69,8 +69,8 @@ shell expansion, the `:` matching refspec, and `HEAD` when the same command
 also switches branches. Git and gh subcommands and option names must be literal.
 After a `cd` in a subshell or pipeline, or under `env -C`, the guard treats the
 directory as unknown and refuses relative `gh api` input files.
-Through `gh api`, agents may read, write PR or issue comments, and reply to or
-resolve review threads. Other API writes need the maintainer.
+Through `gh api`, agents may read, write PR or issue comments, submit
+comment-only or pending PR reviews, and reply to or resolve review threads. Other API writes need the maintainer.
 It refuses a git or gh command it cannot classify. It is a mistake guard, not
 a shell sandbox or a complete security boundary.
 Repository rules and required GitHub checks remain authoritative. Review the

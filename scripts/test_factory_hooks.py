@@ -102,6 +102,10 @@ class GuardHookTests(unittest.TestCase):
         for command in ("git push -fu origin topic", "git push -uvf origin topic", "git push -fuv origin topic"):
             self.assertBlocked("Execute", {"command": command}, "force-push")
         self.assertBlocked("Execute", {"command": "echo $(git push origin main)"}, "main only")
+        self.assertBlocked("Execute", {"command": 'output="$(# 1) Push the branch\ngit push origin main\n)"'}, "main only")
+        self.assertAllowed("Execute", {"command": "echo \"$(# user's note\ngit log -1\n)\""})
+        for command in ("git push -h", "git push --help"):
+            self.assertAllowed("Execute", {"command": command})
         self.assertBlocked("Execute", {"command": "git push origin 'main"}, "Cannot parse")
 
     def test_argument_vectors_classify_git_and_gh(self):
@@ -172,11 +176,19 @@ class GuardHookTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            for command in ("git branch --show-current && git push -u origin HEAD",
+                            "git symbolic-ref --short HEAD && git push origin HEAD",
+                            "git worktree list && git push origin HEAD"):
+                payload["tool_input"]["command"] = command
+                result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, command + result.stderr)
             for command in ("git switch main && git push origin HEAD", "gh pr checkout 12 && git push origin @",
                             "env -C /tmp git push origin HEAD", "env --chdir=/tmp git push origin HEAD",
                             "(cd /tmp); git push origin HEAD", "GIT_DIR=/tmp/x/.git git push origin HEAD",
                             "env GIT_DIR=/tmp/x/.git git push origin HEAD",
-                            "export GIT_WORK_TREE=/tmp/x; git push origin HEAD",
+                            "export GIT_WORK_TREE=/tmp/x; git push origin HEAD", "git branch -m main && git push origin HEAD",
+                            "git symbolic-ref HEAD refs/heads/main && git push origin HEAD",
                             "echo $(git checkout main) && git push origin HEAD"):
                 payload["tool_input"]["command"] = command
                 result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
@@ -288,6 +300,9 @@ class GuardHookTests(unittest.TestCase):
                         "gh api repos/o/r/releases -f tag_name=v1.2.3",
                         "gh api repos/o/r/merges -f base=main -f head=topic",
                         "gh api -X PATCH repos/o/r/git/refs/heads/topic -F force=true -f sha=abc",
+                        "gh api repos/o/r/pulls/12/reviews -f event=APPROVE",
+                        "gh api repos/o/r/pulls/12/reviews/5/events -f event=REQUEST_CHANGES",
+                        "gh api repos/o/r/pulls/12/reviews -f event=COMMENT -f event=APPROVE",
                         "gh api -X POST repos/o/r/git/refs --input ref.json",
                         "gh api -X DELETE repos/o/r/contents/a.md -f message=remove -f sha=abc",
                         "gh api -X PUT repos/o/r/contents/a.md -f branch=topic -f message=x -f content=eA==",
@@ -309,6 +324,9 @@ class GuardHookTests(unittest.TestCase):
                         "gh api -i repos/o/r/pulls", "gh api -iXGET repos/o/r/pulls",
                         "gh api repos/o/r/pulls/12/comments/34/replies -f body=ok",
                         "gh api -X PATCH repos/o/r/issues/comments/34 -f body=edited",
+                        "gh api repos/o/r/pulls/12/reviews -f event=COMMENT -f body=Review",
+                        "gh api repos/o/r/pulls/12/reviews -f body=Draft -f 'comments[][path]=a.py'",
+                        "gh api repos/o/r/pulls/12/reviews/5/events -f event=comment",
                         "gh api graphql -f 'query=query { viewer { login } } # mergePullRequest('",
                         "gh api graphql -f 'query=query mutation { viewer { login } }'",
                         "gh api graphql -f 'query=mutation($id: ID!) { r: resolveReviewThread(input: {threadId: $id}) "

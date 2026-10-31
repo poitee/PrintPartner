@@ -48,7 +48,7 @@ COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-mess
 GH_SHORT_BOOLEAN = set("ih")
 RELEASE_READS = {"download", "list", "verify", "verify-asset", "view"}
 # Git commands that can change which branch HEAD names before a later push runs.
-BRANCH_CHANGES = {"bisect", "branch", "checkout", "rebase", "switch", "symbolic-ref", "worktree"}
+BRANCH_CHANGES = {"bisect", "checkout", "rebase", "switch"}
 # Marks text the shell expands at run time, so its value is unknown here.
 EXPANDED = "\x00"
 GH_VALUE_OPTIONS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
@@ -60,6 +60,8 @@ REPO_PATH = r"(?:^|/)repos/[^/]+/[^/]+/"
 # The only REST writes agents may make through gh api: PR and issue comments.
 COMMENT_WRITES = re.compile(REPO_PATH + r"(?:issues/\d+/comments|pulls/\d+/comments(?:/\d+/replies)?"
                             r"|issues/comments/\d+|pulls/comments/\d+)$")
+# Pull request reviews are comment writes only when their event is COMMENT or left pending.
+REVIEW_WRITES = re.compile(REPO_PATH + r"pulls/\d+/reviews(?:/\d+/events)?$")
 ALLOWED_MUTATIONS = {"addComment", "addPullRequestReviewComment", "addPullRequestReviewThreadReply",
                      "resolveReviewThread", "unresolveReviewThread", "updateIssueComment",
                      "updatePullRequestReviewComment"}
@@ -134,9 +136,15 @@ def skip_heredoc_bodies(source, i, pending):
 
 
 def closing_paren(source, i):
-    depth, pending = 1, []
+    depth, pending, start = 1, [], i
     while i < len(source):
         char = source[i]
+        if char == "#" and (i == start or source[i - 1] in " \t\n;&|("):
+            newline = source.find("\n", i)
+            if newline < 0:
+                raise ValueError("unterminated command substitution")
+            i = newline
+            continue
         if char == "\\":
             i += 2
             continue
@@ -429,6 +437,8 @@ def current_branch(cwd, location):
 
 
 def push_reason(args, cwd, location, head_moves):
+    if args in (["-h"], ["--help"]):
+        return None
     parsed = list(options(args, value_flags="o", value_long=PUSH_VALUE_LONG))
     dry_run = False
     for kind, arg in parsed:
@@ -499,7 +509,16 @@ def git_command(args):
 def moves_head(name, args):
     if name == "git":
         i = git_command(args)[0]
-        return i < len(args) and args[i] in BRANCH_CHANGES
+        if i >= len(args):
+            return False
+        command, rest = args[i], args[i + 1:]
+        if command == "branch":
+            # Only a rename of the current branch changes the name HEAD points to.
+            return any(arg in ("--move", "-m", "-M") or re.match(r"^-[^-]*[mM]", arg) for arg in rest)
+        if command == "symbolic-ref":
+            operands = [arg for arg in rest if not arg.startswith("-")]
+            return len(operands) > 1 or any(arg in ("-d", "--delete") for arg in rest)
+        return command in BRANCH_CHANGES
     return name == "gh" and without_repo_flags(args)[:2] == ["pr", "checkout"]
 
 
@@ -610,6 +629,26 @@ def graphql_documents(fields, body, cwd):
         documents.append(text)
     return documents
 
+def review_events(fields, body, cwd):
+    """Return the review events a request sets; an empty string means none, which leaves it pending."""
+    events = set()
+    for flag, value in fields:
+        key, _, text = value.partition("=")
+        if key == "event":
+            if flag in ("-F", "--field") and text.startswith("@"):
+                raise Unclear
+            events.add(text.upper())
+    if body is not None:
+        try:
+            decoded = json.loads(read_input(body, cwd))
+        except ValueError:
+            raise Unclear from None
+        if not isinstance(decoded, dict):
+            raise Unclear
+        events.add(str(decoded.get("event", "")).upper())
+    return events or {""}
+
+
 def without_repo_flags(args):
     kept, i = [], 0
     while i < len(args):
@@ -685,6 +724,8 @@ def gh_reason(args, cwd):
             if names is None or set(names) - ALLOWED_MUTATIONS:
                 return API_WRITE
         return None
+    if method == "POST" and REVIEW_WRITES.search(path):
+        return None if review_events(fields, body, cwd) <= {"", "COMMENT"} else API_WRITE
     if method in ("POST", "PATCH") and COMMENT_WRITES.search(path):
         return None
     return API_WRITE
