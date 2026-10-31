@@ -3,11 +3,13 @@
 
 Droid runs this before Execute, Create, Edit, and ApplyPatch calls, including
 inside Missions. It is a guard rail, not a security boundary: it reads the
-tool input Droid supplies and refuses known-dangerous shapes.
+tool input Droid supplies and refuses known-dangerous shapes. When it cannot
+classify a git or gh invocation, it refuses rather than guessing.
 """
 
 import json
-from pathlib import PurePosixPath
+import os
+from pathlib import Path, PurePosixPath
 import re
 import sys
 
@@ -16,18 +18,40 @@ FORCE = "Never force-push. Add a commit instead."
 MAIN = "Push a branch and open a PR; main only changes by merge."
 RELEASE = "Releases and tags need separate authorization."
 HOOKS = "Do not bypass Git hooks."
+UNCLEAR = "Cannot classify this git or gh command; run it without the wrapper option."
+UNPARSABLE = "Cannot parse shell command; use a simpler command."
 
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-WRAPPERS = {"command", "env", "exec", "nohup", "time"}
+SHELL_PREFIXES = {"!", "{", "}", "if", "then", "elif", "else", "while", "until", "do"}
+# Wrapper programs and their options that take a separate value.
+WRAPPERS = {
+    "command": set(),
+    "env": {"-u", "--unset", "-C", "--chdir"},
+    "exec": {"-a"},
+    "nohup": set(),
+    "sudo": {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "-D", "-R", "-T", "-U"},
+    "nice": {"-n", "--adjustment"},
+    "time": {"-f", "--format", "-o", "--output"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+}
+# Positional operands, such as a duration, that come before the wrapped program.
+WRAPPER_OPERANDS = {"timeout": 1}
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
-HOOK_COMMANDS = {"am", "cherry-pick", "commit", "merge", "push", "rebase", "revert"}
-MAIN_REF = re.compile(r"^(?:[^:]*:)?(?:refs/heads/)?main$")
-PR_MERGE_PATH = re.compile(r"(?:^|/)pulls/\d+/merge/?$")
+HOOK_COMMANDS = {"am", "cherry-pick", "merge", "rebase", "revert"}
+MAIN_REF = re.compile(r"^(?:refs/heads/)?main$")
 PUSH_VALUE_LONG = {"--exec", "--push-option", "--receive-pack", "--repo"}
 COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-message",
                      "--reuse-message", "--template", "--trailer"}
+GH_VALUE_OPTIONS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
+                    "-t", "--template", "--hostname", "-p", "--preview", "--cache", "-X", "--method"}
+PR_MERGE_PATH = re.compile(r"(?:^|/)pulls/\d+/merge/?$")
+MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\s*\(")
 GENERATED = {"rust/bundle-manifest.json"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", re.M)
+
+
+class Unclear(Exception):
+    pass
 
 
 def protected_path(raw):
@@ -47,42 +71,104 @@ HEREDOC = re.compile(r"""[ \t]*((?:'[^']*'|"[^"]*"|\\.|[^\s;&|<>()'"\\])+)""")
 HEREDOC_QUOTING = re.compile(r"""\\(.)|['"]""")
 
 
+def closing_paren(source, i):
+    depth = 1
+    while i < len(source):
+        char = source[i]
+        if char == "\\":
+            i += 2
+            continue
+        if char in "'\"":
+            end = source.find(char, i + 1)
+            if end < 0:
+                raise ValueError("unterminated quote")
+            i = end + 1
+            continue
+        depth += {"(": 1, ")": -1}.get(char, 0)
+        if depth == 0:
+            return i
+        i += 1
+    raise ValueError("unterminated command substitution")
+
+
+def closing_backtick(source, i):
+    end = source.find("`", i)
+    if end < 0:
+        raise ValueError("unterminated command substitution")
+    return end
+
+
 def shell_commands(source):
     """Split shell source into simple commands of unquoted arguments.
 
-    Handles quotes, escapes, separators, comments, and heredoc bodies. It does
-    not evaluate expansions, so it is a mistake guard rather than a sandbox.
+    Handles quotes, escapes, continuations, separators, comments, redirections,
+    heredoc bodies, and command substitutions. It does not evaluate expansions.
     """
-    commands, args, word, heredocs = [], [], None, []
+    commands, args, word, heredocs, nested = [], [], None, [], []
+    drop_next = False
 
     def finish_word():
-        nonlocal word
+        nonlocal word, drop_next
         if word is not None:
-            args.append(word)
+            if drop_next:
+                drop_next = False
+            else:
+                args.append(word)
             word = None
 
     i = 0
     while i < len(source):
         char = source[i]
         if char == "\\" and i + 1 < len(source):
-            word = (word or "") + source[i + 1]
-            i += 2
-        elif char in "'\"":
+            if source[i + 1] == "\n":
+                i += 2
+            elif source.startswith("\r\n", i + 1):
+                i += 3
+            else:
+                word = (word or "") + source[i + 1]
+                i += 2
+        elif char == "'":
+            end = source.find("'", i + 1)
+            if end < 0:
+                raise ValueError("unterminated quote")
+            word = (word or "") + source[i + 1:end]
+            i = end + 1
+        elif char == '"':
             j, text = i + 1, []
             while True:
                 if j >= len(source):
                     raise ValueError("unterminated quote")
                 c = source[j]
-                if c == char:
+                if c == '"':
                     break
-                if char == '"' and c == "\\" and source[j + 1:j + 2] in ('$', '`', '"', "\\"):
+                if c == "\\" and source[j + 1:j + 2] == "\n":
+                    j += 2
+                elif c == "\\" and source[j + 1:j + 2] in ("$", "`", '"', "\\"):
                     text.append(source[j + 1])
                     j += 2
-                    continue
-                text.append(c)
-                j += 1
+                elif source.startswith("$(", j):
+                    end = closing_paren(source, j + 2)
+                    nested.append(source[j + 2:end])
+                    j = end + 1
+                elif c == "`":
+                    end = closing_backtick(source, j + 1)
+                    nested.append(source[j + 1:end])
+                    j = end + 1
+                else:
+                    text.append(c)
+                    j += 1
             word = (word or "") + "".join(text)
             i = j + 1
+        elif source.startswith("$(", i):
+            end = closing_paren(source, i + 2)
+            nested.append(source[i + 2:end])
+            word = word or ""
+            i = end + 1
+        elif char == "`":
+            end = closing_backtick(source, i + 1)
+            nested.append(source[i + 1:end])
+            word = word or ""
+            i = end + 1
         elif char == "#" and word is None:
             newline = source.find("\n", i)
             i = len(source) if newline < 0 else newline
@@ -99,11 +185,21 @@ def shell_commands(source):
                 delimiter = HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", match.group(1))
                 heredocs.append((delimiter, tabs))
                 i = match.end()
-        elif char in " \t\r<>" or char in SEPARATORS:
+        elif char in "<>" or source.startswith("&>", i):
+            if word is not None and word.isdigit():
+                word = None
             finish_word()
-            if char in SEPARATORS and args:
-                commands.append(args)
-                args = []
+            i += 1
+            while i < len(source) and source[i] in "<>&|":
+                i += 1
+            drop_next = True
+        elif char in " \t\r" or char in SEPARATORS:
+            finish_word()
+            if char in SEPARATORS:
+                drop_next = False
+                if args:
+                    commands.append(args)
+                    args = []
             i += 1
             if char == "\n":
                 for delimiter, tabs in heredocs:
@@ -121,20 +217,32 @@ def shell_commands(source):
     finish_word()
     if args:
         commands.append(args)
+    for inner in nested:
+        commands.extend(shell_commands(inner))
     return commands
 
+
 def program(args):
-    """Return the executed program name and its arguments after assignments and wrappers."""
+    """Return the executed program name and its arguments."""
     i = 0
     while i < len(args):
-        if ASSIGNMENT.match(args[i]):
+        word = args[i]
+        if ASSIGNMENT.match(word) or word in SHELL_PREFIXES:
             i += 1
-        elif PurePosixPath(args[i]).name in WRAPPERS:
-            i += 1
-            while i < len(args) and args[i].startswith("-"):
+            continue
+        name = PurePosixPath(word).name
+        if name not in WRAPPERS:
+            return name, args[i + 1:]
+        i += 1
+        while i < len(args) and args[i].startswith("-"):
+            option = args[i]
+            if option == "--":
                 i += 1
-        else:
-            return PurePosixPath(args[i]).name, args[i + 1:]
+                break
+            if name == "env" and (option.startswith("--split-string") or re.match(r"^-[^-]*S", option)):
+                raise Unclear
+            i += 2 if option in WRAPPERS[name] else 1
+        i += WRAPPER_OPERANDS.get(name, 0)
     return None, []
 
 
@@ -167,6 +275,27 @@ def options(args, value_flags="", stop_flags="", value_long=()):
                 i += 1
 
 
+def push_reason(args):
+    parsed = list(options(args, value_flags="o", value_long=PUSH_VALUE_LONG))
+    longs = {arg for kind, arg in parsed if kind == "long"}
+    shorts = "".join(arg for kind, arg in parsed if kind == "short")
+    positional = [arg for kind, arg in parsed if kind == "arg"]
+    if "--dry-run" in longs or "n" in shorts:
+        return None
+    if "--no-verify" in longs:
+        return HOOKS
+    refspecs = positional if "--repo" in longs else positional[1:]
+    if longs & {"--force", "--force-with-lease", "--mirror"} or "f" in shorts:
+        return FORCE
+    if any(refspec.startswith("+") for refspec in refspecs):
+        return FORCE
+    if longs & {"--tags", "--follow-tags"} or "tag" in refspecs or any("refs/tags/" in r for r in refspecs):
+        return RELEASE
+    if longs & {"--all", "--branches"} or any(MAIN_REF.match(r.rsplit(":", 1)[-1]) for r in refspecs):
+        return MAIN
+    return None
+
+
 def git_reason(args):
     i = 0
     while i < len(args) and args[i].startswith("-"):
@@ -175,51 +304,69 @@ def git_reason(args):
         return None
     command, rest = args[i], args[i + 1:]
     if command == "push":
-        parsed = list(options(rest, value_flags="o", value_long=PUSH_VALUE_LONG))
-        for kind, arg in parsed:
-            if (kind == "long" and arg in ("--force", "--force-with-lease")
-                    or kind == "short" and "f" in arg or kind == "arg" and arg.startswith("+")):
-                return FORCE
-        if any(kind == "long" and arg in ("--tags", "--follow-tags") for kind, arg in parsed):
-            return RELEASE
-        if any(kind == "arg" and MAIN_REF.match(arg) for kind, arg in parsed):
-            return MAIN
-    if command in HOOK_COMMANDS:
+        return push_reason(rest)
+    if command == "commit":
         parsed = options(rest, value_flags="mFcCt", stop_flags="uS", value_long=COMMIT_VALUE_LONG)
-        for kind, arg in parsed:
-            if kind == "long" and arg == "--no-verify" or command == "commit" and kind == "short" and "n" in arg:
-                return HOOKS
+        if any(kind == "long" and arg == "--no-verify" or kind == "short" and "n" in arg
+               for kind, arg in parsed):
+            return HOOKS
+    elif command in HOOK_COMMANDS:
+        if any(kind == "long" and arg == "--no-verify" for kind, arg in options(rest)):
+            return HOOKS
     return None
 
 
-def gh_reason(args):
-    while args[:1] in (["-R"], ["--repo"]):
-        args = args[2:]
+def graphql_query(flag, value, cwd):
+    key, _, text = value.partition("=")
+    if key != "query":
+        return ""
+    if flag in ("-F", "--field") and text.startswith("@"):
+        try:
+            return (Path(cwd) / text[1:]).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    return text
+
+
+def gh_reason(args, cwd):
+    while args and (args[0] in ("-R", "--repo") or args[0].startswith(("-R", "--repo="))):
+        args = args[2:] if args[0] in ("-R", "--repo") else args[1:]
+    if args[:1] == ["help"] or "--help" in args or "-h" in args:
+        return None
     if args[:2] == ["pr", "merge"]:
         return MERGE
     if args[:2] == ["release", "create"]:
         return RELEASE
     if args[:1] != ["api"]:
         return None
-    method, targets, i = None, [], 1
+    method, endpoint, fields, i = None, None, [], 1
     while i < len(args):
         arg = args[i]
         i += 1
-        if arg in ("-X", "--method"):
-            method = args[i] if i < len(args) else None
-            i += 1
-        elif arg.startswith("--method="):
-            method = arg.split("=", 1)[1]
-        elif arg.startswith("-X"):
-            method = arg[2:]
+        if arg.startswith("--"):
+            name, attached, value = arg.partition("=")
+        elif arg.startswith("-") and arg != "-":
+            name, value = arg[:2], arg[2:]
+            attached = value
         else:
-            targets.append(arg)
-    if (method or "").upper() == "PUT" and any(PR_MERGE_PATH.search(t) for t in targets):
+            endpoint = arg if endpoint is None else endpoint
+            continue
+        if not attached and name in GH_VALUE_OPTIONS:
+            value = args[i] if i < len(args) else ""
+            i += 1
+        if name in ("-X", "--method"):
+            method = value
+        elif name in ("-f", "-F", "--field", "--raw-field"):
+            fields.append((name, value))
+    if (method or "").upper() == "PUT" and endpoint and PR_MERGE_PATH.search(endpoint.split("?", 1)[0]):
         return MERGE
-    if "graphql" in targets and any(re.search(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\b", t)
-                                    for t in targets):
-        return MERGE
+    if endpoint == "graphql":
+        for flag, value in fields:
+            query = re.sub(r"#[^\n]*", "", graphql_query(flag, value, cwd))
+            if re.match(r"\s*mutation\b", query) and MERGE_MUTATION.search(query):
+                return MERGE
     return None
+
 
 def decide(payload):
     if not isinstance(payload, dict):
@@ -229,15 +376,17 @@ def decide(payload):
     if not isinstance(data, dict) and not (tool == "ApplyPatch" and isinstance(data, str)):
         return "Expected object tool input, or a patch string for ApplyPatch."
     if tool == "Execute":
-        command = str(data.get("command", "")).replace("\\\r\n", "").replace("\\\n", "")
+        cwd = str(payload.get("cwd") or os.getcwd())
         try:
-            for args in shell_commands(command):
+            for args in shell_commands(str(data.get("command", ""))):
                 name, rest = program(args)
-                reason = git_reason(rest) if name == "git" else gh_reason(rest) if name == "gh" else None
+                reason = git_reason(rest) if name == "git" else gh_reason(rest, cwd) if name == "gh" else None
                 if reason:
                     return reason
+        except Unclear:
+            return UNCLEAR
         except ValueError:
-            return "Cannot parse shell command; use a simpler command."
+            return UNPARSABLE
         return None
     paths = []
     if tool in ("Create", "Edit"):

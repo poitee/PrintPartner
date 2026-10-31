@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +123,54 @@ class GuardHookTests(unittest.TestCase):
                         "cat <<E'O'F\nhello\nEOF\ngit push origin main",
                         'cat <<< "hello"\ngit push origin main'):
             self.assertBlocked("Execute", {"command": command}, "main only")
+
+    def test_shell_syntax_around_commands(self):
+        for command in ("if git push origin main; then echo ok; fi", "! git push origin main",
+                        "{ git push origin main; }", "2>/dev/null git push origin main",
+                        'output="$(git push origin main)"', "echo `git push origin main`",
+                        "cat <<'EOF'\nline \\\nEOF\ngit push origin main",
+                        "env -u GIT_TRACE git push origin main", "/usr/bin/time -f %E git push origin main",
+                        "sudo -u dev git push origin main", "timeout 60 git push origin main",
+                        "timeout -k 5 60 git push origin main", "nice -n 5 git push origin main"):
+            self.assertBlocked("Execute", {"command": command}, "main only")
+        self.assertAllowed("Execute", {"command": "git push origin topic >main 2>&1"})
+        self.assertBlocked("Execute", {"command": "env -S 'git push origin main'"}, "Cannot classify")
+
+    def test_push_modes_and_refspecs(self):
+        for command in ("git push --dry-run origin HEAD:main", "git push -n --force origin topic",
+                        "git push main HEAD:topic", "git push --repo=origin HEAD:topic"):
+            self.assertAllowed("Execute", {"command": command})
+        for command, reason in (("git push --mirror origin", "force-push"), ("git push --all origin", "main only"),
+                                ("git push origin :main", "main only"), ("git push --repo origin main", "main only"),
+                                ("git push origin refs/tags/v1.0.0", "authorization"),
+                                ("git push origin tag v1.0.0", "authorization"),
+                                ("git rebase -m --no-verify main", "hooks")):
+            self.assertBlocked("Execute", {"command": command}, reason)
+
+    def test_gh_options_and_endpoints(self):
+        for command in ("gh pr merge --help", "gh release create --help",
+                        "gh api -X PUT repos/o/r/contents/example -f message='Document /pulls/12/merge'",
+                        "gh api graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 1) "
+                        "{ issueCount } }' -f q=mergePullRequest"):
+            self.assertAllowed("Execute", {"command": command})
+        for command in ("gh --repo=o/r pr merge 12", "gh -Ro/r pr merge 12",
+                        "gh api -X PUT 'repos/o/r/pulls/12/merge?merge_method=squash'"):
+            self.assertBlocked("Execute", {"command": command}, "maintainer")
+        self.assertBlocked("Execute", {"command": "gh --repo=o/r release create v1"}, "authorization")
+
+    def test_graphql_query_files_are_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "merge.graphql").write_text("mutation { mergePullRequest(input: {}) { clientMutationId } }")
+            Path(folder, "reply.graphql").write_text("mutation { addPullRequestReviewThreadReply(input: {}) { comment { url } } }")
+            payload = {"tool_name": "Execute", "cwd": folder,
+                       "tool_input": {"command": "gh api graphql -F query=@merge.graphql"}}
+            result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            payload["tool_input"]["command"] = "gh api graphql -F query=@reply.graphql"
+            result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_generated_paths_are_normalized(self):
         for path in ("/repo/rust/./bundle-manifest.json", "/repo/rust//bundle-manifest.json"):

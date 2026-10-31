@@ -61,7 +61,8 @@ before opening the next. Only the maintainer merges.
 
 The project guard hook refuses common merge, force-push, direct-main push,
 release, hook-bypass, secret-file edit, and generated-manifest edit commands.
-It is a mistake guard, not a shell sandbox or a complete security boundary.
+It refuses a git or gh command it cannot classify. It is a mistake guard, not
+a shell sandbox or a complete security boundary.
 Repository rules and required GitHub checks remain authoritative. Review the
 project entry in `/hooks` after checkout; Droid snapshots hooks at startup.
 Do not disable the hook to finish a task.
