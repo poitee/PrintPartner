@@ -1,0 +1,6 @@
+**/node_modules/
+**/dist/
+**/coverage/
+web/test-results/
+.audit/
+**/*.generated.ts

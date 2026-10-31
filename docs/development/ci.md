@@ -39,6 +39,34 @@ staged changes. When staged Rust files change, it runs `cargo fmt --check` on
 a copy of the staged files, so unstaged edits do not change the result.
 The hook is opt-in; CI runs the same checks either way.
 
+## TypeScript and Python formatting
+
+GRE-1070 uses pinned Prettier for TypeScript and Ruff for Python. ESLint and
+rustfmt keep their existing jobs. Install the web dependencies with `npm ci`
+from `web/`. Install Ruff in a development virtual environment, not the host
+system Python:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+npm --prefix web run format:check
+.venv/bin/ruff format --check scripts rust/scripts web/scripts slicer-sidecar .factory/hooks
+```
+
+These are check-only commands. They return nonzero for unformatted source and
+never rewrite it. The Prettier command covers application, shared-package, and
+maintenance-script TypeScript, including tests. It skips generated
+`*.generated.ts` files because their generators are the source of truth. Ruff
+covers repository scripts, hooks, and the legacy sidecar. Build outputs,
+dependency trees, and ignored scratch files are not source.
+
+Existing source has not been mechanically reformatted in this setup slice.
+On main `1a0ea2ea`, Prettier reports 1,137 TypeScript files and Ruff reports 61
+Python files that need formatting. Both checks exit 1 until those changes land.
+Keep formatting in separate bounded PRs, then enforce the checks in CI and the
+opt-in hook. Do not treat configuration alone as a passing formatter readiness
+criterion or add broad source exclusions to manufacture a pass.
+
 ## The OS jobs
 
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.
