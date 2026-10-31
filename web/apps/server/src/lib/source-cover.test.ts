@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, realpathSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  realpathSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fetch as undiciFetch, Response as UndiciResponse } from "undici";
@@ -13,7 +21,11 @@ import {
   githubRepoSlug,
   resolveCoverCandidates,
 } from "./source-cover.js";
-import { beginSourceSyncAdmission, packagedSourceSyncManifestPath, requireSourceSyncParticipant } from "../ownership/source-sync-admission.js";
+import {
+  beginSourceSyncAdmission,
+  packagedSourceSyncManifestPath,
+  requireSourceSyncParticipant,
+} from "../ownership/source-sync-admission.js";
 
 // Keep tests hermetic: the SSRF guard resolves hostnames before fetching.
 vi.mock("node:dns/promises", () => ({
@@ -21,7 +33,7 @@ vi.mock("node:dns/promises", () => ({
 }));
 
 vi.mock("undici", async (importOriginal) => ({
-  ...await importOriginal<typeof import("undici")>(),
+  ...(await importOriginal<typeof import("undici")>()),
   fetch: vi.fn(),
 }));
 
@@ -43,11 +55,25 @@ describe("source cover resolution", () => {
       beginSourceSyncAdmission(dataDir);
       vi.mocked(undiciFetch).mockImplementationOnce(async () => {
         writeFileSync(manifest, `${original}\n`);
-        return new UndiciResponse(Buffer.from([0x89, 0x50, 0x4e, 0x47]), { headers: { "content-type": "image/png" } });
+        return new UndiciResponse(Buffer.from([0x89, 0x50, 0x4e, 0x47]), {
+          headers: { "content-type": "image/png" },
+        });
       });
-      await expect(ensureSourceCover(coversRoot, { id: 1, url: "https://github.com/example/cover", sourceKind: "github", sourceType: "git", metadataJson: null }, {
-        beforePublish: () => requireSourceSyncParticipant("job.sync"),
-      })).rejects.toThrow(/runtime manifest does not match/);
+      await expect(
+        ensureSourceCover(
+          coversRoot,
+          {
+            id: 1,
+            url: "https://github.com/example/cover",
+            sourceKind: "github",
+            sourceType: "git",
+            metadataJson: null,
+          },
+          {
+            beforePublish: () => requireSourceSyncParticipant("job.sync"),
+          },
+        ),
+      ).rejects.toThrow(/runtime manifest does not match/);
       expect(readdirSync(coversRoot)).toEqual([]);
     } finally {
       if (previous === undefined) delete process.env.PP_SOURCE_SYNC_OWNERSHIP_MANIFEST;
@@ -118,9 +144,11 @@ describe("source cover resolution", () => {
     };
 
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    vi.mocked(undiciFetch).mockResolvedValue(new UndiciResponse(png, {
-      headers: { "content-type": "image/png" },
-    }));
+    vi.mocked(undiciFetch).mockResolvedValue(
+      new UndiciResponse(png, {
+        headers: { "content-type": "image/png" },
+      }),
+    );
 
     const path = await ensureSourceCover(coversRoot, project);
     expect(path).toBe(join(coversRoot, "source_42.img"));
@@ -138,12 +166,14 @@ describe("source cover resolution", () => {
 
   it("rejects a cover whose declared size exceeds the download budget", async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    vi.mocked(undiciFetch).mockResolvedValue(new UndiciResponse(png, {
-      headers: {
-        "content-type": "image/png",
-        "content-length": "3000001",
-      },
-    }));
+    vi.mocked(undiciFetch).mockResolvedValue(
+      new UndiciResponse(png, {
+        headers: {
+          "content-type": "image/png",
+          "content-length": "3000001",
+        },
+      }),
+    );
 
     await expect(downloadRemoteImage("https://cdn.example.com/cover.png")).resolves.toBeNull();
   });

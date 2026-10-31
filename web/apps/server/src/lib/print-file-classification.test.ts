@@ -203,26 +203,47 @@ describe("G-code and binary G-code classification", () => {
 
   // Independent wire layouts: parameters precede data and are excluded from its declared length.
   // https://github.com/prusa3d/libbgcode/blob/d4da9073616d70a43c151e8c1d7fbff879d2e08a/doc/specifications.md
-  it.each([0, 2, 3, 4])("includes metadata encoding parameters for binary block type %i", (type) => {
-    const bytes = new Uint8Array([
-      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0,
-      type, 0, 0, 0, 4, 0, 0, 0,
-      0, 0,
-      0x61, 0x3d, 0x31, 0x0a,
-    ]);
-    expect(classifyPrintFileBytes(bytes)).toMatchObject({
-      outcome: "classified",
-      classification: { format: "bgcode" },
-      size_bytes: 24,
-    });
-  });
+  it.each([0, 2, 3, 4])(
+    "includes metadata encoding parameters for binary block type %i",
+    (type) => {
+      const bytes = new Uint8Array([
+        0x47,
+        0x43,
+        0x44,
+        0x45,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        type,
+        0,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0x61,
+        0x3d,
+        0x31,
+        0x0a,
+      ]);
+      expect(classifyPrintFileBytes(bytes)).toMatchObject({
+        outcome: "classified",
+        classification: { format: "bgcode" },
+        size_bytes: 24,
+      });
+    },
+  );
 
   it("includes G-code encoding parameters before the binary block data", () => {
     const bytes = new Uint8Array([
-      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0,
-      1, 0, 0, 0, 4, 0, 0, 0,
-      0, 0,
-      0x47, 0x32, 0x38, 0x0a,
+      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0x47, 0x32, 0x38,
+      0x0a,
     ]);
     expect(classifyPrintFileBytes(bytes)).toMatchObject({
       outcome: "classified",
@@ -233,10 +254,8 @@ describe("G-code and binary G-code classification", () => {
 
   it("includes the thumbnail format, width, and height before the binary block data", () => {
     const bytes = new Uint8Array([
-      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0,
-      5, 0, 0, 0, 8, 0, 0, 0,
-      0, 0, 1, 0, 1, 0,
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0, 5, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0x89,
+      0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
     ]);
     expect(classifyPrintFileBytes(bytes)).toMatchObject({
       outcome: "classified",
@@ -247,11 +266,8 @@ describe("G-code and binary G-code classification", () => {
 
   it("walks compressed binary G-code parameters, data, and checksum separately", () => {
     const bytes = new Uint8Array([
-      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 1, 0,
-      1, 0, 1, 0, 4, 0, 0, 0, 12, 0, 0, 0,
-      0, 0,
-      0x78, 0x9c, 0x73, 0x37, 0xb2, 0xe0, 2, 0, 2, 0x30, 0, 0xbc,
-      0xeb, 0x94, 0xe7, 0xb9,
+      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 4, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0x78,
+      0x9c, 0x73, 0x37, 0xb2, 0xe0, 2, 0, 2, 0x30, 0, 0xbc, 0xeb, 0x94, 0xe7, 0xb9,
     ]);
     expect(classifyPrintFileBytes(bytes)).toMatchObject({
       outcome: "classified",
@@ -266,8 +282,24 @@ describe("G-code and binary G-code classification", () => {
 
   it.each([0, 1, 2, 3, 4, 5])("rejects missing binary block parameters for type %i", (type) => {
     const bytes = new Uint8Array([
-      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0,
-      type, 0, 0, 0, 0, 0, 0, 0,
+      0x47,
+      0x43,
+      0x44,
+      0x45,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      type,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
     ]);
     expect(classifyPrintFileBytes(bytes)).toEqual({
       outcome: "rejected",
@@ -277,19 +309,10 @@ describe("G-code and binary G-code classification", () => {
 
   it("walks a checksummed metadata, thumbnail, and compressed G-code block chain", () => {
     const bytes = new Uint8Array([
-      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 1, 0,
-      0, 0, 0, 0, 4, 0, 0, 0,
-      0, 0,
-      0x61, 0x3d, 0x31, 0x0a,
-      0xb4, 0xd1, 0xf1, 0x51,
-      5, 0, 0, 0, 8, 0, 0, 0,
-      0, 0, 1, 0, 1, 0,
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-      0xb0, 0x19, 0xb3, 0x9f,
-      1, 0, 1, 0, 4, 0, 0, 0, 12, 0, 0, 0,
-      0, 0,
-      0x78, 0x9c, 0x73, 0x37, 0xb2, 0xe0, 2, 0, 2, 0x30, 0, 0xbc,
-      0xeb, 0x94, 0xe7, 0xb9,
+      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0x61, 0x3d, 0x31,
+      0x0a, 0xb4, 0xd1, 0xf1, 0x51, 5, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0x89, 0x50, 0x4e,
+      0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xb0, 0x19, 0xb3, 0x9f, 1, 0, 1, 0, 4, 0, 0, 0, 12, 0, 0, 0, 0,
+      0, 0x78, 0x9c, 0x73, 0x37, 0xb2, 0xe0, 2, 0, 2, 0x30, 0, 0xbc, 0xeb, 0x94, 0xe7, 0xb9,
     ]);
     expect(classifyPrintFileBytes(bytes)).toEqual({
       outcome: "classified",
@@ -307,9 +330,7 @@ describe("G-code and binary G-code classification", () => {
 
   it("rejects a binary block whose unknown type has no known parameter size", () => {
     const bytes = new Uint8Array([
-      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0,
-      6, 0, 0, 0, 4, 0, 0, 0,
-      0, 0, 0, 0,
+      0x47, 0x43, 0x44, 0x45, 1, 0, 0, 0, 0, 0, 6, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0,
     ]);
     expect(classifyPrintFileBytes(bytes)).toEqual({
       outcome: "rejected",
