@@ -648,7 +648,9 @@ def git_reason(args, cwd, head_moves=False, config_unknown=False, env_config=Fal
 def read_input(name, cwd):
     """Read a file gh will send, or refuse when the hook cannot see it."""
     path = Path(name)
-    if name == "-" or EXPANDED in name or not path.is_absolute() and cwd is None:
+    # Device paths such as /dev/stdin read data the hook cannot see, like "-" does.
+    device = re.match(r"^/(?:dev|proc)/", os.path.normpath(str(Path(cwd or "/") / path)))
+    if name == "-" or EXPANDED in name or device or not path.is_absolute() and cwd is None:
         raise Unclear
     try:
         return (Path(cwd or "/") / path).read_text(encoding="utf-8")
