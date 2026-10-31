@@ -38,9 +38,18 @@ jobs:
           node-version: "22.23.3"
       - name: Verify Node version
         run: test "$(node --version)" = "v22.23.3"
+      - name: List changed files
+        # UI and desktop changes need visual evidence; the lint reads this list.
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' > "$RUNNER_TEMP/changed-files.txt"
       - name: Lint pull request Evidence block
         # Dependabot bodies are generated and carry no Evidence block. Every other PR is linted.
         if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          CHANGED_FILES_PATH: ${{ runner.temp }}/changed-files.txt
         run: node scripts/lint-pr-evidence.mjs

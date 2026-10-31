@@ -13,8 +13,24 @@ placeholder does not provide a reason. Exemption metadata does not itself
 count as evidence. The Evidence section ends at the next level-one or
 level-two heading; fenced output can be included as evidence.
 
-The lint does not require Steps/Result fields or artifacts and does not check
-hosts. Those removed requirements are tracked in
+## Screenshots and video
+
+A PR that changes `web/apps/web/src/`, `web/apps/web/public/`,
+`web/apps/web/index.html` or `rust/crates/pp-desktop/` needs visual evidence:
+an HTTPS image or video under Evidence. Tests and Markdown files in those paths
+do not count as UI changes. Any of these forms passes:
+
+- `![Builds page](https://github.com/user-attachments/assets/<id>)`, from
+  pasting or dragging a file into the PR description
+- an `<img>` or `<video>` tag with an HTTPS `src`
+- an HTTPS link to a `.png`, `.jpg`, `.gif`, `.webp`, `.mp4`, `.mov` or
+  `.webm` file, such as the links `evidence publish` prints
+
+Links inside fenced code blocks or HTML comments do not count. When the change
+has no visible effect, give the reason on the `Exemption:` line instead.
+
+Apart from this rule, the lint does not require Steps/Result fields or
+artifacts and does not check hosts. Those removed requirements are tracked in
 [GRE-583](https://linear.app/greetz/issue/GRE-583).
 
 ## CI and local checks
@@ -24,7 +40,8 @@ hosts. Those removed requirements are tracked in
 a PR ready starts validation. It executes the protected
 default branch's checker with read-only permissions. This keeps the same
 repository evidence policy for stacked PRs whose base branches predate the
-checker. The PR body enters the checker through an environment variable;
+checker. The PR body enters the checker through an environment variable, and
+the changed-file list comes from the GitHub API with the job's read-only token;
 the body-lint job never checks out or executes the PR head.
 
 `.github/workflows/pr-evidence-tests.yml` tests the proposed checker on a
@@ -36,7 +53,8 @@ node --test scripts/lint-pr-evidence.test.mjs
 node scripts/lint-pr-evidence.mjs --body-file body.md
 ```
 
-The checker also accepts `PR_BODY` or `--stdin`.
+The checker also accepts `PR_BODY` or `--stdin`. Pass `--changed-files
+files.txt` (one path per line) to apply the screenshot and video rule locally.
 
 ## Run CI locally before you push
 

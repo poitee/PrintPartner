@@ -6,7 +6,7 @@ Every pull request meets this bar before it merges. The [pull request template](
 
 1. **One job per PR.** Keep the diff under about 1,500 lines. If you find work that belongs to another ticket, note it on that ticket and leave it out of this PR.
 2. **Unslopped.** Run the unslop pass on code, comments and docs before review. Remove filler comments, dead code and speculative abstractions.
-3. **Independently verified.** A reviewer from a different model vendor than the author reviews the exact head commit, unless the reviewer fallback below applies. CI is green on that commit.
+3. **Reviewed.** Factory Droid's automatic review runs on the exact head commit, every review thread is resolved, and required CI is green on that commit.
 4. **Docs in the same PR.** When the PR changes behavior, setup or an interface, update the matching page under `docs/` in the same PR.
 
 ## Review and merge policy
@@ -19,15 +19,11 @@ Every pull request meets this bar before it merges. The [pull request template](
 - Prefer maintained libraries and standard platform mechanisms over custom hardening. Examples are OS file locks, CODEOWNERS, actionlint and zizmor.
 - Merge with a squash commit. Write `Refs GRE-xxx` for a partial slice. Write `Fixes GRE-xxx` only in the PR that completes the ticket.
 
-## Reviewer fallback
+## Code review
 
-If no cross-vendor reviewer has been available for 24 hours (quota, outage or a missing model), a PR may still merge when all of these hold:
+`.github/workflows/droid-review.yml` runs Factory Droid code and security review on every ready PR and on each new push. Its `droid-review` job is a required check, and the main ruleset requires review threads to be resolved, so an open finding blocks the merge. Fix the finding, or reply with the reason it does not apply and resolve the thread. Critical and high security findings also request changes.
 
-- It is behind the default-off `desktop_rebuild` flag, or it is test-only or docs-only.
-- It does not touch data migration or cutover, auth or credentials, release or signing, or CI and branch-protection configuration.
-- A fresh-context review by a different model than the author scores it above 8 on the exact head, the strix pre-review has run, and required CI is green.
-
-Say in the PR body that the fallback was used. Anything else waits for a cross-vendor score or for Chad.
+Mention `@droid` in a PR or issue comment to ask Droid a question or request another review (`.github/workflows/droid.yml`).
 
 ## Parity scope
 
@@ -43,4 +39,4 @@ Say in the PR body that the fallback was used. Anything else waits for a cross-v
 
 ## Evidence
 
-Put verification output under `## Evidence` in the PR body. The `Lint Evidence block` CI check fails when that section is empty and the `Exemption:` line gives no reason. [Gate evidence](../contributing/gate-evidence.md) describes the check and the desktop capture steps.
+Put verification output under `## Evidence` in the PR body. The `Lint Evidence block` CI check fails when that section is empty and the `Exemption:` line gives no reason. A PR that changes the web UI or desktop app also needs a screenshot or video under Evidence. [Gate evidence](../contributing/gate-evidence.md) describes the check and the desktop capture steps.
