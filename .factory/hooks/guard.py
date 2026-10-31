@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import sys
 from urllib.parse import urlsplit
 
@@ -46,17 +47,23 @@ COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-mess
 GH_VALUE_OPTIONS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
                     "-t", "--template", "--hostname", "-p", "--preview", "--cache", "-X", "--method"}
 REPO_PATH = r"(?:^|/)repos/[^/]+/[^/]+/"
-# (methods, endpoint path, reason) for REST requests that bypass review or release rules.
-REST_RULES = (
-    ({"PUT"}, re.compile(REPO_PATH + r"pulls/\d+/merge$"), MERGE),
-    ({"POST"}, re.compile(REPO_PATH + r"merges$"), MERGE),
-    ({"POST"}, re.compile(REPO_PATH + r"releases$"), RELEASE),
-    ({"PATCH", "DELETE"}, re.compile(REPO_PATH + r"git/refs/heads/main$"), MAIN),
-    ({"PATCH", "DELETE"}, re.compile(REPO_PATH + r"git/refs/tags/.+$"), RELEASE),
-)
-GIT_REFS = re.compile(REPO_PATH + r"git/refs$")
-CONTENTS = re.compile(REPO_PATH + r"contents/.+$")
-MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\s*\(")
+# The only REST writes agents may make through gh api: PR and issue comments.
+COMMENT_WRITES = re.compile(REPO_PATH + r"(?:issues/\d+/comments|pulls/\d+/comments(?:/\d+/replies)?"
+                            r"|issues/comments/\d+|pulls/comments/\d+)$")
+ALLOWED_MUTATIONS = {"addComment", "addPullRequestReviewComment", "addPullRequestReviewThreadReply",
+                     "resolveReviewThread", "unresolveReviewThread", "updateIssueComment",
+                     "updatePullRequestReviewComment"}
+GRAPHQL_TOKEN = re.compile(r'"""(?:[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n])*"|#[^\n]*|\.\.\.|[A-Za-z_]\w*|\S')
+API_WRITE = ("Through gh api, agents may read and write PR or issue comments and review threads; "
+             "other writes need the maintainer.")
+SAFE_PUSH_LONG = {"--atomic", "--dry-run", "--force-if-includes", "--ipv4", "--ipv6", "--no-atomic",
+                  "--no-dry-run", "--no-force-if-includes", "--no-progress", "--no-signed", "--no-thin",
+                  "--porcelain", "--progress", "--push-option", "--quiet", "--repo", "--set-upstream",
+                  "--signed", "--thin", "--verbose"}
+SAFE_PUSH_SHORT = set("46noquv")
+PUSH_OPTIONS = "Use common git push options spelled in full."
+PUSH_EXPLICIT = "Name the destination branch, for example `git push origin HEAD:topic`."
+CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--list", "-l", "get", "list"}
 GENERATED = {"rust/bundle-manifest.json"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", re.M)
 
@@ -333,11 +340,20 @@ def options(args, value_flags="", stop_flags="", value_long=()):
                 i += 1
 
 
-def push_reason(args):
+def current_branch(cwd, location):
+    """Return the checked-out branch, using only the location options of the git command."""
+    if cwd is None:
+        return None
+    try:
+        result = subprocess.run(["git", *location, "symbolic-ref", "--quiet", "--short", "HEAD"],
+                                cwd=cwd, capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def push_reason(args, cwd, location):
     parsed = list(options(args, value_flags="o", value_long=PUSH_VALUE_LONG))
-    longs = {arg for kind, arg in parsed if kind == "long"}
-    shorts = "".join(arg for kind, arg in parsed if kind == "short")
-    positional = [arg for kind, arg in parsed if kind == "arg"]
     dry_run = False
     for kind, arg in parsed:
         if kind == "long" and arg in ("--dry-run", "--no-dry-run"):
@@ -346,22 +362,39 @@ def push_reason(args):
             dry_run = True
     if dry_run:
         return None
+    longs = [arg for kind, arg in parsed if kind == "long"]
+    shorts = "".join(arg for kind, arg in parsed if kind == "short")
     if "--no-verify" in longs:
         return HOOKS
-    refspecs = positional if "--repo" in longs else positional[1:]
-    if longs & {"--force", "--force-with-lease", "--mirror"} or "f" in shorts:
+    if {"--force", "--force-with-lease", "--mirror"} & set(longs) or "f" in shorts:
         return FORCE
-    if any(refspec.startswith("+") for refspec in refspecs):
-        return FORCE
-    if longs & {"--tags", "--follow-tags"} or "tag" in refspecs or any("refs/tags/" in r for r in refspecs):
+    if {"--tags", "--follow-tags"} & set(longs):
         return RELEASE
-    if longs & {"--all", "--branches"} or any(MAIN_REF.match(r.rsplit(":", 1)[-1]) for r in refspecs):
-        return MAIN
+    if set(longs) - SAFE_PUSH_LONG or set(shorts) - SAFE_PUSH_SHORT:
+        return PUSH_OPTIONS
+    positional = [arg for kind, arg in parsed if kind == "arg"]
+    refspecs = positional if "--repo" in longs else positional[1:]
+    if not refspecs:
+        return PUSH_EXPLICIT
+    for refspec in refspecs:
+        if refspec.startswith("+"):
+            return FORCE
+        if refspec == "tag" or "refs/tags/" in refspec:
+            return RELEASE
+        if "*" in refspec:
+            return PUSH_EXPLICIT
+        destination = refspec.rsplit(":", 1)[-1]
+        if destination in ("HEAD", "@"):
+            destination = current_branch(cwd, location)
+            if destination is None:
+                return PUSH_EXPLICIT
+        if MAIN_REF.match(destination):
+            return MAIN
     return None
 
 
-def git_reason(args):
-    i = 0
+def git_reason(args, cwd):
+    i, location = 0, []
     while i < len(args) and args[i].startswith("-"):
         option, value = args[i], args[i + 1] if i + 1 < len(args) else ""
         if option.startswith("--config-env="):
@@ -369,16 +402,19 @@ def git_reason(args):
         if option in ("-c", "--config-env") or option.startswith("--config-env="):
             if value.lower().startswith("core.hookspath"):
                 return HOOKS
+        if option in ("-C", "--git-dir", "--work-tree"):
+            location += [option, value]
+        elif option.startswith(("--git-dir=", "--work-tree=")):
+            location.append(option)
         i += 2 if option in GIT_VALUE_OPTIONS else 1
     if i >= len(args):
         return None
     command, rest = args[i], args[i + 1:]
-    if command == "config":
-        positional = [arg for kind, arg in options(rest) if kind == "arg"]
-        if len(positional) >= 2 and positional[0].lower() == "core.hookspath":
-            return HOOKS
     if command == "push":
-        return push_reason(rest)
+        return push_reason(rest, cwd, location)
+    if command == "config":
+        if any(arg.lower() == "core.hookspath" for arg in rest) and not CONFIG_READS & set(rest):
+            return HOOKS
     if command == "commit":
         parsed = options(rest, value_flags="mFcCt", stop_flags="uS", value_long=COMMIT_VALUE_LONG)
         if any(kind == "long" and arg == "--no-verify" or kind == "short" and "n" in arg
@@ -388,7 +424,6 @@ def git_reason(args):
         if any(kind == "long" and arg == "--no-verify" for kind, arg in options(rest)):
             return HOOKS
     return None
-
 
 def read_input(name, cwd):
     """Read a file gh will send, or refuse when the hook cannot see it."""
@@ -410,26 +445,44 @@ def graphql_query(flag, value, cwd):
     return text
 
 
-def without_graphql_comments(document):
-    out, i = [], 0
-    while i < len(document):
-        if document.startswith('"""', i):
-            end = document.find('"""', i + 3)
-            end = len(document) if end < 0 else end + 3
-        elif document[i] == '"':
-            end = i + 1
-            while end < len(document) and document[end] not in '"\n':
-                end += 2 if document[end] == "\\" else 1
-            end += 1
-        elif document[i] == "#":
-            newline = document.find("\n", i)
-            i = len(document) if newline < 0 else newline
+def mutation_fields(document):
+    """Return the root fields of every mutation in a GraphQL document.
+
+    Returns None when a mutation's root selection uses a fragment, because the
+    fields it adds are not visible here.
+    """
+    tokens = [token for token in GRAPHQL_TOKEN.findall(document)
+              if token != "," and not token.startswith(("#", '"'))]
+    fields, i = [], 0
+    while i < len(tokens):
+        if tokens[i] not in ("mutation", "{"):
+            i += 1
             continue
-        else:
-            end = i + 1
-        out.append(document[i:end])
-        i = end
-    return "".join(out)
+        mutation = tokens[i] == "mutation"
+        while i < len(tokens) and tokens[i] != "{":
+            i += 1
+        depth = parens = 0
+        while i < len(tokens):
+            token = tokens[i]
+            i += 1
+            if token == "{":
+                depth += 1
+            elif token == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif token == "(":
+                parens += 1
+            elif token == ")":
+                parens -= 1
+            elif mutation and depth == 1 and parens == 0:
+                if token == "...":
+                    return None
+                if token == "@":
+                    i += 1
+                elif re.match(r"[A-Za-z_]", token) and tokens[i:i + 1] != [":"]:
+                    fields.append(token)
+    return fields
 
 
 def graphql_documents(fields, body, cwd):
@@ -444,8 +497,7 @@ def graphql_documents(fields, body, cwd):
             items = decoded if isinstance(decoded, list) else [decoded]
             text = "\n".join(str(item.get("query", "")) for item in items if isinstance(item, dict))
         documents.append(text)
-    return [without_graphql_comments(document) for document in documents]
-
+    return documents
 
 def without_repo_flags(args):
     kept, i = [], 0
@@ -495,24 +547,18 @@ def gh_reason(args, cwd):
         return None
     # gh sends POST when the request has fields or a body.
     method = (method or ("POST" if fields or body is not None else "GET")).upper()
+    if method in ("GET", "HEAD"):
+        return None
     path = urlsplit(endpoint).path.strip("/")
-    values = dict(value.partition("=")[::2] for _, value in fields)
-    for methods, pattern, reason in REST_RULES:
-        if method in methods and pattern.search(path):
-            return reason
-    if method == "POST" and GIT_REFS.search(path):
-        ref = values.get("ref", "")
-        if ref.startswith("refs/tags/"):
-            return RELEASE
-        if MAIN_REF.match(ref):
-            return MAIN
-    if method == "PUT" and CONTENTS.search(path) and values.get("branch", "main") == "main":
-        return MAIN
     if path == "graphql" or path.endswith("/graphql"):
         for document in graphql_documents(fields, body, cwd):
-            if re.search(r"\bmutation\b", document) and MERGE_MUTATION.search(document):
-                return MERGE
-    return None
+            names = mutation_fields(document)
+            if names is None or set(names) - ALLOWED_MUTATIONS:
+                return API_WRITE
+        return None
+    if method in ("POST", "PATCH") and COMMENT_WRITES.search(path):
+        return None
+    return API_WRITE
 
 
 def decide(payload):
@@ -532,7 +578,7 @@ def decide(payload):
                     plain = name != "popd" and len(targets) == 1 and not re.search(r"[$~`]", targets[0])
                     cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
                     continue
-                reason = git_reason(rest) if name == "git" else gh_reason(rest, cwd) if name == "gh" else None
+                reason = git_reason(rest, cwd) if name == "git" else gh_reason(rest, cwd) if name == "gh" else None
                 if reason:
                     return reason
         except Unclear:

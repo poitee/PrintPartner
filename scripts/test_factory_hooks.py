@@ -72,7 +72,7 @@ class GuardHookTests(unittest.TestCase):
     def test_push_rules_stop_at_shell_command_boundaries(self):
         for separator in (" && ", "; ", "\n", " | "):
             for following in ("gh pr create --base main", "echo --force", "echo --tags"):
-                self.assertAllowed("Execute", {"command": f"git push -u origin HEAD{separator}{following}"})
+                self.assertAllowed("Execute", {"command": f"git push -u origin HEAD:topic{separator}{following}"})
             self.assertBlocked("Execute", {"command": f"echo ok{separator}git push origin HEAD:main"}, "main only")
             self.assertBlocked("Execute", {"command": f"git push origin HEAD:main{separator}echo ok"}, "main only")
 
@@ -138,19 +138,36 @@ class GuardHookTests(unittest.TestCase):
 
     def test_push_modes_and_refspecs(self):
         for command in ("git push --dry-run origin HEAD:main", "git push -n --force origin topic",
-                        "git push main HEAD:topic", "git push --repo=origin HEAD:topic"):
+                        "git push main HEAD:topic", "git push --repo=origin HEAD:topic",
+                        "git push --force-if-includes -u origin HEAD:topic"):
             self.assertAllowed("Execute", {"command": command})
-        for command, reason in (("git push --mirror origin", "force-push"), ("git push --all origin", "main only"),
+        for command, reason in (("git push --mirror origin", "force-push"), ("git push --all origin", "push options"),
+                                ("git push --force-w origin topic", "push options"),
+                                ("git push origin", "destination branch"), ("git push", "destination branch"),
+                                ("git push origin 'refs/heads/*:refs/heads/*'", "destination branch"),
                                 ("git push origin :main", "main only"), ("git push --repo origin main", "main only"),
                                 ("git push origin refs/tags/v1.0.0", "authorization"),
                                 ("git push origin tag v1.0.0", "authorization"),
                                 ("git rebase -m --no-verify main", "hooks")):
             self.assertBlocked("Execute", {"command": command}, reason)
 
+    def test_head_push_destination_uses_checked_out_branch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            subprocess.run(["git", "init", "-q", "-b", "main", folder], check=True)
+            payload = {"tool_name": "Execute", "cwd": folder, "tool_input": {"command": "git push origin HEAD"}}
+            for branch, code in (("main", 2), ("topic", 0)):
+                subprocess.run(["git", "-C", folder, "symbolic-ref", "HEAD", f"refs/heads/{branch}"], check=True)
+                result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, code, result.stderr)
+            payload["tool_input"]["command"] = f"cd / && git -C {folder} push -u origin HEAD"
+            result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_gh_options_and_endpoints(self):
         for command in ("gh pr merge --help", "gh release create --help",
-                        "gh api -X PUT repos/o/r/contents/example -f branch=topic -f message='Document /pulls/12/merge'",
-                        "gh api graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 1) "
+                        "gh api repos/o/r/issues/1/comments -f body='Document /pulls/12/merge'",                        "gh api graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 1) "
                         "{ issueCount } }' -f q=mergePullRequest"):
             self.assertAllowed("Execute", {"command": command})
         for command in ("gh --repo=o/r pr merge 12", "gh -Ro/r pr merge 12",
@@ -166,10 +183,12 @@ class GuardHookTests(unittest.TestCase):
                                 ("cd $DIR && gh api graphql -F query=@merge.graphql", "Cannot classify"),
                                 ("cat <<EOF\n$(git push origin main)\nEOF", "main only"),
                                 ("git -c core.hooksPath=/dev/null commit -m change", "hooks"),
-                                ("git config core.hooksPath /dev/null", "hooks")):
+                                ("git config core.hooksPath /dev/null", "hooks"),
+                                ("git config set core.hooksPath /dev/null", "hooks")):
             self.assertBlocked("Execute", {"command": command}, reason)
         for command in ("cat <<'EOF'\n$(git push origin main)\nEOF",
-                        "echo \"$(printf '%s' \"a\\\"b\")\"", "git config --get core.hooksPath"):
+                        "echo \"$(printf '%s' \"a\\\"b\")\"", "git config --get core.hooksPath",
+                        "git config --get core.hooksPath '^/tmp'"):
             self.assertAllowed("Execute", {"command": command})
 
     def test_graphql_query_files_are_read(self):
@@ -207,19 +226,25 @@ class GuardHookTests(unittest.TestCase):
         mutation = "query=mutation { mergePullRequest # note\n(input: {}) { clientMutationId } }"
         for endpoint in ("graphql", "/graphql", "https://api.github.com/graphql"):
             self.assertBlocked("Execute", {"command": f"gh api {endpoint} -f '{mutation}'"}, "maintainer")
-        for command, reason in (("gh pr -R o/r merge 12 --squash", "maintainer"),
-                                ("gh pr --repo=o/r merge 12", "maintainer"),
-                                ("gh api repos/o/r/releases -f tag_name=v1.2.3", "authorization"),
-                                ("gh api repos/o/r/merges -f base=main -f head=topic", "maintainer"),
-                                ("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc", "main only"),
-                                ("gh api repos/o/r/git/refs -f ref=refs/tags/v1 -f sha=abc", "authorization"),
-                                ("gh api -X PUT repos/o/r/contents/a.md -f message=x -f content=eA==", "main only")):
-            self.assertBlocked("Execute", {"command": command}, reason)
-        for command in ("gh api repos/o/r/releases", "gh api repos/o/r/git/refs -f ref=refs/heads/topic -f sha=abc",
+        for command in ("gh pr -R o/r merge 12 --squash", "gh pr --repo=o/r merge 12",
+                        "gh api repos/o/r/releases -f tag_name=v1.2.3",
+                        "gh api repos/o/r/merges -f base=main -f head=topic",
+                        "gh api -X PATCH repos/o/r/git/refs/heads/topic -F force=true -f sha=abc",
+                        "gh api -X POST repos/o/r/git/refs --input ref.json",
+                        "gh api -X DELETE repos/o/r/contents/a.md -f message=remove -f sha=abc",
                         "gh api -X PUT repos/o/r/contents/a.md -f branch=topic -f message=x -f content=eA==",
-                        "gh api graphql -f 'query=query { viewer { login } } # mergePullRequest('"):
+                        "gh api graphql -f 'query=mutation { mergePullRequest,(input: {}) { clientMutationId } }'",
+                        "gh api graphql -f 'query=mutation { ...F } fragment F on Mutation { x }'",
+                        "gh api graphql -f 'query=mutation { a: addComment(input: {}) { clientMutationId } "
+                        "b: mergePullRequest(input: {}) { clientMutationId } }'"):
+            self.assertBlocked("Execute", {"command": command}, "maintainer")
+        for command in ("gh api repos/o/r/releases", "gh api -X GET repos/o/r/pulls -f state=open",
+                        "gh api repos/o/r/pulls/12/comments/34/replies -f body=ok",
+                        "gh api -X PATCH repos/o/r/issues/comments/34 -f body=edited",
+                        "gh api graphql -f 'query=query { viewer { login } } # mergePullRequest('",
+                        "gh api graphql -f 'query=mutation($id: ID!) { r: resolveReviewThread(input: {threadId: $id}) "
+                        "{ thread { isResolved } } }' -F id=X"):
             self.assertAllowed("Execute", {"command": command})
-
     def test_generated_paths_are_normalized(self):
         for path in ("/repo/rust/./bundle-manifest.json", "/repo/rust//bundle-manifest.json"):
             self.assertBlocked("Edit", {"file_path": path}, "generated")

@@ -61,6 +61,9 @@ before opening the next. Only the maintainer merges.
 
 The project guard hook refuses common merge, force-push, direct-main push,
 release, hook-bypass, secret-file edit, and generated-manifest edit commands.
+`git push` needs an explicit branch refspec and common options spelled in full.
+Through `gh api`, agents may read, write PR or issue comments, and reply to or
+resolve review threads. Other API writes need the maintainer.
 It refuses a git or gh command it cannot classify. It is a mistake guard, not
 a shell sandbox or a complete security boundary.
 Repository rules and required GitHub checks remain authoritative. Review the
