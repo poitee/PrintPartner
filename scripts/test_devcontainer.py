@@ -61,6 +61,18 @@ class DevcontainerTests(unittest.TestCase):
         self.assertIn("--features desktop_rebuild", smoke)
         self.assertIn("vitest run src/lib/supportLinks.test.ts", smoke)
         self.assertNotIn("--passWithNoTests", smoke)
+        self.assertIn("vitest run src/services/gcode-object-parser.test.ts", smoke)
+        self.assertIn("-m unittest test_sidecar.py test_shutdown.py", smoke)
+        self.assertIn("cargo_tests -p pp-server --test cli", smoke)
+        self.assertIn("cargo_tests -p pp-desktop --lib browser::tests", smoke)
+        self.assertIn("[1-9][0-9]* passed;", smoke)
+
+    def test_sidecar_versions_match_product_image(self):
+        dockerfile = (DIRECTORY / "Dockerfile").read_text()
+        product = (ROOT / "slicer-sidecar/Dockerfile").read_text()
+        for dependency in ("flask", "waitress"):
+            version = re.search(rf"{dependency}==([0-9.]+)", product)[1]
+            self.assertIn(f"{dependency}=={version}", dockerfile)
 
     def test_wrong_node_fails_before_installing_dependencies(self):
         with tempfile.TemporaryDirectory() as temporary:

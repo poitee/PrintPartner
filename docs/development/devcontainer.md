@@ -6,7 +6,9 @@ base images are digest-pinned. Debian packages receive the current Bookworm
 updates at build time, so the image is not a byte-for-byte archived OS snapshot.
 
 It includes Linux GTK/WebKit development libraries, Chromium, Python virtual
-environments with pip, rustfmt, and Clippy. It runs as `developer`, without sudo,
+environments with pip, rustfmt, and Clippy. A separate `/opt/sidecar-venv`
+provides the Flask and Waitress versions pinned by the legacy sidecar image.
+It runs as `developer`, without sudo,
 privileged mode, the host Docker socket, or automatic port forwarding. It does
 not install a product service, enable sharing, or change telemetry defaults.
 
@@ -40,14 +42,32 @@ The root package's Node 22 engine warning is expected during this transition.
 
 Run `bash .devcontainer/smoke.sh` after post-create. It checks both Node versions,
 the Rust tools and Linux libraries, Python venv/pip creation, the pp-domain
-library tests with `desktop_rebuild` off/on, and four shared React Sponsor-action
-tests. A missing test file fails rather than passing with zero Vitest tests.
+library tests with `desktop_rebuild` off/on, shared React Sponsor-action tests,
+Node G-code filename matching, and Python sidecar unit/shutdown tests using a
+synthetic slicer. A missing test file fails rather than passing with zero Vitest tests.
 Check the executed counts in Cargo/Vitest output.
 
 These checks do not require a generated asset manifest, native window, printer,
-or real data. They prove only the selected domain and React paths. They do not
-prove pp-server/pp-desktop unit coverage, native acceptance, runtime cutover,
-browser E2E, Orca, Windows/macOS support, or release signing.
+or real data. They prove only those selected paths.
+
+For both Rust applications, run the heavier selector after post-create:
+
+```sh
+bash .devcontainer/smoke.sh --runtime
+```
+
+It repeats the fast checks, builds the desktop web assets, generates the measured
+manifest at the checkout's HEAD, and runs three gateway CLI-refusal integration
+tests plus desktop browser-policy unit tests with `desktop_rebuild` off/on.
+Each selected Rust run must execute at least one passing test. Missing matches
+fail even if Cargo exits zero. Budget 20 minutes for a cold build, depending on
+available CPU and registry access. The manifest remains generated and ignored;
+do not replace it with a placeholder.
+
+These are headless tests, not installed-native acceptance or a running gateway
+journey. They do not prove runtime cutover, browser E2E, real Orca,
+Windows/macOS support, or release signing. The gateway has no separate unit
+suite; its CLI integration selector must not be reported as unit coverage.
 
 For a raw Docker build without an editor or CLI:
 
@@ -89,7 +109,7 @@ The workflow's lightweight configuration tests run without Docker:
 python3 -B -m unittest discover -s scripts -p test_devcontainer.py -v
 ```
 
-## Validation evidence
+## Historical validation evidence
 
 On 2026-10-31, the environment built on Linux x86-64 and completed
 `@devcontainers/cli` 0.80.2 `up` and `exec` against an isolated standalone clone.
@@ -103,4 +123,6 @@ That CLI version emitted a base-image metadata path warning for the tagged,
 digest-pinned Rust image. Its build and lifecycle commands still exited zero.
 The expected Node engine warning also remains. Neither warning was counted as
 a failed or skipped test. Hosted CI and independent exact-head review remain
-pending; no all-application readiness score has been recalculated.
+pending in that historical receipt; no all-application readiness score was
+recalculated. New evidence for the extended selectors belongs on the current
+PR's exact head, not this older checkout.

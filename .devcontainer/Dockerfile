@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libayatana-appindicator3-dev librsvg2-dev mold chromium \
     && rm -rf /var/lib/apt/lists/*
 
+RUN python3 -m venv /opt/sidecar-venv \
+    && /opt/sidecar-venv/bin/pip install --no-cache-dir flask==3.1.3 waitress==3.0.2
+
 COPY --from=parity-node /usr/local/ /opt/node22/
 COPY --from=runtime-node /usr/local/ /opt/node24/
 ENV PATH="/opt/node24/bin:${PATH}" \
