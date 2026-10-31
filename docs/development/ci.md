@@ -61,7 +61,7 @@ covers repository scripts, hooks, and the legacy sidecar. Build outputs,
 dependency trees, and ignored scratch files are not source.
 
 Existing source has not been mechanically reformatted in this setup slice.
-On main `0bfdadbc`, Prettier reports 1,137 TypeScript files and Ruff reports 59
+On main `1a0ea2ea`, Prettier reports 1,137 TypeScript files and Ruff reports 61
 Python files that need formatting. Both checks exit 1 until those changes land.
 Keep formatting in separate bounded PRs, then enforce the checks in CI and the
 opt-in hook. Do not treat configuration alone as a passing formatter readiness
