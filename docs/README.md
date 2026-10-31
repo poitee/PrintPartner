@@ -43,6 +43,7 @@ Print Partner is moving its backend from Node to one Rust core. The core runs as
 ## Development
 
 - [Building](development/building.md)
+- [Rust and React development container](development/devcontainer.md)
 - [Contributing](development/contributing.md)
 - [Continuous integration](development/ci.md)
 - [Change a CI workflow](development/ci-controls.md)

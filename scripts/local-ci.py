@@ -206,6 +206,8 @@ def main(argv=None, env=None, run=run_bash):
     parser.add_argument("--list", action="store_true", help="print the steps and exit")
     parser.add_argument("--only", help="comma-separated step ids to run")
     parser.add_argument("--skip", help="comma-separated step ids to leave out")
+    parser.add_argument("--fail-on-skip", action="store_true",
+                        help="exit nonzero if any selected step cannot run")
     args = parser.parse_args(argv)
 
     known = {step.id for step in STEPS}
@@ -240,7 +242,7 @@ def main(argv=None, env=None, run=run_bash):
         print(f"{status} {step.id:20} {detail}")
     counts = {s: sum(1 for r in results if r[0] == s) for s in ("PASS", "FAIL", "SKIP")}
     print(f"{counts['PASS']} passed, {counts['FAIL']} failed, {counts['SKIP']} skipped")
-    return 1 if counts["FAIL"] else 0
+    return 1 if counts["FAIL"] or (args.fail_on_skip and counts["SKIP"]) else 0
 
 
 if __name__ == "__main__":

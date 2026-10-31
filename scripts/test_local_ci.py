@@ -110,6 +110,17 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci.summary["ast-grep"], "SKIP")
         self.assertIn("ast-grep 0.50.0", ci.output)
 
+    def test_fail_on_skip_rejects_missing_tools_and_wrong_versions(self):
+        for tools in ({k: v for k, v in TOOLS.items() if k != "npm"},
+                      {**TOOLS, "node": "v0.0.0"}):
+            ci = LocalCi(self, tools=tools)
+            self.assertEqual(ci("--only", "web-assets", "--fail-on-skip"), 1)
+            self.assertEqual(ci.summary["web-assets"], "SKIP")
+            self.assertEqual(ci.ran, [])
+        ci = LocalCi(self)
+        self.assertEqual(ci("--only", "web-assets", "--fail-on-skip"), 0)
+        self.assertEqual(ci.ran, ["web-assets"])
+
     def test_node_22_steps_skip_without_the_pinned_node_22(self):
         for node22 in [None, "v22.22.0"]:
             for step in ["node-fixtures", "workaround-ratchet"]:
