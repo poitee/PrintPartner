@@ -158,6 +158,20 @@ class GuardHookTests(unittest.TestCase):
             self.assertBlocked("Execute", {"command": command}, "maintainer")
         self.assertBlocked("Execute", {"command": "gh --repo=o/r release create v1"}, "authorization")
 
+    def test_effective_options_and_hidden_inputs(self):
+        for command, reason in (("git push --dry-run --no-dry-run --force origin topic", "force-push"),
+                                ("gh pr merge 12 --squash --subject --help", "maintainer"),
+                                ("gh api graphql -X POST --input -", "Cannot classify"),
+                                ("cd /tmp/elsewhere && gh api graphql -F query=@merge.graphql", "Cannot classify"),
+                                ("cd $DIR && gh api graphql -F query=@merge.graphql", "Cannot classify"),
+                                ("cat <<EOF\n$(git push origin main)\nEOF", "main only"),
+                                ("git -c core.hooksPath=/dev/null commit -m change", "hooks"),
+                                ("git config core.hooksPath /dev/null", "hooks")):
+            self.assertBlocked("Execute", {"command": command}, reason)
+        for command in ("cat <<'EOF'\n$(git push origin main)\nEOF",
+                        "echo \"$(printf '%s' \"a\\\"b\")\"", "git config --get core.hooksPath"):
+            self.assertAllowed("Execute", {"command": command})
+
     def test_graphql_query_files_are_read(self):
         with tempfile.TemporaryDirectory() as folder:
             Path(folder, "merge.graphql").write_text("mutation { mergePullRequest(input: {}) { clientMutationId } }")
@@ -171,6 +185,15 @@ class GuardHookTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            Path(folder, "sub").mkdir()
+            Path(folder, "sub", "body.json").write_text(
+                '{"query": "fragment R on MergePullRequestPayload { clientMutationId } '
+                'mutation { mergePullRequest(input: {}) { ...R } }"}')
+            payload["tool_input"]["command"] = "cd sub && gh api graphql --input body.json"
+            result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("maintainer", result.stderr)
 
     def test_generated_paths_are_normalized(self):
         for path in ("/repo/rust/./bundle-manifest.json", "/repo/rust//bundle-manifest.json"):

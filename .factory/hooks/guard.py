@@ -71,6 +71,22 @@ HEREDOC = re.compile(r"""[ \t]*((?:'[^']*'|"[^"]*"|\\.|[^\s;&|<>()'"\\])+)""")
 HEREDOC_QUOTING = re.compile(r"""\\(.)|['"]""")
 
 
+def closing_double_quote(source, i):
+    while i < len(source):
+        char = source[i]
+        if char == "\\":
+            i += 2
+        elif char == '"':
+            return i
+        elif source.startswith("$(", i):
+            i = closing_paren(source, i + 2) + 1
+        elif char == "`":
+            i = closing_backtick(source, i + 1) + 1
+        else:
+            i += 1
+    raise ValueError("unterminated quote")
+
+
 def closing_paren(source, i):
     depth = 1
     while i < len(source):
@@ -78,11 +94,14 @@ def closing_paren(source, i):
         if char == "\\":
             i += 2
             continue
-        if char in "'\"":
-            end = source.find(char, i + 1)
+        if char == "'":
+            end = source.find("'", i + 1)
             if end < 0:
                 raise ValueError("unterminated quote")
             i = end + 1
+            continue
+        if char == '"':
+            i = closing_double_quote(source, i + 1) + 1
             continue
         depth += {"(": 1, ")": -1}.get(char, 0)
         if depth == 0:
@@ -92,10 +111,33 @@ def closing_paren(source, i):
 
 
 def closing_backtick(source, i):
-    end = source.find("`", i)
-    if end < 0:
-        raise ValueError("unterminated command substitution")
-    return end
+    while i < len(source):
+        if source[i] == "\\":
+            i += 2
+        elif source[i] == "`":
+            return i
+        else:
+            i += 1
+    raise ValueError("unterminated command substitution")
+
+
+def substitutions(text):
+    """Return command substitutions in text where quotes are literal, such as a heredoc body."""
+    found, i = [], 0
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+        elif text.startswith("$(", i):
+            end = closing_paren(text, i + 2)
+            found.append(text[i + 2:end])
+            i = end + 1
+        elif text[i] == "`":
+            end = closing_backtick(text, i + 1)
+            found.append(text[i + 1:end])
+            i = end + 1
+        else:
+            i += 1
+    return found
 
 
 def shell_commands(source):
@@ -182,8 +224,9 @@ def shell_commands(source):
             i += tabs
             match = HEREDOC.match(source, i)
             if match:
-                delimiter = HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", match.group(1))
-                heredocs.append((delimiter, tabs))
+                raw = match.group(1)
+                delimiter = HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", raw)
+                heredocs.append((delimiter, tabs, not any(c in raw for c in "'\"\\")))
                 i = match.end()
         elif char in "<>" or source.startswith("&>", i):
             if word is not None and word.isdigit():
@@ -202,7 +245,8 @@ def shell_commands(source):
                     args = []
             i += 1
             if char == "\n":
-                for delimiter, tabs in heredocs:
+                for delimiter, tabs, expands in heredocs:
+                    body = []
                     while i < len(source):
                         end = source.find("\n", i)
                         end = len(source) if end < 0 else end
@@ -210,6 +254,9 @@ def shell_commands(source):
                         i = end + 1
                         if (line.lstrip("\t") if tabs else line) == delimiter:
                             break
+                        body.append(line)
+                    if expands:
+                        nested.extend(substitutions("\n".join(body)))
                 heredocs = []
         else:
             word = (word or "") + char
@@ -280,7 +327,13 @@ def push_reason(args):
     longs = {arg for kind, arg in parsed if kind == "long"}
     shorts = "".join(arg for kind, arg in parsed if kind == "short")
     positional = [arg for kind, arg in parsed if kind == "arg"]
-    if "--dry-run" in longs or "n" in shorts:
+    dry_run = False
+    for kind, arg in parsed:
+        if kind == "long" and arg in ("--dry-run", "--no-dry-run"):
+            dry_run = arg == "--dry-run"
+        elif kind == "short" and "n" in arg:
+            dry_run = True
+    if dry_run:
         return None
     if "--no-verify" in longs:
         return HOOKS
@@ -299,10 +352,20 @@ def push_reason(args):
 def git_reason(args):
     i = 0
     while i < len(args) and args[i].startswith("-"):
-        i += 2 if args[i] in GIT_VALUE_OPTIONS else 1
+        option, value = args[i], args[i + 1] if i + 1 < len(args) else ""
+        if option.startswith("--config-env="):
+            value = option.split("=", 1)[1]
+        if option in ("-c", "--config-env") or option.startswith("--config-env="):
+            if value.lower().startswith("core.hookspath"):
+                return HOOKS
+        i += 2 if option in GIT_VALUE_OPTIONS else 1
     if i >= len(args):
         return None
     command, rest = args[i], args[i + 1:]
+    if command == "config":
+        positional = [arg for kind, arg in options(rest) if kind == "arg"]
+        if len(positional) >= 2 and positional[0].lower() == "core.hookspath":
+            return HOOKS
     if command == "push":
         return push_reason(rest)
     if command == "commit":
@@ -316,30 +379,38 @@ def git_reason(args):
     return None
 
 
+def read_input(name, cwd):
+    """Read a file gh will send, or refuse when the hook cannot see it."""
+    path = Path(name)
+    if name == "-" or not path.is_absolute() and cwd is None:
+        raise Unclear
+    try:
+        return (Path(cwd or "/") / path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise Unclear from None
+
+
 def graphql_query(flag, value, cwd):
     key, _, text = value.partition("=")
     if key != "query":
         return ""
     if flag in ("-F", "--field") and text.startswith("@"):
-        try:
-            return (Path(cwd) / text[1:]).read_text(encoding="utf-8")
-        except OSError:
-            return ""
+        return read_input(text[1:], cwd)
     return text
 
 
 def gh_reason(args, cwd):
     while args and (args[0] in ("-R", "--repo") or args[0].startswith(("-R", "--repo="))):
         args = args[2:] if args[0] in ("-R", "--repo") else args[1:]
-    if args[:1] == ["help"] or "--help" in args or "-h" in args:
+    if args[:1] == ["help"]:
         return None
-    if args[:2] == ["pr", "merge"]:
-        return MERGE
-    if args[:2] == ["release", "create"]:
-        return RELEASE
+    if args[:2] in (["pr", "merge"], ["release", "create"]):
+        if args[2:] and all(arg in ("--help", "-h") for arg in args[2:]):
+            return None
+        return MERGE if args[0] == "pr" else RELEASE
     if args[:1] != ["api"]:
         return None
-    method, endpoint, fields, i = None, None, [], 1
+    method, endpoint, fields, body, i = None, None, [], None, 1
     while i < len(args):
         arg = args[i]
         i += 1
@@ -358,12 +429,16 @@ def gh_reason(args, cwd):
             method = value
         elif name in ("-f", "-F", "--field", "--raw-field"):
             fields.append((name, value))
+        elif name == "--input":
+            body = value
     if (method or "").upper() == "PUT" and endpoint and PR_MERGE_PATH.search(endpoint.split("?", 1)[0]):
         return MERGE
     if endpoint == "graphql":
-        for flag, value in fields:
-            query = re.sub(r"#[^\n]*", "", graphql_query(flag, value, cwd))
-            if re.match(r"\s*mutation\b", query) and MERGE_MUTATION.search(query):
+        documents = [graphql_query(flag, value, cwd) for flag, value in fields]
+        if body is not None:
+            documents.append(read_input(body, cwd))
+        for document in documents:
+            if re.search(r"\bmutation\b", document) and MERGE_MUTATION.search(document):
                 return MERGE
     return None
 
@@ -380,6 +455,11 @@ def decide(payload):
         try:
             for args in shell_commands(str(data.get("command", ""))):
                 name, rest = program(args)
+                if name in ("cd", "pushd", "popd"):
+                    targets = [arg for arg in rest if not arg.startswith("-")]
+                    plain = name != "popd" and len(targets) == 1 and not re.search(r"[$~`]", targets[0])
+                    cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
+                    continue
                 reason = git_reason(rest) if name == "git" else gh_reason(rest, cwd) if name == "gh" else None
                 if reason:
                     return reason
