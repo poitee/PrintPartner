@@ -149,7 +149,7 @@ class GuardHookTests(unittest.TestCase):
 
     def test_gh_options_and_endpoints(self):
         for command in ("gh pr merge --help", "gh release create --help",
-                        "gh api -X PUT repos/o/r/contents/example -f message='Document /pulls/12/merge'",
+                        "gh api -X PUT repos/o/r/contents/example -f branch=topic -f message='Document /pulls/12/merge'",
                         "gh api graphql -f query='query($q: String!) { search(query: $q, type: ISSUE, first: 1) "
                         "{ issueCount } }' -f q=mergePullRequest"):
             self.assertAllowed("Execute", {"command": command})
@@ -194,6 +194,31 @@ class GuardHookTests(unittest.TestCase):
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertIn("maintainer", result.stderr)
+
+    def test_gh_api_variants(self):
+        with tempfile.TemporaryDirectory() as folder:
+            body = json.dumps({"query": "mutation { mergePullRequest\n(input: {}) { clientMutationId } }"})
+            Path(folder, "body.json").write_text(body)
+            payload = {"tool_name": "Execute", "cwd": folder,
+                       "tool_input": {"command": "gh api graphql --input body.json"}}
+            result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+        mutation = "query=mutation { mergePullRequest # note\n(input: {}) { clientMutationId } }"
+        for endpoint in ("graphql", "/graphql", "https://api.github.com/graphql"):
+            self.assertBlocked("Execute", {"command": f"gh api {endpoint} -f '{mutation}'"}, "maintainer")
+        for command, reason in (("gh pr -R o/r merge 12 --squash", "maintainer"),
+                                ("gh pr --repo=o/r merge 12", "maintainer"),
+                                ("gh api repos/o/r/releases -f tag_name=v1.2.3", "authorization"),
+                                ("gh api repos/o/r/merges -f base=main -f head=topic", "maintainer"),
+                                ("gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc", "main only"),
+                                ("gh api repos/o/r/git/refs -f ref=refs/tags/v1 -f sha=abc", "authorization"),
+                                ("gh api -X PUT repos/o/r/contents/a.md -f message=x -f content=eA==", "main only")):
+            self.assertBlocked("Execute", {"command": command}, reason)
+        for command in ("gh api repos/o/r/releases", "gh api repos/o/r/git/refs -f ref=refs/heads/topic -f sha=abc",
+                        "gh api -X PUT repos/o/r/contents/a.md -f branch=topic -f message=x -f content=eA==",
+                        "gh api graphql -f 'query=query { viewer { login } } # mergePullRequest('"):
+            self.assertAllowed("Execute", {"command": command})
 
     def test_generated_paths_are_normalized(self):
         for path in ("/repo/rust/./bundle-manifest.json", "/repo/rust//bundle-manifest.json"):

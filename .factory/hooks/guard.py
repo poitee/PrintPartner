@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import sys
+from urllib.parse import urlsplit
 
 MERGE = "Merging is the maintainer's job. Report readiness instead."
 FORCE = "Never force-push. Add a commit instead."
@@ -44,7 +45,17 @@ COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-mess
                      "--reuse-message", "--template", "--trailer"}
 GH_VALUE_OPTIONS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
                     "-t", "--template", "--hostname", "-p", "--preview", "--cache", "-X", "--method"}
-PR_MERGE_PATH = re.compile(r"(?:^|/)pulls/\d+/merge/?$")
+REPO_PATH = r"(?:^|/)repos/[^/]+/[^/]+/"
+# (methods, endpoint path, reason) for REST requests that bypass review or release rules.
+REST_RULES = (
+    ({"PUT"}, re.compile(REPO_PATH + r"pulls/\d+/merge$"), MERGE),
+    ({"POST"}, re.compile(REPO_PATH + r"merges$"), MERGE),
+    ({"POST"}, re.compile(REPO_PATH + r"releases$"), RELEASE),
+    ({"PATCH", "DELETE"}, re.compile(REPO_PATH + r"git/refs/heads/main$"), MAIN),
+    ({"PATCH", "DELETE"}, re.compile(REPO_PATH + r"git/refs/tags/.+$"), RELEASE),
+)
+GIT_REFS = re.compile(REPO_PATH + r"git/refs$")
+CONTENTS = re.compile(REPO_PATH + r"contents/.+$")
 MERGE_MUTATION = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\s*\(")
 GENERATED = {"rust/bundle-manifest.json"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", re.M)
@@ -399,9 +410,58 @@ def graphql_query(flag, value, cwd):
     return text
 
 
+def without_graphql_comments(document):
+    out, i = [], 0
+    while i < len(document):
+        if document.startswith('"""', i):
+            end = document.find('"""', i + 3)
+            end = len(document) if end < 0 else end + 3
+        elif document[i] == '"':
+            end = i + 1
+            while end < len(document) and document[end] not in '"\n':
+                end += 2 if document[end] == "\\" else 1
+            end += 1
+        elif document[i] == "#":
+            newline = document.find("\n", i)
+            i = len(document) if newline < 0 else newline
+            continue
+        else:
+            end = i + 1
+        out.append(document[i:end])
+        i = end
+    return "".join(out)
+
+
+def graphql_documents(fields, body, cwd):
+    documents = [graphql_query(flag, value, cwd) for flag, value in fields]
+    if body is not None:
+        text = read_input(body, cwd)
+        try:
+            decoded = json.loads(text)
+        except ValueError:
+            decoded = None
+        if isinstance(decoded, (dict, list)):
+            items = decoded if isinstance(decoded, list) else [decoded]
+            text = "\n".join(str(item.get("query", "")) for item in items if isinstance(item, dict))
+        documents.append(text)
+    return [without_graphql_comments(document) for document in documents]
+
+
+def without_repo_flags(args):
+    kept, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-R", "--repo"):
+            i += 2
+            continue
+        if not (arg.startswith("--repo=") or arg.startswith("-R") and len(arg) > 2):
+            kept.append(arg)
+        i += 1
+    return kept
+
+
 def gh_reason(args, cwd):
-    while args and (args[0] in ("-R", "--repo") or args[0].startswith(("-R", "--repo="))):
-        args = args[2:] if args[0] in ("-R", "--repo") else args[1:]
+    args = without_repo_flags(args)
     if args[:1] == ["help"]:
         return None
     if args[:2] in (["pr", "merge"], ["release", "create"]):
@@ -431,13 +491,25 @@ def gh_reason(args, cwd):
             fields.append((name, value))
         elif name == "--input":
             body = value
-    if (method or "").upper() == "PUT" and endpoint and PR_MERGE_PATH.search(endpoint.split("?", 1)[0]):
-        return MERGE
-    if endpoint == "graphql":
-        documents = [graphql_query(flag, value, cwd) for flag, value in fields]
-        if body is not None:
-            documents.append(read_input(body, cwd))
-        for document in documents:
+    if endpoint is None:
+        return None
+    # gh sends POST when the request has fields or a body.
+    method = (method or ("POST" if fields or body is not None else "GET")).upper()
+    path = urlsplit(endpoint).path.strip("/")
+    values = dict(value.partition("=")[::2] for _, value in fields)
+    for methods, pattern, reason in REST_RULES:
+        if method in methods and pattern.search(path):
+            return reason
+    if method == "POST" and GIT_REFS.search(path):
+        ref = values.get("ref", "")
+        if ref.startswith("refs/tags/"):
+            return RELEASE
+        if MAIN_REF.match(ref):
+            return MAIN
+    if method == "PUT" and CONTENTS.search(path) and values.get("branch", "main") == "main":
+        return MAIN
+    if path == "graphql" or path.endswith("/graphql"):
+        for document in graphql_documents(fields, body, cwd):
             if re.search(r"\bmutation\b", document) and MERGE_MUTATION.search(document):
                 return MERGE
     return None
