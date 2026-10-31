@@ -82,9 +82,7 @@ describe("board-model", () => {
         { source: "source-2", role: "mods" },
       ],
     });
-    expect(coverUrlFromSnapshot(printablesFirst)).toBe(
-      "https://opengraph.githubassets.com/1/a/b",
-    );
+    expect(coverUrlFromSnapshot(printablesFirst)).toBe("https://opengraph.githubassets.com/1/a/b");
     expect(
       coverUrlFromSnapshot(
         buildSnapshot({

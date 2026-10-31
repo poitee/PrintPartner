@@ -29,8 +29,11 @@ export function parseFeatureLayer(
   if (snapshot.kind === "missing") return { choices: {}, raw: {} };
   try {
     const { rawJSON } = losslessJsonSchema.parse(JSON);
-    const stored: unknown = JSON.parse(snapshot.value, (_key: string, value: unknown, context?: unknown) =>
-      typeof value === "number" ? rawJSON(numberSourceSchema.parse(context).source) : value);
+    const stored: unknown = JSON.parse(
+      snapshot.value,
+      (_key: string, value: unknown, context?: unknown) =>
+        typeof value === "number" ? rawJSON(numberSourceSchema.parse(context).source) : value,
+    );
     const raw = storedObjectSchema.parse(stored);
     return { choices: choicesSchema.parse(raw), raw };
   } catch {
@@ -49,7 +52,7 @@ export function resolveFeature(
 }
 
 export function resolveFeatures(user: FeatureChoices, plan: FeatureChoices) {
-  return effectiveSchema.parse(Object.fromEntries(
-    featureKeys.map((key) => [key, resolveFeature(key, user, plan)]),
-  ));
+  return effectiveSchema.parse(
+    Object.fromEntries(featureKeys.map((key) => [key, resolveFeature(key, user, plan)])),
+  );
 }

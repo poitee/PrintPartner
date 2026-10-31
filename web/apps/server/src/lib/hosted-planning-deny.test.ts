@@ -17,9 +17,7 @@ describe("hostedDeniedRouteDetail", () => {
     expect(hostedDeniedRouteDetail("POST", "/api/v1/integrations")).toBe(
       HOSTED_LAN_DISABLED_DETAIL,
     );
-    expect(hostedDeniedRouteDetail("DELETE", "/integrations/abc")).toBe(
-      HOSTED_LAN_DISABLED_DETAIL,
-    );
+    expect(hostedDeniedRouteDetail("DELETE", "/integrations/abc")).toBe(HOSTED_LAN_DISABLED_DETAIL);
     expect(hostedDeniedRouteDetail("POST", "/integrations/abc/test")).toBe(
       HOSTED_LAN_DISABLED_DETAIL,
     );
@@ -29,12 +27,8 @@ describe("hostedDeniedRouteDetail", () => {
     expect(hostedDeniedRouteDetail("POST", "/jobs/printer-upload")).toBe(
       HOSTED_LAN_DISABLED_DETAIL,
     );
-    expect(hostedDeniedRouteDetail("POST", "/printer-send-queue")).toBe(
-      HOSTED_LAN_DISABLED_DETAIL,
-    );
-    expect(hostedDeniedRouteDetail("GET", "/printers/p1/files")).toBe(
-      HOSTED_LAN_DISABLED_DETAIL,
-    );
+    expect(hostedDeniedRouteDetail("POST", "/printer-send-queue")).toBe(HOSTED_LAN_DISABLED_DETAIL);
+    expect(hostedDeniedRouteDetail("GET", "/printers/p1/files")).toBe(HOSTED_LAN_DISABLED_DETAIL);
     expect(hostedDeniedRouteDetail("GET", "/printers/p1/cameras/view")).toBe(
       HOSTED_LAN_DISABLED_DETAIL,
     );
@@ -65,18 +59,12 @@ describe("hostedDeniedRouteDetail", () => {
     expect(hostedDeniedRouteDetail("GET", "/settings/api-keys")).toBe(
       HOSTED_FEATURE_DISABLED_DETAIL,
     );
-    expect(hostedDeniedRouteDetail("POST", "/plans/3/shares")).toBe(
-      HOSTED_FEATURE_DISABLED_DETAIL,
-    );
-    expect(hostedDeniedRouteDetail("GET", "/shares/incoming")).toBe(
-      HOSTED_FEATURE_DISABLED_DETAIL,
-    );
+    expect(hostedDeniedRouteDetail("POST", "/plans/3/shares")).toBe(HOSTED_FEATURE_DISABLED_DETAIL);
+    expect(hostedDeniedRouteDetail("GET", "/shares/incoming")).toBe(HOSTED_FEATURE_DISABLED_DETAIL);
     expect(hostedDeniedRouteDetail("POST", "/shares/tok/accept")).toBe(
       HOSTED_FEATURE_DISABLED_DETAIL,
     );
-    expect(hostedDeniedRouteDetail("DELETE", "/shares/abc")).toBe(
-      HOSTED_FEATURE_DISABLED_DETAIL,
-    );
+    expect(hostedDeniedRouteDetail("DELETE", "/shares/abc")).toBe(HOSTED_FEATURE_DISABLED_DETAIL);
     expect(hostedDeniedRouteDetail("POST", "/jobs/export-kit-bundle")).toBe(
       HOSTED_FEATURE_DISABLED_DETAIL,
     );

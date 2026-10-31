@@ -67,20 +67,23 @@ describe("readBoundedResponseBody", () => {
   it.each([-1, 1.5, Number.POSITIVE_INFINITY])(
     "rejects the invalid byte limit %s",
     async (maxBytes) => {
-      await expect(readBoundedResponseBody(new Response("body"), maxBytes))
-        .rejects.toThrow("maxBytes must be a non-negative safe integer");
+      await expect(readBoundedResponseBody(new Response("body"), maxBytes)).rejects.toThrow(
+        "maxBytes must be a non-negative safe integer",
+      );
     },
   );
 
   it("cancels the upstream when a chunk consumer stops early", async () => {
     const cancel = vi.fn();
-    const response = new Response(new ReadableStream({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1]));
-        controller.enqueue(new Uint8Array([2]));
-      },
-      cancel,
-    }));
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+          controller.enqueue(new Uint8Array([2]));
+        },
+        cancel,
+      }),
+    );
 
     for await (const _chunk of readBoundedResponseChunks(response, 2)) {
       break;

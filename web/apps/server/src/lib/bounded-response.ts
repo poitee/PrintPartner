@@ -69,9 +69,7 @@ export async function readResponsePrefix(
         break;
       }
       const remainingBytes = maxBytes - totalBytes;
-      const chunk = value.byteLength > remainingBytes
-        ? value.subarray(0, remainingBytes)
-        : value;
+      const chunk = value.byteLength > remainingBytes ? value.subarray(0, remainingBytes) : value;
       chunks.push(chunk);
       totalBytes += chunk.byteLength;
     }
@@ -146,8 +144,6 @@ export async function readBoundedJsonResponse(
   response: Response,
   maxBytes: number,
 ): Promise<unknown> {
-  const parsed: unknown = JSON.parse(
-    await readBoundedResponseText(response, maxBytes),
-  );
+  const parsed: unknown = JSON.parse(await readBoundedResponseText(response, maxBytes));
   return parsed;
 }

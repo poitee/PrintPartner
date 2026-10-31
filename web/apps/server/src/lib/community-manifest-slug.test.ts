@@ -52,9 +52,7 @@ function kitBundle(slug: unknown): Record<string, unknown> {
 }
 
 function kitArchive(slug: unknown): Buffer {
-  return Buffer.from(
-    zipSync({ "kit.json": Buffer.from(JSON.stringify(kitBundle(slug))) }),
-  );
+  return Buffer.from(zipSync({ "kit.json": Buffer.from(JSON.stringify(kitBundle(slug))) }));
 }
 
 describe("parseCommunityManifestSlug", () => {
