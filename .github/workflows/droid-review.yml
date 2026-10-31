@@ -30,6 +30,15 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      - name: Require the Factory API key
+        # Without the key droid-action skips and the required check would pass unreviewed.
+        env:
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+        run: |
+          if [ -z "$FACTORY_API_KEY" ]; then
+            echo "::error::FACTORY_API_KEY is not set, so Droid cannot review this PR."
+            exit 1
+          fi
       - name: Run Droid Auto Review
         uses: Factory-AI/droid-action@260eac443df653198ed70e9ea9d32980cfabde23 # v13
         with:

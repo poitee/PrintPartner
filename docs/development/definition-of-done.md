@@ -21,7 +21,7 @@ Every pull request meets this bar before it merges. The [pull request template](
 
 ## Code review
 
-`.github/workflows/droid-review.yml` runs Factory Droid code and security review on every ready PR and on each new push. Its `droid-review` job is a required check, and the main ruleset requires review threads to be resolved, so an open finding blocks the merge. Fix the finding, or reply with the reason it does not apply and resolve the thread. Critical and high security findings also request changes.
+`.github/workflows/droid-review.yml` runs Factory Droid code and security review on every ready PR and on each new push. Its `droid-review` job is a required check, and the main ruleset requires review threads to be resolved, so an open finding blocks the merge. Fix the finding, or reply with the reason it does not apply and resolve the thread. Critical and high security findings also request changes. The job fails when the `FACTORY_API_KEY` secret is missing. On a PR that adds or changes `droid-review.yml` itself, droid-action skips the review and the job passes, so ask for `@droid review` after merging such a change.
 
 Mention `@droid` in a PR or issue comment to ask Droid a question or request another review (`.github/workflows/droid.yml`).
 
