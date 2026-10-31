@@ -46,7 +46,6 @@ PUSH_VALUE_LONG = {"--exec", "--push-option", "--receive-pack", "--repo"}
 COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-message",
                      "--reuse-message", "--template", "--trailer"}
 GH_SHORT_BOOLEAN = set("ih")
-GH_SHORT_VALUE = set("FHXfpqt")
 RELEASE_READS = {"download", "list", "verify", "verify-asset", "view"}
 # Git commands that can change which branch HEAD names before a later push runs.
 BRANCH_CHANGES = {"bisect", "branch", "checkout", "rebase", "switch", "symbolic-ref", "worktree"}
@@ -54,6 +53,9 @@ BRANCH_CHANGES = {"bisect", "branch", "checkout", "rebase", "switch", "symbolic-
 EXPANDED = "\x00"
 GH_VALUE_OPTIONS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
                     "-t", "--template", "--hostname", "-p", "--preview", "--cache", "-X", "--method"}
+GH_SHORT_VALUE = {option[1] for option in GH_VALUE_OPTIONS if len(option) == 2}
+# Wrapper options that run the program in another directory.
+WRAPPER_CHDIR = {"-C", "--chdir", "-D"}
 REPO_PATH = r"(?:^|/)repos/[^/]+/[^/]+/"
 # The only REST writes agents may make through gh api: PR and issue comments.
 COMMENT_WRITES = re.compile(REPO_PATH + r"(?:issues/\d+/comments|pulls/\d+/comments(?:/\d+/replies)?"
@@ -167,13 +169,14 @@ def substitutions(text):
 
 
 def shell_commands(source):
-    """Split shell source into simple commands of unquoted arguments.
+    """Split shell source into (arguments, in_subshell) pairs for simple commands.
 
     Handles quotes, escapes, continuations, separators, comments, redirections,
     heredoc bodies, and command substitutions. It does not evaluate expansions.
     """
     commands, args, word, heredocs, nested = [], [], None, [], []
-    drop_next = False
+    drop_next = piped = False
+    depth = 0
 
     def finish_word():
         nonlocal word, drop_next
@@ -268,9 +271,14 @@ def shell_commands(source):
             finish_word()
             if char in SEPARATORS:
                 drop_next = False
+                # A pipeline stage or background job runs in its own subshell.
+                pipe = char in "|&" and source[i + 1:i + 2] != char and source[i - 1:i] != char
+                inside = depth > 0
+                depth += {"(": 1, ")": -1}.get(char, 0)
                 if args:
-                    commands.append(args)
+                    commands.append((args, inside or pipe or piped))
                     args = []
+                piped = pipe
             i += 1
             if char == "\n":
                 for delimiter, tabs, expands in heredocs:
@@ -280,6 +288,12 @@ def shell_commands(source):
                         end = len(source) if end < 0 else end
                         line = source[i:end].rstrip("\r")
                         i = end + 1
+                        # Bash joins backslash-newline in an unquoted heredoc before matching the delimiter.
+                        while expands and (len(line) - len(line.rstrip("\\"))) % 2 and i < len(source):
+                            end = source.find("\n", i)
+                            end = len(source) if end < 0 else end
+                            line = line[:-1] + source[i:end].rstrip("\r")
+                            i = end + 1
                         if (line.lstrip("\t") if tabs else line) == delimiter:
                             break
                         body.append(line)
@@ -291,15 +305,15 @@ def shell_commands(source):
             i += 1
     finish_word()
     if args:
-        commands.append(args)
+        commands.append((args, depth > 0 or piped))
     for inner in nested:
-        commands.extend(shell_commands(inner))
+        commands.extend((inner_args, True) for inner_args, _ in shell_commands(inner))
     return commands
 
 
 def program(args):
-    """Return the executed program name and its arguments."""
-    i = 0
+    """Return the executed program name, its arguments, and whether a wrapper changed directory."""
+    i, moved = 0, False
     while i < len(args):
         word = args[i]
         if ASSIGNMENT.match(word) or word in SHELL_PREFIXES:
@@ -307,7 +321,7 @@ def program(args):
             continue
         name = PurePosixPath(word).name
         if name not in WRAPPERS:
-            return name, args[i + 1:]
+            return name, args[i + 1:], moved
         i += 1
         while i < len(args) and args[i].startswith("-"):
             option = args[i]
@@ -316,9 +330,10 @@ def program(args):
                 break
             if name == "env" and (option.startswith("--split-string") or re.match(r"^-[^-]*S", option)):
                 raise Unclear
+            moved = moved or option.split("=", 1)[0] in WRAPPER_CHDIR or re.match(r"^-[^-]*[CD]", option)
             i += 2 if option in WRAPPERS[name] else 1
         i += WRAPPER_OPERANDS.get(name, 0)
-    return None, []
+    return None, [], moved
 
 
 def options(args, value_flags="", stop_flags="", value_long=()):
@@ -338,7 +353,10 @@ def options(args, value_flags="", stop_flags="", value_long=()):
         elif ended or arg == "-" or not arg.startswith("-"):
             yield "arg", arg
         elif arg.startswith("--"):
-            yield "long", arg.split("=", 1)[0]
+            name = arg.split("=", 1)[0]
+            if EXPANDED in name:
+                raise Unclear(EXPANSION)
+            yield "long", name
             if arg in value_long:
                 i += 1
         else:
@@ -347,9 +365,16 @@ def options(args, value_flags="", stop_flags="", value_long=()):
                 flags += char
                 if char in value_flags or char in stop_flags:
                     break
+            if EXPANDED in flags:
+                raise Unclear(EXPANSION)
             yield "short", flags
             if flags[-1:] in tuple(value_flags) and len(flags) == len(arg) - 1:
                 i += 1
+
+
+def spells(option, full):
+    """Return whether a long option is full or a prefix Git could expand to it."""
+    return len(option) > 2 and full.startswith(option)
 
 
 def current_branch(cwd, location):
@@ -420,11 +445,15 @@ def git_command(args):
                 raise Unclear(EXPANSION)
             if value.lower().startswith("core.hookspath"):
                 reason = HOOKS
+        if EXPANDED in option.split("=", 1)[0]:
+            raise Unclear(EXPANSION)
         if option in ("-C", "--git-dir", "--work-tree"):
             location += [option, value]
         elif option.startswith(("--git-dir=", "--work-tree=")):
             location.append(option)
         i += 2 if option in GIT_VALUE_OPTIONS else 1
+    if i < len(args) and EXPANDED in args[i]:
+        raise Unclear(EXPANSION)
     return i, location, reason
 
 
@@ -447,11 +476,11 @@ def git_reason(args, cwd, head_moves=False):
             return HOOKS
     if command == "commit":
         parsed = options(rest, value_flags="mFcCt", stop_flags="uS", value_long=COMMIT_VALUE_LONG)
-        if any(kind == "long" and arg == "--no-verify" or kind == "short" and "n" in arg
+        if any(kind == "long" and spells(arg, "--no-verify") or kind == "short" and "n" in arg
                for kind, arg in parsed):
             return HOOKS
     elif command in HOOK_COMMANDS:
-        if any(kind == "long" and arg == "--no-verify" for kind, arg in options(rest)):
+        if any(kind == "long" and spells(arg, "--no-verify") for kind, arg in options(rest)):
             return HOOKS
     return None
 
@@ -487,6 +516,10 @@ def mutation_fields(document):
     while i < len(tokens):
         # Variable definitions and directive arguments may hold "{" or a $mutation name.
         parens += {"(": 1, ")": -1}.get(tokens[i], 0)
+        if not parens and tokens[i] in ("query", "subscription", "fragment"):
+            # Skip the operation or fragment name, which may itself be "mutation".
+            i += 2 if re.match(r"[A-Za-z_]", tokens[i + 1] if i + 1 < len(tokens) else "") else 1
+            continue
         if parens or tokens[i] not in ("mutation", "{"):
             i += 1
             continue
@@ -549,6 +582,8 @@ def without_repo_flags(args):
 
 def gh_reason(args, cwd):
     args = without_repo_flags(args)
+    if any(EXPANDED in arg for arg in args[:2]):
+        raise Unclear(EXPANSION)
     if args[:1] == ["help"]:
         return None
     release_write = (args[:1] == ["release"] and args[1:2] and not args[1].startswith("-")
@@ -563,8 +598,12 @@ def gh_reason(args, cwd):
     while i < len(args):
         arg = args[i]
         i += 1
+        if arg.startswith(EXPANDED):
+            raise Unclear(EXPANSION)
         if arg.startswith("--"):
             name, attached, value = arg.partition("=")
+            if EXPANDED in name:
+                raise Unclear(EXPANSION)
         elif arg.startswith("-") and arg != "-":
             name = None
             for j, flag in enumerate(arg[1:], 2):
@@ -616,16 +655,19 @@ def decide(payload):
     if tool == "Execute":
         cwd = str(payload.get("cwd") or os.getcwd())
         try:
-            commands = [program(args) for args in shell_commands(str(data.get("command", "")))]
+            commands = [(*program(args), scoped) for args, scoped in shell_commands(str(data.get("command", "")))]
             # Substitutions run out of source order, so any branch change makes HEAD unknown.
-            head_moves = any(moves_head(name, rest) for name, rest in commands)
-            for name, rest in commands:
+            head_moves = any(moves_head(name, rest) for name, rest, _, _ in commands)
+            for name, rest, moved, scoped in commands:
                 if name in ("cd", "pushd", "popd"):
                     targets = [arg for arg in rest if not arg.startswith("-")]
-                    plain = name != "popd" and len(targets) == 1 and not re.search(r"[$~`\x00]", targets[0])
+                    plain = (name != "popd" and len(targets) == 1 and not scoped and not moved
+                             and not re.search(r"[$~`\x00]", targets[0]))
+                    # A directory change inside a subshell has no single directory after it.
                     cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
                     continue
-                reason = git_reason(rest, cwd, head_moves) if name == "git" else gh_reason(rest, cwd) if name == "gh" else None
+                here = None if moved else cwd
+                reason = git_reason(rest, here, head_moves) if name == "git" else gh_reason(rest, here) if name == "gh" else None
                 if reason:
                     return reason
         except Unclear as error:

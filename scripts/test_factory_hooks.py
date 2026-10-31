@@ -119,7 +119,8 @@ class GuardHookTests(unittest.TestCase):
             self.assertBlocked("Execute", {"command": command}, reason)
 
     def test_heredoc_quoting_and_here_strings_keep_later_commands(self):
-        for command in ("cat <<\\EOF\nhello\nEOF\ngit push origin main",
+        for command in ("cat <<EOF\nE\\\nOF\ngit push origin main\n",
+                        "cat <<\\EOF\nhello\nEOF\ngit push origin main",
                         "cat <<E'O'F\nhello\nEOF\ngit push origin main",
                         'cat <<< "hello"\ngit push origin main'):
             self.assertBlocked("Execute", {"command": command}, "main only")
@@ -150,7 +151,9 @@ class GuardHookTests(unittest.TestCase):
                                 ("git push origin :main", "main only"), ("git push --repo origin main", "main only"),
                                 ("git push origin refs/tags/v1.0.0", "authorization"),
                                 ("git push origin tag v1.0.0", "authorization"),
-                                ("git rebase -m --no-verify main", "hooks")):
+                                ("git rebase -m --no-verify main", "hooks"),
+                                ("git commit --no-veri -m change", "hooks"), ("git rebase --no-veri main", "hooks"),
+                                ("git commit --no-v -m change", "hooks")):
             self.assertBlocked("Execute", {"command": command}, reason)
 
     def test_head_push_destination_uses_checked_out_branch(self):
@@ -167,6 +170,8 @@ class GuardHookTests(unittest.TestCase):
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             for command in ("git switch main && git push origin HEAD", "gh pr checkout 12 && git push origin @",
+                            "env -C /tmp git push origin HEAD", "env --chdir=/tmp git push origin HEAD",
+                            "(cd /tmp); git push origin HEAD",
                             "echo $(git checkout main) && git push origin HEAD"):
                 payload["tool_input"]["command"] = command
                 result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
@@ -183,6 +188,10 @@ class GuardHookTests(unittest.TestCase):
         for command in ('git push "$remote_and_branch"', 'git push "$remote" HEAD:topic'):
             self.assertBlocked("Execute", {"command": command}, "shell expansion")
         self.assertBlocked("Execute", {"command": 'git commit "$flags" -m x'}, "Cannot classify")
+        for command in ('sub=push; git "$sub" --force origin topic', "flag=no-verify; git commit --$flag -m change",
+                        'git -c x=1 "$sub" origin topic', 'gh "$group" merge 12', 'gh pr "$action" 12',
+                        'gh api "$endpoint" -X PUT', "gh api repos/o/r/pulls --$opt x"):
+            self.assertBlocked("Execute", {"command": command}, "shell expansion")
         self.assertBlocked("Execute", {"command": 'gh api graphql -f query="mutation { $field }"'}, "Cannot classify")
         for command in ("git push origin 'HEAD:topic'", 'git commit -m "$(git rev-parse HEAD)"',
                         "git push origin '$literal'"):
@@ -213,6 +222,7 @@ class GuardHookTests(unittest.TestCase):
                                 ("git config core.hooksPath /dev/null", "hooks"),
                                 ("git config set core.hooksPath /dev/null", "hooks")):
             self.assertBlocked("Execute", {"command": command}, reason)
+        self.assertAllowed("Execute", {"command": "git commit --no-edit --amend"})
         for command in ("cat <<'EOF'\n$(git push origin main)\nEOF",
                         "echo \"$(printf '%s' \"a\\\"b\")\"", "git config --get core.hooksPath",
                         "git config --get core.hooksPath '^/tmp'"):
@@ -235,6 +245,16 @@ class GuardHookTests(unittest.TestCase):
             Path(folder, "sub", "body.json").write_text(
                 '{"query": "fragment R on MergePullRequestPayload { clientMutationId } '
                 'mutation { mergePullRequest(input: {}) { ...R } }"}')
+            # The shell reads the merge mutation from the outer directory; sub holds a harmless file.
+            Path(folder, "sub", "merge.graphql").write_text("query { viewer { login } }")
+            for command in ("(cd sub); gh api graphql -F query=@merge.graphql",
+                            "cd sub | cat; gh api graphql -F query=@merge.graphql",
+                            "env -C sub gh api graphql -F query=@reply.graphql"):
+                payload["tool_input"]["command"] = command
+                result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 2, command)
+                self.assertIn("Cannot classify", result.stderr)
             payload["tool_input"]["command"] = "cd sub && gh api graphql --input body.json"
             result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                     capture_output=True, text=True, check=False)
@@ -276,6 +296,7 @@ class GuardHookTests(unittest.TestCase):
                         "gh api repos/o/r/pulls/12/comments/34/replies -f body=ok",
                         "gh api -X PATCH repos/o/r/issues/comments/34 -f body=edited",
                         "gh api graphql -f 'query=query { viewer { login } } # mergePullRequest('",
+                        "gh api graphql -f 'query=query mutation { viewer { login } }'",
                         "gh api graphql -f 'query=mutation($id: ID!) { r: resolveReviewThread(input: {threadId: $id}) "
                         "{ thread { isResolved } } }' -F id=X"):
             self.assertAllowed("Execute", {"command": command})
