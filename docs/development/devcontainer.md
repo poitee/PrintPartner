@@ -58,7 +58,8 @@ For both Rust applications, run the heavier selector after post-create:
 bash .devcontainer/smoke.sh --runtime
 ```
 
-It repeats the fast checks, builds the desktop web assets, generates the measured
+It repeats the fast checks and reuses `local-ci.py --only web-assets --fail-on-skip`
+to install dependencies, build desktop web assets, and generate the measured
 manifest at the checkout's HEAD, and runs five gateway argument-parser unit
 tests, three gateway CLI-refusal integration tests, and desktop browser-policy
 unit tests with `desktop_rebuild` off/on.

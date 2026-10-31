@@ -31,10 +31,7 @@ npm --prefix web exec -w @print-partner/server -- vitest run src/services/gcode-
 (cd slicer-sidecar && /opt/sidecar-venv/bin/python -B -m unittest test_sidecar.py test_shutdown.py)
 
 if [[ ${1:-} == --runtime ]]; then
-  VITE_PRINT_PARTNER_DESKTOP=1 npm --prefix web run build
-  python3 rust/scripts/build-desktop-manifest.py \
-    --web web --node "$(command -v node)" \
-    --output rust/bundle-manifest.json --commit "$(git rev-parse HEAD)"
+  python3 scripts/local-ci.py --only web-assets --fail-on-skip
 
   # Cargo permits zero matches. Require a nonzero executed result as well.
   LOG="$(mktemp)"

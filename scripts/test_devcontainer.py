@@ -67,6 +67,8 @@ class DevcontainerTests(unittest.TestCase):
         self.assertIn("npm --prefix web run predev", setup)
         self.assertNotIn("run build -w", setup)
         smoke = (DIRECTORY / "smoke.sh").read_text()
+        self.assertIn("scripts/local-ci.py --only web-assets --fail-on-skip", smoke)
+        self.assertNotIn("build-desktop-manifest.py", smoke)
         self.assertIn("-p pp-domain --lib", smoke)
         self.assertIn("--features desktop_rebuild", smoke)
         self.assertIn("vitest run src/lib/supportLinks.test.ts", smoke)
