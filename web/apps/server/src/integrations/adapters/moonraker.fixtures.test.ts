@@ -8,10 +8,7 @@ vi.mock("node:dns/promises", () => ({
   lookup: async () => [{ address: "192.0.2.10", family: 4 }],
 }));
 
-const fixtureDirectory = new URL(
-  "../../../../../../fixtures/drivers/moonraker/",
-  import.meta.url,
-);
+const fixtureDirectory = new URL("../../../../../../fixtures/drivers/moonraker/", import.meta.url);
 
 type Case = {
   name: string;
@@ -51,9 +48,12 @@ describe(`${cases.length} Moonraker status parity cases through the TS adapter`,
 
     // Status polling is read-only: no upload, print start or other mutation.
     const base = new URL(fixture.base_url).pathname.replace(/\/+$/, "");
-    expect(fetchMock.mock.calls.map(([input, init]) => [
-      (init?.method ?? "GET").toUpperCase(), new URL(String(input)).pathname,
-    ])).toEqual([
+    expect(
+      fetchMock.mock.calls.map(([input, init]) => [
+        (init?.method ?? "GET").toUpperCase(),
+        new URL(String(input)).pathname,
+      ]),
+    ).toEqual([
       ["GET", `${base}/printer/objects/query`],
       ["GET", `${base}/machine/proc_stats`],
     ]);

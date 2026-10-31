@@ -22,14 +22,9 @@ type StoragePathOptions = {
  * A backslash is rejected rather than translated: only the host knows whether
  * it meant a separator or a literal, and guessing is how traversal slips through.
  */
-export function safeStoragePath(
-  raw: string,
-  options: StoragePathOptions = {},
-): string | null {
+export function safeStoragePath(raw: string, options: StoragePathOptions = {}): string | null {
   if (raw.includes("\\") || raw.includes("\0")) return null;
-  const normalized = options.trimTrailing
-    ? raw.replace(/^\/+|\/+$/g, "")
-    : raw.replace(/^\/+/, "");
+  const normalized = options.trimTrailing ? raw.replace(/^\/+|\/+$/g, "") : raw.replace(/^\/+/, "");
   if (!normalized) return null;
   const segments = normalized.split("/");
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {

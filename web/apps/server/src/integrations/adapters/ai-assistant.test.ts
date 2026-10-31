@@ -15,9 +15,9 @@ describe("aiAssistantAdapter.testConnection", () => {
   });
 
   it("pings Ollama /api/tags and requires an installed model", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({ models: [{ name: "llama3.1:latest" }] }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ models: [{ name: "llama3.1:latest" }] }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await aiAssistantAdapter.testConnection({
@@ -59,9 +59,9 @@ describe("aiAssistantAdapter.testConnection", () => {
   });
 
   it("repairs http:/host URLs when testing Ollama", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({ models: [{ name: "llama3.1:latest" }] }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ models: [{ name: "llama3.1:latest" }] }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await aiAssistantAdapter.testConnection({
@@ -90,9 +90,9 @@ describe("aiAssistantAdapter.testConnection", () => {
   });
 
   it("accepts extended Settings config keys without breaking connection test", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({ models: [{ name: "llama3.1:latest" }] }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ models: [{ name: "llama3.1:latest" }] }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await aiAssistantAdapter.testConnection({

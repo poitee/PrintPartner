@@ -1,10 +1,11 @@
-import type { AiProviderId, IntegrationConfig, IntegrationTestResult } from "@print-partner/contracts";
+import type {
+  AiProviderId,
+  IntegrationConfig,
+  IntegrationTestResult,
+} from "@print-partner/contracts";
 import type { IntegrationAdapter } from "../store.js";
 import { safeConnectorFetch } from "../../lib/outbound-url.js";
-import {
-  cancelResponseBody,
-  readBoundedJsonResponse,
-} from "../../lib/bounded-response.js";
+import { cancelResponseBody, readBoundedJsonResponse } from "../../lib/bounded-response.js";
 import { isRecord } from "../../lib/guards.js";
 
 const MAX_MODEL_LIST_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -82,11 +83,7 @@ function listModelNames(models: Array<{ name?: unknown; model?: unknown }>): str
   return names;
 }
 
-async function safeGet(
-  url: string,
-  init: RequestInit,
-  allowPrivate: boolean,
-): Promise<Response> {
+async function safeGet(url: string, init: RequestInit, allowPrivate: boolean): Promise<Response> {
   return safeConnectorFetch(url, { ...init, signal: AbortSignal.timeout(8000) }, { allowPrivate });
 }
 
@@ -117,9 +114,8 @@ export const aiAssistantAdapter = {
           return { ok: false, message: `Ollama returned HTTP ${res.status}` };
         }
         const body = await readBoundedJsonResponse(res, MAX_MODEL_LIST_RESPONSE_BYTES);
-        const models = isRecord(body) && Array.isArray(body.models)
-          ? body.models.filter(isRecord)
-          : [];
+        const models =
+          isRecord(body) && Array.isArray(body.models) ? body.models.filter(isRecord) : [];
         const count = models.length;
         if (!ollamaModelInstalled(models, model)) {
           const installed = listModelNames(models);

@@ -17,9 +17,9 @@ describe("moonrakerAdapter", () => {
   });
 
   it("testConnection reports klippy state and sends API key headers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({ result: { klippy_state: "ready" } }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ result: { klippy_state: "ready" } }));
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await execution.test(moonrakerAdapter, {
@@ -37,14 +37,16 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps print_stats and virtual_sdcard progress", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({
+      vi.fn().mockResolvedValue(
+        jsonResponse({
           result: {
             status: {
               print_stats: { state: "printing", filename: "frame_x.gcode" },
               virtual_sdcard: { progress: 0.42 },
             },
           },
-        })),
+        }),
+      ),
     );
 
     const status = await execution.probe(moonrakerAdapter, {
@@ -58,14 +60,16 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps print_stats complete distinctly from idle", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({
+      vi.fn().mockResolvedValue(
+        jsonResponse({
           result: {
             status: {
               print_stats: { state: "complete", filename: "frame_x.gcode" },
               virtual_sdcard: { progress: 1 },
             },
           },
-        })),
+        }),
+      ),
     );
 
     const status = await execution.probe(moonrakerAdapter, {
@@ -78,13 +82,15 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps cancelled to idle (no auto-checkoff)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({
+      vi.fn().mockResolvedValue(
+        jsonResponse({
           result: {
             status: {
               print_stats: { state: "cancelled", filename: "frame_x.gcode" },
             },
           },
-        })),
+        }),
+      ),
     );
 
     const status = await execution.probe(moonrakerAdapter, {
@@ -96,13 +102,15 @@ describe("moonrakerAdapter", () => {
   it("getStatus maps unrecognized print states to unknown (not idle)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({
+      vi.fn().mockResolvedValue(
+        jsonResponse({
           result: {
             status: {
               print_stats: { state: "klippy_shutdown", filename: "x.gcode" },
             },
           },
-        })),
+        }),
+      ),
     );
 
     const status = await execution.probe(moonrakerAdapter, {
@@ -114,10 +122,12 @@ describe("moonrakerAdapter", () => {
   it("does not forward API key across cross-origin redirects", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(null, {
-        status: 302,
-        headers: { location: "http://192.168.1.50:7125/server/info" },
-      }))
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "http://192.168.1.50:7125/server/info" },
+        }),
+      )
       .mockResolvedValueOnce(jsonResponse({ result: { klippy_state: "ready" } }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -174,10 +184,12 @@ describe("moonrakerAdapter", () => {
   });
 
   it("does not replay an upload across a redirect", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
-      status: 307,
-      headers: { location: "http://127.0.0.2:7125/server/files/upload" },
-    }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 307,
+        headers: { location: "http://127.0.0.2:7125/server/files/upload" },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await moonrakerAdapter.uploadFile!(
@@ -218,14 +230,21 @@ describe("moonrakerAdapter", () => {
 
   it("browses the storage root through the directory endpoint", async () => {
     // Moonraker's HTTP API wraps success payloads in `result`.
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      result: {
-        dirs: [{ dirname: "jobs", modified: 1_725_000_000, size: 4096, permissions: "rw" }],
-        files: [{ filename: "bracket.gcode", modified: 1_725_000_100, size: 8192, permissions: "rw" }],
-        disk_usage: { total: 1, used: 1, free: 0 },
-        root_info: { name: "gcodes", permissions: "rw" },
-      },
-    }), { headers: { "content-type": "application/json" } }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          result: {
+            dirs: [{ dirname: "jobs", modified: 1_725_000_000, size: 4096, permissions: "rw" }],
+            files: [
+              { filename: "bracket.gcode", modified: 1_725_000_100, size: 8192, permissions: "rw" },
+            ],
+            disk_usage: { total: 1, used: 1, free: 0 },
+            root_info: { name: "gcodes", permissions: "rw" },
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const listing = await moonrakerAdapter.files!.browse({ base_url: "http://127.0.0.1:7125" }, "");
@@ -255,15 +274,22 @@ describe("moonrakerAdapter", () => {
   it("browses a nested directory and opens a child by its relative path", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        result: {
-          dirs: [],
-          files: [{ filename: "frame x.bgcode", modified: 1_725_000_000, size: 4096 }],
-        },
-      }), { headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(new Response("; gcode", {
-        headers: { "content-type": "application/octet-stream" },
-      }));
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            result: {
+              dirs: [],
+              files: [{ filename: "frame x.bgcode", modified: 1_725_000_000, size: 4096 }],
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("; gcode", {
+          headers: { "content-type": "application/octet-stream" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const config = { base_url: "http://127.0.0.1:7125" };
@@ -272,12 +298,14 @@ describe("moonrakerAdapter", () => {
       "http://127.0.0.1:7125/server/files/directory?path=gcodes/jobs&extended=true",
     );
     expect(listing.path).toBe("jobs");
-    expect(listing.entries).toEqual([expect.objectContaining({
-      kind: "file",
-      path: "jobs/frame x.bgcode",
-      name: "frame x.bgcode",
-      size_bytes: 4096,
-    })]);
+    expect(listing.entries).toEqual([
+      expect.objectContaining({
+        kind: "file",
+        path: "jobs/frame x.bgcode",
+        name: "frame x.bgcode",
+        size_bytes: 4096,
+      }),
+    ]);
 
     const opened = await moonrakerAdapter.files!.open(config, listing.entries[0]!.path);
     expect(await opened.text()).toBe("; gcode");
@@ -287,12 +315,17 @@ describe("moonrakerAdapter", () => {
   });
 
   it("leaves missing provider metadata absent instead of reporting zero", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      result: {
-        dirs: [{ dirname: "empty", modified: 0, size: 0 }],
-        files: [{ filename: "unknown.gcode", modified: 0 }],
-      },
-    }), { headers: { "content-type": "application/json" } }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          result: {
+            dirs: [{ dirname: "empty", modified: 0, size: 0 }],
+            files: [{ filename: "unknown.gcode", modified: 0 }],
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const listing = await moonrakerAdapter.files!.browse({ base_url: "http://127.0.0.1:7125" }, "");
@@ -319,64 +352,75 @@ describe("moonrakerAdapter", () => {
   it("serves an MJPEG camera resolved against the Moonraker origin", async () => {
     const webcams = {
       result: {
-        webcams: [{
-          uid: "cam-one",
-          name: "Toolhead",
-          service: "mjpegstreamer",
-          enabled: true,
-          stream_url: "/webcam/?action=stream",
-          snapshot_url: "/webcam/?action=snapshot",
-          aspect_ratio: "16:9",
-        }],
+        webcams: [
+          {
+            uid: "cam-one",
+            name: "Toolhead",
+            service: "mjpegstreamer",
+            enabled: true,
+            stream_url: "/webcam/?action=stream",
+            snapshot_url: "/webcam/?action=snapshot",
+            aspect_ratio: "16:9",
+          },
+        ],
       },
     };
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(webcams), {
-        headers: { "content-type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(webcams), {
-        headers: { "content-type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response("frame", {
-        headers: { "content-type": "multipart/x-mixed-replace" },
-      }));
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(webcams), {
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(webcams), {
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("frame", {
+          headers: { "content-type": "multipart/x-mixed-replace" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const config = {
       base_url: "http://127.0.0.1:7125",
       api_key: "moonraker-secret",
     };
-    expect(await moonrakerAdapter.cameras!.list(config)).toEqual([{
-      id: "cam-one",
-      name: "Toolhead",
-      view: "mjpeg",
-      service: "mjpegstreamer",
-      aspect_ratio: "16:9",
-    }]);
+    expect(await moonrakerAdapter.cameras!.list(config)).toEqual([
+      {
+        id: "cam-one",
+        name: "Toolhead",
+        view: "mjpeg",
+        service: "mjpegstreamer",
+        aspect_ratio: "16:9",
+      },
+    ]);
     await moonrakerAdapter.cameras!.open(config, "cam-one");
-    expect(String(fetchMock.mock.calls[2]![0])).toBe(
-      "http://127.0.0.1:7125/webcam/?action=stream",
-    );
+    expect(String(fetchMock.mock.calls[2]![0])).toBe("http://127.0.0.1:7125/webcam/?action=stream");
   });
 
   it("drops a cross-origin camera from the list and refuses to open it", async () => {
     const webcams = {
       result: {
-        webcams: [{
-          uid: "cam-elsewhere",
-          name: "Elsewhere",
-          service: "mjpegstreamer",
-          enabled: true,
-          stream_url: "http://camera.lan/stream",
-          snapshot_url: "http://camera.lan/snapshot",
-        }],
+        webcams: [
+          {
+            uid: "cam-elsewhere",
+            name: "Elsewhere",
+            service: "mjpegstreamer",
+            enabled: true,
+            stream_url: "http://camera.lan/stream",
+            snapshot_url: "http://camera.lan/snapshot",
+          },
+        ],
       },
     };
-    const fetchMock = vi.fn().mockImplementation(async () =>
-      new Response(JSON.stringify(webcams), {
-        headers: { "content-type": "application/json" },
-      })
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify(webcams), {
+          headers: { "content-type": "application/json" },
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 

@@ -15,8 +15,7 @@ describe("digest-auth", () => {
   });
 
   it("lowercases mixed-case Digest parameter names", () => {
-    const header =
-      'Digest Realm="Printer API", Nonce="abc123", Qop="auth", Algorithm=MD5';
+    const header = 'Digest Realm="Printer API", Nonce="abc123", Qop="auth", Algorithm=MD5';
     expect(parseWwwAuthenticate(header)).toEqual({
       realm: "Printer API",
       nonce: "abc123",
