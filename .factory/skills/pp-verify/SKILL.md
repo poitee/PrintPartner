@@ -27,7 +27,9 @@ Use the repository helper. Give each run its own state, evidence, and data folde
 ```
 
 - Screenshot each screen the change affects, in both themes (`--theme dark`) if styling changed.
-- Use `click` and `snapshot` to reach the state you changed, then screenshot it. Check that the image shows the change itself, not just the page loading.
+- The helper opens and closes a fresh browser for each command. Do not chain its `click`, `snapshot`, and `screenshot` commands to capture an open dialog, dropdown, or other client-only state.
+- For those states, keep the app running inside the launch block above and use the `agent-browser` skill. Set `AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-$(agent-browser session id --scope worktree --prefix pp-verify)}"` and export it. Open `http://127.0.0.1:$UI_PORT/builds`, take a snapshot, interact, take another snapshot, and capture with `agent-browser screenshot "$ROOT/evidence/changed-state.png"`. Keep the same session throughout and close that session before the launch block exits. Do not reload between interaction and capture.
+- Open the image and check that it shows the change itself, not just the page loading.
 - The helper drives the Node server. For behavior served by Rust, launch the gateway with `python3 scripts/verify-rust-gateway/verify.py launch` and point the browser at its origin.
 
 ## Desktop app
