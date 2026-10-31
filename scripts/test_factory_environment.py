@@ -18,12 +18,17 @@ class EnvironmentSetupTests(unittest.TestCase):
     def test_runtime_and_parity_versions_match_ci(self):
         setup = SETUP.read_text()
         ci = (ROOT / "scripts/local-ci.py").read_text()
-        for variable in ("NODE_RUNTIME", "NODE_PARITY"):
-            version = re.search(rf"^{variable}=([0-9.]+)$", setup, re.M)[1]
+        dockerfile = (ROOT / ".devcontainer/Dockerfile").read_text()
+        self.assertIn('Path(".devcontainer/Dockerfile").read_text()', setup)
+        self.assertNotRegex(setup, re.compile(r"^NODE_(?:RUNTIME|PARITY)=[0-9.]+", re.M))
+        for stage in ("runtime-node", "parity-node"):
+            version = re.search(rf"^FROM node:([0-9.]+)-\S+ AS {stage}$", dockerfile, re.M)[1]
             self.assertIn(f"v{version}", ci)
         self.assertIn('"$CARGO_HOME/bin/rustup" toolchain install', setup)
         self.assertNotIn("toolchain install stable", setup)
         self.assertIn('rustup" default "$(', setup)
+        self.assertIn('ln -sfn "$PREFIX/node24/bin/node" /usr/bin/node', setup)
+        self.assertNotIn("PP_TOOL_PREFIX", setup)
 
     def test_downloads_have_architecture_specific_checksums(self):
         setup = SETUP.read_text()
@@ -33,12 +38,19 @@ class EnvironmentSetupTests(unittest.TestCase):
         self.assertTrue(all(len(value) == 64 for value in hashes))
         self.assertIn("sha256sum -c --quiet -", setup)
 
-    def test_sidecar_pins_match_product_image(self):
+    def test_sidecar_pins_come_from_product_image(self):
         setup = SETUP.read_text()
         product = (ROOT / "slicer-sidecar/Dockerfile").read_text()
+        self.assertIn('Path("slicer-sidecar/Dockerfile").read_text()', setup)
         for dependency in ("flask", "waitress"):
             pin = re.search(rf"{dependency}==[0-9.]+", product)[0]
-            self.assertIn(pin, setup)
+            self.assertNotIn(pin, setup)
+        self.assertIn('"${sidecar_requirements[@]}"', setup)
+
+    def test_qa_launch_uses_the_linked_fixture_variable(self):
+        skill = (ROOT / ".factory/skills/pp-mission-qa/SKILL.md").read_text()
+        self.assertIn('--data-dir "$ROOT/data"', skill)
+        self.assertNotIn("$QA_ROOT", skill)
 
     def test_setup_builds_packages_without_starting_services(self):
         setup = SETUP.read_text()

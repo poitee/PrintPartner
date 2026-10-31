@@ -30,7 +30,7 @@ loopback ports. The start command is:
 
 ```sh
 node scripts/verify-print-partner/control-print-partner.mjs launch \
-  --mode npm --data-dir "$QA_ROOT/data" --api-port "$API_PORT" --ui-port "$UI_PORT"
+  --mode npm --data-dir "$ROOT/data" --api-port "$API_PORT" --ui-port "$UI_PORT"
 node scripts/verify-print-partner/control-print-partner.mjs doctor
 ```
 

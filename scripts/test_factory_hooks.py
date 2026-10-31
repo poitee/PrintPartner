@@ -32,7 +32,19 @@ class GuardHookTests(unittest.TestCase):
 
     def test_merges_are_blocked(self):
         self.assertBlocked("Execute", {"command": "gh pr merge 12 --squash"}, "maintainer")
-        self.assertBlocked("Execute", {"command": "gh api -X PUT repos/o/r/pulls/12/merge"}, "maintainer")
+        for options in ("-X PUT", "-XPUT", "--method PUT", "--method=PUT"):
+            self.assertBlocked("Execute", {"command": f"gh api {options} repos/o/r/pulls/12/merge"}, "maintainer")
+            self.assertBlocked("Execute", {"command": f"gh api repos/o/r/pulls/12/merge {options}"}, "maintainer")
+
+    def test_merge_status_reads_are_allowed(self):
+        for options in ("", "-X GET", "--method GET", "--method=GET"):
+            self.assertAllowed("Execute", {"command": f"gh api {options} repos/o/r/pulls/12/merge"})
+
+    def test_shell_continuations_are_normalized(self):
+        for newline in ("\n", "\r\n"):
+            self.assertBlocked("Execute", {"command": f"git push \\{newline} --force origin topic"}, "force-push")
+            self.assertBlocked("Execute", {"command": f"git push \\{newline} origin HEAD:main"}, "main only")
+            self.assertAllowed("Execute", {"command": f"git push \\{newline} origin topic"})
 
     def test_force_pushes_and_main_pushes_are_blocked(self):
         for command in ("git push --force origin topic", "git push -f origin topic",
@@ -63,6 +75,14 @@ class GuardHookTests(unittest.TestCase):
         patch = "*** Begin Patch\n*** Update File: /repo/.env.production\n*** End Patch\n"
         self.assertBlocked("ApplyPatch", {"input": patch}, "environment files")
         self.assertBlocked("ApplyPatch", patch, "environment files")
+
+    def test_patch_move_destinations_are_checked(self):
+        for destination, reason in ((".env", "environment files"),
+                                    (".git/config", "Git metadata"),
+                                    ("rust/bundle-manifest.json", "generated")):
+            patch = f"*** Update File: /repo/.env.example\n*** Move to: /repo/{destination}\n"
+            self.assertBlocked("ApplyPatch", {"input": patch}, reason)
+        self.assertAllowed("ApplyPatch", {"input": "*** Update File: /repo/a.py\n*** Move to: /repo/b.py\n"})
 
     def test_templates_and_ordinary_files_pass(self):
         self.assertAllowed("Create", {"file_path": "/repo/.env.example"})

@@ -5,9 +5,16 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 RUSTUP_VERSION=1.29.2
-NODE_RUNTIME=24.21.0
-NODE_PARITY=22.23.3
-PREFIX="${PP_TOOL_PREFIX:-$HOME/.local/print-partner}"
+node_versions="$(python3 - <<'PY'
+from pathlib import Path
+import re
+dockerfile = Path(".devcontainer/Dockerfile").read_text()
+for stage in ("runtime-node", "parity-node"):
+    print(re.search(rf"^FROM node:([0-9.]+)-\S+ AS {stage}$", dockerfile, re.M)[1])
+PY
+)"
+read -r NODE_RUNTIME NODE_PARITY <<<"$(echo "$node_versions" | tr '\n' ' ')"
+PREFIX="$HOME/.local/print-partner"
 
 case "$(uname -m)" in
   x86_64)
@@ -55,6 +62,9 @@ for spec in "node24 $NODE_RUNTIME $runtime_sha" "node22 $NODE_PARITY $parity_sha
     tar -xJf "$archive" -C "$PREFIX/$name" --strip-components 1
   fi
 done
+# Existing runtime proofs invoke this path rather than resolving PATH.
+"${as_root[@]}" ln -sfn "$PREFIX/node24/bin/node" /usr/bin/node
+test "$(/usr/bin/node --version)" = "v$NODE_RUNTIME"
 
 export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
 if [[ ! -x "$CARGO_HOME/bin/rustup" ]]; then
@@ -69,7 +79,16 @@ fi
 "$CARGO_HOME/bin/rustup" default "$("$CARGO_HOME/bin/rustup" show active-toolchain | cut -d" " -f1)"
 
 python3 -m venv "$PREFIX/sidecar-venv"
-"$PREFIX/sidecar-venv/bin/pip" install --quiet flask==3.1.3 waitress==3.0.2
+sidecar_pins="$(python3 - <<'PY'
+from pathlib import Path
+import re
+dockerfile = Path("slicer-sidecar/Dockerfile").read_text()
+for dependency in ("flask", "waitress"):
+    print(re.search(rf"\b{dependency}==[0-9.]+", dockerfile)[0])
+PY
+)"
+read -r -a sidecar_requirements <<<"$(echo "$sidecar_pins" | tr '\n' ' ')"
+"$PREFIX/sidecar-venv/bin/pip" install --quiet "${sidecar_requirements[@]}"
 
 cat >"$PREFIX/env.sh" <<ENV
 export PATH="$PREFIX/node24/bin:$CARGO_HOME/bin:\$PATH"

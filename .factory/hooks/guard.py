@@ -14,7 +14,8 @@ import sys
 GIT = r"\bgit(?:\s+-C\s+(?:\"[^\"]*\"|'[^']*'|\S+))*\s+"
 COMMAND_RULES = (
     (re.compile(r"\bgh\s+pr\s+merge\b"), "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(r"\bgh\s+api\b.*/pulls/\d+/merge\b"), "Merging is the maintainer's job. Report readiness instead."),
+    (re.compile(r"\bgh\s+api\b(?=[^;&|\n]*(?:-X\s*|--method[= ])PUT\b)[^;&|\n]*/pulls/\d+/merge\b"),
+     "Merging is the maintainer's job. Report readiness instead."),
     (re.compile(GIT + r"push\b.*(\s--force\b|\s--force-with-lease\b|\s-[a-zA-Z]*f\b|\s\+\S)"),
      "Never force-push. Add a commit instead."),
     (re.compile(GIT + r"push\b.*\s(\S+:)?(refs/heads/)?main(?:\s|$)"), "Push a branch and open a PR; main only changes by merge."),
@@ -23,7 +24,7 @@ COMMAND_RULES = (
 )
 
 GENERATED = {"rust/bundle-manifest.json"}
-PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
+PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", re.M)
 
 
 def protected_path(raw):
@@ -46,7 +47,7 @@ def decide(payload):
     if not isinstance(data, dict) and not (tool == "ApplyPatch" and isinstance(data, str)):
         return "Expected object tool input, or a patch string for ApplyPatch."
     if tool == "Execute":
-        command = str(data.get("command", ""))
+        command = str(data.get("command", "")).replace("\\\r\n", "").replace("\\\n", "")
         for pattern, reason in COMMAND_RULES:
             if pattern.search(command):
                 return reason
