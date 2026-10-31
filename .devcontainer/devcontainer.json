@@ -1,0 +1,23 @@
+{
+  "name": "Print Partner Rust and React",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "remoteUser": "developer",
+  "userEnvProbe": "none",
+  "updateRemoteUserUID": true,
+  "workspaceFolder": "/workspaces/PrintPartner",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/PrintPartner,type=bind",
+  "containerEnv": {
+    "PP_SCHEMA_PARITY_NODE": "/opt/node22/bin/node",
+    "PLAYWRIGHT_CHROMIUM_EXECUTABLE": "/usr/bin/chromium",
+    "INSTA_UPDATE": "no"
+  },
+  "forwardPorts": [],
+  "otherPortsAttributes": {
+    "onAutoForward": "ignore"
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "shutdownAction": "stopContainer"
+}
