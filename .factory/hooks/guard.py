@@ -327,7 +327,9 @@ def shell_commands(source):
             match = ANSI_C_QUOTE.match(source, i)
             if not match:
                 raise ValueError("unterminated quote")
-            word = (word or "") + match.group(1).encode("latin-1", "backslashreplace").decode("unicode_escape")
+            decoded = match.group(1).encode("latin-1", "backslashreplace").decode("unicode_escape")
+            # Bash ends an ANSI-C quoted string at a decoded NUL.
+            word = (word or "") + decoded.split("\x00", 1)[0]
             i = match.end()
         elif source.startswith("$(", i):
             end = closing_paren(source, i + 2)
@@ -586,8 +588,10 @@ def long_prefix(arg, option, shortest):
 
 def config_reads(rest):
     # Read operations are options or the first operand; a value such as "get" is not one.
-    operands = [arg for arg in rest if not arg.startswith("-")]
-    flags = {arg.split("=", 1)[0] for arg in rest if arg.startswith("-")}
+    # Everything after "--" is an operand, even when it starts with "-".
+    end = rest.index("--") if "--" in rest else len(rest)
+    operands = [arg for arg in rest[:end] if not arg.startswith("-")] + rest[end + 1:]
+    flags = {arg.split("=", 1)[0] for arg in rest[:end] if arg.startswith("-")}
     # "git config <key>" with no value or write option is the legacy read form.
     single_key = len(operands) == 1 and "." in operands[0] and not flags & CONFIG_WRITE_OPTIONS
     return bool(flags & CONFIG_READ_OPTIONS or operands[:1] and operands[0] in CONFIG_READ_COMMANDS or single_key)

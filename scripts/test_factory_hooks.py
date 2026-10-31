@@ -143,7 +143,7 @@ class GuardHookTests(unittest.TestCase):
                         "git push origin HEAD:main <<< --dry-run",
                         'output="$(case x in x) git push origin main;; esac)"',
                         "x=$(if true; then case a in a) git push origin main;; esac; fi)",
-                        "0<<EOF git push origin HEAD:main\nbody\nEOF"):
+                        "0<<EOF git push origin HEAD:main\nbody\nEOF", "$'git\\0ignored' push origin main"):
             self.assertBlocked("Execute", {"command": command}, "main only")
         self.assertBlocked("Execute", {"command": "<<< x gh pr merge 12"}, "maintainer")
         self.assertBlocked("Execute", {"command": "0<<< x gh pr merge 12"}, "maintainer")
@@ -301,7 +301,8 @@ class GuardHookTests(unittest.TestCase):
                                 ("git config core.hooksPath /dev/null", "hooks"),
                                 ("git config set core.hooksPath /dev/null", "hooks"),
                                 ("git config core.hooksPath get", "hooks"),
-                                ("git config set core.hooksPath list", "hooks")):
+                                ("git config set core.hooksPath list", "hooks"),
+                                ("git config -- core.hooksPath --get; git commit -m change", "hooks")):
             self.assertBlocked("Execute", {"command": command}, reason)
         self.assertAllowed("Execute", {"command": "git commit --no-edit --amend"})
         for command in ("cat <<'EOF'\n$(git push origin main)\nEOF",
