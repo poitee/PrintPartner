@@ -9,18 +9,20 @@ tool input Droid supplies and refuses known-dangerous shapes.
 import json
 from pathlib import PurePosixPath
 import re
+import shlex
 import sys
 
-GIT = r"\bgit(?:\s+-C\s+(?:\"[^\"]*\"|'[^']*'|\S+))*\s+"
+GIT = r"^git(?:\s+-C\s+(?:\"[^\"]*\"|'[^']*'|\S+))*\s+"
 COMMAND_RULES = (
-    (re.compile(r"\bgh\s+pr\s+merge\b"), "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(r"\bgh\s+api\b(?=[^;&|\n]*(?:-X\s*|--method[= ])PUT\b)[^;&|\n]*/pulls/\d+/merge\b"),
+    (re.compile(r"^gh\s+pr\s+merge\b"), "Merging is the maintainer's job. Report readiness instead."),
+    (re.compile(r"^gh\s+api\b(?=[^;&|\n]*(?:-X\s*|--method[= ])PUT\b)[^;&|\n]*/pulls/\d+/merge\b"),
      "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(GIT + r"push\b[^;&|\n]*(\s--force\b|\s--force-with-lease\b|\s-[a-zA-Z]*f\b|\s\+\S)"),
+    (re.compile(GIT + r"push\b[^;&|\n]*(\s--force(?=\s|$)|\s--force-with-lease(?:=|\s|$)|\s-[a-zA-Z]*f\b|\s\+\S)"),
      "Never force-push. Add a commit instead."),
     (re.compile(GIT + r"push\b[^;&|\n]*[ \t](\S+:)?(refs/heads/)?main(?:\s|[;&|]|$)"), "Push a branch and open a PR; main only changes by merge."),
-    (re.compile(GIT + r"push\b[^;&|\n]*\s--tags\b|\bgh\s+release\s+create\b"), "Releases and tags need separate authorization."),
-    (re.compile(r"--no-verify\b"), "Do not bypass Git hooks."),
+    (re.compile(GIT + r"push\b[^;&|\n]*\s--tags\b|^gh\s+release\s+create\b"), "Releases and tags need separate authorization."),
+    (re.compile(GIT + r"(?:commit|push|merge|rebase|am|cherry-pick|revert)\b.*\s--no-verify(?=\s|$)"),
+     "Do not bypass Git hooks."),
 )
 
 GENERATED = {"rust/bundle-manifest.json"}
@@ -34,9 +36,48 @@ def protected_path(raw):
         return "Do not edit Git metadata."
     if (name == ".env" or name.startswith(".env.")) and not name.endswith(".example"):
         return "Keep real environment files out of agent edits; use the .example template."
-    if any(raw.replace("\\", "/").endswith(entry) for entry in GENERATED):
+    if any(path.as_posix().endswith(entry) for entry in GENERATED):
         return "This file is generated. Run its generator instead of editing it."
     return None
+
+
+def shell_commands(source):
+    """Extract simple commands, excluding quoted literals and heredoc bodies.
+
+    This deliberately handles common shell shapes, not shell evaluation.
+    """
+    lines, pending = [], []
+    for line in source.splitlines(keepends=True):
+        if pending:
+            delimiter, tabs = pending[0]
+            if (line.lstrip("\t") if tabs else line).rstrip("\r\n") == delimiter:
+                pending.pop(0)
+            continue
+        lines.append(line)
+        lexer = shlex.shlex(line, posix=False, punctuation_chars="<>")
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            continue  # A multiline quoted string is parsed by the lexer below.
+        for i, token in enumerate(tokens[:-1]):
+            if token == "<<":
+                delimiter = tokens[i + 1]
+                tabs = delimiter.startswith("-")
+                pending.append((delimiter.lstrip("-").strip("'\""), tabs))
+    lexer = shlex.shlex("".join(lines), posix=False, punctuation_chars=";&|\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    command = []
+    for token in lexer:
+        if token and all(char in ";&|\n" for char in token):
+            if command:
+                yield command
+                command = []
+        else:
+            command.append(shlex.split(token)[0])
+    if command:
+        yield command
 
 
 def decide(payload):
@@ -48,9 +89,18 @@ def decide(payload):
         return "Expected object tool input, or a patch string for ApplyPatch."
     if tool == "Execute":
         command = str(data.get("command", "")).replace("\\\r\n", "").replace("\\\n", "")
-        for pattern, reason in COMMAND_RULES:
-            if pattern.search(command):
-                return reason
+        try:
+            for args in shell_commands(command):
+                if args[0] not in ("git", "gh"):
+                    continue
+                # Preserve spaces within arguments, but remove unnecessary quotes.
+                executable = " ".join(shlex.quote(arg) if any(c.isspace() for c in arg) else arg
+                                      for arg in args)
+                for pattern, reason in COMMAND_RULES:
+                    if pattern.search(executable):
+                        return reason
+        except ValueError:
+            return "Cannot parse shell command; use a simpler command."
         return None
     paths = []
     if tool in ("Create", "Edit"):

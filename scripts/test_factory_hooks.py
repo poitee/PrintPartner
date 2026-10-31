@@ -59,6 +59,7 @@ class GuardHookTests(unittest.TestCase):
         self.assertBlocked("Execute", {"command": "gh release create v1"}, "authorization")
         self.assertBlocked("Execute", {"command": "git push --tags"}, "authorization")
         self.assertBlocked("Execute", {"command": "git commit --no-verify -m x"}, "hooks")
+        self.assertBlocked("Execute", {"command": "git -C /repo push --no-verify origin topic"}, "hooks")
 
     def test_ordinary_commands_pass(self):
         for command in ("git push -u origin HEAD:chore/topic", "gh pr view 12",
@@ -73,6 +74,27 @@ class GuardHookTests(unittest.TestCase):
                 self.assertAllowed("Execute", {"command": f"git push -u origin HEAD{separator}{following}"})
             self.assertBlocked("Execute", {"command": f"echo ok{separator}git push origin HEAD:main"}, "main only")
             self.assertBlocked("Execute", {"command": f"git push origin HEAD:main{separator}echo ok"}, "main only")
+
+    def test_command_literals_and_heredoc_data_are_allowed(self):
+        for command in ("rg -- '--no-verify' .factory",
+                        "printf '%s\\n' 'gh pr merge 12 --squash'",
+                        "git log --grep 'gh pr merge'",
+                        "gh pr list --search '--no-verify'",
+                        "git log --grep --no-verify",
+                        "python3 - <<'PY'\nprint('git push --force')\nPY\n",
+                        "python3 - <<'PY'\nprint(\"unmatched shell quote: '\")\nPY\n"):
+            self.assertAllowed("Execute", {"command": command})
+        self.assertBlocked("Execute", {"command": "python3 - <<'PY'\nprint('ok')\nPY\ngit push origin main"}, "main only")
+
+    def test_quoted_push_arguments_and_safe_force_option(self):
+        self.assertBlocked("Execute", {"command": 'git push origin "HEAD:main"'}, "main only")
+        self.assertBlocked("Execute", {"command": "git push '--force' origin topic"}, "force-push")
+        self.assertAllowed("Execute", {"command": "git push --force-if-includes origin HEAD:topic"})
+
+    def test_generated_paths_are_normalized(self):
+        for path in ("/repo/rust/./bundle-manifest.json", "/repo/rust//bundle-manifest.json"):
+            self.assertBlocked("Edit", {"file_path": path}, "generated")
+            self.assertBlocked("ApplyPatch", {"input": f"*** Update File: {path}\n"}, "generated")
 
     def test_protected_files_are_blocked_for_each_edit_tool(self):
         self.assertBlocked("Create", {"file_path": "/repo/.env"}, "environment files")
