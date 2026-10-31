@@ -146,6 +146,7 @@ class GuardHookTests(unittest.TestCase):
             self.assertBlocked("Execute", {"command": command}, "main only")
         self.assertBlocked("Execute", {"command": "<<< x gh pr merge 12"}, "maintainer")
         for command in ("git push origin topic >main 2>&1", 'echo "$(case x in (y) echo ok;; esac)"',
+                        'echo "$(case a in esac)"',
                         "echo $(echo showcase) && git status"):
             self.assertAllowed("Execute", {"command": command})
         self.assertBlocked("Execute", {"command": "env -S 'git push origin main'"}, "Cannot classify")
@@ -211,6 +212,7 @@ class GuardHookTests(unittest.TestCase):
             subprocess.run(["git", "-C", folder, "config", "--unset", "push.followTags"], check=True)
             for command in ("git branch --show-current && git push -u origin HEAD",
                             "git config --get push.followTags; git push origin HEAD:topic",
+                            "git config --get-color color.diff; git push origin HEAD:topic",
                             "git remote -v && git push origin HEAD:topic",
                             "printf '%s\\n' 'GIT_CONFIG_COUNT=1'; git push origin HEAD:topic",
                             "echo GIT_DIR=.git && git push origin HEAD",
@@ -234,6 +236,18 @@ class GuardHookTests(unittest.TestCase):
                                         capture_output=True, text=True, check=False)
                 self.assertEqual(result.returncode, 2, command)
                 self.assertIn("destination branch", result.stderr)
+
+    def test_skipped_or_physical_directory_changes_leave_head_unknown(self):
+        with tempfile.TemporaryDirectory() as folder:
+            subprocess.run(["git", "init", "-q", "-b", "main", folder], check=True)
+            subprocess.run(["git", "init", "-q", "-b", "topic", str(Path(folder, "sub"))], check=True)
+            for command, code in (("cd sub && git push origin HEAD", 0),
+                                  ("{ if false; then cd sub; fi; }; git push origin HEAD", 2),
+                                  ("cd -P sub && git push origin HEAD", 2)):
+                payload = {"tool_name": "Execute", "cwd": folder, "tool_input": {"command": command}}
+                result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, code, command + result.stderr)
 
     def test_shell_expansions_in_push_destinations_are_refused(self):
         for command in ('branch=main; git push origin "HEAD:$branch"', "git push origin HEAD:$branch",
@@ -272,8 +286,9 @@ class GuardHookTests(unittest.TestCase):
         for command, reason in (("git push --dry-run --no-dry-run --force origin topic", "force-push"),
                                 ("gh pr merge 12 --squash --subject --help", "maintainer"),
                                 ("gh api graphql -X POST --input -", "Cannot classify"),
-                                ("cd /tmp/elsewhere && gh api graphql -F query=@merge.graphql", "Cannot classify"),
-                                ("cd $DIR && gh api graphql -F query=@merge.graphql", "Cannot classify"),
+                                ("cd /tmp/elsewhere && gh api graphql -F query=@merge.graphql", "separate command"),
+                                ("cd $DIR && gh api graphql -F query=@merge.graphql", "separate command"),
+                                ("gh api graphql -F query=@/tmp/elsewhere/merge.graphql", "Cannot classify"),
                                 ("cat <<EOF\n$(git push origin main)\nEOF", "main only"),
                                 ("git -c core.hooksPath=/dev/null commit -m change", "hooks"),
                                 ("git config core.hooksPath /dev/null", "hooks"),
@@ -313,17 +328,21 @@ class GuardHookTests(unittest.TestCase):
                 'mutation { mergePullRequest(input: {}) { ...R } }"}')
             # The shell reads the merge mutation from the outer directory; sub holds a harmless file.
             Path(folder, "sub", "merge.graphql").write_text("query { viewer { login } }")
-            for command in ("(cd sub); gh api graphql -F query=@merge.graphql",
-                            "cd sub | cat; gh api graphql -F query=@merge.graphql",
-                            "env -C sub gh api graphql -F query=@reply.graphql",
-                            "true || cd sub; gh api graphql -F query=@merge.graphql",
-                            "if false; then cd sub; fi; gh api graphql -F query=@merge.graphql"):
+            for command, reason in (("(cd sub); gh api graphql -F query=@merge.graphql", "separate command"),
+                                    ("cd sub | cat; gh api graphql -F query=@merge.graphql", "separate command"),
+                                    ("env -C sub gh api graphql -F query=@reply.graphql", "Cannot classify"),
+                                    ("true || cd sub; gh api graphql -F query=@merge.graphql", "separate command"),
+                                    ("{ if false; then cd sub; fi; }; gh api graphql -F query=@merge.graphql",
+                                     "separate command"),
+                                    ("git checkout other && gh api graphql -F query=@reply.graphql", "separate command"),
+                                    ("cd -P sub && gh api graphql -F query=@merge.graphql", "separate command")):
                 payload["tool_input"]["command"] = command
                 result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                         capture_output=True, text=True, check=False)
                 self.assertEqual(result.returncode, 2, command)
-                self.assertIn("Cannot classify", result.stderr)
-            payload["tool_input"]["command"] = "cd sub && gh api graphql --input body.json"
+                self.assertIn(reason, result.stderr)
+            payload.update(cwd=str(Path(folder, "sub")))
+            payload["tool_input"]["command"] = "gh api graphql --input body.json"
             result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 2, result.stderr)

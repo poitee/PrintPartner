@@ -7,6 +7,7 @@ tool input Droid supplies and refuses known-dangerous shapes. When it cannot
 classify a git or gh invocation, it refuses rather than guessing.
 """
 
+import itertools
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -67,8 +68,8 @@ ALLOWED_MUTATIONS = {"addComment", "addPullRequestReviewComment", "addPullReques
                      "updatePullRequestReviewComment"}
 # GraphQL ends comments at CR or LF, and a block string may contain an escaped \""".
 GRAPHQL_TOKEN = re.compile(r'"""(?:\\"""|[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n\r])*"|#[^\n\r]*|\.\.\.|[A-Za-z_]\w*|\S')
-STALE_INPUT = ("This command may change a file before gh reads it; "
-               "write the request file in a separate command first.")
+STALE_INPUT = ("Run a gh api request that reads a file as a separate command; "
+               "other commands could change the file or directory before gh reads it.")
 API_WRITE = ("Through gh api, agents may read and write PR or issue comments and review threads; "
              "other writes need the maintainer.")
 SAFE_PUSH_LONG = {"--atomic", "--dry-run", "--force-if-includes", "--ipv4", "--ipv6", "--no-atomic",
@@ -84,7 +85,8 @@ ENV_CONFIG = "GIT_CONFIG_* variables can disable hooks or redirect pushes; run g
 GIT_CONFIG_ENV = re.compile(r"^GIT_CONFIG\w*=")
 # Builtins whose arguments are assignments, such as export GIT_DIR=...
 DECLARATIONS = {"declare", "export", "local", "readonly", "typeset"}
-CONFIG_READ_OPTIONS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l"}
+CONFIG_READ_OPTIONS = {"--get", "--get-all", "--get-color", "--get-colorbool", "--get-regexp",
+                       "--get-urlmatch", "--list", "-l"}
 CONFIG_READ_COMMANDS = {"get", "list"}
 # Environment assignments that point git at another repository.
 GIT_LOCATION = re.compile(r"^(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)=")
@@ -158,7 +160,9 @@ def closing_paren(source, i):
         char = source[i]
         if char in "ce":
             keyword = re.match(r"(case|esac)(?=[\s;&|)]|$)", source[i:i + 5])
-            if keyword and command_position(source, start, i):
+            # "case a in esac" has no arms, so esac may follow "in".
+            if keyword and (command_position(source, start, i)
+                            or keyword.group(1) == "esac" and source[start:i].split()[-1:] == ["in"]):
                 if keyword.group(1) == "case":
                     cases.append(depth)
                 elif cases:
@@ -747,13 +751,7 @@ def without_repo_flags(args):
     return kept
 
 
-def mentioned_elsewhere(name, source):
-    """Whether a request file's name appears in the command source beyond its single reference."""
-    base = re.escape(PurePosixPath(name).name)
-    return len(re.findall(rf"(?<![\w.-]){base}(?![\w.-])", source)) > 1
-
-
-def gh_reason(args, cwd, source=""):
+def gh_reason(args, cwd, alone=True):
     args = without_repo_flags(args)
     if any(EXPANDED in arg for arg in args[:2]):
         raise Unclear(EXPANSION)
@@ -808,10 +806,11 @@ def gh_reason(args, cwd, source=""):
     method = (method or ("POST" if fields or body is not None else "GET")).upper()
     if method in ("GET", "HEAD"):
         return None
-    # The hook reads request files before the command runs, so an earlier write would go unseen.
-    files = [value.partition("=")[2][1:] for flag, value in fields
-             if flag in ("-F", "--field") and value.partition("=")[2].startswith("@")]
-    if any(mentioned_elsewhere(name, source) for name in files + ([body] if body else [])):
+    # The hook reads request files before the command runs. Any other command, such as a
+    # checkout, redirect, or directory change, could replace what gh reads.
+    reads_file = body is not None or any(flag in ("-F", "--field") and value.partition("=")[2].startswith("@")
+                                         for flag, value in fields)
+    if reads_file and not alone:
         return STALE_INPUT
     path = urlsplit(endpoint).path.strip("/")
     if path == "graphql" or path.endswith("/graphql"):
@@ -837,8 +836,7 @@ def decide(payload):
     if tool == "Execute":
         cwd = str(payload.get("cwd") or os.getcwd())
         try:
-            source = str(data.get("command", ""))
-            parsed = shell_commands(source)
+            parsed = shell_commands(str(data.get("command", "")))
             commands = [(*program(args), scoped, conditional) for args, scoped, conditional in parsed]
             assigned = [word for _, _, _, words, *_ in commands for word in words]
             # Substitutions run out of source order, so any branch change makes HEAD unknown.
@@ -850,18 +848,22 @@ def decide(payload):
             config_unknown = head_moves or any(writes_config(name, rest) for name, rest, *_ in commands)
             control = 0
             for (args, *_), (name, rest, moved, _, scoped, conditional) in zip(parsed, commands):
-                control += args[0] in ("if", "while", "until", "for", "case", "select")
+                # Prefixes such as "{" or "!" can come before a control keyword.
+                leading = list(itertools.takewhile(lambda word: word in SHELL_PREFIXES | {"for", "case", "select"}, args))
+                control += sum(word in ("if", "while", "until", "for", "case", "select") for word in leading)
                 control -= args[0] in ("fi", "done", "esac")
                 if name in ("cd", "pushd", "popd"):
                     targets = [arg for arg in rest if not arg.startswith("-")]
                     # A directory change that may be skipped leaves no single directory after it.
-                    plain = (name != "popd" and len(targets) == 1 and not (scoped or moved or conditional or control)
+                    # cd -P resolves symlinks, so only a bare cd has a lexical result.
+                    plain = (name != "popd" and rest == targets and len(targets) == 1
+                             and not (scoped or moved or conditional or control)
                              and not re.search(r"[$~`\x00]", targets[0]))
                     # A directory change inside a subshell has no single directory after it.
                     cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
                     continue
                 here = None if moved else cwd
-                reason = git_reason(rest, here, head_moves, config_unknown, env_config) if name == "git" else gh_reason(rest, here, source) if name == "gh" else None
+                reason = git_reason(rest, here, head_moves, config_unknown, env_config) if name == "git" else gh_reason(rest, here, len(parsed) == 1) if name == "gh" else None
                 if reason:
                     return reason
         except Unclear as error:
