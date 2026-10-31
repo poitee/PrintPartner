@@ -27,12 +27,12 @@ export async function fetchPrinterPlanBindings(): Promise<PrinterPlanBinding[]> 
 }
 
 export async function savePrinterPlanBinding(
-  integration_id: string,
-  profile_id: number | null,
+  integrationId: string,
+  profileId: number | null,
 ): Promise<PrinterPlanBinding[]> {
   const body = await engineFetch<{ bindings: PrinterPlanBinding[] }>("/settings/printer-plan-bindings", {
     method: "PUT",
-    body: JSON.stringify({ integration_id, profile_id }),
+    body: JSON.stringify({ integration_id: integrationId, profile_id: profileId }),
   });
   return body.bindings;
 }

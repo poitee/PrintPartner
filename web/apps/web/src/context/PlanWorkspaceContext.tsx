@@ -1050,7 +1050,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
   }, [discardFileChoices, enqueueDraftEdit, queryClient, resolveOpenDraftWorkspace, selectedProfileId, updateDraftUi]);
 
   const setSpoolmanSpool = useCallback(
-    async (partId: number, spoolman_spool_id: string | null) => {
+    async (partId: number, spoolmanSpoolId: string | null) => {
       if (!review || selectedProfileId == null) return;
       const profileId = selectedProfileId;
       updateDraftUi(profileId, (current) => ({
@@ -1060,7 +1060,7 @@ export function PlanWorkspaceProvider({ children }: { children: ReactNode }) {
       try {
         await patchPartMutation.mutateAsync({
           partId,
-          body: { spoolman_spool_id },
+          body: { spoolman_spool_id: spoolmanSpoolId },
         });
       } finally {
         updateDraftUi(profileId, (current) => ({

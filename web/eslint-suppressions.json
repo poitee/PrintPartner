@@ -1,0 +1,142 @@
+{
+  "apps/server/src/assistant/compatibility.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 8
+    }
+  },
+  "apps/server/src/assistant/operation-resources.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 76
+    }
+  },
+  "apps/server/src/assistant/source-docs-digest.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/assistant/tools.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 6
+    }
+  },
+  "apps/server/src/db/repository.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 4
+    }
+  },
+  "apps/server/src/integrations/adapters/bambu.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/integrations/spoolman-client.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/routes/assistant.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/bambu-connect.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 4
+    }
+  },
+  "apps/server/src/routes/jobs.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 12
+    }
+  },
+  "apps/server/src/routes/plans.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/routes/printer-checkoff-progress.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/routes/printer-send-queue.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/settings.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/routes/sources.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/routes/spoolman-workflow-access.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/build-recipe.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/guide-ingest.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 9
+    }
+  },
+  "apps/server/src/services/interaction-graph.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/knowledge-bundle.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/services/plan-compare.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/printer-checkoff-store.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/services/printer-outcomes-store.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 5
+    }
+  },
+  "apps/server/src/services/printer-profile-assignments.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/services/printer-send-queue.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-upload-farm-feature-access.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/printer-upload-feature-access.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/storage-lease.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  }
+}

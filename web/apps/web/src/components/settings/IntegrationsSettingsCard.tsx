@@ -77,8 +77,8 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
 
   const onAddSpoolman = async () => {
     const name = newName.trim();
-    const base_url = newUrl.trim();
-    if (!name || !base_url) return;
+    const baseUrl = newUrl.trim();
+    if (!name || !baseUrl) return;
     setBusy(true);
     setMessage(null);
     setLoadError(null);
@@ -86,7 +86,7 @@ export default function IntegrationsSettingsCard({ engineReady }: Props) {
       const created = await createIntegration({
         type: "spoolman",
         name,
-        config: { base_url, enabled: true },
+        config: { base_url: baseUrl, enabled: true },
       });
       setNewName("");
       if (!defaultId) {

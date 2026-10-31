@@ -130,7 +130,7 @@ export function mergeProgressIntoReview(
     assembled_units?: boolean[];
   },
 ): PlanReview {
-  const part_groups = review.part_groups.map((g) => ({
+  const partGroups = review.part_groups.map((g) => ({
     ...g,
     parts: g.parts.map((p) => {
       if (p.id !== partId) return p;
@@ -138,15 +138,15 @@ export function mergeProgressIntoReview(
       // enforces this in the domain layer, so mirror it in the cache: without
       // this, un-printing a unit leaves a stale assembled=true that reappears
       // as a checked "Assembled" toggle the moment the unit is re-checked.
-      const assembled_units =
+      const assembledUnits =
         progress.assembled_units ??
         (p.assembled_units
           ? p.assembled_units.map((a, i) => (progress.print_units[i] ? a : false))
           : p.assembled_units);
-      return mergeReviewPartPatch(p, { ...progress, assembled_units });
+      return mergeReviewPartPatch(p, { ...progress, assembled_units: assembledUnits });
     }),
   }));
-  return { ...review, part_groups };
+  return { ...review, part_groups: partGroups };
 }
 
 /** Apply an assembled-units PATCH response into review payload (assembly tracking). */
@@ -155,11 +155,11 @@ export function mergeAssembledIntoReview(
   partId: number,
   progress: { assembled_units: boolean[] },
 ): PlanReview {
-  const part_groups = review.part_groups.map((g) => ({
+  const partGroups = review.part_groups.map((g) => ({
     ...g,
     parts: g.parts.map((p) =>
       p.id === partId ? mergeReviewPartPatch(p, progress) : p,
     ),
   }));
-  return { ...review, part_groups };
+  return { ...review, part_groups: partGroups };
 }
