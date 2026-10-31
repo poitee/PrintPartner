@@ -22,7 +22,23 @@ This page covers what the Rust jobs run and how to reproduce them. [Change a CI 
 The `agent-guidance` job in `actionlint.yml` checks the root `AGENTS.md` and the
 repo skills in `.factory/skills/`. It checks local file links (not heading
 anchors), each skill's `name` and `description`, and that Git does not ignore
-these files. It makes no network requests. Run it locally with `just guidance`.
+these files. It also tests the staged-Rust snapshot in the opt-in pre-commit
+hook, including sparse worktrees. It makes no network requests. Run it locally
+with `just guidance`.
+
+## Large-file and pre-commit checks
+
+The `large-files` job in `actionlint.yml` fails when any file in the Git index
+is larger than 1.5 MiB (1,572,864 bytes). The largest tracked file today is a
+1.2 MB parity fixture. Generate bigger test data at test time or publish it as
+an artifact. Run the check with `python3 scripts/check-large-files.py`.
+
+`just hooks` sets `core.hooksPath` to `.githooks` for your clone. The
+pre-commit hook then rejects whitespace errors and oversized files in the
+staged changes. When staged Rust files change, it runs `cargo fmt --check` on
+a copy of the staged files, so unstaged edits do not change the result.
+The hook is opt-in; CI runs the same checks either way.
+
 ## The OS jobs
 
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.
