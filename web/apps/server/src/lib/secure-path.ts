@@ -1,10 +1,4 @@
-import {
-  createReadStream,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { createReadStream, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import type { ReadStream } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveCaseInsensitiveRepoPath } from "../services/part-paths.js";
@@ -15,11 +9,7 @@ function resolvedExistingPathUnderRoot(root: string, path: string): string | nul
     const base = realpathSync(resolve(root));
     const candidate = realpathSync(resolve(path));
     const relativePath = relative(base, candidate);
-    if (
-      relativePath === ".." ||
-      relativePath.startsWith(`..${sep}`) ||
-      isAbsolute(relativePath)
-    ) {
+    if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
       return null;
     }
     return candidate;

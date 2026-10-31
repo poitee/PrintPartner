@@ -69,7 +69,13 @@ describe("tenant disk quota", () => {
 function quotaFixture(tenantId = "tenant-a") {
   const dataDir = mkdtempSync(join(tmpdir(), "pp-quota-serial-"));
   dirs.push(dataDir);
-  return { dataDir, reposDir: join(dataDir, "repos"), tenantId, sourceIds: () => [], quotaBytes: 10 };
+  return {
+    dataDir,
+    reposDir: join(dataDir, "repos"),
+    tenantId,
+    sourceIds: () => [],
+    quotaBytes: 10,
+  };
 }
 
 it("serializes same-tenant writes and rescans retained bytes before the next writer", async () => {
@@ -78,8 +84,12 @@ it("serializes same-tenant writes and rescans retained bytes before the next wri
   mkdirSync(root, { recursive: true });
   let release!: () => void;
   let entered!: () => void;
-  const ready = new Promise<void>((resolve) => { entered = resolve; });
-  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const first = runWithTenantDiskQuota(input, async () => {
     chargeTenantDiskBytes(6);
     entered();
@@ -94,7 +104,9 @@ it("serializes same-tenant writes and rescans retained bytes before the next wri
     writeFileSync(join(root, "second"), "123456");
   });
   const refused = expect(second).rejects.toBeInstanceOf(TenantDiskQuotaError);
-  await runWithTenantDiskQuota({ ...input, tenantId: "tenant-b" }, async () => chargeTenantDiskBytes(10));
+  await runWithTenantDiskQuota({ ...input, tenantId: "tenant-b" }, async () =>
+    chargeTenantDiskBytes(10),
+  );
   expect(secondEntered).toBe(false);
   release();
   await first;
@@ -111,7 +123,9 @@ it("counts temporary writes conservatively and clears the budget for subsequent 
     chargeTenantDiskBytes(3);
   });
   await runWithTenantDiskQuota(input, async () => chargeTenantDiskBytes(10));
-  await runWithTenantDiskQuota({ ...input, quotaBytes: null }, async () => chargeTenantDiskBytes(1000));
+  await runWithTenantDiskQuota({ ...input, quotaBytes: null }, async () =>
+    chargeTenantDiskBytes(1000),
+  );
 });
 
 it("detaches scheduled child jobs so they acquire a fresh budget after the parent", async () => {
@@ -119,11 +133,17 @@ it("detaches scheduled child jobs so they acquire a fresh budget after the paren
   let child: Promise<void> | undefined;
   await runWithTenantDiskQuota(input, async () => {
     chargeTenantDiskBytes(10);
-    child = withoutTenantDiskQuota(() => new Promise<void>((resolve, reject) => {
-      setImmediate(() => {
-        runWithTenantDiskQuota(input, async () => chargeTenantDiskBytes(10)).then(resolve, reject);
-      });
-    }));
+    child = withoutTenantDiskQuota(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          setImmediate(() => {
+            runWithTenantDiskQuota(input, async () => chargeTenantDiskBytes(10)).then(
+              resolve,
+              reject,
+            );
+          });
+        }),
+    );
   });
   await child;
 });
@@ -151,8 +171,17 @@ it("counts abandoned upload bytes only for their tenant and refuses the next wri
   writeFileSync(join(other, "upload.zip"), Buffer.alloc(2000));
   symlinkSync(other, join(own, "other-tenant"));
   expect(await measureTenantDiskUsage({ ...input, sourceIds: [7] })).toBe(1005);
-  expect(await measureTenantDiskUsage({ ...input, tenantId: "tenant-a/../b", sourceIds: [] })).toBe(2000);
-  await expect(runWithTenantDiskQuota({
-    ...input, sourceIds: () => [7], quotaBytes: 1005,
-  }, async () => chargeTenantDiskBytes(1))).rejects.toBeInstanceOf(TenantDiskQuotaError);
+  expect(await measureTenantDiskUsage({ ...input, tenantId: "tenant-a/../b", sourceIds: [] })).toBe(
+    2000,
+  );
+  await expect(
+    runWithTenantDiskQuota(
+      {
+        ...input,
+        sourceIds: () => [7],
+        quotaBytes: 1005,
+      },
+      async () => chargeTenantDiskBytes(1),
+    ),
+  ).rejects.toBeInstanceOf(TenantDiskQuotaError);
 });

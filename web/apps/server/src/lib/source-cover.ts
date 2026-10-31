@@ -1,11 +1,6 @@
 import { createHash } from "node:crypto";
 import { OwnershipAdmissionError } from "../ownership/source-sync-admission.js";
-import {
-  existsSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { readReadmeText } from "./repo-readme.js";
 import { safeOutboundFetch } from "./outbound-url.js";
@@ -15,10 +10,8 @@ import { resolvedFileUnderRoot } from "./secure-path.js";
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
 const IMG_MD_RE = /!\[[^\]]*\]\(([^)]+)\)/g;
 const IMG_HTML_RE = /<img[^>]+src=["']([^"']+)["']/gi;
-const OG_IMAGE_RE =
-  /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i;
-const OG_IMAGE_RE_ALT =
-  /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i;
+const OG_IMAGE_RE = /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i;
+const OG_IMAGE_RE_ALT = /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i;
 const USER_AGENT = "PrintPartner/2.0 (source cover)";
 const MAX_BYTES = 3_000_000;
 const MAX_PAGE_BYTES = 1_000_000;
@@ -58,7 +51,10 @@ export function githubRepoSlug(url: string): [string, string] | null {
   }
   const host = parsed.hostname.toLowerCase();
   if (host !== "github.com" && host !== "www.github.com") return null;
-  const parts = parsed.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+  const parts = parsed.pathname
+    .replace(/^\/+|\/+$/g, "")
+    .split("/")
+    .filter(Boolean);
   if (parts.length < 2) return null;
   let repo = parts[1];
   if (repo.endsWith(".git")) repo = repo.slice(0, -4);
@@ -214,7 +210,10 @@ export async function downloadRemoteImage(url: string): Promise<Buffer | null> {
       await cancelResponseBody(response);
       return null;
     }
-    const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    const contentType = (response.headers.get("content-type") ?? "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
     if (!contentType.startsWith("image/")) {
       await cancelResponseBody(response);
       return null;
@@ -290,7 +289,13 @@ export async function ensureSourceCover(
         );
         const imageUrl = extractOgImageUrl(page);
         if (imageUrl) {
-          const cached = await downloadToCache(coversRoot, project, imageUrl, "og_image", options?.beforePublish);
+          const cached = await downloadToCache(
+            coversRoot,
+            project,
+            imageUrl,
+            "og_image",
+            options?.beforePublish,
+          );
           if (cached) return cached;
         }
       } catch (error) {
@@ -301,12 +306,24 @@ export async function ensureSourceCover(
     }
 
     if (resolvedFrom === "repo_file") {
-      const cached = copyLocalImage(coversRoot, project, target, resolvedFrom, options?.beforePublish);
+      const cached = copyLocalImage(
+        coversRoot,
+        project,
+        target,
+        resolvedFrom,
+        options?.beforePublish,
+      );
       if (cached) return cached;
       continue;
     }
 
-    const cached = await downloadToCache(coversRoot, project, target, resolvedFrom, options?.beforePublish);
+    const cached = await downloadToCache(
+      coversRoot,
+      project,
+      target,
+      resolvedFrom,
+      options?.beforePublish,
+    );
     if (cached) return cached;
   }
 

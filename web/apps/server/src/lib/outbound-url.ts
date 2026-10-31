@@ -26,9 +26,7 @@ function privateTargetsAllowed(options: OutboundUrlOptions): boolean {
   return Boolean(options.allowPrivate) && !privateOutboundDenied;
 }
 
-export type LookupFn = (
-  hostname: string,
-) => Promise<Array<{ address: string; family: number }>>;
+export type LookupFn = (hostname: string) => Promise<Array<{ address: string; family: number }>>;
 
 export type OutboundUrlOptions = {
   /** Allow private/loopback/link-local targets (LAN integrations). */
@@ -68,7 +66,12 @@ function classifyIpv4(address: string): AddressClass {
 }
 
 function normalizeIpv6(address: string): string {
-  return address.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0] ?? "";
+  return (
+    address
+      .toLowerCase()
+      .replace(/^\[|\]$/g, "")
+      .split("%")[0] ?? ""
+  );
 }
 
 /** Expand a compressed IPv6 literal into eight hex groups, or null if unparseable. */
@@ -137,11 +140,13 @@ export function createCheckedLookup(options: OutboundUrlOptions): LookupFunction
     void assertResolvedHostSafe(hostname, options).then(
       (addresses) => {
         const first = addresses[0];
-        if (!first) return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
+        if (!first)
+          return callback(new OutboundUrlError(`Could not resolve host: ${hostname}`), "", 4);
         if (lookupOptions.all) callback(null, addresses);
         else callback(null, first.address, first.family);
       },
-      (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)), "", 4),
+      (error: unknown) =>
+        callback(error instanceof Error ? error : new Error(String(error)), "", 4),
     );
   };
 }
@@ -299,9 +304,13 @@ export async function safeConnectorFetch(
     },
   });
   let finish!: () => void;
-  const closed = new Promise<void>((resolve) => { finish = resolve; });
+  const closed = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
   init.joinTransport?.(closed);
-  const destroy = () => { void dispatcher.destroy().then(finish, finish); };
+  const destroy = () => {
+    void dispatcher.destroy().then(finish, finish);
+  };
   const requestInit: RequestInit = { ...init, redirect: "manual" };
   Object.defineProperty(requestInit, "dispatcher", { value: dispatcher });
   try {
@@ -321,32 +330,39 @@ function responseWithDispatcher(
   response: Response,
   dispatcher: Agent,
   redirected: boolean,
-  destroy = () => { void dispatcher.destroy(); },
+  destroy = () => {
+    void dispatcher.destroy();
+  },
 ): Response {
   const reader = response.body?.getReader();
-  const body = reader ? new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const result = await reader.read();
-        if (result.done) {
-          controller.close();
-          destroy();
-        } else {
-          controller.enqueue(result.value);
-        }
-      } catch (error) {
-        controller.error(error);
-        destroy();
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader.cancel(reason);
-      } finally {
-        destroy();
-      }
-    },
-  }, { highWaterMark: 0 }) : null;
+  const body = reader
+    ? new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            try {
+              const result = await reader.read();
+              if (result.done) {
+                controller.close();
+                destroy();
+              } else {
+                controller.enqueue(result.value);
+              }
+            } catch (error) {
+              controller.error(error);
+              destroy();
+            }
+          },
+          async cancel(reason) {
+            try {
+              await reader.cancel(reason);
+            } finally {
+              destroy();
+            }
+          },
+        },
+        { highWaterMark: 0 },
+      )
+    : null;
   if (!body) destroy();
   const wrapped = new Response(body, {
     status: response.status,

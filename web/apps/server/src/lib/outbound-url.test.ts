@@ -36,16 +36,22 @@ describe("safeConnectorFetch", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP server");
 
     try {
-      await expect(safeConnectorFetch(`http://connector.test:${address.port}/`, {
-        signal: AbortSignal.timeout(500),
-      }, { allowPrivate: true, lookupFn: rebindingLookup })).rejects.toMatchObject({
+      await expect(
+        safeConnectorFetch(
+          `http://connector.test:${address.port}/`,
+          {
+            signal: AbortSignal.timeout(500),
+          },
+          { allowPrivate: true, lookupFn: rebindingLookup },
+        ),
+      ).rejects.toMatchObject({
         cause: { message: expect.stringMatching(/metadata/) },
       });
       expect(lookups).toBe(2);
       expect(requests).toBe(0);
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -61,16 +67,20 @@ describe("safeConnectorFetch", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP server");
 
     try {
-      const response = await safeConnectorFetch(`http://connector.test:${address.port}/`, {}, {
-        allowPrivate: true,
-        lookupFn: loopbackLookup,
-      });
+      const response = await safeConnectorFetch(
+        `http://connector.test:${address.port}/`,
+        {},
+        {
+          allowPrivate: true,
+          lookupFn: loopbackLookup,
+        },
+      );
       expect(response.status).toBe(302);
       expect(await response.text()).toBe("redirect");
       expect(host).toBe(`connector.test:${address.port}`);
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -131,15 +141,11 @@ describe("assertSafeOutboundUrl", () => {
     await expect(assertSafeOutboundUrl("http://127.0.0.1:8080/")).rejects.toThrow(
       /private or internal/,
     );
-    await expect(assertSafeOutboundUrl("http://10.0.0.5/")).rejects.toThrow(
-      /private or internal/,
+    await expect(assertSafeOutboundUrl("http://10.0.0.5/")).rejects.toThrow(/private or internal/);
+    await expect(assertSafeOutboundUrl("http://[::1]/")).rejects.toThrow(/private or internal/);
+    await expect(assertSafeOutboundUrl("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(
+      /metadata/,
     );
-    await expect(assertSafeOutboundUrl("http://[::1]/")).rejects.toThrow(
-      /private or internal/,
-    );
-    await expect(
-      assertSafeOutboundUrl("http://169.254.169.254/latest/meta-data/"),
-    ).rejects.toThrow(/metadata/);
     await expect(assertSafeOutboundUrl("http://[::ffff:127.0.0.1]/")).rejects.toThrow(
       /private or internal/,
     );
@@ -209,18 +215,18 @@ describe("assertSafeOutboundUrl", () => {
 
 describe("assertSafeOutboundHost", () => {
   it("allows private LAN hosts with allowPrivate", async () => {
-    await expect(
-      assertSafeOutboundHost("192.168.1.60", { allowPrivate: true }),
-    ).resolves.toBe("192.168.1.60");
+    await expect(assertSafeOutboundHost("192.168.1.60", { allowPrivate: true })).resolves.toBe(
+      "192.168.1.60",
+    );
   });
 
   it("rejects host:port and metadata", async () => {
     await expect(
       assertSafeOutboundHost("192.168.1.60:8883", { allowPrivate: true }),
     ).rejects.toThrow(/port separately/);
-    await expect(
-      assertSafeOutboundHost("169.254.169.254", { allowPrivate: true }),
-    ).rejects.toThrow(/metadata/);
+    await expect(assertSafeOutboundHost("169.254.169.254", { allowPrivate: true })).rejects.toThrow(
+      /metadata/,
+    );
   });
 });
 
@@ -236,13 +242,17 @@ describe("safeOutboundFetch", () => {
     ];
 
     try {
-      const response = await safeOutboundFetch(`http://dualstack.test:${address.port}/`, {
-        signal: AbortSignal.timeout(2_000),
-      }, { allowPrivate: true, lookupFn: dualStackLookup });
+      const response = await safeOutboundFetch(
+        `http://dualstack.test:${address.port}/`,
+        {
+          signal: AbortSignal.timeout(2_000),
+        },
+        { allowPrivate: true, lookupFn: dualStackLookup },
+      );
       expect(await response.text()).toBe("ipv4 fallback");
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -255,9 +265,9 @@ describe("safeOutboundFetch", () => {
       return lookups === 1
         ? [{ address: "93.184.216.34", family: 4 }]
         : [
-          { address: "93.184.216.34", family: 4 },
-          { address: "127.0.0.1", family: 4 },
-        ];
+            { address: "93.184.216.34", family: 4 },
+            { address: "127.0.0.1", family: 4 },
+          ];
     };
     const server = createServer((_request, response) => {
       requests++;
@@ -270,18 +280,24 @@ describe("safeOutboundFetch", () => {
     try {
       let failure: unknown;
       try {
-        await safeOutboundFetch(`http://localhost:${address.port}/secret`, {
-          signal: AbortSignal.timeout(300),
-        }, { lookupFn: rebindingLookup });
+        await safeOutboundFetch(
+          `http://localhost:${address.port}/secret`,
+          {
+            signal: AbortSignal.timeout(300),
+          },
+          { lookupFn: rebindingLookup },
+        );
       } catch (error) {
         failure = error;
       }
-      expect(failure).toMatchObject({ cause: { message: expect.stringMatching(/private or internal/) } });
+      expect(failure).toMatchObject({
+        cause: { message: expect.stringMatching(/private or internal/) },
+      });
       expect(lookups).toBe(2);
       expect(requests).toBe(0);
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -296,14 +312,18 @@ describe("safeOutboundFetch", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP server");
 
     try {
-      const response = await safeOutboundFetch(`http://localhost:${address.port}/body`, {}, {
-        allowPrivate: true,
-        lookupFn: loopbackLookup,
-      });
+      const response = await safeOutboundFetch(
+        `http://localhost:${address.port}/body`,
+        {},
+        {
+          allowPrivate: true,
+          lookupFn: loopbackLookup,
+        },
+      );
       expect(await response.text()).toBe("first second");
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -317,14 +337,18 @@ describe("safeOutboundFetch", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP server");
 
     try {
-      const response = await safeOutboundFetch(`http://localhost:${address.port}/stream`, {}, {
-        allowPrivate: true,
-        lookupFn: loopbackLookup,
-      });
+      const response = await safeOutboundFetch(
+        `http://localhost:${address.port}/stream`,
+        {},
+        {
+          allowPrivate: true,
+          lookupFn: loopbackLookup,
+        },
+      );
       await response.body?.cancel();
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -342,15 +366,19 @@ describe("safeOutboundFetch", () => {
 
     try {
       await expect(
-        safeOutboundFetch(`http://localhost:${address.port}/start`, {}, {
-          allowPrivate: true,
-          lookupFn: loopbackLookup,
-        }),
+        safeOutboundFetch(
+          `http://localhost:${address.port}/start`,
+          {},
+          {
+            allowPrivate: true,
+            lookupFn: loopbackLookup,
+          },
+        ),
       ).rejects.toThrow(/private or internal/);
       expect(requests).toBe(1);
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -367,15 +395,19 @@ describe("safeOutboundFetch", () => {
 
     try {
       await expect(
-        safeOutboundFetch(`http://localhost:${address.port}/start`, {}, {
-          allowPrivate: true,
-          lookupFn: loopbackLookup,
-        }),
+        safeOutboundFetch(
+          `http://localhost:${address.port}/start`,
+          {},
+          {
+            allowPrivate: true,
+            lookupFn: loopbackLookup,
+          },
+        ),
       ).rejects.toThrow(/metadata/);
       expect(requests).toBe(1);
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -395,10 +427,14 @@ describe("safeOutboundFetch", () => {
     if (!address || typeof address === "string") throw new Error("Expected TCP server");
 
     try {
-      const response = await safeOutboundFetch(`http://localhost:${address.port}/start`, {}, {
-        allowPrivate: true,
-        lookupFn: loopbackLookup,
-      });
+      const response = await safeOutboundFetch(
+        `http://localhost:${address.port}/start`,
+        {},
+        {
+          allowPrivate: true,
+          lookupFn: loopbackLookup,
+        },
+      );
       expect(response.status).toBe(200);
       expect(response.url).toBe(`http://localhost:${address.port}/final`);
       expect(response.redirected).toBe(true);
@@ -407,7 +443,7 @@ describe("safeOutboundFetch", () => {
       expect(requests).toBe(2);
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });

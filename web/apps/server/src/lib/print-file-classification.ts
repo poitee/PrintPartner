@@ -182,7 +182,11 @@ function scanThreeMf(bytes: Uint8Array): ThreeMfScan {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocdSearchStart = Math.max(0, bytes.byteLength - ZIP_EOCD_SEARCH_BYTES);
   let eocdOffset = -1;
-  for (let offset = bytes.byteLength - ZIP_EOCD_FIXED_BYTES; offset >= eocdSearchStart; offset -= 1) {
+  for (
+    let offset = bytes.byteLength - ZIP_EOCD_FIXED_BYTES;
+    offset >= eocdSearchStart;
+    offset -= 1
+  ) {
     if (view.getUint32(offset, true) === ZIP_EOCD) {
       eocdOffset = offset;
       break;
@@ -365,7 +369,12 @@ function gcodeBodyIsValid(bytes: Uint8Array): boolean {
       // A command line opens with G, M, or T followed by its number.
       if (
         !sawCommand &&
-        (byte === 0x47 || byte === 0x4d || byte === 0x54 || byte === 0x67 || byte === 0x6d || byte === 0x74)
+        (byte === 0x47 ||
+          byte === 0x4d ||
+          byte === 0x54 ||
+          byte === 0x67 ||
+          byte === 0x6d ||
+          byte === 0x74)
       ) {
         const next = bytes[index + 1];
         if (next !== undefined && next >= 0x30 && next <= 0x39) sawCommand = true;
