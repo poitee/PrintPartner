@@ -67,6 +67,8 @@ ALLOWED_MUTATIONS = {"addComment", "addPullRequestReviewComment", "addPullReques
                      "updatePullRequestReviewComment"}
 # GraphQL ends comments at CR or LF, and a block string may contain an escaped \""".
 GRAPHQL_TOKEN = re.compile(r'"""(?:\\"""|[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n\r])*"|#[^\n\r]*|\.\.\.|[A-Za-z_]\w*|\S')
+STALE_INPUT = ("This command may change a file before gh reads it; "
+               "write the request file in a separate command first.")
 API_WRITE = ("Through gh api, agents may read and write PR or issue comments and review threads; "
              "other writes need the maintainer.")
 SAFE_PUSH_LONG = {"--atomic", "--dry-run", "--force-if-includes", "--ipv4", "--ipv6", "--no-atomic",
@@ -107,6 +109,8 @@ def protected_path(raw):
 
 
 SEPARATORS = ";&|\n()"
+# Words after which the next word is a command, as in "then case ...".
+COMMAND_KEYWORDS = {"!", "{", "do", "elif", "else", "if", "then", "time", "until", "while"}
 HEREDOC = re.compile(r"""[ \t]*((?:'[^']*'|"[^"]*"|\\.|[^\s;&|<>()'"\\])+)""")
 HEREDOC_QUOTING = re.compile(r"""\\(.)|['"]""")
 ANSI_C_QUOTE = re.compile(r"\$'((?:\\.|[^'\\])*)'", re.S)
@@ -141,10 +145,29 @@ def skip_heredoc_bodies(source, i, pending):
     return i
 
 
+def command_position(source, start, i):
+    """Whether index i starts a command word inside a substitution that starts at start."""
+    before = source[start:i].rstrip(" \t")
+    return not before or before[-1] in ";&|(\n" or before.split()[-1] in COMMAND_KEYWORDS
+
+
 def closing_paren(source, i):
-    depth, pending, start = 1, [], i
+    # cases holds the paren depth at each open case; a ")" at that depth ends a pattern.
+    depth, pending, start, cases = 1, [], i, []
     while i < len(source):
         char = source[i]
+        if char in "ce":
+            keyword = re.match(r"(case|esac)(?=[\s;&|)]|$)", source[i:i + 5])
+            if keyword and command_position(source, start, i):
+                if keyword.group(1) == "case":
+                    cases.append(depth)
+                elif cases:
+                    cases.pop()
+                i += 4
+                continue
+        if char == ")" and cases and cases[-1] == depth:
+            i += 1
+            continue
         if char == "#" and (i == start or source[i - 1] in " \t\n;&|("):
             newline = source.find("\n", i)
             if newline < 0:
@@ -296,8 +319,10 @@ def shell_commands(source):
             newline = source.find("\n", i)
             i = len(source) if newline < 0 else newline
         elif source.startswith("<<<", i):
+            # The here-string word is stdin data, not an argument.
             finish_word()
             i += 3
+            drop_next = True
         elif source.startswith("<<", i):
             finish_word()
             i += 2
@@ -427,11 +452,6 @@ def options(args, value_flags="", stop_flags="", value_long=()):
             yield "short", flags
             if flags[-1:] in tuple(value_flags) and len(flags) == len(arg) - 1:
                 i += 1
-
-
-def skips_hooks(option):
-    """Return whether a long option is --no-verify or a prefix Git could expand to it."""
-    return len(option) > 2 and "--no-verify".startswith(option)
 
 
 def current_branch(cwd, location):
@@ -603,11 +623,11 @@ def git_reason(args, cwd, head_moves=False, config_unknown=False, env_config=Fal
             return HOOKS
     if command == "commit":
         parsed = options(rest, value_flags="mFcCt", stop_flags="uS", value_long=COMMIT_VALUE_LONG)
-        if any(kind == "long" and skips_hooks(arg) or kind == "short" and "n" in arg
+        if any(kind == "long" and long_prefix(arg, "--no-verify", 3) or kind == "short" and "n" in arg
                for kind, arg in parsed):
             return HOOKS
     elif command in HOOK_COMMANDS:
-        if any(kind == "long" and skips_hooks(arg) for kind, arg in options(rest)):
+        if any(kind == "long" and long_prefix(arg, "--no-verify", 3) for kind, arg in options(rest)):
             return HOOKS
     return None
 
@@ -727,7 +747,13 @@ def without_repo_flags(args):
     return kept
 
 
-def gh_reason(args, cwd):
+def mentioned_elsewhere(name, source):
+    """Whether a request file's name appears in the command source beyond its single reference."""
+    base = re.escape(PurePosixPath(name).name)
+    return len(re.findall(rf"(?<![\w.-]){base}(?![\w.-])", source)) > 1
+
+
+def gh_reason(args, cwd, source=""):
     args = without_repo_flags(args)
     if any(EXPANDED in arg for arg in args[:2]):
         raise Unclear(EXPANSION)
@@ -782,6 +808,11 @@ def gh_reason(args, cwd):
     method = (method or ("POST" if fields or body is not None else "GET")).upper()
     if method in ("GET", "HEAD"):
         return None
+    # The hook reads request files before the command runs, so an earlier write would go unseen.
+    files = [value.partition("=")[2][1:] for flag, value in fields
+             if flag in ("-F", "--field") and value.partition("=")[2].startswith("@")]
+    if any(mentioned_elsewhere(name, source) for name in files + ([body] if body else [])):
+        return STALE_INPUT
     path = urlsplit(endpoint).path.strip("/")
     if path == "graphql" or path.endswith("/graphql"):
         for document in graphql_documents(fields, body, cwd):
@@ -806,7 +837,8 @@ def decide(payload):
     if tool == "Execute":
         cwd = str(payload.get("cwd") or os.getcwd())
         try:
-            parsed = shell_commands(str(data.get("command", "")))
+            source = str(data.get("command", ""))
+            parsed = shell_commands(source)
             commands = [(*program(args), scoped, conditional) for args, scoped, conditional in parsed]
             assigned = [word for _, _, _, words, *_ in commands for word in words]
             # Substitutions run out of source order, so any branch change makes HEAD unknown.
@@ -829,7 +861,7 @@ def decide(payload):
                     cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
                     continue
                 here = None if moved else cwd
-                reason = git_reason(rest, here, head_moves, config_unknown, env_config) if name == "git" else gh_reason(rest, here) if name == "gh" else None
+                reason = git_reason(rest, here, head_moves, config_unknown, env_config) if name == "git" else gh_reason(rest, here, source) if name == "gh" else None
                 if reason:
                     return reason
         except Unclear as error:

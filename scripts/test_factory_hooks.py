@@ -139,9 +139,15 @@ class GuardHookTests(unittest.TestCase):
                         "cat <<'EOF'\nline \\\nEOF\ngit push origin main",
                         "env -u GIT_TRACE git push origin main", "/usr/bin/time -f %E git push origin main",
                         "sudo -u dev git push origin main", "timeout 60 git push origin main",
-                        "timeout -k 5 60 git push origin main", "nice -n 5 git push origin main"):
+                        "timeout -k 5 60 git push origin main", "nice -n 5 git push origin main",
+                        "git push origin HEAD:main <<< --dry-run",
+                        'output="$(case x in x) git push origin main;; esac)"',
+                        "x=$(if true; then case a in a) git push origin main;; esac; fi)"):
             self.assertBlocked("Execute", {"command": command}, "main only")
-        self.assertAllowed("Execute", {"command": "git push origin topic >main 2>&1"})
+        self.assertBlocked("Execute", {"command": "<<< x gh pr merge 12"}, "maintainer")
+        for command in ("git push origin topic >main 2>&1", 'echo "$(case x in (y) echo ok;; esac)"',
+                        "echo $(echo showcase) && git status"):
+            self.assertAllowed("Execute", {"command": command})
         self.assertBlocked("Execute", {"command": "env -S 'git push origin main'"}, "Cannot classify")
 
     def test_push_modes_and_refspecs(self):
@@ -295,6 +301,12 @@ class GuardHookTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            payload["tool_input"]["command"] = ("printf '%s' 'mutation { mergePullRequest(input: {}) { clientMutationId } }'"
+                                                " > reply.graphql; gh api graphql -F query=@reply.graphql")
+            result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("separate command", result.stderr)
             Path(folder, "sub").mkdir()
             Path(folder, "sub", "body.json").write_text(
                 '{"query": "fragment R on MergePullRequestPayload { clientMutationId } '

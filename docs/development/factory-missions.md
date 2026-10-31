@@ -71,7 +71,8 @@ mapping exists, add `--no-follow-tags` or write `source:destination` refspecs.
 The guard treats both settings as unknown after a `git config` write or a
 `git remote` change in the same command. It refuses commits and pushes that run
 with `GIT_CONFIG_*` environment variables. Git and gh subcommands and option
-names must be literal.
+names must be literal. Write a `gh api` request file in an earlier command; the
+guard refuses a request whose file name appears elsewhere in the same command.
 After a `cd` in a subshell or pipeline, or under `env -C`, the guard treats the
 directory as unknown and refuses relative `gh api` input files.
 Through `gh api`, agents may read, write PR or issue comments, submit
