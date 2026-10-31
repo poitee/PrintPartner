@@ -20,13 +20,9 @@ const MQTT_USERNAME = "bblp";
 const CONNECT_TIMEOUT_MS = 8_000;
 const STATUS_TIMEOUT_MS = 10_000;
 
-export type BambuMqttConnect = (
-  brokerUrl: string,
-  options?: IClientOptions,
-) => MqttClient;
+export type BambuMqttConnect = (brokerUrl: string, options?: IClientOptions) => MqttClient;
 
-let mqttConnect: BambuMqttConnect = (brokerUrl, options) =>
-  mqtt.connect(brokerUrl, options);
+let mqttConnect: BambuMqttConnect = (brokerUrl, options) => mqtt.connect(brokerUrl, options);
 
 /** @internal Vitest hook — restore with `null` in afterEach. */
 export function setBambuMqttConnectForTests(fn: BambuMqttConnect | null): void {
@@ -57,7 +53,8 @@ function asNonEmptyString(value: unknown): string | null {
 }
 
 function finiteNumber(value: unknown): number | undefined {
-  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  const number =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isFinite(number) ? number : undefined;
 }
 
@@ -71,8 +68,7 @@ function readHost(config: IntegrationConfig): string | null {
 }
 
 function readAccessCode(config: IntegrationConfig): string | null {
-  const code =
-    asNonEmptyString(config.access_code) ?? asNonEmptyString(config.accessCode);
+  const code = asNonEmptyString(config.access_code) ?? asNonEmptyString(config.accessCode);
   if (!code || code === "****") return null;
   return code;
 }
@@ -101,9 +97,7 @@ function readPort(config: IntegrationConfig): number {
 }
 
 /** Map Bambu `gcode_state` tokens to Print Partner host states. */
-export function mapBambuGcodeState(
-  raw: string | undefined,
-): PrinterHostStatus["state"] {
+export function mapBambuGcodeState(raw: string | undefined): PrinterHostStatus["state"] {
   const state = (raw ?? "").trim().toUpperCase();
   if (!state) return "unknown";
   if (state === "IDLE") return "idle";
@@ -127,10 +121,9 @@ export function statusFromBambuPrint(print: BambuPrintReport): PrinterHostStatus
       : typeof percentRaw === "string"
         ? Number(percentRaw)
         : NaN;
-  const progress =
-    Number.isFinite(percentNum)
-      ? Math.round(Math.min(100, Math.max(0, percentNum)))
-      : undefined;
+  const progress = Number.isFinite(percentNum)
+    ? Math.round(Math.min(100, Math.max(0, percentNum)))
+    : undefined;
 
   const remainingRaw = print.mc_remaining_time;
   const remainingMinutes =
@@ -146,9 +139,7 @@ export function statusFromBambuPrint(print: BambuPrintReport): PrinterHostStatus
       : undefined;
 
   const filename =
-    asNonEmptyString(print.subtask_name) ??
-    asNonEmptyString(print.gcode_file) ??
-    undefined;
+    asNonEmptyString(print.subtask_name) ?? asNonEmptyString(print.gcode_file) ?? undefined;
 
   const showProgress = state === "printing" || state === "paused";
   return {
@@ -239,11 +230,7 @@ async function resolveConnection(
     return { ok: true, conn: { host, port, accessCode, serial, rejectUnauthorized } };
   } catch (e) {
     const message =
-      e instanceof OutboundUrlError
-        ? e.message
-        : e instanceof Error
-          ? e.message
-          : String(e);
+      e instanceof OutboundUrlError ? e.message : e instanceof Error ? e.message : String(e);
     return { ok: false, message };
   }
 }
@@ -287,7 +274,8 @@ function fetchBambuStatus(conn: BambuConnection, permit: StatusPermit): Promise<
     const timer = setTimeout(() => {
       finish({
         state: "offline",
-        message: "Timed out waiting for Bambu MQTT status (check LAN mode, IP, serial, access code)",
+        message:
+          "Timed out waiting for Bambu MQTT status (check LAN mode, IP, serial, access code)",
       });
     }, STATUS_TIMEOUT_MS);
 
@@ -374,7 +362,10 @@ function fetchBambuStatus(conn: BambuConnection, permit: StatusPermit): Promise<
 export const bambuAdapter: IntegrationAdapter = {
   type: "bambu",
 
-  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
+  async testConnection(
+    config: IntegrationConfig,
+    permit: StatusPermit,
+  ): Promise<IntegrationTestResult> {
     const resolved = await resolveConnection(config);
     if (!resolved.ok) return { ok: false, message: resolved.message };
     try {

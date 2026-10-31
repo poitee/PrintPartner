@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { statusFromBambuPrint } from "./bambu.js";
 
 const fixtureDirectory = new URL("../../../../../../fixtures/drivers/bambu/", import.meta.url);
-const fixtureNames = readdirSync(fixtureDirectory).filter((name) => name.endsWith(".json")).sort();
+const fixtureNames = readdirSync(fixtureDirectory)
+  .filter((name) => name.endsWith(".json"))
+  .sort();
 const expectedStatuses = {
   "ams-tray-synthetic.json": { state: "idle", message: "Idle" },
   "pushall-idle.json": { state: "idle", message: "Idle" },

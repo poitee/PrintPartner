@@ -90,8 +90,7 @@ function normUrl(raw: unknown): string | null {
 function healthResponseIsHealthy(body: unknown): boolean {
   if (typeof body !== "object" || body === null || Array.isArray(body)) return false;
   const hasPositiveSignal =
-    ("ok" in body && body.ok === true) ||
-    ("status" in body && body.status === "ok");
+    ("ok" in body && body.ok === true) || ("status" in body && body.status === "ok");
   return (
     hasPositiveSignal &&
     (!("ok" in body) || body.ok !== false) &&

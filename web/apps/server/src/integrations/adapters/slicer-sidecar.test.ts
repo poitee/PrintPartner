@@ -1,9 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import {
-  slicerSidecarAdapter,
-} from "./slicer-sidecar.js";
+import { slicerSidecarAdapter } from "./slicer-sidecar.js";
 
 type Handler = (req: IncomingMessage, res: ServerResponse, body: Buffer) => void;
 
@@ -43,7 +41,6 @@ function reset(): void {
 }
 
 describe("slicerSidecarSlice — legacy fallback", () => {
-
   it("retries a dropped GET health probe once (idempotent)", async () => {
     reset();
     let healthHits = 0;
@@ -151,24 +148,24 @@ describe("slicerSidecarAdapter.testConnection", () => {
   it("cancels health bodies that it does not parse", async () => {
     const nonOkCancel = vi.fn();
     const plainTextCancel = vi.fn();
-    const responseWithOpenBody = (
-      status: number,
-      contentType: string,
-      cancel: () => void,
-    ) => new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("unused"));
-        },
-        cancel,
-      }),
-      { status, headers: { "content-type": contentType } },
+    const responseWithOpenBody = (status: number, contentType: string, cancel: () => void) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("unused"));
+          },
+          cancel,
+        }),
+        { status, headers: { "content-type": contentType } },
+      );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        String(input).endsWith("/healthz")
+          ? responseWithOpenBody(503, "text/plain", nonOkCancel)
+          : responseWithOpenBody(200, "text/plain", plainTextCancel),
+      ),
     );
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) =>
-      String(input).endsWith("/healthz")
-        ? responseWithOpenBody(503, "text/plain", nonOkCancel)
-        : responseWithOpenBody(200, "text/plain", plainTextCancel),
-    ));
 
     try {
       await expect(
