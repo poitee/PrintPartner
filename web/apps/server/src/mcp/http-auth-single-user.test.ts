@@ -76,10 +76,7 @@ async function buildSingleUserApp(overrides: Partial<ServerConfig> = {}) {
   return { app, config };
 }
 
-function initialize(
-  app: Awaited<ReturnType<typeof buildSingleUserApp>>["app"],
-  apiKey?: string,
-) {
+function initialize(app: Awaited<ReturnType<typeof buildSingleUserApp>>["app"], apiKey?: string) {
   return app.inject({
     method: "POST",
     url: "/api/v1/mcp",

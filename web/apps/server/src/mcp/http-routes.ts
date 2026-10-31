@@ -99,9 +99,7 @@ function assertMcpHttpAllowed(
 }
 
 /** Read `mcp-session-id` whether Fastify hands it back as a string or a repeated header. */
-function readMcpSessionId(
-  header: string | string[] | undefined,
-): string {
+function readMcpSessionId(header: string | string[] | undefined): string {
   if (typeof header === "string") return header.trim();
   if (Array.isArray(header) && header[0]) return String(header[0]).trim();
   return "";
@@ -238,115 +236,119 @@ export async function registerMcpHttpRoutes(
     if (!assertMcpHttpAllowed(deps.config, request, reply, deps.validateApiKey)) return reply;
   };
 
-  app.post("/mcp", {
-    bodyLimit: MAX_ASSISTANT_ACTION_BODY_BYTES,
-    preHandler: mcpAuth,
-  }, async (request, reply) => {
-    const sessionId = readMcpSessionId(request.headers["mcp-session-id"]);
+  app.post(
+    "/mcp",
+    {
+      bodyLimit: MAX_ASSISTANT_ACTION_BODY_BYTES,
+      preHandler: mcpAuth,
+    },
+    async (request, reply) => {
+      const sessionId = readMcpSessionId(request.headers["mcp-session-id"]);
 
-    try {
-      const existing = resolveSession(sessionId);
+      try {
+        const existing = resolveSession(sessionId);
 
-      if (!existing) {
-        // Expired/unknown id: 404 tells a spec-compliant client to re-initialize.
-        if (sessionId) return replyUnknownSession(reply);
-        if (!isInitializeRequest(request.body)) {
-          return reply.status(400).send({
-            jsonrpc: "2.0",
-            error: {
-              code: -32000,
-              message: "Bad Request: No valid session ID provided",
-            },
-            id: null,
-          });
-        }
-
-        // Reserve BEFORE any await so concurrent inits cannot overshoot max.
-        const releaseReservation = capacity.tryReserve();
-        if (!releaseReservation) {
-          return reply.status(503).send({
-            jsonrpc: "2.0",
-            error: {
-              code: -32000,
-              message: "MCP session limit reached; retry later",
-            },
-            id: null,
-          });
-        }
-
-        const pending = new Map<string, AssistantProposedAction>();
-        const now = Date.now();
-        const server = createProductMcpServer({
-          getRepo: deps.getRepo,
-          statusExecution: deps.statusExecution,
-          jobs: deps.jobs,
-          config: deps.config,
-          defaultPlanId,
-          pending,
-          tenantId: request.tenantId,
-        });
-
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (id) => {
-            // Register session first, then drop reservation (same occupied count).
-            sessions.set(id, {
-              transport,
-              server,
-              pending,
-              createdAt: now,
-              lastAccessAt: Date.now(),
-              openStreams: 0,
+        if (!existing) {
+          // Expired/unknown id: 404 tells a spec-compliant client to re-initialize.
+          if (sessionId) return replyUnknownSession(reply);
+          if (!isInitializeRequest(request.body)) {
+            return reply.status(400).send({
+              jsonrpc: "2.0",
+              error: {
+                code: -32000,
+                message: "Bad Request: No valid session ID provided",
+              },
+              id: null,
             });
-            releaseReservation();
-          },
-          onsessionclosed: (id) => {
-            const sess = sessions.get(id);
-            sessions.delete(id);
-            if (sess) {
-              try {
-                void sess.server.close();
-              } catch {
-                /* ignore */
-              }
-            }
-          },
-        });
-        transport.onclose = () => {
-          const sid = transport.sessionId;
-          if (sid) {
-            const sess = sessions.get(sid);
-            sessions.delete(sid);
-            if (sess) {
-              try {
-                void sess.server.close();
-              } catch {
-                /* ignore */
-              }
-            }
           }
-          // Init aborted before onsessioninitialized — free the slot.
-          releaseReservation();
-        };
 
-        try {
-          reply.hijack();
-          await server.connect(transport);
-          await transport.handleRequest(request.raw, reply.raw, request.body);
-        } finally {
-          // If initialize never registered a session, free the reservation.
-          releaseReservation();
+          // Reserve BEFORE any await so concurrent inits cannot overshoot max.
+          const releaseReservation = capacity.tryReserve();
+          if (!releaseReservation) {
+            return reply.status(503).send({
+              jsonrpc: "2.0",
+              error: {
+                code: -32000,
+                message: "MCP session limit reached; retry later",
+              },
+              id: null,
+            });
+          }
+
+          const pending = new Map<string, AssistantProposedAction>();
+          const now = Date.now();
+          const server = createProductMcpServer({
+            getRepo: deps.getRepo,
+            statusExecution: deps.statusExecution,
+            jobs: deps.jobs,
+            config: deps.config,
+            defaultPlanId,
+            pending,
+            tenantId: request.tenantId,
+          });
+
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (id) => {
+              // Register session first, then drop reservation (same occupied count).
+              sessions.set(id, {
+                transport,
+                server,
+                pending,
+                createdAt: now,
+                lastAccessAt: Date.now(),
+                openStreams: 0,
+              });
+              releaseReservation();
+            },
+            onsessionclosed: (id) => {
+              const sess = sessions.get(id);
+              sessions.delete(id);
+              if (sess) {
+                try {
+                  void sess.server.close();
+                } catch {
+                  /* ignore */
+                }
+              }
+            },
+          });
+          transport.onclose = () => {
+            const sid = transport.sessionId;
+            if (sid) {
+              const sess = sessions.get(sid);
+              sessions.delete(sid);
+              if (sess) {
+                try {
+                  void sess.server.close();
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
+            // Init aborted before onsessioninitialized — free the slot.
+            releaseReservation();
+          };
+
+          try {
+            reply.hijack();
+            await server.connect(transport);
+            await transport.handleRequest(request.raw, reply.raw, request.body);
+          } finally {
+            // If initialize never registered a session, free the reservation.
+            releaseReservation();
+          }
+          return;
         }
-        return;
-      }
 
-      reply.hijack();
-      await existing.transport.handleRequest(request.raw, reply.raw, request.body);
-      touch(existing);
-    } catch (err) {
-      failHijacked(reply, err);
-    }
-  });
+        reply.hijack();
+        await existing.transport.handleRequest(request.raw, reply.raw, request.body);
+        touch(existing);
+      } catch (err) {
+        failHijacked(reply, err);
+      }
+    },
+  );
 
   app.get("/mcp", { preHandler: mcpAuth }, async (request, reply) => {
     const sessionId = readMcpSessionId(request.headers["mcp-session-id"]);

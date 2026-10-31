@@ -22,9 +22,15 @@ export class SelfHostDbStore implements DbStore {
 
   async connect(): Promise<void> {
     this.sqlite.connect();
-    this.repository = new AppRepository(getDb(this.sqlite), undefined, this.sqlite.reposDir, undefined, {
-      sourceFilesystemPolicy: this.sourceFilesystemPolicy,
-    });
+    this.repository = new AppRepository(
+      getDb(this.sqlite),
+      undefined,
+      this.sqlite.reposDir,
+      undefined,
+      {
+        sourceFilesystemPolicy: this.sourceFilesystemPolicy,
+      },
+    );
   }
 
   async close(): Promise<void> {

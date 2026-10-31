@@ -40,7 +40,12 @@ const TRUST_CLASSES = [
   { name: "LAN", host: "0.0.0.0", peer: "192.168.1.20" },
 ] as const;
 
-const ENV_KEYS = ["PRINT_PARTNER_API_KEY", "PRINT_PARTNER_DATA_DIR", "DEPLOY_MODE", "HOST"] as const;
+const ENV_KEYS = [
+  "PRINT_PARTNER_API_KEY",
+  "PRINT_PARTNER_DATA_DIR",
+  "DEPLOY_MODE",
+  "HOST",
+] as const;
 
 describe("ticket_t_16 MCP key enforcement", () => {
   let dataDir: string;

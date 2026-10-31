@@ -4,10 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-  MCP_HTTP_SESSION_MAX,
-  createMcpSessionCapacity,
-} from "./http-routes.js";
+import { MCP_HTTP_SESSION_MAX, createMcpSessionCapacity } from "./http-routes.js";
 
 describe("HTTP MCP session capacity reservations", () => {
   it("concurrent inits cannot exceed MCP_HTTP_SESSION_MAX", async () => {

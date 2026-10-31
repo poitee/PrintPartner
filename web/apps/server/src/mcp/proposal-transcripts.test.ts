@@ -182,7 +182,10 @@ function checkGolden(scenario: string, transcript: Record<string, unknown>): voi
       `Missing golden transcript ${path}; regenerate with PP_UPDATE_PARITY_FIXTURES=1`,
     );
   }
-  expect(actual, `MCP transcript drift in ${scenario}.json (PP_UPDATE_PARITY_FIXTURES=1 regenerates)`).toBe(expected);
+  expect(
+    actual,
+    `MCP transcript drift in ${scenario}.json (PP_UPDATE_PARITY_FIXTURES=1 regenerates)`,
+  ).toBe(expected);
 }
 
 const FILAMENT = { display_name: "Galaxy Black", hex: "#1a1a1a", product_line: "PLA Basic" };
@@ -195,7 +198,8 @@ const SCENARIOS: {
 }[] = [
   {
     name: "propose-list-confirm",
-    description: "propose -> list_pending_actions -> confirm_apply applies exactly once and clears the pending entry",
+    description:
+      "propose -> list_pending_actions -> confirm_apply applies exactly once and clears the pending entry",
     body: async (s) => {
       await s.call("propose_add_custom_filament", FILAMENT);
       const id = s.lastProposedId();
@@ -211,7 +215,8 @@ const SCENARIOS: {
   },
   {
     name: "propose-dismiss",
-    description: "propose -> dismiss_proposed_action discards without applying; a later confirm_apply is rejected",
+    description:
+      "propose -> dismiss_proposed_action discards without applying; a later confirm_apply is rejected",
     body: async (s) => {
       await s.call("propose_add_custom_filament", FILAMENT);
       const id = s.lastProposedId();
@@ -227,7 +232,8 @@ const SCENARIOS: {
   },
   {
     name: "confirm-twice",
-    description: "confirm_apply twice on the same action_id applies once; the second call is rejected without mutating",
+    description:
+      "confirm_apply twice on the same action_id applies once; the second call is rejected without mutating",
     body: async (s) => {
       await s.call("propose_add_custom_filament", FILAMENT);
       const id = s.lastProposedId();
@@ -243,7 +249,8 @@ const SCENARIOS: {
   },
   {
     name: "unknown-key-rejected",
-    description: "confirm_apply and dismiss_proposed_action reject an action_id that was never proposed; nothing is applied",
+    description:
+      "confirm_apply and dismiss_proposed_action reject an action_id that was never proposed; nothing is applied",
     body: async (s) => {
       await s.call("propose_add_custom_filament", FILAMENT);
       await s.call("confirm_apply", { action_id: UNKNOWN_ACTION_ID });
@@ -280,7 +287,9 @@ describe("golden MCP proposal lifecycle transcripts", () => {
   }
 
   it("fixture directory holds exactly the golden scenarios", () => {
-    const files = readdirSync(FIXTURE_DIR).filter((f) => f.endsWith(".json")).sort();
+    const files = readdirSync(FIXTURE_DIR)
+      .filter((f) => f.endsWith(".json"))
+      .sort();
     expect(files).toEqual(SCENARIOS.map((s) => `${s.name}.json`).sort());
   });
 

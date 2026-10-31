@@ -89,9 +89,7 @@ describe("product MCP confirm_apply reservation", () => {
       arguments: { action_id: "act-1" },
     });
     expect(second.isError).toBe(true);
-    const secondText = String(
-      (second.content as { type: string; text?: string }[])[0]?.text ?? "",
-    );
+    const secondText = String((second.content as { type: string; text?: string }[])[0]?.text ?? "");
     expect(secondText).toMatch(/in-flight|already applied/i);
 
     release({ ok: false, detail: "Plan not found" });
@@ -147,11 +145,9 @@ describe("product MCP confirm_apply reservation", () => {
 
     const { client, server } = await withClient(new Map());
     const controller = new AbortController();
-    const call = client.callTool(
-      { name: "get_print_stats", arguments: {} },
-      undefined,
-      { signal: controller.signal },
-    );
+    const call = client.callTool({ name: "get_print_stats", arguments: {} }, undefined, {
+      signal: controller.signal,
+    });
     const settled = call.catch((error: unknown) => error);
     await entered;
 
@@ -185,8 +181,8 @@ describe("product MCP confirm_apply reservation", () => {
     expect(content.text).toMatch(/working_plan is none/);
 
     const templates = await client.listResourceTemplates();
-    const planning = templates.resourceTemplates.find((template) =>
-      template.uriTemplate === "print-partner://build-planning/{build_id}",
+    const planning = templates.resourceTemplates.find(
+      (template) => template.uriTemplate === "print-partner://build-planning/{build_id}",
     );
     expect(planning?.description).not.toMatch(/readiness/i);
 

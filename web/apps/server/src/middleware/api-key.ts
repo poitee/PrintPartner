@@ -1,10 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
-import type {
-  FastifyInstance,
-  FastifyReply,
-  FastifyRequest,
-} from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ServerConfig } from "../config.js";
 import { sendProblem } from "../lib/api-error.js";
 import { isMcpTransportRequest } from "../lib/mcp-transport-path.js";
@@ -27,10 +23,7 @@ function isExempt(url: string): boolean {
 }
 
 export type ApiKeyValidator = (rawKey: string) => boolean;
-type AdminPreHandler = (
-  request: FastifyRequest,
-  reply: FastifyReply,
-) => Promise<unknown>;
+type AdminPreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 
 type ExternalAccess = Readonly<{
   apiKeysEnabled: () => boolean;
@@ -61,11 +54,7 @@ function constantTimeSecretEqual(left: string, right: string): boolean {
 
 function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
-  return (
-    address === "::1" ||
-    address.startsWith("127.") ||
-    address.startsWith("::ffff:127.")
-  );
+  return address === "::1" || address.startsWith("127.") || address.startsWith("::ffff:127.");
 }
 
 function hasForwardingHeaders(request: FastifyRequest): boolean {
@@ -77,10 +66,7 @@ function hasForwardingHeaders(request: FastifyRequest): boolean {
   );
 }
 
-function isUnambiguousLoopback(
-  request: FastifyRequest,
-  config: ServerConfig,
-): boolean {
+function isUnambiguousLoopback(request: FastifyRequest, config: ServerConfig): boolean {
   if (config.trustProxy || config.authRequired || hasForwardingHeaders(request)) {
     return false;
   }
@@ -110,18 +96,12 @@ function isPrivateNetworkAddress(address: string | undefined): boolean {
   }
   if (isIP(normalized) === 6) {
     const firstHextet = Number.parseInt(normalized.split(":")[0] || "0", 16);
-    return (
-      (firstHextet & 0xfe00) === 0xfc00 ||
-      (firstHextet & 0xffc0) === 0xfe80
-    );
+    return (firstHextet & 0xfe00) === 0xfc00 || (firstHextet & 0xffc0) === 0xfe80;
   }
   return false;
 }
 
-function isDirectPrivateNetworkPeer(
-  request: FastifyRequest,
-  config: ServerConfig,
-): boolean {
+function isDirectPrivateNetworkPeer(request: FastifyRequest, config: ServerConfig): boolean {
   if (
     config.deployMode !== "self-host" ||
     config.authRequired ||
@@ -134,10 +114,7 @@ function isDirectPrivateNetworkPeer(
   return isPrivateNetworkAddress(request.socket.remoteAddress);
 }
 
-function hasConfiguredBasicAuth(
-  request: FastifyRequest,
-  config: ServerConfig,
-): boolean {
+function hasConfiguredBasicAuth(request: FastifyRequest, config: ServerConfig): boolean {
   const header = request.headers.authorization;
   if (typeof header !== "string" || !header.startsWith("Basic ")) return false;
 
@@ -171,16 +148,8 @@ export function registerApiKeyAuth(
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? request.url;
     if (!path.startsWith("/api/v1") && !path.startsWith("/api/v2")) return;
-    if (
-      isMcpTransportRequest(request.method, path) &&
-      !externalAccess.mcpEnabled()
-    ) {
-      return sendProblem(
-        reply,
-        403,
-        "Forbidden",
-        "MCP access is turned off in Settings",
-      );
+    if (isMcpTransportRequest(request.method, path) && !externalAccess.mcpEnabled()) {
+      return sendProblem(reply, 403, "Forbidden", "MCP access is turned off in Settings");
     }
     if (isExempt(path)) return;
 
@@ -189,12 +158,7 @@ export function registerApiKeyAuth(
       if (hasAuthenticatedSession(request)) return;
       if (hasConfiguredBasicAuth(request, config)) return;
       if (isDirectPrivateNetworkPeer(request, config)) return;
-      return sendProblem(
-        reply,
-        403,
-        "Forbidden",
-        "External API access is turned off in Settings",
-      );
+      return sendProblem(reply, 403, "Forbidden", "External API access is turned off in Settings");
     }
 
     const provided = extractApiKey(request);

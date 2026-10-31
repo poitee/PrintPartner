@@ -30,7 +30,7 @@ export async function registerRequestLoggingMiddleware(app: FastifyInstance): Pr
     const isHealthCheck = request.url === "/health";
     const isStaticFile = /\.(js|css|png|jpg|gif|svg|woff|woff2|ttf|eot)$/i.test(request.url);
     const isPollingEndpoint = /\/(printer-send-queue|filaments)/.test(request.url);
-    
+
     if (isHealthCheck || isStaticFile || isPollingEndpoint) {
       return;
     }
@@ -65,7 +65,9 @@ export async function registerRequestLoggingMiddleware(app: FastifyInstance): Pr
       duration,
       statusCode: reply.statusCode || 500,
       severity: "error",
-      message: desktopContext() ? "Desktop request failed" : `Error in ${request.method} ${request.url}`,
+      message: desktopContext()
+        ? "Desktop request failed"
+        : `Error in ${request.method} ${request.url}`,
       error: {
         message: desktopContext() ? "Request failed" : errorMessage,
         stack: desktopContext() ? undefined : errorStack,

@@ -83,7 +83,10 @@ describe("product MCP wires an IntegrationPort into farm tools", () => {
     });
   }
 
-  async function callFarmStatus(integrations?: IntegrationPort, statusExecution = new StatusExecution()) {
+  async function callFarmStatus(
+    integrations?: IntegrationPort,
+    statusExecution = new StatusExecution(),
+  ) {
     const server = createProductMcpServer({
       getRepo: () => repo,
       jobs: jobs(),
@@ -167,27 +170,52 @@ describe("product MCP wires an IntegrationPort into farm tools", () => {
 
   it("shares status shutdown with separate ports and a lazily constructed MCP port", async () => {
     const host = createServer((request, response) => {
-      response.end(JSON.stringify(request.url?.startsWith("/printer/objects/query")
-        ? { result: { status: { print_stats: { state: "standby" } } } }
-        : { result: { system_uptime: 42 } }));
+      response.end(
+        JSON.stringify(
+          request.url?.startsWith("/printer/objects/query")
+            ? { result: { status: { print_stats: { state: "standby" } } } }
+            : { result: { system_uptime: 42 } },
+        ),
+      );
     });
     await new Promise<void>((resolve) => host.listen(0, "127.0.0.1", resolve));
     const address = host.address();
     if (!address || typeof address === "string") throw new Error("Missing fixture port");
-    repo.setSetting("integrations", JSON.stringify([{
-      id: "int-trident", type: "moonraker", name: "Trident",
-      config: { base_url: `http://127.0.0.1:${address.port}` },
-    }]));
+    repo.setSetting(
+      "integrations",
+      JSON.stringify([
+        {
+          id: "int-trident",
+          type: "moonraker",
+          name: "Trident",
+          config: { base_url: `http://127.0.0.1:${address.port}` },
+        },
+      ]),
+    );
     const statusExecution = new StatusExecution();
-    const flat = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution });
-    const versioned = createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution });
+    const flat = createIntegrationPort({
+      repo,
+      getAdapter: getIntegrationAdapter,
+      statusExecution,
+    });
+    const versioned = createIntegrationPort({
+      repo,
+      getAdapter: getIntegrationAdapter,
+      statusExecution,
+    });
     try {
       expect((await flat.getStatus("int-trident")).state).toBe("idle");
       expect((await versioned.getStatus("int-trident")).state).toBe("idle");
       expect((await callFarmStatus(undefined, statusExecution)).printers[0].state).toBe("idle");
       await statusExecution.stop();
-      expect(await flat.getStatus("int-trident")).toEqual({ state: "offline", message: "Printer status execution stopped" });
-      expect(await versioned.getStatus("int-trident")).toEqual({ state: "offline", message: "Printer status execution stopped" });
+      expect(await flat.getStatus("int-trident")).toEqual({
+        state: "offline",
+        message: "Printer status execution stopped",
+      });
+      expect(await versioned.getStatus("int-trident")).toEqual({
+        state: "offline",
+        message: "Printer status execution stopped",
+      });
       expect((await callFarmStatus(undefined, statusExecution)).printers[0].state).toBe("offline");
       expect(statusExecution.snapshot()).toEqual({ state: "stopped", tasks: [] });
     } finally {

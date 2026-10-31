@@ -51,7 +51,10 @@ describe("HTTP MCP /api/v1/mcp", () => {
     const denied = await app.inject({
       method: "POST",
       url: "/api/v1/mcp",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
       payload: {
         jsonrpc: "2.0",
         id: 1,
@@ -107,7 +110,10 @@ describe("HTTP MCP /api/v1/mcp", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/v1/mcp",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
       payload: {
         jsonrpc: "2.0",
         id: 1,
@@ -230,12 +236,7 @@ describe("HTTP MCP /api/v1/mcp", () => {
 });
 
 describe("pruneMcpSessions", () => {
-  function mkSession(
-    id: string,
-    createdAt: number,
-    lastAccessAt: number,
-    openStreams = 0,
-  ) {
+  function mkSession(id: string, createdAt: number, lastAccessAt: number, openStreams = 0) {
     const transportClose = vi.fn();
     const serverClose = vi.fn();
     return {
@@ -404,9 +405,7 @@ describe("resolveMcpSession", () => {
   it("returns undefined for an absolute-expired session so the caller 404s", () => {
     const now = 1_000_000;
     const stale = mkSession("stale", now - 10_000, now - 10_000);
-    const sessions = new Map<string, (typeof stale)["session"]>([
-      ["stale", stale.session],
-    ]);
+    const sessions = new Map<string, (typeof stale)["session"]>([["stale", stale.session]]);
 
     expect(
       resolveMcpSession(sessions as never, "stale", now, {
@@ -426,4 +425,3 @@ describe("resolveMcpSession", () => {
     expect(sessions.has("live")).toBe(true);
   });
 });
-
