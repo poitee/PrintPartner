@@ -21,9 +21,12 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-packages=(build-essential ca-certificates curl git xz-utils python3 python3-venv
-  pkg-config libssl-dev libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev
-  libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev)
+# Native packages come from the development container; the cloud build has no browser.
+mapfile -t native_packages < <(awk '/--no-install-recommends/ { on = 1; sub(/.*--no-install-recommends/, "") }
+  on { for (i = 1; i <= NF; i++) { if ($i == "&&") { on = 0; break } if ($i != "\\") print $i } }' \
+  .devcontainer/Dockerfile | grep -vx chromium)
+(( ${#native_packages[@]} )) || { echo "No packages found in .devcontainer/Dockerfile" >&2; exit 1; }
+packages=(build-essential ca-certificates curl git xz-utils "${native_packages[@]}")
 if [[ $(id -u) == 0 ]]; then
   as_root=()
 elif sudo -n true 2>/dev/null; then
@@ -103,9 +106,7 @@ done
 # shellcheck source=/dev/null
 . "$PREFIX/env.sh"
 
-test "$(node --version)" = "v$NODE_RUNTIME"
-test "$("$PP_SCHEMA_PARITY_NODE" --version)" = "v$NODE_PARITY"
-rustc --version
 cargo clippy --version
+# post-create runs the shared Node and Rust version preflight.
 bash .devcontainer/post-create.sh
 echo "Print Partner environment ready. New shells load $PREFIX/env.sh."

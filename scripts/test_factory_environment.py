@@ -55,6 +55,19 @@ class EnvironmentSetupTests(unittest.TestCase):
         self.assertNotIn("verify.py launch", skill)
         self.assertNotIn("$QA_ROOT", skill)
 
+    def test_native_packages_come_from_devcontainer(self):
+        setup = SETUP.read_text()
+        self.assertNotIn("libgtk-3-dev", setup)
+        script = setup[setup.index("mapfile -t native_packages"):setup.index("(( ${#native_packages")]
+        result = subprocess.run(["bash", "-c", script + 'printf "%s\\n" "${native_packages[@]}"'],
+                                cwd=ROOT, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        packages = result.stdout.split()
+        self.assertIn("libwebkit2gtk-4.1-dev", packages)
+        self.assertIn("python3-venv", packages)
+        self.assertNotIn("chromium", packages)
+        self.assertNotIn("\\", packages)
+
     def test_python_is_installed_before_version_extraction(self):
         setup = SETUP.read_text()
         self.assertLess(setup.index("apt-get install"), setup.index("node_versions="))

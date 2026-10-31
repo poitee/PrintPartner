@@ -9,22 +9,23 @@ tool input Droid supplies and refuses known-dangerous shapes.
 import json
 from pathlib import PurePosixPath
 import re
-import shlex
 import sys
 
-GIT = r"^git(?:\s+-C\s+(?:\"[^\"]*\"|'[^']*'|\S+))*\s+"
-COMMAND_RULES = (
-    (re.compile(r"^gh\s+pr\s+merge\b"), "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(r"^gh\s+api\b(?=[^;&|\n]*(?:-X\s*|--method[= ])PUT\b)[^;&|\n]*/pulls/\d+/merge\b"),
-     "Merging is the maintainer's job. Report readiness instead."),
-    (re.compile(GIT + r"push\b[^;&|\n]*(\s--force(?=\s|$)|\s--force-with-lease(?:=|\s|$)|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+\S)"),
-     "Never force-push. Add a commit instead."),
-    (re.compile(GIT + r"push\b[^;&|\n]*[ \t](\S+:)?(refs/heads/)?main(?:\s|[;&|]|$)"), "Push a branch and open a PR; main only changes by merge."),
-    (re.compile(GIT + r"push\b[^;&|\n]*\s--tags\b|^gh\s+release\s+create\b"), "Releases and tags need separate authorization."),
-    (re.compile(GIT + r"(?:commit|push|merge|rebase|am|cherry-pick|revert)\b.*\s--no-verify(?=\s|$)"),
-     "Do not bypass Git hooks."),
-)
+MERGE = "Merging is the maintainer's job. Report readiness instead."
+FORCE = "Never force-push. Add a commit instead."
+MAIN = "Push a branch and open a PR; main only changes by merge."
+RELEASE = "Releases and tags need separate authorization."
+HOOKS = "Do not bypass Git hooks."
 
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+WRAPPERS = {"command", "env", "exec", "nohup", "time"}
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+HOOK_COMMANDS = {"am", "cherry-pick", "commit", "merge", "push", "rebase", "revert"}
+MAIN_REF = re.compile(r"^(?:[^:]*:)?(?:refs/heads/)?main$")
+PR_MERGE_PATH = re.compile(r"(?:^|/)pulls/\d+/merge/?$")
+PUSH_VALUE_LONG = {"--exec", "--push-option", "--receive-pack", "--repo"}
+COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-message",
+                     "--reuse-message", "--template", "--trailer"}
 GENERATED = {"rust/bundle-manifest.json"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", re.M)
 
@@ -42,7 +43,8 @@ def protected_path(raw):
 
 
 SEPARATORS = ";&|\n()"
-HEREDOC = re.compile(r"""[ \t]*(?:'([^']*)'|"([^"]*)"|([^\s;&|<>()]+))""")
+HEREDOC = re.compile(r"""[ \t]*((?:'[^']*'|"[^"]*"|\\.|[^\s;&|<>()'"\\])+)""")
+HEREDOC_QUOTING = re.compile(r"""\\(.)|['"]""")
 
 
 def shell_commands(source):
@@ -84,14 +86,18 @@ def shell_commands(source):
         elif char == "#" and word is None:
             newline = source.find("\n", i)
             i = len(source) if newline < 0 else newline
-        elif source.startswith("<<", i) and not source.startswith("<<<", i):
+        elif source.startswith("<<<", i):
+            finish_word()
+            i += 3
+        elif source.startswith("<<", i):
             finish_word()
             i += 2
             tabs = source.startswith("-", i)
             i += tabs
             match = HEREDOC.match(source, i)
             if match:
-                heredocs.append((next(g for g in match.groups() if g is not None), tabs))
+                delimiter = HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", match.group(1))
+                heredocs.append((delimiter, tabs))
                 i = match.end()
         elif char in " \t\r<>" or char in SEPARATORS:
             finish_word()
@@ -117,6 +123,104 @@ def shell_commands(source):
         commands.append(args)
     return commands
 
+def program(args):
+    """Return the executed program name and its arguments after assignments and wrappers."""
+    i = 0
+    while i < len(args):
+        if ASSIGNMENT.match(args[i]):
+            i += 1
+        elif PurePosixPath(args[i]).name in WRAPPERS:
+            i += 1
+            while i < len(args) and args[i].startswith("-"):
+                i += 1
+        else:
+            return PurePosixPath(args[i]).name, args[i + 1:]
+    return None, []
+
+
+def options(args, value_flags="", stop_flags="", value_long=()):
+    """Yield ("long" | "short" | "arg", text) for one command's arguments.
+
+    A short bundle stops at a flag that takes a value; when that value is the
+    next argument, it is skipped rather than read as another option.
+    """
+    i, ended = 0, False
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if not ended and arg == "--":
+            ended = True
+        elif ended or arg == "-" or not arg.startswith("-"):
+            yield "arg", arg
+        elif arg.startswith("--"):
+            yield "long", arg.split("=", 1)[0]
+            if arg in value_long:
+                i += 1
+        else:
+            flags = ""
+            for char in arg[1:]:
+                flags += char
+                if char in value_flags or char in stop_flags:
+                    break
+            yield "short", flags
+            if flags[-1:] in tuple(value_flags) and len(flags) == len(arg) - 1:
+                i += 1
+
+
+def git_reason(args):
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        i += 2 if args[i] in GIT_VALUE_OPTIONS else 1
+    if i >= len(args):
+        return None
+    command, rest = args[i], args[i + 1:]
+    if command == "push":
+        parsed = list(options(rest, value_flags="o", value_long=PUSH_VALUE_LONG))
+        for kind, arg in parsed:
+            if (kind == "long" and arg in ("--force", "--force-with-lease")
+                    or kind == "short" and "f" in arg or kind == "arg" and arg.startswith("+")):
+                return FORCE
+        if any(kind == "long" and arg in ("--tags", "--follow-tags") for kind, arg in parsed):
+            return RELEASE
+        if any(kind == "arg" and MAIN_REF.match(arg) for kind, arg in parsed):
+            return MAIN
+    if command in HOOK_COMMANDS:
+        parsed = options(rest, value_flags="mFcCt", stop_flags="uS", value_long=COMMIT_VALUE_LONG)
+        for kind, arg in parsed:
+            if kind == "long" and arg == "--no-verify" or command == "commit" and kind == "short" and "n" in arg:
+                return HOOKS
+    return None
+
+
+def gh_reason(args):
+    while args[:1] in (["-R"], ["--repo"]):
+        args = args[2:]
+    if args[:2] == ["pr", "merge"]:
+        return MERGE
+    if args[:2] == ["release", "create"]:
+        return RELEASE
+    if args[:1] != ["api"]:
+        return None
+    method, targets, i = None, [], 1
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg in ("-X", "--method"):
+            method = args[i] if i < len(args) else None
+            i += 1
+        elif arg.startswith("--method="):
+            method = arg.split("=", 1)[1]
+        elif arg.startswith("-X"):
+            method = arg[2:]
+        else:
+            targets.append(arg)
+    if (method or "").upper() == "PUT" and any(PR_MERGE_PATH.search(t) for t in targets):
+        return MERGE
+    if "graphql" in targets and any(re.search(r"\b(?:mergePullRequest|enablePullRequestAutoMerge)\b", t)
+                                    for t in targets):
+        return MERGE
+    return None
+
 def decide(payload):
     if not isinstance(payload, dict):
         return "Expected a JSON object."
@@ -128,14 +232,10 @@ def decide(payload):
         command = str(data.get("command", "")).replace("\\\r\n", "").replace("\\\n", "")
         try:
             for args in shell_commands(command):
-                if args[0] not in ("git", "gh"):
-                    continue
-                # Preserve spaces within arguments, but remove unnecessary quotes.
-                executable = " ".join(shlex.quote(arg) if any(c.isspace() for c in arg) else arg
-                                      for arg in args)
-                for pattern, reason in COMMAND_RULES:
-                    if pattern.search(executable):
-                        return reason
+                name, rest = program(args)
+                reason = git_reason(rest) if name == "git" else gh_reason(rest) if name == "gh" else None
+                if reason:
+                    return reason
         except ValueError:
             return "Cannot parse shell command; use a simpler command."
         return None

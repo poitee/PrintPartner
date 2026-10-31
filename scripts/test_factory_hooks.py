@@ -100,6 +100,29 @@ class GuardHookTests(unittest.TestCase):
         self.assertBlocked("Execute", {"command": "echo $(git push origin main)"}, "main only")
         self.assertBlocked("Execute", {"command": "git push origin 'main"}, "Cannot parse")
 
+    def test_argument_vectors_classify_git_and_gh(self):
+        for command in ('git commit -m "Document --no-verify behavior"',
+                        "git commit -m -n", "git merge -n topic", "git commit -mnote",
+                        "gh api graphql -f query='{ viewer { login } }'"):
+            self.assertAllowed("Execute", {"command": command})
+        for command, reason in (("git commit -n -m Change", "hooks"), ("git commit -anm x", "hooks"),
+                                ("GIT_TERMINAL_PROMPT=0 git push --force origin topic", "force-push"),
+                                ("env GIT_TRACE=1 git push origin main", "main only"),
+                                ("/usr/bin/git push origin main", "main only"),
+                                ("git -c color.ui=false push --force origin topic", "force-push"),
+                                ("git -c color.ui=false push origin HEAD:main", "main only"),
+                                ("git --git-dir=.git push origin main", "main only"),
+                                ("gh -R o/r pr merge 12", "maintainer"),
+                                ("gh api graphql -f query='mutation { mergePullRequest(input: {}) { clientMutationId } }'",
+                                 "maintainer")):
+            self.assertBlocked("Execute", {"command": command}, reason)
+
+    def test_heredoc_quoting_and_here_strings_keep_later_commands(self):
+        for command in ("cat <<\\EOF\nhello\nEOF\ngit push origin main",
+                        "cat <<E'O'F\nhello\nEOF\ngit push origin main",
+                        'cat <<< "hello"\ngit push origin main'):
+            self.assertBlocked("Execute", {"command": command}, "main only")
+
     def test_generated_paths_are_normalized(self):
         for path in ("/repo/rust/./bundle-manifest.json", "/repo/rust//bundle-manifest.json"):
             self.assertBlocked("Edit", {"file_path": path}, "generated")

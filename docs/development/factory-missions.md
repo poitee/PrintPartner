@@ -31,7 +31,7 @@ The script targets Debian/Ubuntu Linux with root or passwordless sudo inside
 the cloud build. It installs GTK/WebKit build libraries, checksum-verified Node
 24.21.0 and 22.23.3, rustup, the repository Rust toolchain, sidecar dependencies,
 and npm dependencies. It runs `predev`, not a product service or full CI.
-Node versions come from the pinned devcontainer stages; sidecar Python pins
+Node versions and native packages come from the development container; sidecar Python pins
 come from its existing Dockerfile. The setup also links the runtime Node to
 `/usr/bin/node` for existing absolute-path runtime proofs.
 It writes `~/.local/print-partner/env.sh` and sources it from shell profiles.
