@@ -53,6 +53,8 @@ class GuardHookTests(unittest.TestCase):
             self.assertBlocked("Execute", {"command": command}, "force-push")
         self.assertBlocked("Execute", {"command": "git push origin HEAD:main"}, "main only")
         self.assertBlocked("Execute", {"command": "git push origin main"}, "main only")
+        for destination in ("heads/main", "refs/heads/main"):
+            self.assertBlocked("Execute", {"command": f"git push origin HEAD:{destination}"}, "main only")
         self.assertBlocked("Execute", {"command": 'git -C "/repo with spaces" push origin HEAD:main'}, "main only")
         self.assertBlocked("Execute", {"command": "git -C /repo push --force origin topic"}, "force-push")
 
@@ -84,6 +86,7 @@ class GuardHookTests(unittest.TestCase):
                         "git log --grep --no-verify",
                         "git log --format='%h %s'",
                         'git commit --message="Fix guard"',
+                        "git commit -m \"$(cat <<'EOF'\nFix user's settings (part\nEOF\n)\"",
                         "printf '%s\\n' /tmp/a\\ b",
                         "git commit -m 'note; git push --force'",
                         "git log # git push origin main",
@@ -171,7 +174,9 @@ class GuardHookTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             for command in ("git switch main && git push origin HEAD", "gh pr checkout 12 && git push origin @",
                             "env -C /tmp git push origin HEAD", "env --chdir=/tmp git push origin HEAD",
-                            "(cd /tmp); git push origin HEAD",
+                            "(cd /tmp); git push origin HEAD", "GIT_DIR=/tmp/x/.git git push origin HEAD",
+                            "env GIT_DIR=/tmp/x/.git git push origin HEAD",
+                            "export GIT_WORK_TREE=/tmp/x; git push origin HEAD",
                             "echo $(git checkout main) && git push origin HEAD"):
                 payload["tool_input"]["command"] = command
                 result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
@@ -190,7 +195,8 @@ class GuardHookTests(unittest.TestCase):
         self.assertBlocked("Execute", {"command": 'git commit "$flags" -m x'}, "Cannot classify")
         for command in ('sub=push; git "$sub" --force origin topic', "flag=no-verify; git commit --$flag -m change",
                         'git -c x=1 "$sub" origin topic', 'gh "$group" merge 12', 'gh pr "$action" 12',
-                        'gh api "$endpoint" -X PUT', "gh api repos/o/r/pulls --$opt x"):
+                        'gh api "$endpoint" -X PUT', "gh api repos/o/r/pulls --$opt x",
+                        'gh api graphql -f "$key=mutation { mergePullRequest(input: {}) { clientMutationId } }"'):
             self.assertBlocked("Execute", {"command": command}, "shell expansion")
         self.assertBlocked("Execute", {"command": 'gh api graphql -f query="mutation { $field }"'}, "Cannot classify")
         for command in ("git push origin 'HEAD:topic'", 'git commit -m "$(git rev-parse HEAD)"',
@@ -220,12 +226,15 @@ class GuardHookTests(unittest.TestCase):
                                 ("cat <<EOF\n$(git push origin main)\nEOF", "main only"),
                                 ("git -c core.hooksPath=/dev/null commit -m change", "hooks"),
                                 ("git config core.hooksPath /dev/null", "hooks"),
-                                ("git config set core.hooksPath /dev/null", "hooks")):
+                                ("git config set core.hooksPath /dev/null", "hooks"),
+                                ("git config core.hooksPath get", "hooks"),
+                                ("git config set core.hooksPath list", "hooks")):
             self.assertBlocked("Execute", {"command": command}, reason)
         self.assertAllowed("Execute", {"command": "git commit --no-edit --amend"})
         for command in ("cat <<'EOF'\n$(git push origin main)\nEOF",
                         "echo \"$(printf '%s' \"a\\\"b\")\"", "git config --get core.hooksPath",
-                        "git config --get core.hooksPath '^/tmp'"):
+                        "git config --get core.hooksPath '^/tmp'", "git config get core.hooksPath",
+                        "git config --list"):
             self.assertAllowed("Execute", {"command": command})
 
     def test_graphql_query_files_are_read(self):
@@ -249,7 +258,9 @@ class GuardHookTests(unittest.TestCase):
             Path(folder, "sub", "merge.graphql").write_text("query { viewer { login } }")
             for command in ("(cd sub); gh api graphql -F query=@merge.graphql",
                             "cd sub | cat; gh api graphql -F query=@merge.graphql",
-                            "env -C sub gh api graphql -F query=@reply.graphql"):
+                            "env -C sub gh api graphql -F query=@reply.graphql",
+                            "true || cd sub; gh api graphql -F query=@merge.graphql",
+                            "if false; then cd sub; fi; gh api graphql -F query=@merge.graphql"):
                 payload["tool_input"]["command"] = command
                 result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                         capture_output=True, text=True, check=False)
@@ -282,6 +293,9 @@ class GuardHookTests(unittest.TestCase):
                         "gh api -X PUT repos/o/r/contents/a.md -f branch=topic -f message=x -f content=eA==",
                         "gh api graphql -f 'query=mutation { mergePullRequest,(input: {}) { clientMutationId } }'",
                         "gh api graphql -f 'query=mutation { ...F } fragment F on Mutation { x }'",
+                        "gh api graphql -f $'query=mutation { # note\\r mergePullRequest(input: {}) { clientMutationId } }'",
+                        "gh api graphql -f 'query=mutation { addComment(input: {body: \"\"\"a \\\"\"\" }} \"\"\"}) "
+                        "{ clientMutationId } mergePullRequest(input: {}) { clientMutationId } }'",
                         "gh api -iX PUT repos/o/r/pulls/12/merge", "gh api -iXPUT repos/o/r/pulls/12/merge",
                         "gh api graphql -f 'query=mutation($input: MergePullRequestInput! = {pullRequestId: \"P\"}) "
                         "{ mergePullRequest(input: $input) { clientMutationId } }'",

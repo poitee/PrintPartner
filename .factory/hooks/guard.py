@@ -41,7 +41,7 @@ WRAPPERS = {
 WRAPPER_OPERANDS = {"timeout": 1}
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
 HOOK_COMMANDS = {"am", "cherry-pick", "merge", "rebase", "revert"}
-MAIN_REF = re.compile(r"^(?:refs/heads/)?main$")
+MAIN_REF = re.compile(r"^(?:(?:refs/)?heads/)?main$")
 PUSH_VALUE_LONG = {"--exec", "--push-option", "--receive-pack", "--repo"}
 COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-message",
                      "--reuse-message", "--template", "--trailer"}
@@ -63,7 +63,8 @@ COMMENT_WRITES = re.compile(REPO_PATH + r"(?:issues/\d+/comments|pulls/\d+/comme
 ALLOWED_MUTATIONS = {"addComment", "addPullRequestReviewComment", "addPullRequestReviewThreadReply",
                      "resolveReviewThread", "unresolveReviewThread", "updateIssueComment",
                      "updatePullRequestReviewComment"}
-GRAPHQL_TOKEN = re.compile(r'"""(?:[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n])*"|#[^\n]*|\.\.\.|[A-Za-z_]\w*|\S')
+# GraphQL ends comments at CR or LF, and a block string may contain an escaped \""".
+GRAPHQL_TOKEN = re.compile(r'"""(?:\\"""|[^"]|"(?!""))*"""|"(?:\\.|[^"\\\n\r])*"|#[^\n\r]*|\.\.\.|[A-Za-z_]\w*|\S')
 API_WRITE = ("Through gh api, agents may read and write PR or issue comments and review threads; "
              "other writes need the maintainer.")
 SAFE_PUSH_LONG = {"--atomic", "--dry-run", "--force-if-includes", "--ipv4", "--ipv6", "--no-atomic",
@@ -73,7 +74,10 @@ SAFE_PUSH_LONG = {"--atomic", "--dry-run", "--force-if-includes", "--ipv4", "--i
 SAFE_PUSH_SHORT = set("46noquv")
 PUSH_OPTIONS = "Use common git push options spelled in full."
 PUSH_EXPLICIT = "Name the destination branch, for example `git push origin HEAD:topic`."
-CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--list", "-l", "get", "list"}
+CONFIG_READ_OPTIONS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l"}
+CONFIG_READ_COMMANDS = {"get", "list"}
+# Environment assignments that point git at another repository.
+GIT_LOCATION = re.compile(r"^(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)=")
 GENERATED = {"rust/bundle-manifest.json"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$", re.M)
 
@@ -97,6 +101,7 @@ def protected_path(raw):
 SEPARATORS = ";&|\n()"
 HEREDOC = re.compile(r"""[ \t]*((?:'[^']*'|"[^"]*"|\\.|[^\s;&|<>()'"\\])+)""")
 HEREDOC_QUOTING = re.compile(r"""\\(.)|['"]""")
+ANSI_C_QUOTE = re.compile(r"\$'((?:\\.|[^'\\])*)'", re.S)
 
 
 def closing_double_quote(source, i):
@@ -115,12 +120,37 @@ def closing_double_quote(source, i):
     raise ValueError("unterminated quote")
 
 
+def skip_heredoc_bodies(source, i, pending):
+    """Return the index after the bodies of pending heredocs that start at i."""
+    for delimiter, tabs in pending:
+        while i < len(source):
+            end = source.find("\n", i)
+            end = len(source) if end < 0 else end
+            line = source[i:end].rstrip("\r")
+            i = end + 1
+            if (line.lstrip("\t") if tabs else line) == delimiter:
+                break
+    return i
+
+
 def closing_paren(source, i):
-    depth = 1
+    depth, pending = 1, []
     while i < len(source):
         char = source[i]
         if char == "\\":
             i += 2
+            continue
+        # Heredoc bodies inside a substitution are data; their quotes and parentheses do not count.
+        if source.startswith("<<", i) and not source.startswith("<<<", i):
+            tabs = source.startswith("-", i + 2)
+            match = HEREDOC.match(source, i + 2 + tabs)
+            if match:
+                pending.append((HEREDOC_QUOTING.sub(lambda m: m.group(1) or "", match.group(1)), tabs))
+                i = match.end()
+                continue
+        if char == "\n" and pending:
+            i = skip_heredoc_bodies(source, i + 1, pending)
+            pending = []
             continue
         if char == "'":
             end = source.find("'", i + 1)
@@ -169,13 +199,13 @@ def substitutions(text):
 
 
 def shell_commands(source):
-    """Split shell source into (arguments, in_subshell) pairs for simple commands.
+    """Split shell source into (arguments, in_subshell, after_and_or) for simple commands.
 
     Handles quotes, escapes, continuations, separators, comments, redirections,
     heredoc bodies, and command substitutions. It does not evaluate expansions.
     """
     commands, args, word, heredocs, nested = [], [], None, [], []
-    drop_next = piped = False
+    drop_next = piped = after_logic = False
     depth = 0
 
     def finish_word():
@@ -232,6 +262,12 @@ def shell_commands(source):
                     j += 1
             word = (word or "") + "".join(text)
             i = j + 1
+        elif source.startswith("$'", i):
+            match = ANSI_C_QUOTE.match(source, i)
+            if not match:
+                raise ValueError("unterminated quote")
+            word = (word or "") + match.group(1).encode("latin-1", "backslashreplace").decode("unicode_escape")
+            i = match.end()
         elif source.startswith("$(", i):
             end = closing_paren(source, i + 2)
             nested.append(source[i + 2:end])
@@ -273,12 +309,14 @@ def shell_commands(source):
                 drop_next = False
                 # A pipeline stage or background job runs in its own subshell.
                 pipe = char in "|&" and source[i + 1:i + 2] != char and source[i - 1:i] != char
+                # A command after && or || may not run.
+                logic = char in "|&" and not pipe
                 inside = depth > 0
                 depth += {"(": 1, ")": -1}.get(char, 0)
                 if args:
-                    commands.append((args, inside or pipe or piped))
+                    commands.append((args, inside or pipe or piped, after_logic))
                     args = []
-                piped = pipe
+                piped, after_logic = pipe, logic
             i += 1
             if char == "\n":
                 for delimiter, tabs, expands in heredocs:
@@ -305,9 +343,9 @@ def shell_commands(source):
             i += 1
     finish_word()
     if args:
-        commands.append((args, depth > 0 or piped))
+        commands.append((args, depth > 0 or piped, after_logic))
     for inner in nested:
-        commands.extend((inner_args, True) for inner_args, _ in shell_commands(inner))
+        commands.extend((inner_args, True, conditional) for inner_args, _, conditional in shell_commands(inner))
     return commands
 
 
@@ -317,6 +355,7 @@ def program(args):
     while i < len(args):
         word = args[i]
         if ASSIGNMENT.match(word) or word in SHELL_PREFIXES:
+            moved = moved or bool(GIT_LOCATION.match(word))
             i += 1
             continue
         name = PurePosixPath(word).name
@@ -330,7 +369,7 @@ def program(args):
                 break
             if name == "env" and (option.startswith("--split-string") or re.match(r"^-[^-]*S", option)):
                 raise Unclear
-            moved = moved or option.split("=", 1)[0] in WRAPPER_CHDIR or re.match(r"^-[^-]*[CD]", option)
+            moved = moved or option.split("=", 1)[0] in WRAPPER_CHDIR or bool(re.match(r"^-[^-]*[CD]", option))
             i += 2 if option in WRAPPERS[name] else 1
         i += WRAPPER_OPERANDS.get(name, 0)
     return None, [], moved
@@ -372,9 +411,9 @@ def options(args, value_flags="", stop_flags="", value_long=()):
                 i += 1
 
 
-def spells(option, full):
-    """Return whether a long option is full or a prefix Git could expand to it."""
-    return len(option) > 2 and full.startswith(option)
+def skips_hooks(option):
+    """Return whether a long option is --no-verify or a prefix Git could expand to it."""
+    return len(option) > 2 and "--no-verify".startswith(option)
 
 
 def current_branch(cwd, location):
@@ -472,15 +511,19 @@ def git_reason(args, cwd, head_moves=False):
     if command == "push":
         return push_reason(rest, cwd, location, head_moves)
     if command == "config":
-        if any(arg.lower() == "core.hookspath" for arg in rest) and not CONFIG_READS & set(rest):
+        # Read operations are options or the first operand; a value such as "get" is not one.
+        operands = [arg for arg in rest if not arg.startswith("-")]
+        reads = ({arg.split("=", 1)[0] for arg in rest if arg.startswith("-")} & CONFIG_READ_OPTIONS
+                 or operands[:1] and operands[0] in CONFIG_READ_COMMANDS)
+        if any(arg.lower() == "core.hookspath" for arg in rest) and not reads:
             return HOOKS
     if command == "commit":
         parsed = options(rest, value_flags="mFcCt", stop_flags="uS", value_long=COMMIT_VALUE_LONG)
-        if any(kind == "long" and spells(arg, "--no-verify") or kind == "short" and "n" in arg
+        if any(kind == "long" and skips_hooks(arg) or kind == "short" and "n" in arg
                for kind, arg in parsed):
             return HOOKS
     elif command in HOOK_COMMANDS:
-        if any(kind == "long" and spells(arg, "--no-verify") for kind, arg in options(rest)):
+        if any(kind == "long" and skips_hooks(arg) for kind, arg in options(rest)):
             return HOOKS
     return None
 
@@ -624,6 +667,8 @@ def gh_reason(args, cwd):
         if name in ("-X", "--method"):
             method = value
         elif name in ("-f", "-F", "--field", "--raw-field"):
+            if EXPANDED in value.partition("=")[0]:
+                raise Unclear(EXPANSION)
             fields.append((name, value))
         elif name == "--input":
             body = value
@@ -655,13 +700,20 @@ def decide(payload):
     if tool == "Execute":
         cwd = str(payload.get("cwd") or os.getcwd())
         try:
-            commands = [(*program(args), scoped) for args, scoped in shell_commands(str(data.get("command", "")))]
+            parsed = shell_commands(str(data.get("command", "")))
+            commands = [(*program(args), scoped, conditional) for args, scoped, conditional in parsed]
             # Substitutions run out of source order, so any branch change makes HEAD unknown.
-            head_moves = any(moves_head(name, rest) for name, rest, _, _ in commands)
-            for name, rest, moved, scoped in commands:
+            # An exported GIT_DIR or similar can also point a later push at another repository.
+            head_moves = (any(moves_head(name, rest) for name, rest, *_ in commands)
+                          or any(GIT_LOCATION.match(arg) for args, *_ in parsed for arg in args))
+            control = 0
+            for (args, *_), (name, rest, moved, scoped, conditional) in zip(parsed, commands):
+                control += args[0] in ("if", "while", "until", "for", "case", "select")
+                control -= args[0] in ("fi", "done", "esac")
                 if name in ("cd", "pushd", "popd"):
                     targets = [arg for arg in rest if not arg.startswith("-")]
-                    plain = (name != "popd" and len(targets) == 1 and not scoped and not moved
+                    # A directory change that may be skipped leaves no single directory after it.
+                    plain = (name != "popd" and len(targets) == 1 and not (scoped or moved or conditional or control)
                              and not re.search(r"[$~`\x00]", targets[0]))
                     # A directory change inside a subshell has no single directory after it.
                     cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
