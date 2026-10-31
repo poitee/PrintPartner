@@ -33,7 +33,8 @@ an artifact. Run the check with `python3 scripts/check-large-files.py`.
 
 `just hooks` sets `core.hooksPath` to `.githooks` for your clone. The
 pre-commit hook then rejects whitespace errors and oversized files in the
-staged changes, and runs `cargo fmt --check` when staged Rust files change.
+staged changes. When staged Rust files change, it runs `cargo fmt --check` on
+a copy of the staged files, so unstaged edits do not change the result.
 The hook is opt-in; CI runs the same checks either way.
 
 ## The OS jobs

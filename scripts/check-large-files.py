@@ -3,10 +3,9 @@
 
 It reads blob sizes from the index, so CI checks the commit and the opt-in
 pre-commit hook checks exactly what is staged. Usage:
-python3 scripts/check-large-files.py [--limit BYTES]
+python3 scripts/check-large-files.py
 """
 
-import argparse
 from pathlib import Path
 import subprocess
 import sys
@@ -39,17 +38,14 @@ def oversized(root, limit):
     return [(path, int(size)) for (_, path), size in zip(entries, sizes) if int(size) > limit]
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--limit", type=int, default=LIMIT, help="maximum bytes per file")
-    args = parser.parse_args(argv)
-    found = oversized(ROOT, args.limit)
+def main():
+    found = oversized(ROOT, LIMIT)
     for path, size in found:
-        print(f"{path}: {size} bytes exceeds the {args.limit}-byte limit", file=sys.stderr)
+        print(f"{path}: {size} bytes exceeds the {LIMIT}-byte limit", file=sys.stderr)
     if found:
         print("Generate large fixtures at test time or publish them as artifacts.", file=sys.stderr)
         return 1
-    print(f"Large-file check: every indexed file is at most {args.limit} bytes.")
+    print(f"Large-file check: every indexed file is at most {LIMIT} bytes.")
     return 0
 
 

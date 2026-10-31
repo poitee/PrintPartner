@@ -42,7 +42,7 @@ class LargeFileTests(unittest.TestCase):
         self.assertEqual(CHECK.oversized(self.root, 100), [])
 
     def test_repository_is_within_the_default_limit(self):
-        self.assertEqual(CHECK.main([]), 0)
+        self.assertEqual(CHECK.main(), 0)
 
 
 if __name__ == "__main__":
