@@ -104,28 +104,34 @@ Bump a major version in a ticketed PR that updates the manifest pin, `Cargo.lock
 
 ## Applied main-branch ruleset
 
-Chad applied Phase 1 on 2026-10-17. The GitHub ruleset
+The GitHub ruleset
 [main CI controls](https://github.com/poitee/PrintPartner/rules/25285698), ID `25285698`,
 is active on the default branch, currently `main`.
-The [committed ruleset JSON](main-ci-controls.ruleset.json) records the live configuration read on 2026-10-18.
+The [committed ruleset JSON](main-ci-controls.ruleset.json) records its configuration.
 It omits node IDs, timestamps, API links, and the current user's bypass capability.
 
-The applied ruleset has these protections:
+The ruleset has these protections:
 
 - Block branch deletion and force pushes.
 - Require a pull request and allow only squash merges.
-- Require GitHub Actions checks `actionlint`, `zizmor`, `rust (linux)`, and `rust (windows)`.
+- Require GitHub Actions checks `actionlint`, `zizmor`, `rust (linux)`, `rust (windows)`,
+  `Lint Evidence block`, and `droid-review`.
+- Require every review thread to be resolved, so an open Factory Droid finding blocks the merge.
 - Allow branches that are not up to date with `main`.
 - Keep the bypass list empty, with no standing admin or bot bypass.
 
-The live ruleset requires four checks. `rust (macos)` is absent, consistent with its advisory status in [Continuous integration](ci.md).
-The Phase 1 ticket report lists five required checks. Chad must reconcile that discrepancy.
-This snapshot records the applied configuration without changing settings.
+`rust (macos)` is absent, consistent with its advisory status in [Continuous integration](ci.md).
+`droid-review` replaced the `pp/score-verified` model-score check on 2026-10-31.
 
-No approving reviews are required yet. Code-owner review, dismissal of stale approvals,
-approval of the latest push, and review-thread resolution are disabled.
-All agent lanes currently author PRs as `poitee`, and GitHub forbids self-approval.
-CODEOWNERS requests Chad's review but does not yet make that review a merge requirement.
+No approving reviews are required. Chad authors PRs as `poitee`, and GitHub forbids
+self-approval. CODEOWNERS requests Chad's review but does not make it a merge requirement.
+
+To apply the committed JSON to the live ruleset (admin only):
+
+```sh
+jq 'del(.id, .source, .source_type)' docs/development/main-ci-controls.ruleset.json \
+  | gh api -X PUT repos/poitee/PrintPartner/rulesets/25285698 --input -
+```
 
 To compare the snapshot with the live ruleset, run this read-only check from the repository root:
 

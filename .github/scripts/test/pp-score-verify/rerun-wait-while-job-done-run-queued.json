@@ -1,9 +1,0 @@
-{
-  "kind": "rerun",
-  "head_sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090",
-  "runs": [
-    {"id": 100, "event": "pull_request_target", "head_sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090", "status": "completed", "conclusion": "failure"},
-    {"id": 101, "event": "pull_request_target", "head_sha": "3f1c2a9b8e7d6c5b4a39281706f5e4d3c2b1a090", "status": "queued", "conclusion": null, "verify_status": "completed"}
-  ],
-  "expect": {"action": "wait", "run_id": 101, "message_contains": ["run 101", "job is completed", "waiting for the run to complete"]}
-}
