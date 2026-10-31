@@ -1,7 +1,13 @@
-use std::process::Command;
+#[path = "../../pp-storage/tests/common/process.rs"]
+mod child_process;
 
 fn rejected(args: &[&str], message: &str) {
-    let output = Command::new(env!("CARGO_BIN_EXE_pp-server"))
+    let binary = if std::env::var_os("NEXTEST_BIN_EXE_pp-server").is_some() {
+        child_process::bin_exe("pp-server")
+    } else {
+        env!("CARGO_BIN_EXE_pp-server").into()
+    };
+    let output = child_process::command(binary)
         .args(args)
         .output()
         .expect("run the gateway binary");
