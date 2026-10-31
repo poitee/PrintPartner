@@ -6,10 +6,10 @@ import {
 } from "./spoolPickerUtils";
 import type { SpoolmanSpoolRow } from "../api/endpoints/filaments";
 
-const spool = (id: number, filament_id: number, remaining_weight: number): SpoolmanSpoolRow => ({
+const spool = (id: number, filamentId: number, remainingWeight: number): SpoolmanSpoolRow => ({
   id,
-  filament_id,
-  remaining_weight,
+  filament_id: filamentId,
+  remaining_weight: remainingWeight,
 });
 
 describe("filterFilamentSpools", () => {

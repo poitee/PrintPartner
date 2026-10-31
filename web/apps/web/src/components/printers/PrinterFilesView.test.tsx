@@ -129,7 +129,7 @@ describe("PrinterFilesView", () => {
       suggested_units: [], suggestion_basis: "none", unlabeled_names: ["brackett.stl", "brackett.stl"], plan_revision_id: 9,
       match_review: {
         objects: [{ object_index: 0, name: "brackett.stl" }, { object_index: 1, name: "brackett.stl" }],
-        parts: [{ part_id: 41, filename: "bracket.stl", relative_path: "parts/bracket.stl", units: [0, 1].map((unit_index) => ({ part_id: 41, unit_index })) }],
+        parts: [{ part_id: 41, filename: "bracket.stl", relative_path: "parts/bracket.stl", units: [0, 1].map((unitIndex) => ({ part_id: 41, unit_index: unitIndex })) }],
       },
     });
     renderView();

@@ -248,9 +248,9 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
   ): Promise<{ created: IntegrationSummary; deviceId: string }> => {
     if (hostType === "bambu") {
       const host = bambuHost.trim();
-      const access_code = accessCode.trim();
+      const trimmedAccessCode = accessCode.trim();
       const deviceSerial = serial.trim();
-      if (!host || !access_code || !deviceSerial) {
+      if (!host || !trimmedAccessCode || !deviceSerial) {
         throw new Error("Enter printer IP, LAN access code, and serial.");
       }
       const created = await createIntegration({
@@ -258,7 +258,7 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
         name,
         config: {
           host,
-          access_code,
+          access_code: trimmedAccessCode,
           serial: deviceSerial,
           enabled: true,
         },
@@ -268,11 +268,11 @@ export default function PrintersSettingsCard({ engineReady }: Props) {
       return { created, deviceId: deviceSerial };
     }
 
-    const base_url = newUrl.trim();
-    if (!base_url) {
+    const baseUrl = newUrl.trim();
+    if (!baseUrl) {
       throw new Error("Enter the printer base URL.");
     }
-    const config: Record<string, unknown> = { base_url, enabled: true };
+    const config: Record<string, unknown> = { base_url: baseUrl, enabled: true };
     if (hostType === "moonraker") {
       if (apiKey.trim()) config.api_key = apiKey.trim();
     } else {
