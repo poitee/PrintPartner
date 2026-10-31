@@ -22,7 +22,9 @@ This page covers what the Rust jobs run and how to reproduce them. [Change a CI 
 The `agent-guidance` job in `actionlint.yml` checks the root `AGENTS.md` and the
 repo skills in `.factory/skills/`. It checks local file links (not heading
 anchors), each skill's `name` and `description`, and that Git does not ignore
-these files. It makes no network requests. Run it locally with `just guidance`.
+these files. It also tests the staged-Rust snapshot in the opt-in pre-commit
+hook, including sparse worktrees. It makes no network requests. Run it locally
+with `just guidance`.
 
 ## Large-file and pre-commit checks
 

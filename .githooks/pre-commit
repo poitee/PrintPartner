@@ -9,6 +9,6 @@ if [ -n "$(git diff --cached --name-only --diff-filter=ACMR -- 'rust/*.rs')" ]; 
   # Format the staged snapshot, not the working tree, so the result matches the commit.
   snapshot="$(mktemp -d)"
   trap 'rm -rf "$snapshot"' EXIT
-  git ls-files -z -- rust | git checkout-index -z --stdin --prefix="$snapshot/"
+  git ls-files -z -- rust | git checkout-index --ignore-skip-worktree-bits -z --stdin --prefix="$snapshot/"
   cargo fmt --manifest-path "$snapshot/rust/Cargo.toml" --all --check
 fi
