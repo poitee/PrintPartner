@@ -19,7 +19,9 @@ export function normalizeBoardComment(raw: unknown): string | null {
   return body;
 }
 
-export function freezeBuildSnapshot(manifest: unknown): { json: string; title: string; parsed: ReferenceShare } | null {
+export function freezeBuildSnapshot(
+  manifest: unknown,
+): { json: string; title: string; parsed: ReferenceShare } | null {
   const parsed = referenceShareSchema.safeParse(manifest);
   if (!parsed.success || parsed.data.kind !== "build") return null;
   const json = JSON.stringify(parsed.data);

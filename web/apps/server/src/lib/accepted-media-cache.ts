@@ -60,7 +60,10 @@ export function acceptedMediaBasis(input: AcceptedMediaBasisInput): string {
 }
 
 function validatePng(png: Buffer): void {
-  if (png.length < PNG_SIGNATURE.length || !png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+  if (
+    png.length < PNG_SIGNATURE.length ||
+    !png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
+  ) {
     throw new Error("Invalid accepted media PNG");
   }
 }
@@ -79,8 +82,7 @@ type ReadAcceptedMediaPngInput = {
 };
 
 export type AcceptedMediaPngObservation =
-  | { readonly kind: "present" }
-  | { readonly kind: "missing" };
+  { readonly kind: "present" } | { readonly kind: "missing" };
 
 type AcceptedMediaPngReadResult =
   | { readonly status: "found"; readonly png: Buffer }
@@ -98,9 +100,7 @@ type AcceptedMediaDescriptorResult =
 
 function isRenameWindowError(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    "code" in error &&
-    (error.code === "ENOENT" || error.code === "ELOOP")
+    error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ELOOP")
   );
 }
 
@@ -134,10 +134,7 @@ function openAcceptedMediaPngDescriptor(input: {
   }
 }
 
-function descriptorStayedStable(
-  descriptor: number,
-  opened: Stats,
-): boolean {
+function descriptorStayedStable(descriptor: number, opened: Stats): boolean {
   const afterRead = fstatSync(descriptor);
   // Atomic replacement unlinks the opened inode, changing ctime but not bytes.
   const unlinkedByReplacement = opened.nlink > 0 && afterRead.nlink === 0;
@@ -160,13 +157,7 @@ function readAcceptedMediaPngOnce(input: {
     const png = Buffer.alloc(opened.stats.size);
     let position = 0;
     while (position < png.length) {
-      const bytesRead = readSync(
-        opened.descriptor,
-        png,
-        position,
-        png.length - position,
-        position,
-      );
+      const bytesRead = readSync(opened.descriptor, png, position, png.length - position, position);
       if (bytesRead === 0) return { status: "retryable_race" };
       position += bytesRead;
     }
@@ -185,14 +176,13 @@ function readAcceptedMediaPngOnce(input: {
 function observeAcceptedMediaPngOnce(input: {
   readonly thumbsDir: string;
   readonly path: string;
-}): Exclude<AcceptedMediaPngReadResult, { readonly status: "found" }> | { readonly status: "found" } {
+}):
+  Exclude<AcceptedMediaPngReadResult, { readonly status: "found" }> | { readonly status: "found" } {
   const opened = openAcceptedMediaPngDescriptor(input);
   if (opened.status !== "opened") return opened;
   try {
     const signature = Buffer.alloc(PNG_SIGNATURE.length);
-    if (
-      readSync(opened.descriptor, signature, 0, signature.length, 0) !== signature.length
-    ) {
+    if (readSync(opened.descriptor, signature, 0, signature.length, 0) !== signature.length) {
       return { status: "retryable_race" };
     }
     if (!descriptorStayedStable(opened.descriptor, opened.stats)) {
@@ -263,7 +253,10 @@ export function writeAcceptedMediaPng(input: {
   if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
     throw new Error("Invalid accepted media cache root");
   }
-  const temporary = join(root, `.${input.basis}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+  const temporary = join(
+    root,
+    `.${input.basis}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
+  );
   let descriptor: number | null = null;
   let renamed = false;
   try {

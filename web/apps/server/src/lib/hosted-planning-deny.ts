@@ -1,8 +1,7 @@
 export const HOSTED_LAN_DISABLED_DETAIL =
   "Live printer hosts are disabled on the hosted planning site. Use Compose on the shop LAN.";
 
-export const HOSTED_FEATURE_DISABLED_DETAIL =
-  "This feature is off on the hosted planning site.";
+export const HOSTED_FEATURE_DISABLED_DETAIL = "This feature is off on the hosted planning site.";
 
 type DenyRule = Readonly<{
   method: string;
@@ -16,7 +15,11 @@ const RULES: readonly DenyRule[] = [
   { method: "DELETE", pattern: /^\/integrations\/[^/]+$/, detail: HOSTED_LAN_DISABLED_DETAIL },
   { method: "POST", pattern: /^\/integrations\/[^/]+\/test$/, detail: HOSTED_LAN_DISABLED_DETAIL },
   { method: "GET", pattern: /^\/integrations\/[^/]+\/status$/, detail: HOSTED_LAN_DISABLED_DETAIL },
-  { method: "GET", pattern: /^\/integrations\/[^/]+\/devices$/, detail: HOSTED_LAN_DISABLED_DETAIL },
+  {
+    method: "GET",
+    pattern: /^\/integrations\/[^/]+\/devices$/,
+    detail: HOSTED_LAN_DISABLED_DETAIL,
+  },
   {
     method: "GET",
     pattern: /^\/integrations\/[^/]+\/spoolman(?:\/|$)/,
@@ -30,8 +33,16 @@ const RULES: readonly DenyRule[] = [
     detail: HOSTED_LAN_DISABLED_DETAIL,
   },
   { method: "POST", pattern: /^\/printer-send-queue\/drain$/, detail: HOSTED_LAN_DISABLED_DETAIL },
-  { method: "GET", pattern: /^\/printers\/[^/]+\/files(?:\/content)?$/, detail: HOSTED_LAN_DISABLED_DETAIL },
-  { method: "GET", pattern: /^\/printers\/[^/]+\/cameras(?:\/view)?$/, detail: HOSTED_LAN_DISABLED_DETAIL },
+  {
+    method: "GET",
+    pattern: /^\/printers\/[^/]+\/files(?:\/content)?$/,
+    detail: HOSTED_LAN_DISABLED_DETAIL,
+  },
+  {
+    method: "GET",
+    pattern: /^\/printers\/[^/]+\/cameras(?:\/view)?$/,
+    detail: HOSTED_LAN_DISABLED_DETAIL,
+  },
   {
     method: "POST",
     pattern: /^\/slicer-instances\/[^/]+\/open-accepted-plates$/,
@@ -55,7 +66,11 @@ const RULES: readonly DenyRule[] = [
     detail: HOSTED_LAN_DISABLED_DETAIL,
   },
   { method: "PUT", pattern: /^\/settings\/github-pat$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
-  { method: "PUT", pattern: /^\/settings\/discord-notify$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  {
+    method: "PUT",
+    pattern: /^\/settings\/discord-notify$/,
+    detail: HOSTED_FEATURE_DISABLED_DETAIL,
+  },
   {
     method: "POST",
     pattern: /^\/settings\/discord-notify\/test$/,
@@ -78,9 +93,17 @@ const RULES: readonly DenyRule[] = [
   { method: "GET", pattern: /^\/shares\/incoming$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
   { method: "POST", pattern: /^\/shares\/[^/]+\/accept$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
   { method: "DELETE", pattern: /^\/shares\/[^/]+$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
-  { method: "POST", pattern: /^\/jobs\/export-kit-bundle$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  {
+    method: "POST",
+    pattern: /^\/jobs\/export-kit-bundle$/,
+    detail: HOSTED_FEATURE_DISABLED_DETAIL,
+  },
   { method: "POST", pattern: /^\/imports\/kit-bundle$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
-  { method: "POST", pattern: /^\/admin\/import-kit-bundle$/, detail: HOSTED_FEATURE_DISABLED_DETAIL },
+  {
+    method: "POST",
+    pattern: /^\/admin\/import-kit-bundle$/,
+    detail: HOSTED_FEATURE_DISABLED_DETAIL,
+  },
 ];
 
 export function normalizeHostedApiPath(url: string): string {

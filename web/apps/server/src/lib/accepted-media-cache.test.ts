@@ -62,7 +62,7 @@ async function withDescriptorMutationAfterRead<T>(
     calls += 1;
     if (calls % 2 === 0) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-      mutate((calls / 2) - 1);
+      mutate(calls / 2 - 1);
     }
     return actualFs.fstatSync(descriptor);
   });
@@ -82,10 +82,15 @@ afterEach(() => {
 describe("acceptedMediaBasis", () => {
   it("invalidates old thumbnail renders without changing mesh or preview identities", () => {
     for (const variant of ["mesh", "thumbnail", "preview"] as const) {
-      const legacyBasis = createHash("sha256").update([
-        "accepted-media-v1", variant, "a".repeat(64), "primary", "#abcdef",
-      ].join("\0")).digest("hex");
-      const current = acceptedMediaBasis({ expectedSha256: "a".repeat(64), role: "primary", hex: "#abcdef", variant });
+      const legacyBasis = createHash("sha256")
+        .update(["accepted-media-v1", variant, "a".repeat(64), "primary", "#abcdef"].join("\0"))
+        .digest("hex");
+      const current = acceptedMediaBasis({
+        expectedSha256: "a".repeat(64),
+        role: "primary",
+        hex: "#abcdef",
+        variant,
+      });
       if (variant === "thumbnail") expect(current).not.toBe(legacyBasis);
       else expect(current).toBe(legacyBasis);
     }
@@ -334,7 +339,10 @@ describe("accepted media PNG cache", () => {
     const thumbsDir = cacheFixture();
     mkdirSync(thumbsDir);
     const target = acceptedMediaCachePath({ thumbsDir, basis });
-    const nextPng = Buffer.concat([png.subarray(0, 8), Buffer.from("replacement after stale stat")]);
+    const nextPng = Buffer.concat([
+      png.subarray(0, 8),
+      Buffer.from("replacement after stale stat"),
+    ]);
     const replacement = join(thumbsDir, "replacement.png");
     writeFileSync(target, png);
     writeFileSync(replacement, nextPng);
@@ -416,7 +424,7 @@ describe("accepted media PNG cache", () => {
     const actualFstat = descriptorStats.getMockImplementation()!;
     let calls = 0;
     descriptorStats.mockClear();
-    descriptorStats.mockImplementation(() => ++calls % 2 === 1 ? stats : unlinkedStats);
+    descriptorStats.mockImplementation(() => (++calls % 2 === 1 ? stats : unlinkedStats));
     try {
       if (operation === "read") expect(readAcceptedMediaPng({ thumbsDir, basis })).toEqual(png);
       else expect(observeAcceptedMediaPng({ thumbsDir, basis })).toEqual({ kind: "present" });
@@ -599,9 +607,9 @@ describe("accepted media PNG cache", () => {
     expect(() => acceptedMediaCachePath({ thumbsDir, basis: "../escape" })).toThrow(
       "Invalid accepted media basis",
     );
-    expect(() =>
-      writeAcceptedMediaPng({ thumbsDir, basis: "../escape", png }),
-    ).toThrow("Invalid accepted media basis");
+    expect(() => writeAcceptedMediaPng({ thumbsDir, basis: "../escape", png })).toThrow(
+      "Invalid accepted media basis",
+    );
     expect(existsSync(thumbsDir)).toBe(false);
   });
 
