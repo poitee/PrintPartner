@@ -145,6 +145,8 @@ class GuardHookTests(unittest.TestCase):
                                 ("git push --force-w origin topic", "push options"),
                                 ("git push origin", "destination branch"), ("git push", "destination branch"),
                                 ("git push origin 'refs/heads/*:refs/heads/*'", "destination branch"),
+                                ("git push origin :", "destination branch"),
+                                ("git push origin topic:", "destination branch"),
                                 ("git push origin :main", "main only"), ("git push --repo origin main", "main only"),
                                 ("git push origin refs/tags/v1.0.0", "authorization"),
                                 ("git push origin tag v1.0.0", "authorization"),
@@ -164,6 +166,27 @@ class GuardHookTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            for command in ("git switch main && git push origin HEAD", "gh pr checkout 12 && git push origin @",
+                            "echo $(git checkout main) && git push origin HEAD"):
+                payload["tool_input"]["command"] = command
+                result = subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 2, command)
+                self.assertIn("destination branch", result.stderr)
+
+    def test_shell_expansions_in_push_destinations_are_refused(self):
+        for command in ('branch=main; git push origin "HEAD:$branch"', "git push origin HEAD:$branch",
+                        "git push origin HEAD:${branch}", 'git push origin "HEAD:$(echo main)"',
+                        "git push origin HEAD:`echo main`", "git push origin HEAD:{main,topic}",
+                        "git push origin 'HEAD:ma?n'"):
+            self.assertBlocked("Execute", {"command": command}, "destination branch")
+        for command in ('git push "$remote_and_branch"', 'git push "$remote" HEAD:topic'):
+            self.assertBlocked("Execute", {"command": command}, "shell expansion")
+        self.assertBlocked("Execute", {"command": 'git commit "$flags" -m x'}, "Cannot classify")
+        self.assertBlocked("Execute", {"command": 'gh api graphql -f query="mutation { $field }"'}, "Cannot classify")
+        for command in ("git push origin 'HEAD:topic'", 'git commit -m "$(git rev-parse HEAD)"',
+                        "git push origin '$literal'"):
+            self.assertAllowed("Execute", {"command": command})
 
     def test_gh_options_and_endpoints(self):
         for command in ("gh pr merge --help", "gh release create --help",
@@ -174,6 +197,10 @@ class GuardHookTests(unittest.TestCase):
                         "gh api -X PUT 'repos/o/r/pulls/12/merge?merge_method=squash'"):
             self.assertBlocked("Execute", {"command": command}, "maintainer")
         self.assertBlocked("Execute", {"command": "gh --repo=o/r release create v1"}, "authorization")
+        for command in ("gh release edit v1.2.3 --draft=false", "gh release delete v1", "gh release upload v1 a.zip"):
+            self.assertBlocked("Execute", {"command": command}, "authorization")
+        for command in ("gh release view v1", "gh release list", "gh release edit --help", "gh release --help"):
+            self.assertAllowed("Execute", {"command": command})
 
     def test_effective_options_and_hidden_inputs(self):
         for command, reason in (("git push --dry-run --no-dry-run --force origin topic", "force-push"),
@@ -235,10 +262,17 @@ class GuardHookTests(unittest.TestCase):
                         "gh api -X PUT repos/o/r/contents/a.md -f branch=topic -f message=x -f content=eA==",
                         "gh api graphql -f 'query=mutation { mergePullRequest,(input: {}) { clientMutationId } }'",
                         "gh api graphql -f 'query=mutation { ...F } fragment F on Mutation { x }'",
+                        "gh api -iX PUT repos/o/r/pulls/12/merge", "gh api -iXPUT repos/o/r/pulls/12/merge",
+                        "gh api graphql -f 'query=mutation($input: MergePullRequestInput! = {pullRequestId: \"P\"}) "
+                        "{ mergePullRequest(input: $input) { clientMutationId } }'",
+                        "gh api graphql -f 'query=query($mutation: ID) { viewer { login } } "
+                        "mutation { mergePullRequest(input: {}) { clientMutationId } }'",
                         "gh api graphql -f 'query=mutation { a: addComment(input: {}) { clientMutationId } "
                         "b: mergePullRequest(input: {}) { clientMutationId } }'"):
             self.assertBlocked("Execute", {"command": command}, "maintainer")
+        self.assertBlocked("Execute", {"command": "gh api -iz repos/o/r/pulls"}, "Cannot classify")
         for command in ("gh api repos/o/r/releases", "gh api -X GET repos/o/r/pulls -f state=open",
+                        "gh api -i repos/o/r/pulls", "gh api -iXGET repos/o/r/pulls",
                         "gh api repos/o/r/pulls/12/comments/34/replies -f body=ok",
                         "gh api -X PATCH repos/o/r/issues/comments/34 -f body=edited",
                         "gh api graphql -f 'query=query { viewer { login } } # mergePullRequest('",

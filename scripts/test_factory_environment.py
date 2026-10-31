@@ -47,6 +47,12 @@ class EnvironmentSetupTests(unittest.TestCase):
             self.assertNotIn(pin, setup)
         self.assertIn('"${sidecar_requirements[@]}"', setup)
 
+    def test_smoke_uses_installed_sidecar_interpreter(self):
+        setup = SETUP.read_text()
+        smoke = (ROOT / ".devcontainer/smoke.sh").read_text()
+        self.assertIn('export PP_SIDECAR_PYTHON="$PREFIX/sidecar-venv/bin/python"', setup)
+        self.assertIn('"${PP_SIDECAR_PYTHON:-/opt/sidecar-venv/bin/python}" -B -m unittest', smoke)
+
     def test_qa_launch_defers_to_existing_verification_skill(self):
         skill = (ROOT / ".factory/skills/pp-mission-qa/SKILL.md").read_text()
         self.assertIn("../pp-verify/SKILL.md#web-ui", skill)

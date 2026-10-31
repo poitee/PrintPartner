@@ -28,7 +28,7 @@ cargo test --manifest-path rust/Cargo.toml --locked -p pp-domain --lib
 cargo test --manifest-path rust/Cargo.toml --locked -p pp-domain --lib --features desktop_rebuild
 npm --prefix web exec -w @print-partner/web -- vitest run src/lib/supportLinks.test.ts
 npm --prefix web exec -w @print-partner/server -- vitest run src/services/gcode-object-parser.test.ts
-(cd slicer-sidecar && /opt/sidecar-venv/bin/python -B -m unittest test_sidecar.py test_shutdown.py)
+(cd slicer-sidecar && "${PP_SIDECAR_PYTHON:-/opt/sidecar-venv/bin/python}" -B -m unittest test_sidecar.py test_shutdown.py)
 
 if [[ ${1:-} == --runtime ]]; then
   python3 scripts/local-ci.py --only web-assets --fail-on-skip

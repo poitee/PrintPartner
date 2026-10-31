@@ -35,6 +35,8 @@ Node versions and native packages come from the development container; sidecar P
 come from its existing Dockerfile. The setup also links the runtime Node to
 `/usr/bin/node` for existing absolute-path runtime proofs.
 It writes `~/.local/print-partner/env.sh` and sources it from shell profiles.
+That file sets `PP_SIDECAR_PYTHON`, which `.devcontainer/smoke.sh` uses for the
+sidecar tests.
 For a non-interactive shell, source that file explicitly.
 
 Build steps do not receive Factory runtime secrets. This setup needs none.
@@ -60,8 +62,11 @@ Keep PRs near 600 changed lines for GRE-1067. Finish one PR's Droid review and C
 before opening the next. Only the maintainer merges.
 
 The project guard hook refuses common merge, force-push, direct-main push,
-release, hook-bypass, secret-file edit, and generated-manifest edit commands.
+release publish or edit, hook-bypass, secret-file edit, and generated-manifest edit commands.
 `git push` needs an explicit branch refspec and common options spelled in full.
+Write push destinations literally. The guard refuses a destination built from a
+shell expansion, the `:` matching refspec, and `HEAD` when the same command
+also switches branches.
 Through `gh api`, agents may read, write PR or issue comments, and reply to or
 resolve review threads. Other API writes need the maintainer.
 It refuses a git or gh command it cannot classify. It is a mistake guard, not

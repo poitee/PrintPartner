@@ -98,6 +98,7 @@ cat >"$PREFIX/env.sh" <<ENV
 export PATH="$PREFIX/node24/bin:$CARGO_HOME/bin:\$PATH"
 export CARGO_HOME="$CARGO_HOME" RUSTUP_HOME="$RUSTUP_HOME"
 export PP_SCHEMA_PARITY_NODE="$PREFIX/node22/bin/node"
+export PP_SIDECAR_PYTHON="$PREFIX/sidecar-venv/bin/python"
 export INSTA_UPDATE=no
 ENV
 for profile in "$HOME/.bashrc" "$HOME/.profile"; do

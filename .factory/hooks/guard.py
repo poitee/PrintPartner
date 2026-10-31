@@ -22,6 +22,7 @@ RELEASE = "Releases and tags need separate authorization."
 HOOKS = "Do not bypass Git hooks."
 UNCLEAR = "Cannot classify this git or gh command; run it without the wrapper option."
 UNPARSABLE = "Cannot parse shell command; use a simpler command."
+EXPANSION = "Cannot classify a shell expansion here; write git and gh arguments literally."
 
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 SHELL_PREFIXES = {"!", "{", "}", "if", "then", "elif", "else", "while", "until", "do"}
@@ -44,6 +45,13 @@ MAIN_REF = re.compile(r"^(?:refs/heads/)?main$")
 PUSH_VALUE_LONG = {"--exec", "--push-option", "--receive-pack", "--repo"}
 COMMIT_VALUE_LONG = {"--author", "--date", "--file", "--message", "--reedit-message",
                      "--reuse-message", "--template", "--trailer"}
+GH_SHORT_BOOLEAN = set("ih")
+GH_SHORT_VALUE = set("FHXfpqt")
+RELEASE_READS = {"download", "list", "verify", "verify-asset", "view"}
+# Git commands that can change which branch HEAD names before a later push runs.
+BRANCH_CHANGES = {"bisect", "branch", "checkout", "rebase", "switch", "symbolic-ref", "worktree"}
+# Marks text the shell expands at run time, so its value is unknown here.
+EXPANDED = "\x00"
 GH_VALUE_OPTIONS = {"-f", "-F", "--field", "--raw-field", "-H", "--header", "--input", "-q", "--jq",
                     "-t", "--template", "--hostname", "-p", "--preview", "--cache", "-X", "--method"}
 REPO_PATH = r"(?:^|/)repos/[^/]+/[^/]+/"
@@ -209,25 +217,27 @@ def shell_commands(source):
                 elif source.startswith("$(", j):
                     end = closing_paren(source, j + 2)
                     nested.append(source[j + 2:end])
+                    text.append(EXPANDED)
                     j = end + 1
                 elif c == "`":
                     end = closing_backtick(source, j + 1)
                     nested.append(source[j + 1:end])
+                    text.append(EXPANDED)
                     j = end + 1
                 else:
-                    text.append(c)
+                    text.append(EXPANDED + c if c == "$" else c)
                     j += 1
             word = (word or "") + "".join(text)
             i = j + 1
         elif source.startswith("$(", i):
             end = closing_paren(source, i + 2)
             nested.append(source[i + 2:end])
-            word = word or ""
+            word = (word or "") + EXPANDED
             i = end + 1
         elif char == "`":
             end = closing_backtick(source, i + 1)
             nested.append(source[i + 1:end])
-            word = word or ""
+            word = (word or "") + EXPANDED
             i = end + 1
         elif char == "#" and word is None:
             newline = source.find("\n", i)
@@ -277,7 +287,7 @@ def shell_commands(source):
                         nested.extend(substitutions("\n".join(body)))
                 heredocs = []
         else:
-            word = (word or "") + char
+            word = (word or "") + (EXPANDED + char if char == "$" else char)
             i += 1
     finish_word()
     if args:
@@ -321,6 +331,8 @@ def options(args, value_flags="", stop_flags="", value_long=()):
     while i < len(args):
         arg = args[i]
         i += 1
+        if not ended and arg.startswith(EXPANDED):
+            raise Unclear(EXPANSION)
         if not ended and arg == "--":
             ended = True
         elif ended or arg == "-" or not arg.startswith("-"):
@@ -342,7 +354,7 @@ def options(args, value_flags="", stop_flags="", value_long=()):
 
 def current_branch(cwd, location):
     """Return the checked-out branch, using only the location options of the git command."""
-    if cwd is None:
+    if cwd is None or any(EXPANDED in arg for arg in location):
         return None
     try:
         result = subprocess.run(["git", *location, "symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -352,7 +364,7 @@ def current_branch(cwd, location):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def push_reason(args, cwd, location):
+def push_reason(args, cwd, location, head_moves):
     parsed = list(options(args, value_flags="o", value_long=PUSH_VALUE_LONG))
     dry_run = False
     for kind, arg in parsed:
@@ -381,11 +393,14 @@ def push_reason(args, cwd, location):
             return FORCE
         if refspec == "tag" or "refs/tags/" in refspec:
             return RELEASE
-        if "*" in refspec:
+        # ":" alone pushes every matching branch; braces and globs expand to other refs.
+        if EXPANDED in refspec or set(refspec) & set("*?[{}"):
             return PUSH_EXPLICIT
         destination = refspec.rsplit(":", 1)[-1]
+        if not destination:
+            return PUSH_EXPLICIT
         if destination in ("HEAD", "@"):
-            destination = current_branch(cwd, location)
+            destination = None if head_moves else current_branch(cwd, location)
             if destination is None:
                 return PUSH_EXPLICIT
         if MAIN_REF.match(destination):
@@ -393,25 +408,40 @@ def push_reason(args, cwd, location):
     return None
 
 
-def git_reason(args, cwd):
-    i, location = 0, []
+def git_command(args):
+    """Return the subcommand index, location options, and any -c hook override reason."""
+    i, location, reason = 0, [], None
     while i < len(args) and args[i].startswith("-"):
         option, value = args[i], args[i + 1] if i + 1 < len(args) else ""
         if option.startswith("--config-env="):
             value = option.split("=", 1)[1]
         if option in ("-c", "--config-env") or option.startswith("--config-env="):
+            if EXPANDED in value:
+                raise Unclear(EXPANSION)
             if value.lower().startswith("core.hookspath"):
-                return HOOKS
+                reason = HOOKS
         if option in ("-C", "--git-dir", "--work-tree"):
             location += [option, value]
         elif option.startswith(("--git-dir=", "--work-tree=")):
             location.append(option)
         i += 2 if option in GIT_VALUE_OPTIONS else 1
-    if i >= len(args):
-        return None
+    return i, location, reason
+
+
+def moves_head(name, args):
+    if name == "git":
+        i = git_command(args)[0]
+        return i < len(args) and args[i] in BRANCH_CHANGES
+    return name == "gh" and without_repo_flags(args)[:2] == ["pr", "checkout"]
+
+
+def git_reason(args, cwd, head_moves=False):
+    i, location, reason = git_command(args)
+    if reason or i >= len(args):
+        return reason
     command, rest = args[i], args[i + 1:]
     if command == "push":
-        return push_reason(rest, cwd, location)
+        return push_reason(rest, cwd, location, head_moves)
     if command == "config":
         if any(arg.lower() == "core.hookspath" for arg in rest) and not CONFIG_READS & set(rest):
             return HOOKS
@@ -428,7 +458,7 @@ def git_reason(args, cwd):
 def read_input(name, cwd):
     """Read a file gh will send, or refuse when the hook cannot see it."""
     path = Path(name)
-    if name == "-" or not path.is_absolute() and cwd is None:
+    if name == "-" or EXPANDED in name or not path.is_absolute() and cwd is None:
         raise Unclear
     try:
         return (Path(cwd or "/") / path).read_text(encoding="utf-8")
@@ -453,13 +483,16 @@ def mutation_fields(document):
     """
     tokens = [token for token in GRAPHQL_TOKEN.findall(document)
               if token != "," and not token.startswith(("#", '"'))]
-    fields, i = [], 0
+    fields, i, parens = [], 0, 0
     while i < len(tokens):
-        if tokens[i] not in ("mutation", "{"):
+        # Variable definitions and directive arguments may hold "{" or a $mutation name.
+        parens += {"(": 1, ")": -1}.get(tokens[i], 0)
+        if parens or tokens[i] not in ("mutation", "{"):
             i += 1
             continue
         mutation = tokens[i] == "mutation"
-        while i < len(tokens) and tokens[i] != "{":
+        while i < len(tokens) and (tokens[i] != "{" or parens):
+            parens += {"(": 1, ")": -1}.get(tokens[i], 0)
             i += 1
         depth = parens = 0
         while i < len(tokens):
@@ -487,6 +520,8 @@ def mutation_fields(document):
 
 def graphql_documents(fields, body, cwd):
     documents = [graphql_query(flag, value, cwd) for flag, value in fields]
+    if any(EXPANDED in document for document in documents):
+        raise Unclear(EXPANSION)
     if body is not None:
         text = read_input(body, cwd)
         try:
@@ -516,7 +551,9 @@ def gh_reason(args, cwd):
     args = without_repo_flags(args)
     if args[:1] == ["help"]:
         return None
-    if args[:2] in (["pr", "merge"], ["release", "create"]):
+    release_write = (args[:1] == ["release"] and args[1:2] and not args[1].startswith("-")
+                     and args[1] not in RELEASE_READS)
+    if args[:2] == ["pr", "merge"] or release_write:
         if args[2:] and all(arg in ("--help", "-h") for arg in args[2:]):
             return None
         return MERGE if args[0] == "pr" else RELEASE
@@ -529,7 +566,15 @@ def gh_reason(args, cwd):
         if arg.startswith("--"):
             name, attached, value = arg.partition("=")
         elif arg.startswith("-") and arg != "-":
-            name, value = arg[:2], arg[2:]
+            name = None
+            for j, flag in enumerate(arg[1:], 2):
+                if flag in GH_SHORT_VALUE:
+                    name, value = "-" + flag, arg[j:]
+                    break
+                if flag not in GH_SHORT_BOOLEAN:
+                    raise Unclear
+            if name is None:
+                continue
             attached = value
         else:
             endpoint = arg if endpoint is None else endpoint
@@ -571,18 +616,20 @@ def decide(payload):
     if tool == "Execute":
         cwd = str(payload.get("cwd") or os.getcwd())
         try:
-            for args in shell_commands(str(data.get("command", ""))):
-                name, rest = program(args)
+            commands = [program(args) for args in shell_commands(str(data.get("command", "")))]
+            # Substitutions run out of source order, so any branch change makes HEAD unknown.
+            head_moves = any(moves_head(name, rest) for name, rest in commands)
+            for name, rest in commands:
                 if name in ("cd", "pushd", "popd"):
                     targets = [arg for arg in rest if not arg.startswith("-")]
-                    plain = name != "popd" and len(targets) == 1 and not re.search(r"[$~`]", targets[0])
+                    plain = name != "popd" and len(targets) == 1 and not re.search(r"[$~`\x00]", targets[0])
                     cwd = os.path.normpath(os.path.join(cwd, targets[0])) if plain and cwd else None
                     continue
-                reason = git_reason(rest, cwd) if name == "git" else gh_reason(rest, cwd) if name == "gh" else None
+                reason = git_reason(rest, cwd, head_moves) if name == "git" else gh_reason(rest, cwd) if name == "gh" else None
                 if reason:
                     return reason
-        except Unclear:
-            return UNCLEAR
+        except Unclear as error:
+            return str(error) or UNCLEAR
         except ValueError:
             return UNPARSABLE
         return None
