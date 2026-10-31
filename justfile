@@ -9,3 +9,7 @@ ci *args:
 guidance:
     python3 -B -m unittest discover -s scripts -p test_agent_guidance.py -v
     python3 -B scripts/check-agent-guidance.py
+
+# Opt in to the staged-change checks in .githooks/pre-commit.
+hooks:
+    git config core.hooksPath .githooks
