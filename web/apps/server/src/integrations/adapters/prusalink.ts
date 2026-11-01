@@ -136,7 +136,11 @@ async function prusalinkFetch(
 async function fetchWithIdleTimeout(
   url: string,
   config: IntegrationConfig,
-  { idleMs, headers, timeoutMessage }: {
+  {
+    idleMs,
+    headers,
+    timeoutMessage,
+  }: {
     idleMs: number;
     headers?: RequestInit["headers"];
     timeoutMessage: string;
@@ -152,10 +156,7 @@ async function fetchWithIdleTimeout(
   const resetIdleTimer = () => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      abortController.abort(new DOMException(
-        timeoutMessage,
-        "TimeoutError",
-      ));
+      abortController.abort(new DOMException(timeoutMessage, "TimeoutError"));
     }, idleMs);
     idleTimer.unref();
   };
@@ -339,9 +340,7 @@ async function readJobFileMeta(
       await drainResponseBody(res);
       return {};
     }
-    const body = parseJobBody(
-      await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES),
-    );
+    const body = parseJobBody(await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES));
     const progressRaw = body.progress;
     const progress =
       typeof progressRaw === "number" && Number.isFinite(progressRaw)
@@ -363,7 +362,10 @@ async function readJobFileMeta(
   }
 }
 
-async function readStatus(config: IntegrationConfig, permit: StatusPermit): Promise<PrinterHostStatus> {
+async function readStatus(
+  config: IntegrationConfig,
+  permit: StatusPermit,
+): Promise<PrinterHostStatus> {
   const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) return { state: "offline", message: "base_url is required" };
   if (!credentials(config)) {
@@ -381,9 +383,7 @@ async function readStatus(config: IntegrationConfig, permit: StatusPermit): Prom
     await drainResponseBody(res);
     return { state: "offline", message: `PrusaLink returned HTTP ${res.status}` };
   }
-  const body = parseStatusBody(
-    await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES),
-  );
+  const body = parseStatusBody(await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES));
   const rawState = body.printer?.state ?? body.printer?.status;
   const state = mapPrinterState(rawState);
   const progressRaw = body.job?.progress;
@@ -539,14 +539,14 @@ async function browseStorage(
   for (const child of children) {
     // A child name is one segment. Anything else is the printer reporting a
     // path where a name belongs, and it is not this directory's to serve.
-    const name = typeof child.name === "string"
-      ? safeStoragePath(child.name, { trimTrailing: true })
-      : null;
+    const name =
+      typeof child.name === "string" ? safeStoragePath(child.name, { trimTrailing: true }) : null;
     if (!name || name.includes("/")) continue;
     const childPath = relative ? `${relative}/${name}` : name;
-    const modified = typeof child.m_timestamp === "number" && Number.isFinite(child.m_timestamp)
-      ? { modified_at: new Date(child.m_timestamp * 1_000).toISOString() }
-      : {};
+    const modified =
+      typeof child.m_timestamp === "number" && Number.isFinite(child.m_timestamp)
+        ? { modified_at: new Date(child.m_timestamp * 1_000).toISOString() }
+        : {};
     if (child.type === "FOLDER") {
       entries.push({
         kind: "directory",
@@ -558,9 +558,10 @@ async function browseStorage(
     }
     if (child.type !== "PRINT_FILE") continue;
     // Absent size stays absent: unknown must not read as zero.
-    const size = typeof child.size === "number" && Number.isFinite(child.size) && child.size >= 0
-      ? { size_bytes: Math.round(child.size) }
-      : {};
+    const size =
+      typeof child.size === "number" && Number.isFinite(child.size) && child.size >= 0
+        ? { size_bytes: Math.round(child.size) }
+        : {};
     // PrusaLink's file record carries no etag or revision, so provider_revision
     // is omitted rather than filled with a stand-in.
     entries.push({
@@ -602,9 +603,7 @@ async function readCameras(config: IntegrationConfig): Promise<PrusaCameraInfo[]
     throw new Error(`PrusaLink camera list returned HTTP ${response.status}`);
   }
   const body = await readBoundedJsonResponse(response, MAX_METADATA_RESPONSE_BYTES);
-  return Array.isArray(body)
-    ? body.map(parseCameraInfo).filter((camera) => camera !== null)
-    : [];
+  return Array.isArray(body) ? body.map(parseCameraInfo).filter((camera) => camera !== null) : [];
 }
 
 async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> {
@@ -612,9 +611,10 @@ async function listCameras(config: IntegrationConfig): Promise<PrinterCamera[]> 
   return cameras.flatMap((camera, index): PrinterCamera[] => {
     const id = typeof camera.camera_id === "string" ? camera.camera_id.trim() : "";
     if (!id || camera.connected === false) return [];
-    const name = typeof camera.config?.name === "string" && camera.config.name.trim()
-      ? camera.config.name.trim()
-      : `Camera ${index + 1}`;
+    const name =
+      typeof camera.config?.name === "string" && camera.config.name.trim()
+        ? camera.config.name.trim()
+        : `Camera ${index + 1}`;
     return [{ id, name, view: "snapshot", service: "prusalink" }];
   });
 }
@@ -631,21 +631,16 @@ export const prusalinkAdapter: IntegrationAdapter = {
       if (!relative) throw new Error("Invalid PrusaLink print-file path");
       const providerPath = joinStoragePath(await resolveStorageRoot(config, baseUrl), relative);
       if (!providerPath) throw new Error("Invalid PrusaLink print-file path");
-      const metadataResponse = await prusalinkFetch(
-        prusaFileUrl(baseUrl, providerPath),
-        config,
-        {
-          headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(15_000),
-        },
-      );
+      const metadataResponse = await prusalinkFetch(prusaFileUrl(baseUrl, providerPath), config, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      });
       if (!metadataResponse.ok) return metadataResponse;
       const metadata = parseFileInfo(
         await readBoundedJsonResponse(metadataResponse, MAX_METADATA_RESPONSE_BYTES),
       );
-      const downloadRef = typeof metadata?.refs?.download === "string"
-        ? metadata.refs.download.trim()
-        : "";
+      const downloadRef =
+        typeof metadata?.refs?.download === "string" ? metadata.refs.download.trim() : "";
       if (!downloadRef) throw new Error("PrusaLink did not advertise a download URL");
       const downloadUrl = new URL(downloadRef, `${baseUrl}/`).toString();
       if (new URL(downloadUrl).origin !== new URL(baseUrl).origin) {
@@ -671,7 +666,10 @@ export const prusalinkAdapter: IntegrationAdapter = {
     },
   },
 
-  async testConnection(config: IntegrationConfig, permit: StatusPermit): Promise<IntegrationTestResult> {
+  async testConnection(
+    config: IntegrationConfig,
+    permit: StatusPermit,
+  ): Promise<IntegrationTestResult> {
     const baseUrl = normalizeBaseUrl(config.base_url ?? config.baseUrl);
     if (!baseUrl) {
       return { ok: false, message: "base_url is required" };
@@ -686,9 +684,9 @@ export const prusalinkAdapter: IntegrationAdapter = {
       if (infoRes.ok) {
         const info = await readBoundedJsonResponse(infoRes, MAX_METADATA_RESPONSE_BYTES);
         const label = isRecord(info)
-          ? [info.name, info.hostname, info.printer_model]
-              .find((value): value is string => typeof value === "string" && value.length > 0)
-            ?? "PrusaLink"
+          ? ([info.name, info.hostname, info.printer_model].find(
+              (value): value is string => typeof value === "string" && value.length > 0,
+            ) ?? "PrusaLink")
           : "PrusaLink";
         const status = await readStatus(config, permit).catch(() => null);
         const statePart = status?.state ? `, state: ${status.state}` : "";
@@ -698,7 +696,10 @@ export const prusalinkAdapter: IntegrationAdapter = {
       await drainResponseBody(infoRes);
       const status = await readStatus(config, permit);
       if (status.state === "offline") {
-        return { ok: false, message: status.message ?? `PrusaLink returned HTTP ${infoRes.status}` };
+        return {
+          ok: false,
+          message: status.message ?? `PrusaLink returned HTTP ${infoRes.status}`,
+        };
       }
       return { ok: true, message: `Connected (${status.message ?? status.state})` };
     } catch (e) {
@@ -751,9 +752,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
         await drainResponseBody(jobRes);
         return [];
       }
-      const job = parseJobBody(
-        await readBoundedJsonResponse(jobRes, MAX_METADATA_RESPONSE_BYTES),
-      );
+      const job = parseJobBody(await readBoundedJsonResponse(jobRes, MAX_METADATA_RESPONSE_BYTES));
 
       // Only parse for active/finished jobs
       const rawState = (job.state ?? "").toUpperCase();
@@ -809,7 +808,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
       if (!isRecord(parsed) || !Array.isArray(parsed.objects)) return [];
 
       return parsed.objects
-        .map((object) => isRecord(object) && typeof object.name === "string" ? object.name : "")
+        .map((object) => (isRecord(object) && typeof object.name === "string" ? object.name : ""))
         .filter((n) => n.length > 0);
     } catch {
       return [];
@@ -827,9 +826,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
         await drainResponseBody(res);
         return null;
       }
-      const body = parseJobBody(
-        await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES),
-      );
+      const body = parseJobBody(await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES));
       const consumed = body.consumed_material;
       if (typeof consumed === "number" && Number.isFinite(consumed) && consumed >= 0) {
         return consumed;
@@ -903,9 +900,7 @@ export const prusalinkAdapter: IntegrationAdapter = {
         ok: true,
         remote_path: remotePath,
         started: start,
-        message: start
-          ? `Uploaded and started ${safeName}`
-          : `Uploaded ${safeName}`,
+        message: start ? `Uploaded and started ${safeName}` : `Uploaded ${safeName}`,
       };
     } catch (e) {
       return {

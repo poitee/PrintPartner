@@ -6,8 +6,7 @@ function digest401() {
   return new Response(null, {
     status: 401,
     headers: {
-      "www-authenticate":
-        'Digest realm="Printer API", nonce="abc", qop="auth", algorithm=MD5',
+      "www-authenticate": 'Digest realm="Printer API", nonce="abc", qop="auth", algorithm=MD5',
     },
   });
 }
@@ -34,37 +33,51 @@ function storageFetchMock({ downloadRef = "/api/files/local/jobs/BRACK~1.BGC/raw
     const url = String(input);
     if (url.endsWith("/api/v1/status")) return digest401();
     if (url.endsWith("/api/v1/storage")) {
-      return new Response(JSON.stringify({
-        storage_list: [{ path: "/local", available: true }],
-      }), { headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          storage_list: [{ path: "/local", available: true }],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
     }
     if (url.endsWith("/api/v1/files/local/")) {
-      return new Response(JSON.stringify({
-        type: "FOLDER",
-        children: [
-          { name: "jobs", type: "FOLDER", m_timestamp: 1_724_000_000 },
-          { name: "SPOOL~1.GCO", display_name: "spool-holder.gcode", type: "PRINT_FILE" },
-          { name: "firmware.bbf", type: "FIRMWARE", size: 4096 },
-        ],
-      }), { headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          type: "FOLDER",
+          children: [
+            { name: "jobs", type: "FOLDER", m_timestamp: 1_724_000_000 },
+            { name: "SPOOL~1.GCO", display_name: "spool-holder.gcode", type: "PRINT_FILE" },
+            { name: "firmware.bbf", type: "FIRMWARE", size: 4096 },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
     }
     if (url.endsWith("/api/v1/files/local/jobs")) {
-      return new Response(JSON.stringify({
-        type: "FOLDER",
-        children: [{
-          name: "BRACK~1.BGC",
-          display_name: "bracket.bgcode",
-          type: "PRINT_FILE",
-          size: 8192,
-          m_timestamp: 1_725_000_000,
-        }],
-      }), { headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          type: "FOLDER",
+          children: [
+            {
+              name: "BRACK~1.BGC",
+              display_name: "bracket.bgcode",
+              type: "PRINT_FILE",
+              size: 8192,
+              m_timestamp: 1_725_000_000,
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
     }
     if (url.endsWith("/api/v1/files/local/jobs/BRACK~1.BGC")) {
-      return new Response(JSON.stringify({
-        type: "PRINT_FILE",
-        refs: { download: downloadRef },
-      }), { headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          type: "PRINT_FILE",
+          refs: { download: downloadRef },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
     }
     if (url.endsWith("/api/files/local/jobs/BRACK~1.BGC/raw")) {
       return new Response("binary-gcode");
@@ -88,14 +101,17 @@ function useFakeDownloadClock() {
 
 function stubDownloadResponse(response: (signal: AbortSignal) => Response) {
   const fallback = storageFetchMock();
-  vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
-    if (!String(input).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw")) {
-      return fallback(input);
-    }
-    const signal = init?.signal;
-    if (!signal) throw new Error("The download request must have an abort signal");
-    return response(signal);
-  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input, init) => {
+      if (!String(input).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw")) {
+        return fallback(input);
+      }
+      const signal = init?.signal;
+      if (!signal) throw new Error("The download request must have an abort signal");
+      return response(signal);
+    }),
+  );
 }
 
 const execution = new StatusExecution();
@@ -113,43 +129,62 @@ describe("prusalinkAdapter", () => {
       setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
       return controller.signal;
     });
-    const chunks = ['{"type":"FOLDER",', '"children":[', '{"name":"part.bgcode",',
-      '"type":"PRINT_FILE"}', ']}'];
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
-      if (String(input).endsWith("/api/v1/status")) return digest401();
-      const signal = init?.signal;
-      if (!signal) throw new Error("Expected bounded directory request");
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          let index = 0;
-          const timer = setInterval(() => {
-            if (stalled) {
-              controller.enqueue(new Uint8Array());
-              return;
-            }
-            controller.enqueue(new TextEncoder().encode(chunks[index++]));
-            if (index === chunks.length) {
-              clearInterval(timer);
-              controller.close();
-            }
-          }, 5_000);
-          signal.addEventListener("abort", () => {
-            clearInterval(timer);
-            controller.error(signal.reason);
-          }, { once: true });
-        },
-      }));
-    }));
+    const chunks = [
+      '{"type":"FOLDER",',
+      '"children":[',
+      '{"name":"part.bgcode",',
+      '"type":"PRINT_FILE"}',
+      "]}",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        if (String(input).endsWith("/api/v1/status")) return digest401();
+        const signal = init?.signal;
+        if (!signal) throw new Error("Expected bounded directory request");
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              let index = 0;
+              const timer = setInterval(() => {
+                if (stalled) {
+                  controller.enqueue(new Uint8Array());
+                  return;
+                }
+                controller.enqueue(new TextEncoder().encode(chunks[index++]));
+                if (index === chunks.length) {
+                  clearInterval(timer);
+                  controller.close();
+                }
+              }, 5_000);
+              signal.addEventListener(
+                "abort",
+                () => {
+                  clearInterval(timer);
+                  controller.error(signal.reason);
+                },
+                { once: true },
+              );
+            },
+          }),
+        );
+      }),
+    );
     try {
-      const result = prusalinkAdapter.files!.browse({ ...prusaConfig, storage: "usb" }, "")
-        .then((listing) => ({ kind: "complete", listing }), (error: unknown) => ({ kind: "failed", error }));
+      const result = prusalinkAdapter.files!.browse({ ...prusaConfig, storage: "usb" }, "").then(
+        (listing) => ({ kind: "complete", listing }),
+        (error: unknown) => ({ kind: "failed", error }),
+      );
       await vi.advanceTimersByTimeAsync(25_000);
       if (stalled) {
         expect(await result).toMatchObject({ kind: "failed", error: { name: "TimeoutError" } });
       } else {
-        expect(await result).toMatchObject({ kind: "complete", listing: {
-          entries: [{ name: "part.bgcode" }],
-        } });
+        expect(await result).toMatchObject({
+          kind: "complete",
+          listing: {
+            entries: [{ name: "part.bgcode" }],
+          },
+        });
       }
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -319,18 +354,22 @@ describe("prusalinkAdapter", () => {
       .fn()
       // status challenge + status
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce(jsonResponse({
+      .mockResolvedValueOnce(
+        jsonResponse({
           printer: { state: "PRINTING" },
           job: {
             progress: 33.3,
             time_remaining: 1200,
           },
-        }))
+        }),
+      )
       // job challenge + job (file lives here)
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce(jsonResponse({
+      .mockResolvedValueOnce(
+        jsonResponse({
           file: { display_name: "benchy.bgcode" },
-        }));
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const status = await execution.probe(prusalinkAdapter, {
@@ -341,9 +380,7 @@ describe("prusalinkAdapter", () => {
     expect(status.progress).toBe(33);
     expect(status.filename).toBe("benchy.bgcode");
     expect(status.eta_seconds).toBe(1200);
-    expect(
-      fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/v1/job")),
-    ).toBe(true);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/v1/job"))).toBe(true);
   });
 
   it("getStatus maps READY to idle", async () => {
@@ -359,19 +396,21 @@ describe("prusalinkAdapter", () => {
     });
     expect(status.state).toBe("idle");
     expect(status.message).toBe("Idle");
-    expect(
-      fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/v1/job")),
-    ).toBe(false);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/v1/job"))).toBe(
+      false,
+    );
   });
 
   it("getStatus maps FINISHED to complete", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce(jsonResponse({
+      .mockResolvedValueOnce(
+        jsonResponse({
           printer: { state: "FINISHED" },
           job: { file: { name: "done.bgcode" }, progress: 100 },
-        }));
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const status = await execution.probe(prusalinkAdapter, {
@@ -386,23 +425,22 @@ describe("prusalinkAdapter", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce(jsonResponse({
-        state: "PRINTING",
-        refs: { download: "/api/files/local/active.bgcode" },
-      }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          state: "PRINTING",
+          refs: { download: "/api/files/local/active.bgcode" },
+        }),
+      )
       .mockResolvedValueOnce(digest401())
-      .mockResolvedValueOnce(new Response(
-        'objects_info={"objects":[{"name":"bracket.stl"}]} trailing gcode',
-        {
+      .mockResolvedValueOnce(
+        new Response('objects_info={"objects":[{"name":"bracket.stl"}]} trailing gcode', {
           status: 200,
           headers: { "content-length": String(8 * 1024 * 1024) },
-        },
-      ));
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(prusalinkAdapter.getObjectList!(prusaConfig)).resolves.toEqual([
-      "bracket.stl",
-    ]);
+    await expect(prusalinkAdapter.getObjectList!(prusaConfig)).resolves.toEqual(["bracket.stl"]);
     const downloadRequest = fetchMock.mock.calls[3]?.[1] as RequestInit;
     expect(new Headers(downloadRequest.headers).get("Range")).toBe("bytes=0-65535");
   });
@@ -433,41 +471,51 @@ describe("prusalinkAdapter", () => {
     const listing = await prusalinkAdapter.files!.browse(prusaConfig, "jobs");
 
     expect(listing.path).toBe("jobs");
-    expect(listing.entries).toEqual([{
-      kind: "file",
-      path: "jobs/BRACK~1.BGC",
-      name: "bracket.bgcode",
-      size_bytes: 8192,
-      modified_at: new Date(1_725_000_000 * 1_000).toISOString(),
-    }]);
+    expect(listing.entries).toEqual([
+      {
+        kind: "file",
+        path: "jobs/BRACK~1.BGC",
+        name: "bracket.bgcode",
+        size_bytes: 8192,
+        modified_at: new Date(1_725_000_000 * 1_000).toISOString(),
+      },
+    ]);
 
     const opened = await prusalinkAdapter.files!.open(prusaConfig, "jobs/BRACK~1.BGC");
     expect(await opened.text()).toBe("binary-gcode");
-    expect(fetchMock.mock.calls.some((call) =>
-      String(call[0]).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw"),
-    )).toBe(true);
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).endsWith("/api/files/local/jobs/BRACK~1.BGC/raw"),
+      ),
+    ).toBe(true);
   });
 
   it("keeps a progressing file download alive beyond two minutes", async () => {
     useFakeDownloadClock();
     stubDownloadResponse((signal) => {
-      return new Response(new ReadableStream<Uint8Array>({
-        start(controller) {
-          let sent = 0;
-          const timer = setInterval(() => {
-            controller.enqueue(new TextEncoder().encode("gcode-chunk\n"));
-            sent += 1;
-            if (sent === 13) {
-              clearInterval(timer);
-              controller.close();
-            }
-          }, 10_000);
-          signal.addEventListener("abort", () => {
-            clearInterval(timer);
-            controller.error(signal.reason);
-          }, { once: true });
-        },
-      }));
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            let sent = 0;
+            const timer = setInterval(() => {
+              controller.enqueue(new TextEncoder().encode("gcode-chunk\n"));
+              sent += 1;
+              if (sent === 13) {
+                clearInterval(timer);
+                controller.close();
+              }
+            }, 10_000);
+            signal.addEventListener(
+              "abort",
+              () => {
+                clearInterval(timer);
+                controller.error(signal.reason);
+              },
+              { once: true },
+            );
+          },
+        }),
+      );
     });
 
     try {
@@ -503,15 +551,24 @@ describe("prusalinkAdapter", () => {
 
   it("times out a stalled file body even when it emits empty chunks", async () => {
     useFakeDownloadClock();
-    stubDownloadResponse((signal) => new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        const timer = setInterval(() => controller.enqueue(new Uint8Array()), 10_000);
-        signal.addEventListener("abort", () => {
-          clearInterval(timer);
-          controller.error(signal.reason);
-        }, { once: true });
-      },
-    })));
+    stubDownloadResponse(
+      (signal) =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              const timer = setInterval(() => controller.enqueue(new Uint8Array()), 10_000);
+              signal.addEventListener(
+                "abort",
+                () => {
+                  clearInterval(timer);
+                  controller.error(signal.reason);
+                },
+                { once: true },
+              );
+            },
+          }),
+        ),
+    );
     try {
       const response = await prusalinkAdapter.files!.open(prusaConfig, "jobs/BRACK~1.BGC");
       const result = response.arrayBuffer().then(
@@ -612,14 +669,12 @@ describe("prusalinkAdapter", () => {
     const fetchMock = storageFetchMock();
     vi.stubGlobal("fetch", fetchMock);
 
-    for (
-      const unsafe of [
-        "../secrets",
-        "jobs/../../etc",
-        "jobs\\bracket.bgcode",
-        "jobs/brack\u0000et.bgcode",
-      ]
-    ) {
+    for (const unsafe of [
+      "../secrets",
+      "jobs/../../etc",
+      "jobs\\bracket.bgcode",
+      "jobs/brack\u0000et.bgcode",
+    ]) {
       await expect(prusalinkAdapter.files!.browse(prusaConfig, unsafe)).rejects.toThrow(
         /Invalid PrusaLink storage path/,
       );
@@ -643,11 +698,16 @@ describe("prusalinkAdapter", () => {
       const url = String(input);
       if (url.endsWith("/api/v1/status")) return digest401();
       if (url.endsWith("/api/v1/cameras")) {
-        return new Response(JSON.stringify([{
-          camera_id: "camera-one",
-          connected: true,
-          config: { name: "Enclosure" },
-        }]), { headers: { "content-type": "application/json" } });
+        return new Response(
+          JSON.stringify([
+            {
+              camera_id: "camera-one",
+              connected: true,
+              config: { name: "Enclosure" },
+            },
+          ]),
+          { headers: { "content-type": "application/json" } },
+        );
       }
       if (url.endsWith("/api/v1/cameras/camera-one/snap")) {
         return new Response("png", { headers: { "content-type": "image/png" } });
@@ -661,12 +721,14 @@ describe("prusalinkAdapter", () => {
       password: "printer-key",
     };
 
-    expect(await prusalinkAdapter.cameras!.list(config)).toEqual([{
-      id: "camera-one",
-      name: "Enclosure",
-      view: "snapshot",
-      service: "prusalink",
-    }]);
+    expect(await prusalinkAdapter.cameras!.list(config)).toEqual([
+      {
+        id: "camera-one",
+        name: "Enclosure",
+        view: "snapshot",
+        service: "prusalink",
+      },
+    ]);
     const snapshot = await prusalinkAdapter.cameras!.open(config, "camera-one");
     expect(snapshot.headers.get("content-type")).toBe("image/png");
   });

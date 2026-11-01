@@ -9,9 +9,9 @@ import { describe, expect, it } from "vitest";
 import { prusalinkAdapter } from "./prusalink.js";
 
 const here = new URL("../../../../../../fixtures/drivers/prusalink/driver/", import.meta.url);
-const challenge = JSON.parse(
-  readFileSync(new URL("../digest-401.json", here), "utf8"),
-) as { headers: Record<string, string> };
+const challenge = JSON.parse(readFileSync(new URL("../digest-401.json", here), "utf8")) as {
+  headers: Record<string, string>;
+};
 
 type Routes = {
   routes: Record<string, string>;
@@ -59,7 +59,8 @@ describe("PrusaLink driver oracle", () => {
           res.writeHead(404, { "content-type": "application/json" }).end("{}");
           return;
         }
-        res.writeHead(200, { "content-type": "application/json" })
+        res
+          .writeHead(200, { "content-type": "application/json" })
           .end(readFileSync(new URL(fixture, here)));
       });
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
