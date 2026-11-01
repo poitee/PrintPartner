@@ -66,7 +66,7 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci(), 0)
         for step in ["fmt", "clippy-off", "clippy-on", "nextest-off", "nextest-on", "doc-off", "doc-on",
                      "web-assets", "workaround-ratchet", "ast-grep", "boundaries", "selector-tests",
-                     "node-fixtures", "actionlint", "zizmor", "rust-deps"]:
+                     "node-fixtures", "actionlint", "zizmor", "rust-deps", "duplication"]:
             self.assertEqual(ci.summary[step], "PASS", step)
         for step in ["rust-windows", "rust-macos", "pr-evidence"]:
             self.assertEqual(ci.summary[step], "SKIP", step)
@@ -143,7 +143,7 @@ class LocalCiTests(unittest.TestCase):
 
     def test_node_22_steps_skip_without_the_pinned_node_22(self):
         for node22 in [None, "v22.22.0"]:
-            for step in ["node-fixtures", "workaround-ratchet"]:
+            for step in ["node-fixtures", "workaround-ratchet", "duplication"]:
                 with self.subTest(node22=node22, step=step):
                     ci = LocalCi(self, node22=node22)
                     self.assertEqual(ci(), 0)
@@ -180,6 +180,14 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci(), 0)
         self.assertLess(ci.ran.index("web-assets"), ci.ran.index("workaround-ratchet"))
         self.assertLess(ci.ran.index("workaround-ratchet"), ci.ran.index("node-fixtures"))
+        self.assertLess(ci.ran.index("web-assets"), ci.ran.index("duplication"))
+        self.assertLess(ci.ran.index("duplication"), ci.ran.index("node-fixtures"))
+
+    def test_duplication_failure_fails_the_run_without_stopping_later_steps(self):
+        ci = LocalCi(self, fail={"duplication"})
+        self.assertEqual(ci(), 1)
+        self.assertEqual(ci.summary["duplication"], "FAIL")
+        self.assertIn("node-fixtures", ci.ran)
 
     def test_just_ci_runs_this_command_with_its_arguments_and_no_step_list_of_its_own(self):
         recipe = (ROOT / "justfile").read_text().split("\nci *args:\n", 1)[1]

@@ -16,6 +16,7 @@
         "scripts/**"
       ],
       "ignoreDependencies": [
+        "jscpd", // scripts/check-duplication.mjs resolves this CLI from the repo root
         "fflate",
         "@print-partner/domain"
       ]
