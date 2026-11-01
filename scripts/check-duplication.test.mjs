@@ -125,4 +125,11 @@ test("real jscpd finds a copied block and ignores fixtures", (t) => {
   writeFileSync(join(root, "web/packages/b.ts"), `${fn("second").replace(/\s+/g, " ")}\n`);
   assert.equal(scan(root)["web/packages"].duplicatedTokens, found.duplicatedTokens, "line wrapping must not change the baseline");
   assert.equal(scan(root).rust.duplicatedTokens, 0);
+  // UI tests live outside src/ and are often plain JavaScript.
+  const before = scan(root)["web/apps/web"].duplicatedTokens;
+  mkdirSync(join(root, "web/apps/web/test"), { recursive: true });
+  const js = (name) => fn(name).replace(/: number\[\]/g, "");
+  writeFileSync(join(root, "web/apps/web/test/a.browser.mjs"), js("first"));
+  writeFileSync(join(root, "web/apps/web/test/b.browser.mjs"), js("second"));
+  assert.ok(scan(root)["web/apps/web"].duplicatedTokens >= before + 50, "copied UI test JavaScript must count");
 });

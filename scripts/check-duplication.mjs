@@ -13,8 +13,8 @@ const BASELINE_PATH = join(SCRIPT_DIR, "duplication-baseline.json");
 // One entry per app the readiness audit counts. rust/crates holds pp-server,
 // pp-desktop and the libraries they share.
 export const AREAS = {
-  "web/apps/server": "web/apps/server/src",
-  "web/apps/web": "web/apps/web/src",
+  "web/apps/server": "web/apps/server",
+  "web/apps/web": "web/apps/web",
   "web/packages": "web/packages",
   rust: "rust/crates",
   "slicer-sidecar": "slicer-sidecar",
@@ -38,7 +38,7 @@ export function jscpdArgs(path, output) {
     "--min-tokens", "50",
     "--min-lines", "0",
     "--mode", "mild",
-    "--format", "typescript,tsx,rust,python",
+    "--format", "javascript,typescript,tsx,rust,python",
     "--ignore", IGNORED.join(","),
     "--reporters", "json",
     "--output", output,
@@ -59,7 +59,8 @@ export function readReport(report) {
   return { duplicatedTokens: total.duplicatedTokens, clones: report.duplicates ?? [] };
 }
 
-export function scan(root = REPO_ROOT, entry = jscpdEntry()) {
+export function scan(root = REPO_ROOT) {
+  const entry = jscpdEntry();
   const results = {};
   for (const [area, path] of Object.entries(AREAS)) {
     const output = mkdtempSync(join(tmpdir(), "pp-jscpd-"));

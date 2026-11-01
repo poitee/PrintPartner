@@ -70,8 +70,10 @@ criterion or add broad source exclusions to manufacture a pass.
 ## Duplicated code
 
 The `duplication` job in `duplication.yml` caps duplicated tokens with jscpd 5.4.2.
-It scans the Node server, React UI, shared web packages, all Rust crates including
-`pp-server` and `pp-desktop`, and the Python sidecar. Tests count as source.
+It scans the whole Node server and React UI app directories, shared web packages,
+all Rust crates including `pp-server` and `pp-desktop`, and the Python sidecar.
+It reads JavaScript, TypeScript, Rust and Python. Tests count as source,
+including the UI's `test/` tree.
 Generated TypeScript, fixtures, snapshots, dependencies and build outputs do not.
 It runs on ready PRs and main pushes that change those inputs, on merge groups,
 and on manual dispatch. It does not change required-check settings.
