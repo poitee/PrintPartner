@@ -6,8 +6,15 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { buildApp } from "../app.js";
 import { loadConfig } from "../config.js";
 import { createJobRunner } from "../services/job-runner.js";
-import { enqueuePrinterSend, loadPrinterSendQueue, updatePrinterSendQueueItem } from "../services/printer-send-queue-store.js";
-import { interruptPrinterUploadsOnShutdown, resetPrinterUploadHaltForTests } from "../services/printer-send-queue.js";
+import {
+  enqueuePrinterSend,
+  loadPrinterSendQueue,
+  updatePrinterSendQueueItem,
+} from "../services/printer-send-queue-store.js";
+import {
+  interruptPrinterUploadsOnShutdown,
+  resetPrinterUploadHaltForTests,
+} from "../services/printer-send-queue.js";
 import * as sourceManifestMigration from "../services/source-manifest-migration.js";
 import * as sourceWatcher from "../services/source-watcher.js";
 import {
@@ -134,7 +141,10 @@ describe("operation cutover record at Node startup", () => {
 
   it("fences the worker and its route aliases after Rust takes the operation", async () => {
     const { app, ports } = await start((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), record("profile.sync", PROFILE_SYNC_PARTICIPANTS));
+      writeFileSync(
+        join(dataDir, "operation-cutover.json"),
+        record("profile.sync", PROFILE_SYNC_PARTICIPANTS),
+      );
     });
     try {
       expect(profileSync.startManagedProfileSync).not.toHaveBeenCalled();
@@ -149,10 +159,10 @@ describe("operation cutover record at Node startup", () => {
 
   it("keeps the worker when Rust owns only unrelated HTTP routes", async () => {
     const { app, ports } = await start((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), record("filament.catalog", [
-        "http.GET /filaments/catalog",
-        "http.HEAD /filaments/catalog",
-      ]));
+      writeFileSync(
+        join(dataDir, "operation-cutover.json"),
+        record("filament.catalog", ["http.GET /filaments/catalog", "http.HEAD /filaments/catalog"]),
+      );
     });
     try {
       expect(profileSync.startManagedProfileSync).toHaveBeenCalledOnce();
@@ -164,11 +174,16 @@ describe("operation cutover record at Node startup", () => {
 
   it("fences every Source Sync participant after Rust takes the operation", async () => {
     const { app, ports, dataDir } = await start((dir) => {
-      writeFileSync(join(dir, "operation-cutover.json"), record("source.sync", SOURCE_SYNC_PARTICIPANTS));
+      writeFileSync(
+        join(dir, "operation-cutover.json"),
+        record("source.sync", SOURCE_SYNC_PARTICIPANTS),
+      );
     });
     try {
       expect(sourceWatcher.startSourceWatcher).not.toHaveBeenCalled();
-      expect(sourceManifestMigration.migrateLegacySourceManifestOverridesForTenant).not.toHaveBeenCalled();
+      expect(
+        sourceManifestMigration.migrateLegacySourceManifestOverridesForTenant,
+      ).not.toHaveBeenCalled();
       expect(existsSync(sourceSyncAdmissionReceiptPath(dataDir))).toBe(false);
       for (const url of ["/jobs/sync", "/api/v1/jobs/check-source-updates"]) {
         const refused = await app.inject({ method: "POST", url, payload: {} });
@@ -178,7 +193,9 @@ describe("operation cutover record at Node startup", () => {
           detail: `Rust owns source.sync; Node does not run http.POST ${url.replace("/api/v1", "")}`,
         });
       }
-      for (const id of SOURCE_SYNC_PARTICIPANTS.filter((participant) => !participant.startsWith("http."))) {
+      for (const id of SOURCE_SYNC_PARTICIPANTS.filter(
+        (participant) => !participant.startsWith("http."),
+      )) {
         const refusal = captured(() => requireSourceSyncParticipant(id));
         expect(refusal, id).toBeInstanceOf(OwnershipAdmissionError);
         expect(refusal, id).toMatchObject({ code: "rust_owner", statusCode: 503 });
@@ -194,12 +211,19 @@ describe("operation cutover record at Node startup", () => {
 
   it("refuses an export job after Rust takes its operation and keeps other exports", async () => {
     const { app, ports } = await start((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), record("export.checklist-html", EXPORT_CHECKLIST_PARTICIPANTS));
+      writeFileSync(
+        join(dataDir, "operation-cutover.json"),
+        record("export.checklist-html", EXPORT_CHECKLIST_PARTICIPANTS),
+      );
     });
     try {
       const profile = ports.repository.createProfile("Fenced export");
       for (const url of ["/jobs/export-checklist-html", "/api/v1/jobs/export-checklist-html"]) {
-        const refused = await app.inject({ method: "POST", url, payload: { profile_id: profile.id } });
+        const refused = await app.inject({
+          method: "POST",
+          url,
+          payload: { profile_id: profile.id },
+        });
         expect(refused.statusCode, url).toBe(503);
         expect(refused.json(), url).toEqual({
           statusCode: 503,
@@ -208,10 +232,16 @@ describe("operation cutover record at Node startup", () => {
           message: "Rust owns job.export-checklist-html; Node does not run it",
         });
       }
-      const kinds = async () => (await app.inject({ method: "GET", url: "/api/v1/jobs" })).json().jobs
-        .map((job: { kind: string }) => job.kind);
+      const kinds = async () =>
+        (await app.inject({ method: "GET", url: "/api/v1/jobs" }))
+          .json()
+          .jobs.map((job: { kind: string }) => job.kind);
       expect(await kinds()).toEqual([]);
-      const allowed = await app.inject({ method: "POST", url: "/jobs/export-kit-bundle", payload: { profile_id: profile.id } });
+      const allowed = await app.inject({
+        method: "POST",
+        url: "/jobs/export-kit-bundle",
+        payload: { profile_id: profile.id },
+      });
       expect(allowed.statusCode).toBe(200);
       expect(await kinds()).toEqual(["export-kit-bundle"]);
       expect(sourceWatcher.startSourceWatcher).toHaveBeenCalledOnce();
@@ -224,7 +254,10 @@ describe("operation cutover record at Node startup", () => {
   it("refuses a Rust-owned job from the record even when nothing admitted Source Sync first", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "pp-operation-cutover-"));
     roots.push(dataDir);
-    writeFileSync(join(dataDir, "operation-cutover.json"), record("source.sync", SOURCE_SYNC_PARTICIPANTS));
+    writeFileSync(
+      join(dataDir, "operation-cutover.json"),
+      record("source.sync", SOURCE_SYNC_PARTICIPANTS),
+    );
     const jobs = createJobRunner(() => {
       throw new Error("a refused job must not reach the database");
     }, dataDir);
@@ -241,7 +274,10 @@ describe("operation cutover record at Node startup", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "pp-operation-cutover-"));
     roots.push(dataDir);
     if (rustOwnsQueue) {
-      writeFileSync(join(dataDir, "operation-cutover.json"), record("printer.send-queue", PRINTER_SEND_QUEUE_PARTICIPANTS));
+      writeFileSync(
+        join(dataDir, "operation-cutover.json"),
+        record("printer.send-queue", PRINTER_SEND_QUEUE_PARTICIPANTS),
+      );
     }
     const legacyUpload = join(dataDir, "exports", "printer-uploads", "upload-1", "part.3mf");
     mkdirSync(join(legacyUpload, ".."), { recursive: true });
@@ -249,7 +285,12 @@ describe("operation cutover record at Node startup", () => {
     const ports = createSelfHostPorts(dataDir);
     await ports.db.connect();
     const repo = ports.repository!;
-    const item = enqueuePrinterSend(repo, { filename: "part.3mf", artifact_path: legacyUpload, printer_id: "printer-1", start: false })!;
+    const item = enqueuePrinterSend(repo, {
+      filename: "part.3mf",
+      artifact_path: legacyUpload,
+      printer_id: "printer-1",
+      start: false,
+    })!;
     updatePrinterSendQueueItem(repo, item.id, { state: "sending", upload_job_id: "job-gone" });
     try {
       const app = await buildApp({ ...loadConfig(), dataDir, deployMode: "self-host" }, ports);
@@ -264,7 +305,9 @@ describe("operation cutover record at Node startup", () => {
     const { app, ports, legacyUpload, queue } = await startWithSendingUpload(false);
     try {
       expect(existsSync(legacyUpload)).toBe(false);
-      expect(queue()).toMatchObject([{ state: "error", artifact_path: expect.stringContaining("tenant-default") }]);
+      expect(queue()).toMatchObject([
+        { state: "error", artifact_path: expect.stringContaining("tenant-default") },
+      ]);
     } finally {
       await app.close();
       ports.db.close();
@@ -273,7 +316,9 @@ describe("operation cutover record at Node startup", () => {
 
   it("leaves every queue write to Rust after it takes the printer send queue", async () => {
     const { app, ports, dataDir, legacyUpload, queue } = await startWithSendingUpload(true);
-    const untouched = [{ state: "sending", upload_job_id: "job-gone", artifact_path: legacyUpload }];
+    const untouched = [
+      { state: "sending", upload_job_id: "job-gone", artifact_path: legacyUpload },
+    ];
     try {
       // No startup reconcile and no legacy path rewrite.
       expect(existsSync(legacyUpload)).toBe(true);
@@ -284,10 +329,14 @@ describe("operation cutover record at Node startup", () => {
       expect(lookup.statusCode).toBe(404);
       expect(queue()).toMatchObject(untouched);
 
-      expect(interruptPrinterUploadsOnShutdown(dataDir, { repository: ports.repository })).toEqual([]);
+      expect(interruptPrinterUploadsOnShutdown(dataDir, { repository: ports.repository })).toEqual(
+        [],
+      );
       expect(queue()).toMatchObject(untouched);
 
-      await expect(createJobRunner(() => ports.repository!, dataDir).start("printer-upload", {})).rejects.toMatchObject({
+      await expect(
+        createJobRunner(() => ports.repository!, dataDir).start("printer-upload", {}),
+      ).rejects.toMatchObject({
         code: "rust_owner",
         statusCode: 503,
         message: "Rust owns job.printer-upload; Node does not run it",
@@ -300,37 +349,59 @@ describe("operation cutover record at Node startup", () => {
 
   it("refuses to start when the record gives Rust only part of Source Sync", async () => {
     const partial = SOURCE_SYNC_PARTICIPANTS.filter((id) => id !== "worker.startSourceWatcher");
-    expect(await startupError((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), record("source.sync", partial));
-    })).toBe('cutover gives Rust part of source.sync; missing=["worker.startSourceWatcher"]');
+    expect(
+      await startupError((dataDir) => {
+        writeFileSync(join(dataDir, "operation-cutover.json"), record("source.sync", partial));
+      }),
+    ).toBe('cutover gives Rust part of source.sync; missing=["worker.startSourceWatcher"]');
     expect(sourceWatcher.startSourceWatcher).not.toHaveBeenCalled();
   });
 
   it("refuses to start when Rust owns a participant Node cannot fence", async () => {
-    expect(await startupError((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), record("startup.seedStockSlicerInstancesIfEmpty", ["startup.seedStockSlicerInstancesIfEmpty"]));
-    })).toBe("Operation cutover assigns startup.seedStockSlicerInstancesIfEmpty to Rust, but Node cannot fence it");
+    expect(
+      await startupError((dataDir) => {
+        writeFileSync(
+          join(dataDir, "operation-cutover.json"),
+          record("startup.seedStockSlicerInstancesIfEmpty", [
+            "startup.seedStockSlicerInstancesIfEmpty",
+          ]),
+        );
+      }),
+    ).toBe(
+      "Operation cutover assigns startup.seedStockSlicerInstancesIfEmpty to Rust, but Node cannot fence it",
+    );
   });
 
   it("refuses to start on a malformed, oversized or symlinked record", async () => {
-    expect(await startupError((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), "{\"schema\":");
-    })).toMatch(/^Operation cutover record is invalid: /);
-    expect(await startupError((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), JSON.stringify({
-        schema: "pp-operation-cutover-v2",
-        manifest_sha256: "0".repeat(64),
-        operations: {},
-      }));
-    })).toMatch(/^Operation cutover record is invalid: /);
-    expect(await startupError((dataDir) => {
-      writeFileSync(join(dataDir, "operation-cutover.json"), " ".repeat(256 * 1024 + 1));
-    })).toBe("Operation cutover record is invalid: exceeds 262144 bytes");
+    expect(
+      await startupError((dataDir) => {
+        writeFileSync(join(dataDir, "operation-cutover.json"), '{"schema":');
+      }),
+    ).toMatch(/^Operation cutover record is invalid: /);
+    expect(
+      await startupError((dataDir) => {
+        writeFileSync(
+          join(dataDir, "operation-cutover.json"),
+          JSON.stringify({
+            schema: "pp-operation-cutover-v2",
+            manifest_sha256: "0".repeat(64),
+            operations: {},
+          }),
+        );
+      }),
+    ).toMatch(/^Operation cutover record is invalid: /);
+    expect(
+      await startupError((dataDir) => {
+        writeFileSync(join(dataDir, "operation-cutover.json"), " ".repeat(256 * 1024 + 1));
+      }),
+    ).toBe("Operation cutover record is invalid: exceeds 262144 bytes");
     if (process.platform === "win32") return;
-    expect(await startupError((dataDir) => {
-      const target = join(dataDir, "elsewhere.json");
-      writeFileSync(target, record("profile.sync", PROFILE_SYNC_PARTICIPANTS));
-      symlinkSync(target, join(dataDir, "operation-cutover.json"));
-    })).toMatch(/^Operation cutover record is invalid: /);
+    expect(
+      await startupError((dataDir) => {
+        const target = join(dataDir, "elsewhere.json");
+        writeFileSync(target, record("profile.sync", PROFILE_SYNC_PARTICIPANTS));
+        symlinkSync(target, join(dataDir, "operation-cutover.json"));
+      }),
+    ).toMatch(/^Operation cutover record is invalid: /);
   });
 });

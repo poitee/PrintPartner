@@ -1,5 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, linkSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  linkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,29 +20,59 @@ import { fileURLToPath } from "node:url";
  * operation to Rust. Then Node fences every participant and never routes back.
  */
 export const SOURCE_SYNC_OPERATION = "source.sync";
-const SYNC_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers"] as const;
+const SYNC_RESOURCES = [
+  "table:projects",
+  "table:source_revisions",
+  "table:source_docs",
+  "file:source-workspace",
+  "file:source-covers",
+] as const;
 const UPLOAD_RESOURCES = [...SYNC_RESOURCES, "table:build_profiles"] as const;
 const UPDATE_RESOURCES = ["table:projects", "table:app_settings", "table:app_events"] as const;
 const DOC_RESOURCES = ["table:source_docs", "file:source-workspace"] as const;
 const INDEX_RESOURCES = ["table:source_docs"] as const;
 const COVER_RESOURCES = ["file:source-covers"] as const;
-const LOCAL_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "table:build_profiles"] as const;
+const LOCAL_RESOURCES = [
+  "table:projects",
+  "table:source_revisions",
+  "table:source_docs",
+  "file:source-workspace",
+  "table:build_profiles",
+] as const;
 const CREATE_RESOURCES = ["table:projects", "table:source_revisions"] as const;
-const MIGRATION_RESOURCES = ["table:projects", "table:source_revisions", "file:source-workspace"] as const;
-const WORKER_RESOURCES = ["table:projects", "table:source_revisions", "table:source_docs", "file:source-workspace", "file:source-covers", "table:app_settings", "table:app_events"] as const;
+const MIGRATION_RESOURCES = [
+  "table:projects",
+  "table:source_revisions",
+  "file:source-workspace",
+] as const;
+const WORKER_RESOURCES = [
+  "table:projects",
+  "table:source_revisions",
+  "table:source_docs",
+  "file:source-workspace",
+  "file:source-covers",
+  "table:app_settings",
+  "table:app_events",
+] as const;
 const SOURCE_SYNC_PARTICIPANT_SPECS = {
   "http.POST /jobs/check-source-updates": { kind: "http", resources: UPDATE_RESOURCES },
   "http.POST /jobs/extract-source-docs": { kind: "http", resources: DOC_RESOURCES },
   "http.POST /jobs/import-scan": { kind: "http", resources: SYNC_RESOURCES },
   "http.POST /jobs/sync": { kind: "http", resources: SYNC_RESOURCES },
-  "http.POST /api/v1/jobs/check-source-updates": { kind: "http_alias", resources: UPDATE_RESOURCES },
+  "http.POST /api/v1/jobs/check-source-updates": {
+    kind: "http_alias",
+    resources: UPDATE_RESOURCES,
+  },
   "http.POST /api/v1/jobs/extract-source-docs": { kind: "http_alias", resources: DOC_RESOURCES },
   "http.POST /api/v1/jobs/import-scan": { kind: "http_alias", resources: SYNC_RESOURCES },
   "http.POST /api/v1/jobs/sync": { kind: "http_alias", resources: SYNC_RESOURCES },
   "http.POST /sources": { kind: "http", resources: CREATE_RESOURCES },
   "http.POST /api/v1/sources": { kind: "http_alias", resources: CREATE_RESOURCES },
   "http.PUT /sources/:id/repo-manifest": { kind: "http", resources: MIGRATION_RESOURCES },
-  "http.PUT /api/v1/sources/:id/repo-manifest": { kind: "http_alias", resources: MIGRATION_RESOURCES },
+  "http.PUT /api/v1/sources/:id/repo-manifest": {
+    kind: "http_alias",
+    resources: MIGRATION_RESOURCES,
+  },
   "http.POST /assistant/actions/apply": { kind: "http", resources: SYNC_RESOURCES },
   "http.POST /api/v1/assistant/actions/apply": { kind: "http_alias", resources: SYNC_RESOURCES },
   "http.POST /sources/:id/upload-zip": { kind: "http", resources: UPLOAD_RESOURCES },
@@ -51,9 +93,14 @@ const SOURCE_SYNC_PARTICIPANT_SPECS = {
   "job.sync": { kind: "job", resources: SYNC_RESOURCES },
   "startup.startSourceWatcher": { kind: "startup_watcher", resources: SYNC_RESOURCES },
   "worker.startSourceWatcher": { kind: "worker", resources: WORKER_RESOURCES },
-  "migration.migrateLegacySourceManifestOverridesForTenant": { kind: "migration", resources: MIGRATION_RESOURCES },
+  "migration.migrateLegacySourceManifestOverridesForTenant": {
+    kind: "migration",
+    resources: MIGRATION_RESOURCES,
+  },
 } as const;
-export const SOURCE_SYNC_PARTICIPANTS: readonly string[] = Object.freeze(Object.keys(SOURCE_SYNC_PARTICIPANT_SPECS));
+export const SOURCE_SYNC_PARTICIPANTS: readonly string[] = Object.freeze(
+  Object.keys(SOURCE_SYNC_PARTICIPANT_SPECS),
+);
 const expectedParticipantSpecs = new Map(Object.entries(SOURCE_SYNC_PARTICIPANT_SPECS));
 
 const MANIFEST_FIELDS = new Set(["operation", "owner", "live_format", "participants"]);
@@ -83,7 +130,16 @@ export function sourceSyncOwnedByRust(): boolean {
 }
 const LIVE_FORMAT_FIELDS = new Set(["id", "rollback"]);
 const PARTICIPANT_FIELDS = new Set(["id", "kind", "owner", "resources"]);
-const KINDS = new Set(["http", "http_alias", "mcp_action", "job", "startup_watcher", "worker", "migration", "assistant_action"]);
+const KINDS = new Set([
+  "http",
+  "http_alias",
+  "mcp_action",
+  "job",
+  "startup_watcher",
+  "worker",
+  "migration",
+  "assistant_action",
+]);
 
 export class OwnershipAdmissionError extends Error {
   readonly statusCode = 503;
@@ -163,7 +219,8 @@ export function admitSourceSyncManifest(text: string): {
   }
   if (!isRecord(parsed)) return fail("malformed", "malformed ownership manifest: expected object");
   const extra = unknownFields(parsed, MANIFEST_FIELDS);
-  if (extra !== null) return fail("malformed", `malformed ownership manifest: unknown field ${extra}`);
+  if (extra !== null)
+    return fail("malformed", `malformed ownership manifest: unknown field ${extra}`);
   if (parsed.operation !== SOURCE_SYNC_OPERATION) {
     return fail("unknown_operation", `unknown operation ${String(parsed.operation)}`);
   }
@@ -171,7 +228,8 @@ export function admitSourceSyncManifest(text: string): {
     return fail("malformed", "malformed ownership manifest: live_format");
   }
   const liveExtra = unknownFields(parsed.live_format, LIVE_FORMAT_FIELDS);
-  if (liveExtra !== null) return fail("malformed", `malformed ownership manifest: unknown field ${liveExtra}`);
+  if (liveExtra !== null)
+    return fail("malformed", `malformed ownership manifest: unknown field ${liveExtra}`);
   const formatId = parsed.live_format.id;
   if (formatId !== "source-revision-workspace-v1") {
     return fail("unknown_live_format", `unknown live format rollback ${String(formatId)}`);
@@ -200,28 +258,41 @@ export function admitSourceSyncManifest(text: string): {
     if (typeof entry.id !== "string" || entry.id === "") {
       return fail("malformed", "malformed ownership manifest: participant id");
     }
-    if (seen.has(entry.id)) return fail("duplicate_participant", `duplicate participant ${entry.id}`);
+    if (seen.has(entry.id))
+      return fail("duplicate_participant", `duplicate participant ${entry.id}`);
     seen.add(entry.id);
     if (typeof entry.kind !== "string" || !KINDS.has(entry.kind)) {
       return fail("unknown_kind", `unknown participant kind ${String(entry.kind)}`);
     }
     const expectedSpec = expectedParticipantSpecs.get(entry.id);
     if (expectedSpec !== undefined && entry.kind !== expectedSpec.kind) {
-      return fail("participant_kind_mismatch", `participant kind mismatch for ${entry.id}: expected ${expectedSpec.kind}, got ${entry.kind}`);
+      return fail(
+        "participant_kind_mismatch",
+        `participant kind mismatch for ${entry.id}: expected ${expectedSpec.kind}, got ${entry.kind}`,
+      );
     }
     if (!Array.isArray(entry.resources) || entry.resources.length === 0) {
-      return fail("malformed", "malformed ownership manifest: participant resources must name a table or file");
+      return fail(
+        "malformed",
+        "malformed ownership manifest: participant resources must name a table or file",
+      );
     }
     const resources: string[] = [];
     for (const resource of entry.resources) {
       if (typeof resource !== "string" || !resourceName(resource)) {
-        return fail("malformed", `malformed ownership manifest: resource ${String(resource)} is not table: or file:`);
+        return fail(
+          "malformed",
+          `malformed ownership manifest: resource ${String(resource)} is not table: or file:`,
+        );
       }
       resources.push(resource);
     }
     if (expectedSpec) {
       const actual = new Set(resources);
-      if (actual.size !== expectedSpec.resources.length || expectedSpec.resources.some((resource) => !actual.has(resource))) {
+      if (
+        actual.size !== expectedSpec.resources.length ||
+        expectedSpec.resources.some((resource) => !actual.has(resource))
+      ) {
         return fail("resource_set_mismatch", `participant resource set mismatch for ${entry.id}`);
       }
     }
@@ -249,7 +320,10 @@ export function admitSourceSyncManifest(text: string): {
       }
       resources.set(resource, participant.owner);
     }
-    if (participant.owner !== operationOwner && (participant.owner === "rust" || operationOwner === "rust")) {
+    if (
+      participant.owner !== operationOwner &&
+      (participant.owner === "rust" || operationOwner === "rust")
+    ) {
       return fail(
         "conflicting_participant",
         `conflicting ownership for source.sync: operation:${operationOwner} vs ${participant.id}:${participant.owner}`,
@@ -295,7 +369,10 @@ export function requireSourceSyncParticipant(id: string): undefined {
     }
   }
   if (!admitted.participantIds.includes(id)) {
-    fail("participant_set_mismatch", `participant set mismatch missing=${JSON.stringify([id])} unexpected=[]`);
+    fail(
+      "participant_set_mismatch",
+      `participant set mismatch missing=${JSON.stringify([id])} unexpected=[]`,
+    );
   }
 }
 
@@ -322,7 +399,9 @@ export function sourceSyncAdmissionReceiptPath(dataDir: string): string {
 }
 
 function isProcessId(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= MAX_PROCESS_ID;
+  return (
+    typeof value === "number" && Number.isInteger(value) && value > 0 && value <= MAX_PROCESS_ID
+  );
 }
 
 /** Read a stored receipt. Structural failures are admission errors and do not repair the file. */
@@ -351,13 +430,13 @@ export function parseSourceSyncAdmissionReceipt(
   }
   const manifestSha256 = parsed.manifest_sha256;
   if (
-    parsed.operation !== SOURCE_SYNC_OPERATION
-    || parsed.owner !== "node"
-    || !isProcessId(parsed.worker_pid)
-    || parsed.admission_count !== 1
-    || parsed.participant_count !== participantCount
-    || typeof manifestSha256 !== "string"
-    || !/^[0-9a-f]{64}$/.test(manifestSha256)
+    parsed.operation !== SOURCE_SYNC_OPERATION ||
+    parsed.owner !== "node" ||
+    !isProcessId(parsed.worker_pid) ||
+    parsed.admission_count !== 1 ||
+    parsed.participant_count !== participantCount ||
+    typeof manifestSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(manifestSha256)
   ) {
     return fail(
       "malformed",
@@ -390,10 +469,14 @@ function readExistingAdmissionReceipt(
       return fail("malformed", "admission receipt is not a regular file");
     }
     const existing = parseSourceSyncAdmissionReceipt(
-      readFileSync(fd, "utf8"), admitted.participantIds.length,
+      readFileSync(fd, "utf8"),
+      admitted.participantIds.length,
     );
     if (existing.manifest_sha256 !== admitted.manifestSha256) {
-      return fail("restart_manifest_changed", "restart manifest does not match the admitted record");
+      return fail(
+        "restart_manifest_changed",
+        "restart manifest does not match the admitted record",
+      );
     }
     return existing;
   } finally {
@@ -409,7 +492,10 @@ function cutoverGivesSourceSyncToRust(rustOwned: ReadonlySet<string>): boolean {
   const missing = fenced.filter((id) => !rustOwned.has(id));
   if (missing.length === fenced.length) return false;
   if (missing.length > 0) {
-    fail("participant_set_mismatch", `cutover gives Rust part of source.sync; missing=${JSON.stringify(missing)}`);
+    fail(
+      "participant_set_mismatch",
+      `cutover gives Rust part of source.sync; missing=${JSON.stringify(missing)}`,
+    );
   }
   return true;
 }
@@ -448,7 +534,11 @@ export function beginSourceSyncAdmission(
   const temporary = `${receiptPath}.${randomUUID()}.tmp`;
   const payload = Buffer.from(JSON.stringify(receipt, null, 2));
   mkdirSync(dataDir, { recursive: true });
-  const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  const fd = openSync(
+    temporary,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  );
   try {
     try {
       writeFileSync(fd, payload);
@@ -460,8 +550,9 @@ export function beginSourceSyncAdmission(
       linkSync(temporary, receiptPath);
     } catch (error) {
       if (!isRecord(error) || error.code !== "EEXIST") throw error;
-      receipt = readExistingAdmissionReceipt(receiptPath, admitted)
-        ?? fail("malformed", "concurrent admission receipt disappeared");
+      receipt =
+        readExistingAdmissionReceipt(receiptPath, admitted) ??
+        fail("malformed", "concurrent admission receipt disappeared");
     }
   } finally {
     rmSync(temporary, { force: true });
