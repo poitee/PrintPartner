@@ -1,13 +1,27 @@
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
-const leaseOwnerSchema = z.object({
-  pid: z.number().int().positive().max(2147483647),
-  process_identity: z.string().refine((identity) => identity.trim().length > 0),
-  instance: z.string().regex(/^[a-f0-9]{32}$/),
-}).passthrough().brand<"LeaseOwner">();
+const leaseOwnerSchema = z
+  .object({
+    pid: z.number().int().positive().max(2147483647),
+    process_identity: z.string().refine((identity) => identity.trim().length > 0),
+    instance: z.string().regex(/^[a-f0-9]{32}$/),
+  })
+  .passthrough()
+  .brand<"LeaseOwner">();
 type LeaseOwner = z.infer<typeof leaseOwnerSchema>;
 type LeaseObservation =
   | { readonly kind: "absent" }
@@ -29,17 +43,24 @@ export function processIdentity(pid: number): string {
     return `${boot}:${start}`;
   } catch (error) {
     // Outside Linux, our own lease still has an identity; other live PIDs remain conservative.
-    if (pid === process.pid && (error as NodeJS.ErrnoException).code === "ENOENT") return instanceIdentity;
+    if (pid === process.pid && (error as NodeJS.ErrnoException).code === "ENOENT")
+      return instanceIdentity;
     throw error;
   }
 }
 
 export function ownerIsStale(owner: { pid: number; process_identity?: string }): boolean {
-  try { process.kill(owner.pid, 0); }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  try {
+    process.kill(owner.pid, 0);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
   if (!owner.process_identity) return false;
-  try { return processIdentity(owner.pid) !== owner.process_identity; }
-  catch { return false; }
+  try {
+    return processIdentity(owner.pid) !== owner.process_identity;
+  } catch {
+    return false;
+  }
 }
 
 /** Reads an ownership record, refusing anything but a regular file. */
@@ -55,7 +76,12 @@ export function readOwnershipRecord(path: string): string {
 }
 
 function isFsError(error: unknown, codes: readonly string[]): boolean {
-  return error instanceof Error && "code" in error && typeof error.code === "string" && codes.includes(error.code);
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    codes.includes(error.code)
+  );
 }
 
 function observeLease(lease: string): LeaseObservation {
@@ -74,8 +100,9 @@ function observeLease(lease: string): LeaseObservation {
     owner = leaseOwnerSchema.parse(parsed);
   } catch (cause) {
     if (isFsError(cause, ["ENOENT"])) {
-      try { lstatSync(lease); }
-      catch (inspectionError) {
+      try {
+        lstatSync(lease);
+      } catch (inspectionError) {
         if (isFsError(inspectionError, ["ENOENT"])) return { kind: "absent" };
         return { kind: "invalid", cause: inspectionError };
       }
@@ -91,19 +118,37 @@ function observeLease(lease: string): LeaseObservation {
  */
 export function recordNamesInstance(path: string, instance: string): boolean {
   let recorded: unknown;
-  try { recorded = JSON.parse(readOwnershipRecord(path)); }
-  catch (error) {
-    if (isFsError(error, ["ENOENT", "ENOTDIR", "ENXIO", "ELOOP", "EISDIR", "ENODEV"]) || !(error instanceof Error && "code" in error)) return false;
+  try {
+    recorded = JSON.parse(readOwnershipRecord(path));
+  } catch (error) {
+    if (
+      isFsError(error, ["ENOENT", "ENOTDIR", "ENXIO", "ELOOP", "EISDIR", "ENODEV"]) ||
+      !(error instanceof Error && "code" in error)
+    )
+      return false;
     throw error;
   }
-  return typeof recorded === "object" && recorded !== null && "instance" in recorded && recorded.instance === instance;
+  return (
+    typeof recorded === "object" &&
+    recorded !== null &&
+    "instance" in recorded &&
+    recorded.instance === instance
+  );
 }
 
 function invalidLeaseError(cause: unknown): Error {
-  return new Error("storage_lease_marker_invalid: Data directory lease is malformed or unreadable", { cause });
+  return new Error(
+    "storage_lease_marker_invalid: Data directory lease is malformed or unreadable",
+    { cause },
+  );
 }
 
-export function acquireStorageLease(directory: string): { identity: string; instance: string; releaseRecoveryEnabled: boolean; release: () => void } {
+export function acquireStorageLease(directory: string): {
+  identity: string;
+  instance: string;
+  releaseRecoveryEnabled: boolean;
+  release: () => void;
+} {
   const releaseRecoveryEnabled = process.env.PP_STORAGE_RELEASE_RECOVERY === "1";
   const identity = processIdentity(process.pid);
   const instance = randomBytes(16).toString("hex");
@@ -111,7 +156,11 @@ export function acquireStorageLease(directory: string): { identity: string; inst
   const lease = join(directory, ".desktop-lease");
   mkdirSync(candidate, { mode: 0o700 });
   try {
-    writeFileSync(join(candidate, "owner.json"), JSON.stringify({ pid: process.pid, process_identity: identity, instance }), { mode: 0o600 });
+    writeFileSync(
+      join(candidate, "owner.json"),
+      JSON.stringify({ pid: process.pid, process_identity: identity, instance }),
+      { mode: 0o600 },
+    );
     for (let attempt = 0; attempt < 16; attempt++) {
       const observation = observeLease(lease);
       switch (observation.kind) {
@@ -129,37 +178,54 @@ export function acquireStorageLease(directory: string): { identity: string; inst
           }
           const detached = join(directory, `.desktop-lease-release-${instance}`);
           let stage: "published" | "detached" | "cleanup" = "published";
-          return { identity, instance, releaseRecoveryEnabled, release: () => {
-            if (stage === "published") {
-              // A lease removed or republished by someone else is no longer ours to retire.
-              if (!recordNamesInstance(join(lease, "owner.json"), instance)) return;
-              // Detach the whole lease before cleanup so a contender never observes an empty lease.
-              try { renameSync(lease, detached); }
-              catch (error) { if (isFsError(error, ["ENOENT"])) return; throw error; }
-              stage = releaseRecoveryEnabled ? "detached" : "cleanup";
-            }
-            if (stage === "detached") {
-              // The check and the rename cannot be one step, so hand back a lease republished in between.
-              if (!recordNamesInstance(join(detached, "owner.json"), instance)) {
-                // A detached lease already removed by someone else leaves nothing to hand back.
-                try { renameSync(detached, lease); }
-                catch (error) { if (!isFsError(error, ["ENOENT"])) throw error; }
-                stage = "published";
-                return;
+          return {
+            identity,
+            instance,
+            releaseRecoveryEnabled,
+            release: () => {
+              if (stage === "published") {
+                // A lease removed or republished by someone else is no longer ours to retire.
+                if (!recordNamesInstance(join(lease, "owner.json"), instance)) return;
+                // Detach the whole lease before cleanup so a contender never observes an empty lease.
+                try {
+                  renameSync(lease, detached);
+                } catch (error) {
+                  if (isFsError(error, ["ENOENT"])) return;
+                  throw error;
+                }
+                stage = releaseRecoveryEnabled ? "detached" : "cleanup";
               }
-              stage = "cleanup";
-            }
-            rmSync(detached, { recursive: true, force: true });
-          } };
+              if (stage === "detached") {
+                // The check and the rename cannot be one step, so hand back a lease republished in between.
+                if (!recordNamesInstance(join(detached, "owner.json"), instance)) {
+                  // A detached lease already removed by someone else leaves nothing to hand back.
+                  try {
+                    renameSync(detached, lease);
+                  } catch (error) {
+                    if (!isFsError(error, ["ENOENT"])) throw error;
+                  }
+                  stage = "published";
+                  return;
+                }
+                stage = "cleanup";
+              }
+              rmSync(detached, { recursive: true, force: true });
+            },
+          };
         }
         case "invalid":
           throw invalidLeaseError(observation.cause);
         case "live":
-          throw new Error("Data directory is already owned; stop the other process before opening another writer");
+          throw new Error(
+            "Data directory is already owned; stop the other process before opening another writer",
+          );
         case "stale":
           try {
             // Retain the nonempty destination: a second stale observer cannot retire a new lease.
-            renameSync(lease, join(directory, `.desktop-lease-retired-${observation.owner.instance}`));
+            renameSync(
+              lease,
+              join(directory, `.desktop-lease-retired-${observation.owner.instance}`),
+            );
           } catch (error) {
             if (!isFsError(error, ["ENOENT", "ENOTEMPTY", "EEXIST"])) throw error;
           }
