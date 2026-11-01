@@ -8,6 +8,9 @@
 /rust/ast-grep-baseline.json @poitee
 /rust/clippy-limits-baseline.json @poitee
 /scripts/workaround-baseline.json @poitee
+/scripts/duplication-baseline.json @poitee
+/scripts/check-duplication.mjs @poitee
+/scripts/check-duplication.test.mjs @poitee
 /rust/crates/**/snapshots/ @poitee
 /scripts/check-github-actions-pinned.sh @poitee
 /web/scripts/check-ci-tool-pins.mjs @poitee

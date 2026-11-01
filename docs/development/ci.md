@@ -67,6 +67,41 @@ Keep formatting in separate bounded PRs, then enforce the checks in CI and the
 opt-in hook. Do not treat configuration alone as a passing formatter readiness
 criterion or add broad source exclusions to manufacture a pass.
 
+## Duplicated code
+
+The `duplication` job in `duplication.yml` caps duplicated tokens with jscpd 5.4.2.
+It scans the Node server, React UI, shared web packages, all Rust crates including
+`pp-server` and `pp-desktop`, and the Python sidecar. Tests count as source.
+Generated TypeScript, fixtures, snapshots, dependencies and build outputs do not.
+It runs on ready PRs and main pushes that change those inputs, on merge groups,
+and on manual dispatch. It does not change required-check settings.
+
+Install the locked web dependencies, then run:
+
+```sh
+npm --prefix web ci --ignore-scripts
+node --test scripts/check-duplication.test.mjs
+node scripts/check-duplication.mjs
+```
+
+The scanner uses mild mode and at least 50 tokens per clone. The minimum line
+count is 0, so line wrapping cannot hide a clone or add one. Token counts keep
+the baseline stable through the formatter rollout.
+`scripts/duplication-baseline.json` caps each area separately. Any increase fails,
+with clone locations for files changed since `origin/main`, or the ref in
+`PP_DUPLICATION_BASE`. CI uses the PR base or the commit before a main push.
+Missing reports, source-free scans and scanner errors also fail.
+
+Extract shared code instead of copying it. After removing duplication, run
+`node scripts/check-duplication.mjs --update` and commit the lower counts.
+Checking and updating both reject baseline increases over the base ref.
+The initial landing permits a baseline only when the base has none.
+The baseline caps existing duplication; it does not mean those clones are fixed.
+
+`just ci --only duplication` runs the same tests and scan on Node 22.23.3.
+It expects the web dependencies to be installed, as they are after `web-assets`
+in a full local run.
+
 ## Unused Rust dependencies
 
 The `cargo-machete` job in `rust-deps-weekly.yml` now fails on unused dependencies
@@ -186,6 +221,7 @@ It runs the steps below in the order that `just ci --list` prints, and continues
 | `rust-deps` | Scanner negative controls and `cargo machete rust`, pinned to 0.9.2 | `cargo-machete` in `rust-deps-weekly.yml` |
 | `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
 | `workaround-ratchet` | `scripts/workaround-ratchet.mjs` and its tests, which cap `TODO`, `eslint-disable` and Rust `#[allow]` markers, on Node 22.23.3. It runs after `web-assets`, which installs its parser. | `web` job of `web-ci.yml` |
+| `duplication` | jscpd negative controls and the five-area duplicated-token baseline, on Node 22.23.3 | `duplication.yml` |
 | `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 5 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
 | `clippy-limits` | Clippy complexity negative controls and baseline check, with both feature modes on Linux | `rust (linux)` (required) |
 | `node-fixtures` | The `--check` mode of each Node parity fixture generator, and the HTTP route inventory diff, on Node 22.23.3 | `desktop-contracts.yml` and `auth-admission-freshness.yml` |
