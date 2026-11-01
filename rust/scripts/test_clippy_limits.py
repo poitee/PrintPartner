@@ -46,6 +46,21 @@ def diagnostic(lint=limits.LINTS[0], package="workspace", start=1):
 FINISHED = {"reason": "build-finished", "success": True}
 
 
+def run_main(*args):
+    with patch.object(limits.sys, "argv", ["check-clippy-limits.py", *args]):
+        return limits.main()
+
+
+def main_baseline_at(root):
+    with patch.object(limits, "ROOT", root):
+        return limits.main_baseline()
+
+
+def scan_at(root, mode, members):
+    with patch.object(limits, "ROOT", root):
+        return limits.scan(mode, members)
+
+
 class ClippyLimitsTests(unittest.TestCase):
     def test_parser_requires_every_mode_and_lint_and_integer_counts(self):
         self.assertEqual(limits.parse_baseline(json.dumps(baseline())), baseline())
@@ -136,7 +151,7 @@ class ClippyLimitsTests(unittest.TestCase):
             root = Path(directory)
             subprocess.run(["git", "init", "-q", directory], check=True)
             with self.assertRaises(subprocess.CalledProcessError):
-                limits.main_baseline(root)
+                main_baseline_at(root)
             # A tree object needs no author identity.
             tree = subprocess.run(
                 ["git", "mktree"], cwd=root, input="", text=True, capture_output=True, check=True
@@ -146,16 +161,16 @@ class ClippyLimitsTests(unittest.TestCase):
                 ["git", "update-ref", "refs/remotes/origin/main", tree], cwd=root, check=True
             )
             with self.assertRaises(subprocess.CalledProcessError):
-                limits.main_baseline(root)
+                main_baseline_at(root)
 
     def test_first_landing_and_existing_main_baseline(self):
         ok = subprocess.CompletedProcess([], 0, "")
         listed = subprocess.CompletedProcess([], 0, limits.BASELINE + "\n")
         shown = subprocess.CompletedProcess([], 0, json.dumps(baseline()))
         with patch.object(limits.subprocess, "run", side_effect=[ok, ok]):
-            self.assertIsNone(limits.main_baseline(Path("/unused")))
+            self.assertIsNone(limits.main_baseline())
         with patch.object(limits.subprocess, "run", side_effect=[ok, listed, shown]):
-            self.assertEqual(limits.main_baseline(Path("/unused")), baseline())
+            self.assertEqual(limits.main_baseline(), baseline())
 
     @unittest.skipUnless(shutil.which("cargo"), "cargo is required for the compile control")
     def test_real_clippy_finds_a_long_function_in_both_modes_and_replays_cached_hits(self):
@@ -186,8 +201,8 @@ class ClippyLimitsTests(unittest.TestCase):
                 results = {}
                 with contextlib.redirect_stdout(io.StringIO()):
                     for mode in limits.MODES:
-                        results[mode], _ = limits.scan(root, mode, members)
-                        replay, _ = limits.scan(root, mode, members)
+                        results[mode], _ = scan_at(root, mode, members)
+                        replay, _ = scan_at(root, mode, members)
                         self.assertEqual(replay, results[mode])
                         self.assertEqual(results[mode]["clippy::too_many_lines"], 1)
                     self.assertEqual(limits.compare(results, baseline(), None), 1)
@@ -206,14 +221,14 @@ class ClippyLimitsTests(unittest.TestCase):
                 patch.object(limits, "scan", return_value=(baseline()["off"], {})),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                self.assertEqual(limits.main([]), 0)
+                self.assertEqual(run_main(), 0)
                 higher = {**baseline()["off"], limits.LINTS[0]: 1}
                 before = target.read_bytes()
                 with patch.object(limits, "scan", return_value=(higher, {})):
-                    self.assertEqual(limits.main(["--update"]), 1)
+                    self.assertEqual(run_main("--update"), 1)
                 self.assertEqual(target.read_bytes(), before)
                 with patch.object(limits, "main_baseline", return_value=None):
-                    self.assertEqual(limits.main(["--update"]), 0)
+                    self.assertEqual(run_main("--update"), 0)
                     self.assertEqual(limits.parse_baseline(target.read_text()), baseline())
 
     def test_failed_cargo_and_unsupported_host_are_errors(self):
@@ -225,9 +240,9 @@ class ClippyLimitsTests(unittest.TestCase):
             ),
         ):
             with self.assertRaises(subprocess.CalledProcessError):
-                limits.main(["--update"])
+                run_main("--update")
         with patch.object(limits.sys, "platform", "darwin"), self.assertRaises(ValueError):
-            limits.main([])
+            run_main()
 
 
 if __name__ == "__main__":

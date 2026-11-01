@@ -33,10 +33,10 @@ def parse_baseline(text):
     return baseline
 
 
-def main_baseline(root):
+def main_baseline():
     subprocess.run(
         ["git", "rev-parse", "--verify", BASE_REF + "^{commit}"],
-        cwd=root,
+        cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
@@ -44,7 +44,7 @@ def main_baseline(root):
     # A missing file is allowed only for the first landing, not a missing ref.
     listed = subprocess.run(
         ["git", "ls-tree", "--name-only", BASE_REF, "--", BASELINE],
-        cwd=root,
+        cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
@@ -53,7 +53,7 @@ def main_baseline(root):
         return None
     shown = subprocess.run(
         ["git", "show", f"{BASE_REF}:./{BASELINE}"],
-        cwd=root,
+        cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
@@ -115,11 +115,11 @@ def read_diagnostics(lines, members):
     return {lint: counts[lint] for lint in LINTS}, hits
 
 
-def scan(root, mode, members):
+def scan(mode, members):
     print(f"Checking Clippy limits, desktop_rebuild {mode}", flush=True)
     with tempfile.TemporaryFile(mode="w+") as output:
         # Keep build progress on stderr and stream JSON through a temporary file.
-        result = subprocess.run(clippy_command(mode), cwd=root, stdout=output)
+        result = subprocess.run(clippy_command(mode), cwd=ROOT, stdout=output)
         output.seek(0)
         diagnostics = read_diagnostics(output, members)
         result.check_returncode()
@@ -142,17 +142,17 @@ def compare(actual, baseline, previous):
     return 1 if failures else 0
 
 
-def main(argv=None):
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--update",
         action="store_true",
         help="regenerate counts; increases over origin/main still fail",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
     if sys.platform != "linux":
         raise ValueError("Clippy limits use a Linux baseline; run on Linux")
-    previous = main_baseline(ROOT)
+    previous = main_baseline()
     baseline = None if args.update else parse_baseline((ROOT / BASELINE).read_text())
     metadata = subprocess.run(
         [
@@ -172,7 +172,7 @@ def main(argv=None):
     members = set(json.loads(metadata.stdout)["workspace_members"])
     if not members:
         raise ValueError("Cargo metadata has no workspace members")
-    scans = {mode: scan(ROOT, mode, members) for mode in MODES}
+    scans = {mode: scan(mode, members) for mode in MODES}
     actual = {mode: result[0] for mode, result in scans.items()}
     if baseline is None:
         baseline = actual
