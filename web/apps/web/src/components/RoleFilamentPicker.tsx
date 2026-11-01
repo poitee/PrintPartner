@@ -545,13 +545,13 @@ function RoleFilamentPickerInner({
     const action = spoolmanAccess.beginAction();
     setSavingRole(row.role);
     try {
-      const spoolman_spool_id = spoolId
+      const spoolmanSpoolId = spoolId
         ? buildSpoolmanSpoolId(parsed.integrationId, Number(spoolId))
         : null;
       const result = await saveRoleFilament(profileId, {
         role: row.role,
         filament_color_id: row.filament_color_id,
-        spoolman_spool_id,
+        spoolman_spool_id: spoolmanSpoolId,
       });
       if (spoolmanAccess.gated) {
         await afterColorChange(result, row.role, action, true);

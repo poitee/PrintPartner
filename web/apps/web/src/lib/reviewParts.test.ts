@@ -234,9 +234,9 @@ describe("maskSpoolmanReviewPart", () => {
     expect(part.filament_display).toBe("Spoolman Blue");
   });
 
-  it.each(["  ", "spoolman:int-1:spool:5"])("preserves catalog color enrichment for spool reference %s", (spoolman_spool_id) => {
+  it.each(["  ", "spoolman:int-1:spool:5"])("preserves catalog color enrichment for spool reference %s", (spoolmanSpoolId) => {
     const part = {
-      ...samplePart({ id: 1, filament_color_id: "catalog:red", spoolman_spool_id }),
+      ...samplePart({ id: 1, filament_color_id: "catalog:red", spoolman_spool_id: spoolmanSpoolId }),
       filament_display: "Catalog Red", filament_hex: "#ff0000",
       spool_badge: "450g left", spool_summary: [{ remaining_g: 450, spool_id: 5 }],
     };

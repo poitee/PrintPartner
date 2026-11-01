@@ -20,6 +20,10 @@ Open one PR per ticket. If you find work that belongs to another ticket, add a c
 
 New Rust rebuild code compiles only with the `desktop_rebuild` Cargo feature, which is off by default. Code that a user can see also checks the `PP_DESKTOP_REBUILD` environment variable. Do not turn `desktop_rebuild` on by default; that is the maintainer's decision. [Desktop rebuild flag](../desktop-rebuild.md) describes the flag and the slice plan.
 
+## TypeScript naming
+
+The web ESLint config enforces `camelCase` for ordinary identifiers, `PascalCase` for types, and `UPPER_CASE` for constants. Property names, imports, and destructured names are exempt so contract, JSON, SQLite, and third-party field names stay unchanged. Generated `*.generated.ts` files are exempt; fix their names in the generator instead. `web/eslint-suppressions.json` tracks existing violations in the legacy Node server. Remove entries as those names are corrected; do not increase the baseline to hide new violations.
+
 ## Open the pull request
 
 1. Meet the [definition of done](definition-of-done.md).

@@ -4,7 +4,7 @@ import { allocateObjectChoices } from "./objectMatchChoices";
 
 const review: PrintFileMatchReview = {
   objects: [{ object_index: 0, name: "clip" }, { object_index: 1, name: "clip" }, { object_index: 2, name: "other" }],
-  parts: [{ part_id: 7, filename: "clip.stl", relative_path: "parts/clip.stl", units: [0, 1, 2].map((unit_index) => ({ part_id: 7, unit_index })) }],
+  parts: [{ part_id: 7, filename: "clip.stl", relative_path: "parts/clip.stl", units: [0, 1, 2].map((unitIndex) => ({ part_id: 7, unit_index: unitIndex })) }],
 };
 describe("object choice allocation", () => {
   it("starts without fuzzy choices and retains only positive tokens", () => {
