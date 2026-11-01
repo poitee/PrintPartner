@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getDb, SqliteDatabase } from "./db/client.js";
@@ -32,28 +26,45 @@ describe("password hashing", () => {
 });
 
 describe("AuthStore", () => {
-  it.each(["github", "discord"] as const)("preserves password capability for linked %s sign-ins", (provider) => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-auth-linked-password-"));
-    const sqlite = new SqliteDatabase(dir);
-    sqlite.connect();
-    try {
-      const auth = new AuthStore(getDb(sqlite));
-      const passwordHash = hashPassword("password123");
-      const user = auth.createUser({ email: "linked@example.com", displayName: "Linked", passwordHash });
-      const linked = auth.upsertOAuthUser({ provider, providerUserId: "linked-id", email: user.email, displayName: "Linked" });
-      expect(linked.id).toBe(user.id);
-      expect(linked.passwordHash).toBe(passwordHash);
-      const session = auth.resolveSession(auth.createSession(linked.id, provider));
-      expect(toPublicUser(session!)).toMatchObject({ provider, hasPassword: true });
+  it.each(["github", "discord"] as const)(
+    "preserves password capability for linked %s sign-ins",
+    (provider) => {
+      const dir = mkdtempSync(join(tmpdir(), "pp-auth-linked-password-"));
+      const sqlite = new SqliteDatabase(dir);
+      sqlite.connect();
+      try {
+        const auth = new AuthStore(getDb(sqlite));
+        const passwordHash = hashPassword("password123");
+        const user = auth.createUser({
+          email: "linked@example.com",
+          displayName: "Linked",
+          passwordHash,
+        });
+        const linked = auth.upsertOAuthUser({
+          provider,
+          providerUserId: "linked-id",
+          email: user.email,
+          displayName: "Linked",
+        });
+        expect(linked.id).toBe(user.id);
+        expect(linked.passwordHash).toBe(passwordHash);
+        const session = auth.resolveSession(auth.createSession(linked.id, provider));
+        expect(toPublicUser(session!)).toMatchObject({ provider, hasPassword: true });
 
-      const oauthOnly = auth.upsertOAuthUser({ provider, providerUserId: "oauth-only-id", email: null, displayName: "OAuth Only" });
-      const oauthSession = auth.resolveSession(auth.createSession(oauthOnly.id, provider));
-      expect(toPublicUser(oauthSession!)).toMatchObject({ provider, hasPassword: false });
-    } finally {
-      sqlite.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+        const oauthOnly = auth.upsertOAuthUser({
+          provider,
+          providerUserId: "oauth-only-id",
+          email: null,
+          displayName: "OAuth Only",
+        });
+        const oauthSession = auth.resolveSession(auth.createSession(oauthOnly.id, provider));
+        expect(toPublicUser(oauthSession!)).toMatchObject({ provider, hasPassword: false });
+      } finally {
+        sqlite.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("creates users, sessions, and claims the existing default tenant for the first user", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-auth-"));
@@ -163,9 +174,7 @@ describe("AuthStore", () => {
         throw new Error("Claimed Source revision is unavailable");
       }
       expect(claimedSource?.current_source_revision_id).toBe(revisionId);
-      expect(claimedRepo.getProjectRow(source.id)?.legacyManifestCutover).toBe(
-        true,
-      );
+      expect(claimedRepo.getProjectRow(source.id)?.legacyManifestCutover).toBe(true);
       expect(claimedRepo.getSourceRevision(revisionId)).toMatchObject({
         id: revisionId,
         source_id: source.id,
@@ -203,10 +212,12 @@ describe("AuthStore", () => {
       const src = repo.createSource({ name: "Kit", url: "https://github.com/a/b" });
       const plan = repo.createProfile("Voron", src.id);
       const recipe = repo.readEditableKitRecipe(plan.id);
-      bundleJson = JSON.stringify(buildKitBundleData({
-        mode: { kind: "editable", recipe },
-        exportedAt: new Date().toISOString(),
-      }));
+      bundleJson = JSON.stringify(
+        buildKitBundleData({
+          mode: { kind: "editable", recipe },
+          exportedAt: new Date().toISOString(),
+        }),
+      );
     });
 
     const share = auth.createPlanShare({

@@ -1,10 +1,22 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parentReservedCopy, rustOwnedCopy } from "./db/rust-owned.js";
-import { acquireDataDirectory, installDesktopContext, releaseOrphanedDesktopOwner } from "./desktop-context.js";
+import {
+  acquireDataDirectory,
+  installDesktopContext,
+  releaseOrphanedDesktopOwner,
+} from "./desktop-context.js";
 import { acquireStorageLease } from "./storage-lease.js";
 
 const roots: string[] = [];
@@ -30,17 +42,27 @@ function fifo(path: string): void {
 // time reports the hang instead of the suite never finishing.
 function admitWithinBound<T>(path: string, admit: () => T): T {
   const before = lstatSync(path);
-  const releaser = spawn(process.execPath, [
-    "-e",
-    `setTimeout(() => { const fs = require("node:fs"); fs.closeSync(fs.openSync(process.argv[1], "w")); }, ${releaseAfterMs})`,
-    path,
-  ], { stdio: "ignore" });
+  const releaser = spawn(
+    process.execPath,
+    [
+      "-e",
+      `setTimeout(() => { const fs = require("node:fs"); fs.closeSync(fs.openSync(process.argv[1], "w")); }, ${releaseAfterMs})`,
+      path,
+    ],
+    { stdio: "ignore" },
+  );
   const started = performance.now();
   try {
     let outcome: { value: T } | { error: unknown };
-    try { outcome = { value: admit() }; } catch (error) { outcome = { error }; }
+    try {
+      outcome = { value: admit() };
+    } catch (error) {
+      outcome = { error };
+    }
     const elapsed = performance.now() - started;
-    expect(elapsed, `admission blocked on a FIFO record for ${Math.round(elapsed)}ms`).toBeLessThan(releaseAfterMs / 2);
+    expect(elapsed, `admission blocked on a FIFO record for ${Math.round(elapsed)}ms`).toBeLessThan(
+      releaseAfterMs / 2,
+    );
     const after = lstatSync(path);
     expect(after.isFIFO()).toBe(true);
     expect({ dev: after.dev, ino: after.ino }).toEqual({ dev: before.dev, ino: before.ino });
@@ -56,7 +78,9 @@ describe("FIFO ownership records", () => {
     const dir = dataDir();
     const owner = join(dir, ".desktop-lease", "owner.json");
     fifo(owner);
-    expect(() => admitWithinBound(owner, () => acquireStorageLease(dir))).toThrow("storage_lease_marker_invalid");
+    expect(() => admitWithinBound(owner, () => acquireStorageLease(dir))).toThrow(
+      "storage_lease_marker_invalid",
+    );
   });
 
   it("refuses a FIFO desktop owner marker when reserving the data directory", () => {
@@ -64,7 +88,9 @@ describe("FIFO ownership records", () => {
     rmSync(join(dir, ".desktop-lease"), { recursive: true });
     const marker = join(dir, ".desktop-owner.json");
     fifo(marker);
-    expect(() => admitWithinBound(marker, () => acquireDataDirectory(dir))).toThrow("Ownership record is not a regular file");
+    expect(() => admitWithinBound(marker, () => acquireDataDirectory(dir))).toThrow(
+      "Ownership record is not a regular file",
+    );
     expect(lstatSync(join(dir, ".desktop-lease"), { throwIfNoEntry: false })).toBeUndefined();
   });
 
@@ -94,10 +120,17 @@ describe("FIFO ownership records", () => {
     const marker = join(dir, ".desktop-owner.json");
     fifo(marker);
     const setup = {
-      version: 1, data_dir: dir, socket_path: join(dir, "pp.sock"), generation: "ab".repeat(16),
-      key: "cd".repeat(32), parent_pid: process.ppid, port: 1,
+      version: 1,
+      data_dir: dir,
+      socket_path: join(dir, "pp.sock"),
+      generation: "ab".repeat(16),
+      key: "cd".repeat(32),
+      parent_pid: process.ppid,
+      port: 1,
     };
-    expect(() => admitWithinBound(marker, () => installDesktopContext(setup))).toThrow("Core storage lock required");
+    expect(() => admitWithinBound(marker, () => installDesktopContext(setup))).toThrow(
+      "Core storage lock required",
+    );
   });
 
   it("removes its private socket without opening a FIFO legacy marker during orphaned shutdown", () => {
@@ -107,7 +140,9 @@ describe("FIFO ownership records", () => {
     mkdirSync(join(dir, "run"));
     const socket = join(dir, "run", "pp.sock");
     writeFileSync(socket, "");
-    admitWithinBound(marker, () => releaseOrphanedDesktopOwner({ data_dir: dir, socket_path: socket, parent_pid: process.ppid }));
+    admitWithinBound(marker, () =>
+      releaseOrphanedDesktopOwner({ data_dir: dir, socket_path: socket, parent_pid: process.ppid }),
+    );
     expect(existsSync(socket)).toBe(false);
     expect(existsSync(join(dir, "run"))).toBe(false);
   });
