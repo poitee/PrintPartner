@@ -8,27 +8,39 @@ import { z } from "zod";
 const OPERATION_CUTOVER_FILE = "operation-cutover.json";
 const RECORD_LIMIT = 256 * 1024;
 
-const cutoverRecordSchema = z.object({
-  schema: z.literal("pp-operation-cutover-v1"),
-  manifest_sha256: z.string(),
-  operations: z.record(z.string(), z.object({
-    parity_sha256: z.string(),
-    fixtures: z.number().int().positive(),
-    participants: z.array(z.string()),
-  }).strict()),
-}).strict();
+const cutoverRecordSchema = z
+  .object({
+    schema: z.literal("pp-operation-cutover-v1"),
+    manifest_sha256: z.string(),
+    operations: z.record(
+      z.string(),
+      z
+        .object({
+          parity_sha256: z.string(),
+          fixtures: z.number().int().positive(),
+          participants: z.array(z.string()),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
 
-const nodeFencedSchema = z.object({
-  schema: z.literal("pp-node-fenced-participants-v1"),
-  participants: z.array(z.string()),
-}).strict();
+const nodeFencedSchema = z
+  .object({
+    schema: z.literal("pp-node-fenced-participants-v1"),
+    participants: z.array(z.string()),
+  })
+  .strict();
 
 // Participants Node skips or refuses when Rust owns them: the profile-sync
 // worker in app.ts and every Source Sync participant through
 // requireSourceSyncParticipant. pp-gateway reads the same file, and its tests
 // pin the list to those whole operations.
 function nodeFencedParticipants(): ReadonlySet<string> {
-  const path = resolve(dirname(fileURLToPath(import.meta.url)), "../data/node-fenced-participants.json");
+  const path = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../data/node-fenced-participants.json",
+  );
   return new Set(nodeFencedSchema.parse(JSON.parse(readFileSync(path, "utf8"))).participants);
 }
 
@@ -74,7 +86,9 @@ export function rustOwnedNodeParticipants(dataDir: string): ReadonlySet<string> 
     for (const participant of participants) {
       if (participant.startsWith("http.")) continue;
       if (!fenced.has(participant)) {
-        throw new Error(`Operation cutover assigns ${participant} to Rust, but Node cannot fence it`);
+        throw new Error(
+          `Operation cutover assigns ${participant} to Rust, but Node cannot fence it`,
+        );
       }
       owned.add(participant);
     }

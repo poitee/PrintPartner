@@ -196,10 +196,9 @@ describe("Phase 6 tenant isolation", () => {
     const native = (sqlite as unknown as { sqlite: Database.Database }).sqlite;
     const accepted = repo.readAcceptedPlanOperationalSnapshot(profile.id);
     if (accepted.kind !== "ready") throw new Error("accepted Plan is not ready");
-    native.prepare("UPDATE print_progress SET tenant_id = ? WHERE part_id = ?").run(
-      "stale-tenant",
-      partId,
-    );
+    native
+      .prepare("UPDATE print_progress SET tenant_id = ? WHERE part_id = ?")
+      .run("stale-tenant", partId);
 
     expect(() =>
       repo.setAcceptedUnitCompletion({
@@ -209,9 +208,7 @@ describe("Phase 6 tenant isolation", () => {
       }),
     ).toThrowError(/progress is corrupt/i);
     expect(
-      native
-        .prepare("SELECT tenant_id FROM print_progress WHERE part_id = ?")
-        .all(partId),
+      native.prepare("SELECT tenant_id FROM print_progress WHERE part_id = ?").all(partId),
     ).toEqual([{ tenant_id: "stale-tenant" }]);
 
     sqlite.close();

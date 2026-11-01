@@ -70,9 +70,9 @@ async function waitForJobToSettle(
     const snapshot: JobSnapshot = response.json();
     lastStatus = snapshot.status;
     if (
-      snapshot.status === "done"
-      || snapshot.status === "error"
-      || snapshot.status === "cancelled"
+      snapshot.status === "done" ||
+      snapshot.status === "error" ||
+      snapshot.status === "cancelled"
     ) {
       return;
     }
@@ -97,7 +97,11 @@ describe("Phase 3 APIs", () => {
     const sqlite = new SqliteDatabase(dir);
     sqlite.connect();
     const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
-    const source = repo.createSource({ name: "Repo", url: "https://github.com/a/b", source_kind: "github" });
+    const source = repo.createSource({
+      name: "Repo",
+      url: "https://github.com/a/b",
+      source_kind: "github",
+    });
     const repoPath = join(dir, "repos", String(source.id));
     mkdirSync(join(repoPath, "x"), { recursive: true });
     writeFileSync(join(repoPath, "x", "part.stl"), "x");
@@ -108,10 +112,12 @@ describe("Phase 3 APIs", () => {
     await acceptPlanForTest(repo, plan.id);
 
     const priorPartId = repo.listParts(plan.id).parts[0]!.id;
-    editAcceptedPartsForTest(repo, plan.id, [{
-      projectionPartId: priorPartId,
-      quantityOverride: 1,
-    }]);
+    editAcceptedPartsForTest(repo, plan.id, [
+      {
+        projectionPartId: priorPartId,
+        quantityOverride: 1,
+      },
+    ]);
     const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
     if (accepted.kind !== "ready") throw new Error("accepted Plan is not ready");
     const patched = repo.setAcceptedUnitCompletion({
@@ -131,7 +137,11 @@ describe("Phase 3 APIs", () => {
     const sqlite = new SqliteDatabase(dir);
     sqlite.connect();
     const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
-    const source = repo.createSource({ name: "Repo", url: "https://github.com/a/b", source_kind: "github" });
+    const source = repo.createSource({
+      name: "Repo",
+      url: "https://github.com/a/b",
+      source_kind: "github",
+    });
     const repoPath = join(dir, "repos", String(source.id));
     mkdirSync(join(repoPath, "x"), { recursive: true });
     writeFileSync(join(repoPath, "x", "part.stl"), "x");
@@ -142,10 +152,12 @@ describe("Phase 3 APIs", () => {
     await acceptPlanForTest(repo, plan.id);
 
     const priorPartId = repo.listParts(plan.id).parts[0]!.id;
-    const partId = editAcceptedPartsForTest(repo, plan.id, [{
-      projectionPartId: priorPartId,
-      quantityOverride: 1,
-    }]).get(priorPartId)!;
+    const partId = editAcceptedPartsForTest(repo, plan.id, [
+      {
+        projectionPartId: priorPartId,
+        quantityOverride: 1,
+      },
+    ]).get(priorPartId)!;
     const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
     if (accepted.kind !== "ready") throw new Error("accepted Plan is not ready");
     const expected = acceptedPlanBasis(accepted.snapshot);
@@ -182,7 +194,11 @@ describe("Phase 3 APIs", () => {
       payload: { unit_index: 0, assembled: true },
     });
     expect(patchRes.statusCode).toBe(200);
-    expect(patchRes.json()).toMatchObject({ part_id: partId, assembled_count: 1, assembled_units: [true] });
+    expect(patchRes.json()).toMatchObject({
+      part_id: partId,
+      assembled_count: 1,
+      assembled_units: [true],
+    });
 
     const missingFieldRes = await app.inject({
       method: "PATCH",
@@ -194,7 +210,11 @@ describe("Phase 3 APIs", () => {
     // Read accessor mirrors the write.
     const getRes = await app.inject({ method: "GET", url: `/parts/${partId}/assembled` });
     expect(getRes.statusCode).toBe(200);
-    expect(getRes.json()).toMatchObject({ part_id: partId, assembled_count: 1, assembled_units: [true] });
+    expect(getRes.json()).toMatchObject({
+      part_id: partId,
+      assembled_count: 1,
+      assembled_units: [true],
+    });
 
     // Un-printing a unit clears its assembled flag, so re-checking the print
     // does not silently resurrect a stale "installed" state.
@@ -466,7 +486,9 @@ describe("Phase 3 APIs", () => {
     expect(
       exportStlPackJobMessage({
         file_total: 2,
-        warnings: ["Missing STL: a.stl (base:R). Sync Sources and fix Review blockers, then export again."],
+        warnings: [
+          "Missing STL: a.stl (base:R). Sync Sources and fix Review blockers, then export again.",
+        ],
       }),
     ).toBe("Exported 2 file(s) with 1 warning(s)");
     expect(exportStlPackJobMessage({ file_total: 0, warnings: [] })).toContain(

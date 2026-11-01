@@ -18,7 +18,11 @@ import {
 import { loadKitManifest, saveKitManifest } from "./services/kit-manifest-store.js";
 import { setRequestTenantId } from "./middleware/tenant-context.js";
 
-function exportEditableKitBundle(repo: AppRepository, profileId: number, exportsDir: string): string {
+function exportEditableKitBundle(
+  repo: AppRepository,
+  profileId: number,
+  exportsDir: string,
+): string {
   const recipe = repo.readEditableKitRecipe(profileId);
   return writeKitBundleData({
     data: buildKitBundleData({
@@ -91,8 +95,10 @@ describe("Phase 5", () => {
     expect(sources).toHaveLength(1);
     expect(sources[0]?.import_rules).toEqual(["p/"]);
     expect(data.kit_manifest).toBeTruthy();
-    const layerProject = (data.layers as Array<Record<string, unknown>>)[0]
-      ?.project as Record<string, unknown>;
+    const layerProject = (data.layers as Array<Record<string, unknown>>)[0]?.project as Record<
+      string,
+      unknown
+    >;
     expect(layerProject?.import_rules).toEqual(["p/"]);
     sqlite.close();
     rmSync(dir, { recursive: true, force: true });
