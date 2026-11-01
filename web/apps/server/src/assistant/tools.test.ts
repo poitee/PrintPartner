@@ -14,21 +14,25 @@ import { registerAssistantRoutes } from "../routes/assistant.js";
 import { InProcessJobRunner } from "../services/job-runner.js";
 import { encodeAcceptedPlate3mf, type StlMesh } from "@print-partner/domain";
 import { ASSISTANT_TOOL_SPECS } from "./tool-specs.js";
-import {
-  invokeAssistantTool,
-  applyAssistantAction,
-} from "./tools.js";
+import { invokeAssistantTool, applyAssistantAction } from "./tools.js";
 
 vi.mock("../services/local-source-revision.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../services/local-source-revision.js")>();
   return {
     ...actual,
-    removeObsoleteHostedWorkingTree: vi.fn((...args: Parameters<typeof actual.removeObsoleteHostedWorkingTree>) =>
-      actual.removeObsoleteHostedWorkingTree(...args)),
+    removeObsoleteHostedWorkingTree: vi.fn(
+      (...args: Parameters<typeof actual.removeObsoleteHostedWorkingTree>) =>
+        actual.removeObsoleteHostedWorkingTree(...args),
+    ),
   };
 });
 import { inferStackPresetId, summarizeOtherBuildsAsExamples } from "./example-builds.js";
-import { hydrateBuildPlanningBrief, newBuildPlanningBrief, readBuildPlanningBrief, saveBuildPlanningBrief } from "../services/build-planning.js";
+import {
+  hydrateBuildPlanningBrief,
+  newBuildPlanningBrief,
+  readBuildPlanningBrief,
+  saveBuildPlanningBrief,
+} from "../services/build-planning.js";
 import { loadKitManifest } from "../services/kit-manifest-store.js";
 import {
   createUnattributedPrint,
@@ -36,10 +40,7 @@ import {
   saveUnattributedPrint,
 } from "../services/unattributed-print-store.js";
 
-const FIXTURE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../test-fixtures/kit-workspace",
-);
+const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "../test-fixtures/kit-workspace");
 
 describe("assistant tools + example builds", () => {
   let dataDir: string;
@@ -80,11 +81,9 @@ describe("assistant tools + example builds", () => {
   it("returns the same Build Workflow projection used by the UI", async () => {
     const build = repo.createProfile("Clockwork Dragon");
 
-    const workflow = JSON.parse((await invokeAssistantTool(
-      "get_build_workflow",
-      { plan_id: build.id },
-      { repo },
-    )).content);
+    const workflow = JSON.parse(
+      (await invokeAssistantTool("get_build_workflow", { plan_id: build.id }, { repo })).content,
+    );
 
     expect(workflow.next_action.kind).toBe("attach_sources");
     expect(workflow.accepted_plan).toEqual({ kind: "none" });
@@ -103,31 +102,69 @@ describe("assistant tools + example builds", () => {
     mkdirSync(join(sourcePath, "STLs", "screen"), { recursive: true });
     writeFileSync(join(sourcePath, "STLs", "screen", "screen_rail.stl"), "solid screen");
     writeFileSync(join(sourcePath, "README.md"), "Screen options");
-    repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: "a".repeat(64) });
+    repo.updateSource(source.id, {
+      local_path: sourcePath,
+      last_synced_at: new Date().toISOString(),
+      last_commit_sha: "a".repeat(64),
+    });
     const plan = repo.createProfile("Options plan", source.id);
-    const optionGroups = JSON.parse((await invokeAssistantTool("get_plan_option_groups", { plan_id: plan.id }, { repo })).content);
+    const optionGroups = JSON.parse(
+      (await invokeAssistantTool("get_plan_option_groups", { plan_id: plan.id }, { repo })).content,
+    );
     expect(optionGroups.plan_id).toBe(plan.id);
-    expect(optionGroups.sources).toEqual(expect.arrayContaining([expect.objectContaining({ source_id: source.id })]));
-    const inventory = JSON.parse((await invokeAssistantTool("get_source_inventory", { source_id: source.id }, { repo })).content);
+    expect(optionGroups.sources).toEqual(
+      expect.arrayContaining([expect.objectContaining({ source_id: source.id })]),
+    );
+    const inventory = JSON.parse(
+      (await invokeAssistantTool("get_source_inventory", { source_id: source.id }, { repo }))
+        .content,
+    );
     expect(inventory.sync.synchronized).toBe(true);
-    expect(inventory.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "STLs/screen/screen_rail.stl" })]));
-    const found = JSON.parse((await invokeAssistantTool("search_source_files", { source_id: source.id, query: "screen_rail" }, { repo })).content);
+    expect(inventory.artifacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "STLs/screen/screen_rail.stl" })]),
+    );
+    const found = JSON.parse(
+      (
+        await invokeAssistantTool(
+          "search_source_files",
+          { source_id: source.id, query: "screen_rail" },
+          { repo },
+        )
+      ).content,
+    );
     expect(found.files).toEqual([{ path: "STLs/screen/screen_rail.stl", byte_size: 12 }]);
   });
 
-  it.each([{ url: "https://github.com/example/replacement" }, { branch: "next" }, { tag: "v2" }])("invalidates sync status after changing source identity: %j", async (patch) => {
-    const source = repo.createSource({ name: "Kit", url: "https://github.com/example/kit", source_kind: "github" });
-    const sourcePath = join(dataDir, "retained");
-    mkdirSync(sourcePath);
-    writeFileSync(join(sourcePath, "part.stl"), "solid part");
-    repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: "a".repeat(40), metadata: { remote_update_status: "up_to_date" } });
-    repo.updateSource(source.id, patch);
-    const inventory = JSON.parse((await invokeAssistantTool("get_source_inventory", { source_id: source.id }, { repo })).content);
-    expect(inventory.sync.synchronized).toBe(false);
-    expect(inventory.sync.update_status).toBe("unknown");
-    expect(inventory.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "part.stl" })]));
-    expect(repo.getSource(source.id)?.local_path).toBe(sourcePath);
-  });
+  it.each([{ url: "https://github.com/example/replacement" }, { branch: "next" }, { tag: "v2" }])(
+    "invalidates sync status after changing source identity: %j",
+    async (patch) => {
+      const source = repo.createSource({
+        name: "Kit",
+        url: "https://github.com/example/kit",
+        source_kind: "github",
+      });
+      const sourcePath = join(dataDir, "retained");
+      mkdirSync(sourcePath);
+      writeFileSync(join(sourcePath, "part.stl"), "solid part");
+      repo.updateSource(source.id, {
+        local_path: sourcePath,
+        last_synced_at: new Date().toISOString(),
+        last_commit_sha: "a".repeat(40),
+        metadata: { remote_update_status: "up_to_date" },
+      });
+      repo.updateSource(source.id, patch);
+      const inventory = JSON.parse(
+        (await invokeAssistantTool("get_source_inventory", { source_id: source.id }, { repo }))
+          .content,
+      );
+      expect(inventory.sync.synchronized).toBe(false);
+      expect(inventory.sync.update_status).toBe("unknown");
+      expect(inventory.artifacts).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "part.stl" })]),
+      );
+      expect(repo.getSource(source.id)?.local_path).toBe(sourcePath);
+    },
+  );
 
   it("proposes and applies multi-value kit selections without flattening them", async () => {
     const plan = repo.createProfile("Multi-select plan");
@@ -353,11 +390,13 @@ option_groups:
     const source = repo.createSource({ name: "Trident frame" });
 
     const rejected = JSON.parse(
-      (await invokeAssistantTool(
-        "propose_set_source_category",
-        { source_id: source.id, category: "Voron/Nope" },
-        { repo },
-      )).content,
+      (
+        await invokeAssistantTool(
+          "propose_set_source_category",
+          { source_id: source.id, category: "Voron/Nope" },
+          { repo },
+        )
+      ).content,
     );
     expect(rejected.error).toMatch(/Unknown library category/);
 
@@ -369,7 +408,10 @@ option_groups:
     expect(JSON.parse(proposal.content).status).toBe("proposed");
     expect(repo.getSource(source.id)?.category).toBeNull();
 
-    const applied = await applyAssistantAction(proposal.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
     expect(applied.ok).toBe(true);
     expect(repo.getSource(source.id)?.category).toBe("Voron/Trident");
   });
@@ -398,11 +440,7 @@ option_groups:
       { repo },
     );
     expect((await applyAssistantAction(renamed.proposedAction!, { repo, jobs })).ok).toBe(true);
-    expect(repo.getSourceCategories()).toEqual([
-      "Voron kits",
-      "Voron kits/Trident",
-      "Toolheads",
-    ]);
+    expect(repo.getSourceCategories()).toEqual(["Voron kits", "Voron kits/Trident", "Toolheads"]);
     expect(repo.getSource(source.id)?.category).toBe("Voron kits/Trident");
 
     const deleted = await invokeAssistantTool(
@@ -416,26 +454,45 @@ option_groups:
   });
 
   it("proposes and confirms Source metadata changes", async () => {
-    const source = repo.createSource({ name: "Before", url: "https://example.com/before.git", source_kind: "git" });
-    const proposal = await invokeAssistantTool("propose_update_source", {
-      source_id: source.id,
-      patch: { name: "After", branch: "release", metadata: { vendor: "Example" } },
-    }, { repo });
+    const source = repo.createSource({
+      name: "Before",
+      url: "https://example.com/before.git",
+      source_kind: "git",
+    });
+    const proposal = await invokeAssistantTool(
+      "propose_update_source",
+      {
+        source_id: source.id,
+        patch: { name: "After", branch: "release", metadata: { vendor: "Example" } },
+      },
+      { repo },
+    );
     expect(JSON.parse(proposal.content).status).toBe("proposed");
     expect(repo.getSource(source.id)?.name).toBe("Before");
-    const applied = await applyAssistantAction(proposal.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    const applied = await applyAssistantAction(proposal.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
     expect(applied.ok).toBe(true);
-    expect(repo.getSource(source.id)).toEqual(expect.objectContaining({ name: "After", branch: "release" }));
-    expect(repo.getSource(source.id)?.metadata).toEqual(expect.objectContaining({ vendor: "Example" }));
+    expect(repo.getSource(source.id)).toEqual(
+      expect.objectContaining({ name: "After", branch: "release" }),
+    );
+    expect(repo.getSource(source.id)?.metadata).toEqual(
+      expect.objectContaining({ vendor: "Example" }),
+    );
   });
 
   it("publishes confirmed MCP file imports as a Source revision", async () => {
     const source = repo.createSource({ name: "Uploads", source_kind: "local" });
     const content = Buffer.from("solid uploaded").toString("base64");
-    const proposal = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id,
-      files: [{ path: "parts/uploaded.stl", content_base64: content }],
-    }, { repo });
+    const proposal = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        files: [{ path: "parts/uploaded.stl", content_base64: content }],
+      },
+      { repo },
+    );
     expect(JSON.parse(proposal.content).status).toBe("proposed");
     const applied = await applyAssistantAction(proposal.proposedAction!, {
       repo,
@@ -444,35 +501,57 @@ option_groups:
     });
     expect(applied.ok).toBe(true);
     expect(repo.getSource(source.id)?.last_commit_sha).toMatch(/^[a-f0-9]{64}$/);
-    expect(applied.result?.artifacts).toEqual(expect.arrayContaining([expect.objectContaining({ path: "parts/uploaded.stl" })]));
+    expect(applied.result?.artifacts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "parts/uploaded.stl" })]),
+    );
   });
 
   it("clears stale docs when a confirmed import's indexing fails", async () => {
     const source = repo.createSource({ name: "Indexed uploads", source_kind: "local" });
     const oldReadme = Buffer.from("old readme\n").toString("base64");
-    const oldProposal = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id,
-      files: [
-        { path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") },
-        { path: "old/readme.md", content_base64: oldReadme },
-      ],
-    }, { repo });
+    const oldProposal = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        files: [
+          {
+            path: "parts/uploaded.stl",
+            content_base64: Buffer.from("solid uploaded").toString("base64"),
+          },
+          { path: "old/readme.md", content_base64: oldReadme },
+        ],
+      },
+      { repo },
+    );
     const oldApplied = await applyAssistantAction(oldProposal.proposedAction!, {
-      repo, dataDir, jobs: { start: async () => "unused" } as never,
+      repo,
+      dataDir,
+      jobs: { start: async () => "unused" } as never,
     });
     expect(oldApplied.ok).toBe(true);
     expect(repo.listSourceDocs(source.id).map((doc) => doc.path)).toEqual(["old/readme.md"]);
-    const spy = vi.spyOn(repo, "replaceSourceDocs").mockImplementationOnce(() => { throw new Error("index unavailable"); });
+    const spy = vi.spyOn(repo, "replaceSourceDocs").mockImplementationOnce(() => {
+      throw new Error("index unavailable");
+    });
     const nextReadme = Buffer.from("new readme\n").toString("base64");
-    const proposal = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id,
-      files: [
-        { path: "parts/uploaded.stl", content_base64: Buffer.from("solid replacement").toString("base64") },
-        { path: "new/readme.md", content_base64: nextReadme },
-      ],
-    }, { repo });
+    const proposal = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        files: [
+          {
+            path: "parts/uploaded.stl",
+            content_base64: Buffer.from("solid replacement").toString("base64"),
+          },
+          { path: "new/readme.md", content_base64: nextReadme },
+        ],
+      },
+      { repo },
+    );
     const applied = await applyAssistantAction(proposal.proposedAction!, {
-      repo, dataDir, jobs: { start: async () => "unused" } as never,
+      repo,
+      dataDir,
+      jobs: { start: async () => "unused" } as never,
     });
     spy.mockRestore();
     expect(applied.ok).toBe(true);
@@ -489,11 +568,18 @@ option_groups:
     writeFileSync(join(working, "files", "keep.stl"), "previous STL");
     writeFileSync(join(working, "upload.zip"), "previous ZIP");
     const before = repo.getSourceActivationObservation(source.id);
-    const proposal = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id, archive_base64: Buffer.from("not-a-zip").toString("base64"),
-    }, { repo });
+    const proposal = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        archive_base64: Buffer.from("not-a-zip").toString("base64"),
+      },
+      { repo },
+    );
     const applied = await applyAssistantAction(proposal.proposedAction!, {
-      repo, dataDir, jobs: { start: async () => "unused" } as never,
+      repo,
+      dataDir,
+      jobs: { start: async () => "unused" } as never,
     });
     expect(applied.ok).toBe(false);
     expect(applied.detail).toMatch(/not a valid ZIP/);
@@ -508,15 +594,26 @@ option_groups:
     mkdirSync(join(working, "files"), { recursive: true });
     writeFileSync(join(working, "files", "keep.stl"), "previous STL");
     const before = repo.getSource(source.id);
-    const proposal = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id,
-      files: [{ path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") }],
-    }, { repo });
+    const proposal = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        files: [
+          {
+            path: "parts/uploaded.stl",
+            content_base64: Buffer.from("solid uploaded").toString("base64"),
+          },
+        ],
+      },
+      { repo },
+    );
     const conflict = vi.spyOn(repo, "activateSourceRevision").mockImplementation(() => {
       throw new SourceActivationConflictError();
     });
     const applied = await applyAssistantAction(proposal.proposedAction!, {
-      repo, dataDir, jobs: { start: async () => "unused" } as never,
+      repo,
+      dataDir,
+      jobs: { start: async () => "unused" } as never,
     });
     expect(applied).toMatchObject({
       ok: false,
@@ -540,7 +637,9 @@ option_groups:
     const response = await app.inject({
       method: "POST",
       url: "/assistant/actions/apply",
-      payload: { action: { ...proposal.proposedAction, plan_id: proposal.proposedAction?.plan_id ?? 1 } },
+      payload: {
+        action: { ...proposal.proposedAction, plan_id: proposal.proposedAction?.plan_id ?? 1 },
+      },
     });
     conflict.mockRestore();
     await app.close();
@@ -559,26 +658,50 @@ option_groups:
     mkdirSync(join(legacy, "files"), { recursive: true });
     writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
     const reposDir = join(dataDir, "repos");
-    const usage = () => measureTenantDiskUsage({
-      dataDir, reposDir, tenantId: "default", sourceIds: [source.id],
-    });
+    const usage = () =>
+      measureTenantDiskUsage({
+        dataDir,
+        reposDir,
+        tenantId: "default",
+        sourceIds: [source.id],
+      });
     const planted = await usage();
-    const rejected = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id, archive_base64: Buffer.from("not-a-zip").toString("base64"),
-    }, { repo });
+    const rejected = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        archive_base64: Buffer.from("not-a-zip").toString("base64"),
+      },
+      { repo },
+    );
     const failed = await applyAssistantAction(rejected.proposedAction!, {
-      repo, dataDir, hostedPlanning: true, jobs: { start: async () => "unused" } as never,
+      repo,
+      dataDir,
+      hostedPlanning: true,
+      jobs: { start: async () => "unused" } as never,
     });
     expect(failed.ok).toBe(false);
     expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
     expect(await usage()).toBe(planted);
 
-    const proposal = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id,
-      files: [{ path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") }],
-    }, { repo });
+    const proposal = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        files: [
+          {
+            path: "parts/uploaded.stl",
+            content_base64: Buffer.from("solid uploaded").toString("base64"),
+          },
+        ],
+      },
+      { repo },
+    );
     const applied = await applyAssistantAction(proposal.proposedAction!, {
-      repo, dataDir, hostedPlanning: true, jobs: { start: async () => "unused" } as never,
+      repo,
+      dataDir,
+      hostedPlanning: true,
+      jobs: { start: async () => "unused" } as never,
     });
     expect(applied.ok).toBe(true);
     expect(existsSync(legacy)).toBe(false);
@@ -592,24 +715,40 @@ option_groups:
     const revision = await import("../services/local-source-revision.js");
     const cleanup = vi.mocked(revision.removeObsoleteHostedWorkingTree);
     const original = cleanup.getMockImplementation();
-    cleanup.mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+    cleanup.mockRejectedValueOnce(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+    );
     try {
       const source = repo.createSource({ name: "Cleanup failure", source_kind: "local" });
       const legacy = join(dataDir, "sources", String(source.id));
       mkdirSync(join(legacy, "files"), { recursive: true });
       writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
-      const proposal = await invokeAssistantTool("propose_import_source_files", {
-        source_id: source.id,
-        files: [{ path: "parts/uploaded.stl", content_base64: Buffer.from("solid uploaded").toString("base64") }],
-      }, { repo });
+      const proposal = await invokeAssistantTool(
+        "propose_import_source_files",
+        {
+          source_id: source.id,
+          files: [
+            {
+              path: "parts/uploaded.stl",
+              content_base64: Buffer.from("solid uploaded").toString("base64"),
+            },
+          ],
+        },
+        { repo },
+      );
       const applied = await applyAssistantAction(proposal.proposedAction!, {
-        repo, dataDir, hostedPlanning: true, jobs: { start: async () => "unused" } as never,
+        repo,
+        dataDir,
+        hostedPlanning: true,
+        jobs: { start: async () => "unused" } as never,
       });
       expect(applied.ok).toBe(true);
       expect(repo.getSource(source.id)?.current_source_revision_id).toEqual(expect.any(Number));
       expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
       const active = repo.getSource(source.id)?.local_path;
-      expect(readFileSync(join(active ?? "", "parts", "uploaded.stl"), "utf8")).toBe("solid uploaded");
+      expect(readFileSync(join(active ?? "", "parts", "uploaded.stl"), "utf8")).toBe(
+        "solid uploaded",
+      );
     } finally {
       cleanup.mockReset();
       if (original) cleanup.mockImplementation(original);
@@ -619,10 +758,14 @@ option_groups:
   it("refuses MCP file imports above the 64 MiB inline limit", async () => {
     const source = repo.createSource({ name: "Oversized uploads", source_kind: "local" });
     const encodedBytesOverLimit = Math.ceil((64 * 1024 * 1024 + 1) / 3) * 4;
-    const proposal = await invokeAssistantTool("propose_import_source_files", {
-      source_id: source.id,
-      files: [{ path: "parts/large.stl", content_base64: "A".repeat(encodedBytesOverLimit) }],
-    }, { repo });
+    const proposal = await invokeAssistantTool(
+      "propose_import_source_files",
+      {
+        source_id: source.id,
+        files: [{ path: "parts/large.stl", content_base64: "A".repeat(encodedBytesOverLimit) }],
+      },
+      { repo },
+    );
     expect(JSON.parse(proposal.content)).toEqual({ error: "upload exceeds the 64 MiB MCP limit" });
     expect(proposal.proposedAction).toBeUndefined();
   });
@@ -631,41 +774,98 @@ option_groups:
     const source = repo.createSource({ name: "Checkoff parts", source_kind: "local" });
     const sourcePath = join(dataDir, "checkoff-source");
     mkdirSync(sourcePath, { recursive: true });
-    writeFileSync(join(sourcePath, "bracket.stl"), `solid bracket\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 10 0 0\n      vertex 0 10 0\n    endloop\n  endfacet\nendsolid bracket\n`);
-    repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: "d".repeat(64) });
+    writeFileSync(
+      join(sourcePath, "bracket.stl"),
+      `solid bracket\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 10 0 0\n      vertex 0 10 0\n    endloop\n  endfacet\nendsolid bracket\n`,
+    );
+    repo.updateSource(source.id, {
+      local_path: sourcePath,
+      last_synced_at: new Date().toISOString(),
+      last_commit_sha: "d".repeat(64),
+    });
     repo.updateImportRules(source.id, ["bracket.stl"]);
     const plan = repo.createProfile("3MF checkoff plan", source.id);
     acceptPlanForTest(repo, plan.id);
     const accepted = repo.readAcceptedPlanOperationalSnapshot(plan.id);
     expect(accepted.kind).toBe("ready");
     if (accepted.kind !== "ready") return;
-    const part = accepted.snapshot.parts.find((candidate) => candidate.included && candidate.units.length > 0);
+    const part = accepted.snapshot.parts.find(
+      (candidate) => candidate.included && candidate.units.length > 0,
+    );
     expect(part).toBeDefined();
     if (!part) return;
     const unit = part.units[0]!;
     const mesh: StlMesh = {
-      vertices: [[0, 0, 0], [10, 0, 0], [0, 10, 0]],
+      vertices: [
+        [0, 0, 0],
+        [10, 0, 0],
+        [0, 10, 0],
+      ],
       faces: [[0, 1, 2]],
-      bounds: { minX: 0, minY: 0, minZ: 0, maxX: 10, maxY: 10, maxZ: 0, widthMm: 10, depthMm: 10, heightMm: 0 },
+      bounds: {
+        minX: 0,
+        minY: 0,
+        minZ: 0,
+        maxX: 10,
+        maxY: 10,
+        maxZ: 0,
+        widthMm: 10,
+        depthMm: 10,
+        heightMm: 0,
+      },
     };
-    const threeMf = Buffer.from(encodeAcceptedPlate3mf([{ token: unit.token, objectName: unit.objectName, xUm: 0, yUm: 0, mesh }])).toString("base64");
+    const threeMf = Buffer.from(
+      encodeAcceptedPlate3mf([
+        { token: unit.token, objectName: unit.objectName, xUm: 0, yUm: 0, mesh },
+      ]),
+    ).toString("base64");
 
-    const before = JSON.parse((await invokeAssistantTool("get_plan_checkoff", { plan_id: plan.id }, { repo })).content);
+    const before = JSON.parse(
+      (await invokeAssistantTool("get_plan_checkoff", { plan_id: plan.id }, { repo })).content,
+    );
     expect(before.state).toBe("ready");
-    expect(before.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId).printed_count).toBe(0);
+    expect(
+      before.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId)
+        .printed_count,
+    ).toBe(0);
 
-    const imported = await invokeAssistantTool("propose_import_3mf_checkoff", { plan_id: plan.id, filename: "foreign-slicer.3mf", content_base64: threeMf }, { repo });
-    const importedApplied = await applyAssistantAction(imported.proposedAction!, { repo, dataDir, jobs: { start: async () => "unused" } as never });
+    const imported = await invokeAssistantTool(
+      "propose_import_3mf_checkoff",
+      { plan_id: plan.id, filename: "foreign-slicer.3mf", content_base64: threeMf },
+      { repo },
+    );
+    const importedApplied = await applyAssistantAction(imported.proposedAction!, {
+      repo,
+      dataDir,
+      jobs: { start: async () => "unused" } as never,
+    });
     expect(importedApplied.ok).toBe(true);
     const link = importedApplied.result?.link as { id: string; state: string; units: unknown[] };
     expect(link.state).toBe("awaiting_verify");
     expect(link.units).toHaveLength(1);
 
-    const verified = await invokeAssistantTool("propose_verify_printer_checkoff", { link_id: link.id, decisions: [{ part_id: part.projectionPartId, unit_index: unit.unitIndex, result: "confirmed" }] }, { repo });
-    const verifiedApplied = await applyAssistantAction(verified.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    const verified = await invokeAssistantTool(
+      "propose_verify_printer_checkoff",
+      {
+        link_id: link.id,
+        decisions: [
+          { part_id: part.projectionPartId, unit_index: unit.unitIndex, result: "confirmed" },
+        ],
+      },
+      { repo },
+    );
+    const verifiedApplied = await applyAssistantAction(verified.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
     expect(verifiedApplied.ok).toBe(true);
-    const after = JSON.parse((await invokeAssistantTool("get_plan_checkoff", { plan_id: plan.id }, { repo })).content);
-    expect(after.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId).printed_count).toBe(1);
+    const after = JSON.parse(
+      (await invokeAssistantTool("get_plan_checkoff", { plan_id: plan.id }, { repo })).content,
+    );
+    expect(
+      after.parts.find((row: { part_id: number }) => row.part_id === part.projectionPartId)
+        .printed_count,
+    ).toBe(1);
   });
 
   it("shows live layers as stale in get_plan_snapshot until rebuild while get_plan_review stays accepted", async () => {
@@ -674,7 +874,11 @@ option_groups:
       const sourcePath = join(dataDir, name);
       mkdirSync(sourcePath, { recursive: true });
       writeFileSync(join(sourcePath, file), `solid ${file}\nendsolid ${file}\n`);
-      repo.updateSource(source.id, { local_path: sourcePath, last_synced_at: new Date().toISOString(), last_commit_sha: sha.repeat(64) });
+      repo.updateSource(source.id, {
+        local_path: sourcePath,
+        last_synced_at: new Date().toISOString(),
+        last_commit_sha: sha.repeat(64),
+      });
       repo.updateImportRules(source.id, [file]);
       return source;
     };
@@ -741,15 +945,35 @@ option_groups:
   it("persists confirmed checklist items and named custom filament", async () => {
     const plan = repo.createProfile("Checklist plan");
     saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Build it", []));
-    const checklist = await invokeAssistantTool("propose_add_build_checklist_items", { plan_id: plan.id, items: [{ title: "Test fit the panels", category: "test_fit" }] }, { repo });
-    const checklistResult = await applyAssistantAction(checklist.proposedAction!, { repo, jobs: { start: async () => "unused" } as never });
+    const checklist = await invokeAssistantTool(
+      "propose_add_build_checklist_items",
+      { plan_id: plan.id, items: [{ title: "Test fit the panels", category: "test_fit" }] },
+      { repo },
+    );
+    const checklistResult = await applyAssistantAction(checklist.proposedAction!, {
+      repo,
+      jobs: { start: async () => "unused" } as never,
+    });
     expect(checklistResult.ok).toBe(true);
-    expect(readBuildPlanningBrief(repo, plan.id)?.checklist_items).toEqual([expect.objectContaining({ title: "Test fit the panels", required: true, completed: false })]);
+    expect(readBuildPlanningBrief(repo, plan.id)?.checklist_items).toEqual([
+      expect.objectContaining({ title: "Test fit the panels", required: true, completed: false }),
+    ]);
 
-    const filament = await invokeAssistantTool("propose_add_custom_filament", { display_name: "Customer Orange", hex: "#ff6600", product_line: "External" }, { repo });
+    const filament = await invokeAssistantTool(
+      "propose_add_custom_filament",
+      { display_name: "Customer Orange", hex: "#ff6600", product_line: "External" },
+      { repo },
+    );
     expect(repo.getSetting("custom_filament_probe")).toBeNull();
-    const filamentResult = await applyAssistantAction(filament.proposedAction!, { repo, dataDir, jobs: { start: async () => "unused" } as never });
-    expect(filamentResult).toMatchObject({ ok: true, result: { filament: { display_name: "Customer Orange", hex: "#ff6600" } } });
+    const filamentResult = await applyAssistantAction(filament.proposedAction!, {
+      repo,
+      dataDir,
+      jobs: { start: async () => "unused" } as never,
+    });
+    expect(filamentResult).toMatchObject({
+      ok: true,
+      result: { filament: { display_name: "Customer Orange", hex: "#ff6600" } },
+    });
   });
 
   it("mutating tools only propose actions", async () => {
@@ -798,7 +1022,10 @@ option_groups:
 
     const proposal = await invokeAssistantTool(
       "propose_import_build_inputs",
-      { plan_id: plan.id, inputs: [{ source_id: source.id, filenames: ["frame.stl", "project.3mf"] }] },
+      {
+        plan_id: plan.id,
+        inputs: [{ source_id: source.id, filenames: ["frame.stl", "project.3mf"] }],
+      },
       { repo },
     );
     expect(readBuildPlanningBrief(repo, plan.id)?.evidence).toHaveLength(0);
@@ -826,11 +1053,13 @@ option_groups:
       "propose_import_build_inputs",
       {
         plan_id: plan.id,
-        inputs: [{
-          url: "https://example.com/assembly-guide",
-          title: "Assembly guide",
-          extract: "Use four M3 heat-set inserts.",
-        }],
+        inputs: [
+          {
+            url: "https://example.com/assembly-guide",
+            title: "Assembly guide",
+            extract: "Use four M3 heat-set inserts.",
+          },
+        ],
       },
       { repo },
     );
@@ -881,17 +1110,24 @@ option_groups:
 
   it("rejects fabricated catalog filament assignments", async () => {
     const plan = repo.createProfile("Fabricated color");
-    saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Primary color is Forest Green.", []));
-    const proposal = await invokeAssistantTool("propose_assign_role_filament", {
-      plan_id: plan.id,
-      assignment: {
-        role: "primary",
-        requested_name: "Forest Green",
-        inventory_kind: "catalog",
-        inventory_id: "made-up-id",
-        color_hex: "#285238",
+    saveBuildPlanningBrief(
+      repo,
+      newBuildPlanningBrief(plan.id, "Primary color is Forest Green.", []),
+    );
+    const proposal = await invokeAssistantTool(
+      "propose_assign_role_filament",
+      {
+        plan_id: plan.id,
+        assignment: {
+          role: "primary",
+          requested_name: "Forest Green",
+          inventory_kind: "catalog",
+          inventory_id: "made-up-id",
+          color_hex: "#285238",
+        },
       },
-    }, { repo });
+      { repo },
+    );
     const result = await applyAssistantAction(proposal.proposedAction!, {
       repo,
       jobs: { start: async () => "unused" } as never,
@@ -905,41 +1141,79 @@ option_groups:
     { account: true, plan: false, gate: "1", allowed: false },
     { account: false, plan: true, gate: "1", allowed: true },
     { account: false, plan: false, gate: "0", allowed: true },
-  ])("admits Spoolman proposals for account=$account Plan=$plan gate=$gate", async ({ account, plan, gate, allowed }) => {
-    vi.stubEnv("PP_DESKTOP_REBUILD", gate);
-    const profile = repo.createProfile("Scoped proposal");
-    repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
-    repo.setSetting(`feature_toggles:plan:${profile.id}`, JSON.stringify({ spoolman: plan }));
-    saveBuildPlanningBrief(repo, newBuildPlanningBrief(profile.id, "Primary color is Red.", []));
-    const saved = readBuildPlanningBrief(repo, profile.id);
-    const result = await invokeAssistantTool("propose_assign_role_filament", {
-      plan_id: profile.id,
-      assignment: { role: "primary", inventory_kind: "spoolman", inventory_id: "spoolman:inventory:filament:7", color_hex: "#ff0000" },
-    }, { repo });
-    if (allowed) {
-      expect(result.proposedAction).toMatchObject({ type: "propose_assign_role_filament", plan_id: profile.id });
-    } else {
-      expect(JSON.parse(result.content)).toEqual({ error: "Feature spoolman is disabled.", code: "FEATURE_DISABLED" });
-      expect(result.proposedAction).toBeUndefined();
-      const catalog = await invokeAssistantTool("propose_assign_role_filament", {
-        plan_id: profile.id,
-        assignment: { role: "primary", inventory_kind: "catalog", inventory_id: "abs-matte::black-pantone-7c", color_hex: "#c0afa1" },
-      }, { repo });
-      expect(catalog.proposedAction?.type).toBe("propose_assign_role_filament");
-    }
-    expect(readBuildPlanningBrief(repo, profile.id)).toEqual(saved);
-  });
+  ])(
+    "admits Spoolman proposals for account=$account Plan=$plan gate=$gate",
+    async ({ account, plan, gate, allowed }) => {
+      vi.stubEnv("PP_DESKTOP_REBUILD", gate);
+      const profile = repo.createProfile("Scoped proposal");
+      repo.setSetting("feature_toggles", JSON.stringify({ spoolman: account }));
+      repo.setSetting(`feature_toggles:plan:${profile.id}`, JSON.stringify({ spoolman: plan }));
+      saveBuildPlanningBrief(repo, newBuildPlanningBrief(profile.id, "Primary color is Red.", []));
+      const saved = readBuildPlanningBrief(repo, profile.id);
+      const result = await invokeAssistantTool(
+        "propose_assign_role_filament",
+        {
+          plan_id: profile.id,
+          assignment: {
+            role: "primary",
+            inventory_kind: "spoolman",
+            inventory_id: "spoolman:inventory:filament:7",
+            color_hex: "#ff0000",
+          },
+        },
+        { repo },
+      );
+      if (allowed) {
+        expect(result.proposedAction).toMatchObject({
+          type: "propose_assign_role_filament",
+          plan_id: profile.id,
+        });
+      } else {
+        expect(JSON.parse(result.content)).toEqual({
+          error: "Feature spoolman is disabled.",
+          code: "FEATURE_DISABLED",
+        });
+        expect(result.proposedAction).toBeUndefined();
+        const catalog = await invokeAssistantTool(
+          "propose_assign_role_filament",
+          {
+            plan_id: profile.id,
+            assignment: {
+              role: "primary",
+              inventory_kind: "catalog",
+              inventory_id: "abs-matte::black-pantone-7c",
+              color_hex: "#c0afa1",
+            },
+          },
+          { repo },
+        );
+        expect(catalog.proposedAction?.type).toBe("propose_assign_role_filament");
+      }
+      expect(readBuildPlanningBrief(repo, profile.id)).toEqual(saved);
+    },
+  );
 
   it("rejects unverified Spoolman and unconfirmed custom assignments", async () => {
     const plan = repo.createProfile("Unverified inventory");
     saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Primary color is Green.", []));
     for (const assignment of [
-      { role: "primary", requested_name: "Green", inventory_kind: "spoolman", inventory_id: "spoolman:missing:filament:9", color_hex: "#008000" },
+      {
+        role: "primary",
+        requested_name: "Green",
+        inventory_kind: "spoolman",
+        inventory_id: "spoolman:missing:filament:9",
+        color_hex: "#008000",
+      },
       { role: "primary", requested_name: "Green", inventory_kind: "custom", color_hex: "#008000" },
     ]) {
-      const proposal = await invokeAssistantTool("propose_assign_role_filament", { plan_id: plan.id, assignment }, { repo });
+      const proposal = await invokeAssistantTool(
+        "propose_assign_role_filament",
+        { plan_id: plan.id, assignment },
+        { repo },
+      );
       const result = await applyAssistantAction(proposal.proposedAction!, {
-        repo, jobs: { start: async () => "unused" } as never,
+        repo,
+        jobs: { start: async () => "unused" } as never,
       });
       expect(result.ok).toBe(false);
     }
@@ -958,14 +1232,17 @@ option_groups:
     });
     saveBuildPlanningBrief(repo, brief);
 
-    const result = await applyAssistantAction({
-      id: "bad-role",
-      type: "propose_set_build_source_roles",
-      plan_id: plan.id,
-      label: "Set roles",
-      summary: "test",
-      params: { roles: [{ evidence_id: "evidence-1", role: "structural-base" }] },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const result = await applyAssistantAction(
+      {
+        id: "bad-role",
+        type: "propose_set_build_source_roles",
+        plan_id: plan.id,
+        label: "Set roles",
+        summary: "test",
+        params: { roles: [{ evidence_id: "evidence-1", role: "structural-base" }] },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
 
     expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/role/i) });
     expect(readBuildPlanningBrief(repo, plan.id)?.evidence[0]?.source_role).toBeUndefined();
@@ -975,14 +1252,17 @@ option_groups:
     const plan = repo.createProfile("Evidence validation");
     saveBuildPlanningBrief(repo, newBuildPlanningBrief(plan.id, "Build it", []));
 
-    const result = await applyAssistantAction({
-      id: "unknown-evidence",
-      type: "propose_set_build_source_roles",
-      plan_id: plan.id,
-      label: "Set roles",
-      summary: "test",
-      params: { roles: [{ evidence_id: "missing", role: "addon" }] },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const result = await applyAssistantAction(
+      {
+        id: "unknown-evidence",
+        type: "propose_set_build_source_roles",
+        plan_id: plan.id,
+        label: "Set roles",
+        summary: "test",
+        params: { roles: [{ evidence_id: "missing", role: "addon" }] },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
 
     expect(result).toMatchObject({ ok: false, detail: expect.stringMatching(/evidence/i) });
   });
@@ -991,13 +1271,16 @@ option_groups:
     const source = repo.createSource({ name: "Printable project", source_kind: "local" });
     const sourcePath = join(dataDir, "printable-project");
     mkdirSync(sourcePath, { recursive: true });
-    writeFileSync(join(sourcePath, "bracket.stl"), [
-      "solid bracket",
-      "facet normal 0 0 1 outer loop",
-      "vertex 0 0 0 vertex 1 0 0 vertex 0 1 0",
-      "endloop endfacet",
-      "endsolid bracket",
-    ].join("\n"));
+    writeFileSync(
+      join(sourcePath, "bracket.stl"),
+      [
+        "solid bracket",
+        "facet normal 0 0 1 outer loop",
+        "vertex 0 0 0 vertex 1 0 0 vertex 0 1 0",
+        "endloop endfacet",
+        "endsolid bracket",
+      ].join("\n"),
+    );
     repo.updateSource(source.id, {
       local_path: sourcePath,
       last_synced_at: new Date().toISOString(),
@@ -1016,28 +1299,34 @@ option_groups:
     });
     saveBuildPlanningBrief(repo, hydrateBuildPlanningBrief(repo, brief));
 
-    const result = await applyAssistantAction({
-      id: "planning-rebuild",
-      type: "propose_rebuild_plan",
-      plan_id: plan.id,
-      label: "Rebuild",
-      summary: "test",
-      params: { idempotency_key: "customer-rebuild" },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const result = await applyAssistantAction(
+      {
+        id: "planning-rebuild",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: { idempotency_key: "customer-rebuild" },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
 
     expect(result).toMatchObject({ ok: true, result: { draft_id: expect.any(Number) } });
     const saved = readBuildPlanningBrief(repo, plan.id);
     expect(saved?.draft_id).toEqual(expect.any(Number));
     expect(repo.getPlanDraft(plan.id, saved!.draft_id!)?.parts).toHaveLength(1);
 
-    const replay = await applyAssistantAction({
-      id: "planning-rebuild",
-      type: "propose_rebuild_plan",
-      plan_id: plan.id,
-      label: "Rebuild",
-      summary: "test",
-      params: { idempotency_key: "customer-rebuild" },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const replay = await applyAssistantAction(
+      {
+        id: "planning-rebuild",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: { idempotency_key: "customer-rebuild" },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(replay).toMatchObject({
       ok: true,
       result: { draft_id: saved!.draft_id, recompute: "existing" },
@@ -1049,14 +1338,17 @@ option_groups:
       last_commit_sha: "b".repeat(40),
     });
     saveBuildPlanningBrief(repo, hydrateBuildPlanningBrief(repo, saved!));
-    const refreshed = await applyAssistantAction({
-      id: "planning-rebuild",
-      type: "propose_rebuild_plan",
-      plan_id: plan.id,
-      label: "Rebuild",
-      summary: "test",
-      params: { idempotency_key: "customer-rebuild" },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const refreshed = await applyAssistantAction(
+      {
+        id: "planning-rebuild",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: { idempotency_key: "customer-rebuild" },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(refreshed.ok).toBe(true);
     const refreshedBrief = readBuildPlanningBrief(repo, plan.id)!;
     expect(refreshedBrief.draft_id).not.toBe(saved!.draft_id);
@@ -1075,13 +1367,15 @@ option_groups:
     });
     const plan = repo.createProfile("Applied project", source.id);
     const brief = newBuildPlanningBrief(plan.id, "Print the bracket", []);
-    brief.checklist_items = [{
-      id: "customer-follow-up",
-      title: "Confirm optional customer preference",
-      category: "pre_print",
-      required: true,
-      completed: false,
-    }];
+    brief.checklist_items = [
+      {
+        id: "customer-follow-up",
+        title: "Confirm optional customer preference",
+        category: "pre_print",
+        required: true,
+        completed: false,
+      },
+    ];
     brief.draft_review_blockers = ["Assistant review was not completed"];
     brief.evidence.push({
       id: "printable",
@@ -1094,14 +1388,17 @@ option_groups:
     });
     saveBuildPlanningBrief(repo, hydrateBuildPlanningBrief(repo, brief));
 
-    const rebuilt = await applyAssistantAction({
-      id: "rebuild-before-apply",
-      type: "propose_rebuild_plan",
-      plan_id: plan.id,
-      label: "Rebuild",
-      summary: "test",
-      params: {},
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const rebuilt = await applyAssistantAction(
+      {
+        id: "rebuild-before-apply",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: {},
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(rebuilt).toMatchObject({ ok: true, result: { draft_id: expect.any(Number) } });
     if (!rebuilt.ok || !rebuilt.result || typeof rebuilt.result.draft_id !== "number") {
       throw new Error("test planning draft was not rebuilt");
@@ -1119,11 +1416,10 @@ option_groups:
     expect(applied).toMatchObject({ ok: true });
     expect(repo.getPlanDraft(plan.id, rebuilt.result.draft_id)?.state).toBe("consumed");
 
-    const planningState = JSON.parse((await invokeAssistantTool(
-      "get_build_planning_state",
-      { plan_id: plan.id },
-      { repo },
-    )).content);
+    const planningState = JSON.parse(
+      (await invokeAssistantTool("get_build_planning_state", { plan_id: plan.id }, { repo }))
+        .content,
+    );
     expect(planningState.planning_phase).toEqual({
       kind: "applied",
       draft_id: rebuilt.result.draft_id,
@@ -1146,74 +1442,133 @@ option_groups:
     const plan = repo.createProfile("Atomic rebuild", original.id);
     const brief = newBuildPlanningBrief(plan.id, "Use empty", []);
     brief.evidence.push({
-      id: "empty", url: `printpartner:source:${empty.id}`,
-      normalized_url: `printpartner:source:${empty.id}`, kind: "model_source",
-      source_id: empty.id, source_role: "structural_base",
+      id: "empty",
+      url: `printpartner:source:${empty.id}`,
+      normalized_url: `printpartner:source:${empty.id}`,
+      kind: "model_source",
+      source_id: empty.id,
+      source_role: "structural_base",
     });
     saveBuildPlanningBrief(repo, brief);
 
-    const result = await applyAssistantAction({
-      id: "failed-rebuild", type: "propose_rebuild_plan", plan_id: plan.id,
-      label: "Rebuild", summary: "test", params: {},
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const result = await applyAssistantAction(
+      {
+        id: "failed-rebuild",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: {},
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
 
     expect(result.ok).toBe(false);
-    expect(repo.getProfileLayers(plan.id).find((layer) => layer.layer_type === "base")?.project_id)
-      .toBe(original.id);
+    expect(
+      repo.getProfileLayers(plan.id).find((layer) => layer.layer_type === "base")?.project_id,
+    ).toBe(original.id);
   });
 
-  it.each(["rebuild", "apply"])("rejects stale planning state during %s after local content changes", async (operation) => {
-    const base = repo.createSource({ name: "Base", source_kind: "local" });
-    const overlay = repo.createSource({ name: "Overlay", source_kind: "local" });
-    for (const source of [base, overlay]) {
-      const localPath = join(dataDir, source.name);
-      mkdirSync(join(localPath, "parts"), { recursive: true });
-      writeFileSync(join(localPath, "parts/part.stl"), `solid ${source.name}\nendsolid ${source.name}\n`);
-      repo.updateSource(source.id, { local_path: localPath, last_synced_at: new Date().toISOString(), last_commit_sha: "same-revision" });
-    }
-    const plan = repo.createProfile("Local changes", base.id);
-    const brief = newBuildPlanningBrief(plan.id, "Build", []);
-    brief.evidence = [
-      { id: "base", url: "https://example.test/base", normalized_url: "https://example.test/base", kind: "canonical_design", source_id: base.id, source_role: "structural_base" },
-      { id: "overlay", url: "https://example.test/overlay", normalized_url: "https://example.test/overlay", kind: "vendor_overlay", source_id: overlay.id, source_role: "overlay" },
-    ];
-    const hydrated = hydrateBuildPlanningBrief(repo, brief);
-    if (operation === "apply") {
-      hydrated.resolutions[hydrated.differences[0]!.group_id] = {
-        resolution: "choose_source_a", rationale: "Reviewed the base", resolved_at: new Date().toISOString(),
-      };
-    }
-    saveBuildPlanningBrief(repo, hydrated);
-    const rebuild = () => applyAssistantAction({
-      id: "repeated-rebuild", type: "propose_rebuild_plan", plan_id: plan.id,
-      label: "Rebuild", summary: "test", params: { idempotency_key: "same-key" },
-    }, { repo, jobs: { start: async () => "unused" } as never });
-    expect((await rebuild()).ok).toBe(true);
-    const draftId = readBuildPlanningBrief(repo, plan.id)!.draft_id!;
-    expect((await rebuild()).ok).toBe(true);
-    expect(readBuildPlanningBrief(repo, plan.id)!.draft_id).toBe(draftId);
-    writeFileSync(join(dataDir, overlay.name, "parts/new.stl"), "solid new\nendsolid new\n");
-    if (operation === "rebuild") {
+  it.each(["rebuild", "apply"])(
+    "rejects stale planning state during %s after local content changes",
+    async (operation) => {
+      const base = repo.createSource({ name: "Base", source_kind: "local" });
+      const overlay = repo.createSource({ name: "Overlay", source_kind: "local" });
+      for (const source of [base, overlay]) {
+        const localPath = join(dataDir, source.name);
+        mkdirSync(join(localPath, "parts"), { recursive: true });
+        writeFileSync(
+          join(localPath, "parts/part.stl"),
+          `solid ${source.name}\nendsolid ${source.name}\n`,
+        );
+        repo.updateSource(source.id, {
+          local_path: localPath,
+          last_synced_at: new Date().toISOString(),
+          last_commit_sha: "same-revision",
+        });
+      }
+      const plan = repo.createProfile("Local changes", base.id);
+      const brief = newBuildPlanningBrief(plan.id, "Build", []);
+      brief.evidence = [
+        {
+          id: "base",
+          url: "https://example.test/base",
+          normalized_url: "https://example.test/base",
+          kind: "canonical_design",
+          source_id: base.id,
+          source_role: "structural_base",
+        },
+        {
+          id: "overlay",
+          url: "https://example.test/overlay",
+          normalized_url: "https://example.test/overlay",
+          kind: "vendor_overlay",
+          source_id: overlay.id,
+          source_role: "overlay",
+        },
+      ];
+      const hydrated = hydrateBuildPlanningBrief(repo, brief);
+      if (operation === "apply") {
+        hydrated.resolutions[hydrated.differences[0]!.group_id] = {
+          resolution: "choose_source_a",
+          rationale: "Reviewed the base",
+          resolved_at: new Date().toISOString(),
+        };
+      }
+      saveBuildPlanningBrief(repo, hydrated);
+      const rebuild = () =>
+        applyAssistantAction(
+          {
+            id: "repeated-rebuild",
+            type: "propose_rebuild_plan",
+            plan_id: plan.id,
+            label: "Rebuild",
+            summary: "test",
+            params: { idempotency_key: "same-key" },
+          },
+          { repo, jobs: { start: async () => "unused" } as never },
+        );
       expect((await rebuild()).ok).toBe(true);
-      const currentDraftId = readBuildPlanningBrief(repo, plan.id)!.draft_id!;
-      expect(currentDraftId).not.toBe(draftId);
-      expect(repo.getPlanDraft(plan.id, currentDraftId)?.parts.some((part) => part.relativePath === "parts/new.stl")).toBe(true);
-    } else {
-      const applied = await applyAssistantAction({
-        id: "apply-stale-choice", type: "propose_apply_plan_draft", plan_id: plan.id,
-        label: "Apply", summary: "test", params: { draft_id: draftId },
-      }, { repo, jobs: { start: async () => "unused" } as never });
-      expect(applied).toMatchObject({ ok: false, detail: "Selected Working Plan not found" });
-      expect(repo.getPlanDraft(plan.id, draftId)?.state).not.toBe("consumed");
-    }
-  });
+      const draftId = readBuildPlanningBrief(repo, plan.id)!.draft_id!;
+      expect((await rebuild()).ok).toBe(true);
+      expect(readBuildPlanningBrief(repo, plan.id)!.draft_id).toBe(draftId);
+      writeFileSync(join(dataDir, overlay.name, "parts/new.stl"), "solid new\nendsolid new\n");
+      if (operation === "rebuild") {
+        expect((await rebuild()).ok).toBe(true);
+        const currentDraftId = readBuildPlanningBrief(repo, plan.id)!.draft_id!;
+        expect(currentDraftId).not.toBe(draftId);
+        expect(
+          repo
+            .getPlanDraft(plan.id, currentDraftId)
+            ?.parts.some((part) => part.relativePath === "parts/new.stl"),
+        ).toBe(true);
+      } else {
+        const applied = await applyAssistantAction(
+          {
+            id: "apply-stale-choice",
+            type: "propose_apply_plan_draft",
+            plan_id: plan.id,
+            label: "Apply",
+            summary: "test",
+            params: { draft_id: draftId },
+          },
+          { repo, jobs: { start: async () => "unused" } as never },
+        );
+        expect(applied).toMatchObject({ ok: false, detail: "Selected Working Plan not found" });
+        expect(repo.getPlanDraft(plan.id, draftId)?.state).not.toBe("consumed");
+      }
+    },
+  );
 
   it("applies a reviewed source choice to the recomputed draft", async () => {
-    const stl = (x: number) => [
-      "solid bracket", "facet normal 0 0 1 outer loop",
-      `vertex 0 0 0 vertex ${x} 0 0 vertex 0 1 0`,
-      "endloop endfacet", "endsolid bracket",
-    ].join("\n");
+    const stl = (x: number) =>
+      [
+        "solid bracket",
+        "facet normal 0 0 1 outer loop",
+        `vertex 0 0 0 vertex ${x} 0 0 vertex 0 1 0`,
+        "endloop endfacet",
+        "endsolid bracket",
+      ].join("\n");
     const official = repo.createSource({ name: "Official", source_kind: "local" });
     const vendor = repo.createSource({ name: "Vendor", source_kind: "local" });
     const officialPath = join(dataDir, "official-choice");
@@ -1224,7 +1579,10 @@ option_groups:
     writeFileSync(join(officialPath, "parts/bracket.stl"), stl(1));
     writeFileSync(join(vendorPath, "parts/bracket.stl"), stl(2));
     writeFileSync(join(vendorPath, "unrelated/bonus.stl"), stl(3));
-    for (const [source, localPath, sha] of [[official, officialPath, "a"], [vendor, vendorPath, "b"]] as const) {
+    for (const [source, localPath, sha] of [
+      [official, officialPath, "a"],
+      [vendor, vendorPath, "b"],
+    ] as const) {
       repo.updateSource(source.id, {
         local_path: localPath,
         last_synced_at: new Date().toISOString(),
@@ -1234,54 +1592,124 @@ option_groups:
     const plan = repo.createProfile("Resolved project", official.id);
     const brief = newBuildPlanningBrief(plan.id, "Use official bracket", []);
     brief.evidence = [
-      { id: "official", url: "https://example.test/official", normalized_url: "https://example.test/official", kind: "canonical_design", source_id: official.id, source_role: "structural_base" },
-      { id: "vendor", url: "https://example.test/vendor", normalized_url: "https://example.test/vendor", kind: "vendor_overlay", source_id: vendor.id, source_role: "overlay" },
+      {
+        id: "official",
+        url: "https://example.test/official",
+        normalized_url: "https://example.test/official",
+        kind: "canonical_design",
+        source_id: official.id,
+        source_role: "structural_base",
+      },
+      {
+        id: "vendor",
+        url: "https://example.test/vendor",
+        normalized_url: "https://example.test/vendor",
+        kind: "vendor_overlay",
+        source_id: vendor.id,
+        source_role: "overlay",
+      },
     ];
-    brief.contributions = [{
-      id: "vendor-parts", evidence_id: "vendor", slot: "bracket",
-      responsibility: "printable_parts", path_scopes: ["parts/**"], confidence: "high",
-      evidence_text: "Use only the bracket family", status: "confirmed",
-    }];
+    brief.contributions = [
+      {
+        id: "vendor-parts",
+        evidence_id: "vendor",
+        slot: "bracket",
+        responsibility: "printable_parts",
+        path_scopes: ["parts/**"],
+        confidence: "high",
+        evidence_text: "Use only the bracket family",
+        status: "confirmed",
+      },
+    ];
     const hydrated = hydrateBuildPlanningBrief(repo, brief);
     saveBuildPlanningBrief(repo, hydrated);
     const groupId = hydrated.differences[0]!.group_id;
-    const resolved = await applyAssistantAction({
-      id: "resolve-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
-      label: "Resolve", summary: "test",
-      params: { group_id: groupId, resolution: "choose_source_a", rationale: "Official geometry" },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const resolved = await applyAssistantAction(
+      {
+        id: "resolve-choice",
+        type: "propose_resolve_build_differences",
+        plan_id: plan.id,
+        label: "Resolve",
+        summary: "test",
+        params: {
+          group_id: groupId,
+          resolution: "choose_source_a",
+          rationale: "Official geometry",
+        },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(resolved.ok).toBe(true);
-    const rebuilt = await applyAssistantAction({
-      id: "rebuild-choice", type: "propose_rebuild_plan", plan_id: plan.id,
-      label: "Rebuild", summary: "test", params: {},
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const rebuilt = await applyAssistantAction(
+      {
+        id: "rebuild-choice",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: {},
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(rebuilt.ok).toBe(true);
     const saved = readBuildPlanningBrief(repo, plan.id)!;
     const draft = repo.getPlanDraft(plan.id, saved.draft_id!)!;
-    expect(draft.parts.filter((part) => part.included).map((part) => part.sourceLayer))
-      .toEqual(["base:Official"]);
+    expect(draft.parts.filter((part) => part.included).map((part) => part.sourceLayer)).toEqual([
+      "base:Official",
+    ]);
     expect(draft.parts.some((part) => part.sourceLayer === "addon:Vendor")).toBe(false);
     expect(draft.parts.some((part) => part.relativePath === "unrelated/bonus.stl")).toBe(false);
 
-    const custom = await applyAssistantAction({
-      id: "custom-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
-      label: "Custom", summary: "test",
-      params: { group_id: groupId, resolution: "custom", rationale: "Use a manually modified bracket", custom_resolution: "Use the base bracket with a 2 mm spacer" },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const custom = await applyAssistantAction(
+      {
+        id: "custom-choice",
+        type: "propose_resolve_build_differences",
+        plan_id: plan.id,
+        label: "Custom",
+        summary: "test",
+        params: {
+          group_id: groupId,
+          resolution: "custom",
+          rationale: "Use a manually modified bracket",
+          custom_resolution: "Use the base bracket with a 2 mm spacer",
+        },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(custom.ok).toBe(true);
     const legacyBrief = readBuildPlanningBrief(repo, plan.id)!;
     saveBuildPlanningBrief(repo, { ...legacyBrief, draft_id: draft.id });
-    const blockedApply = await applyAssistantAction({
-      id: "apply-legacy-custom", type: "propose_apply_plan_draft", plan_id: plan.id,
-      label: "Apply", summary: "test", params: { draft_id: draft.id },
-    }, { repo, jobs: { start: async () => "unused" } as never });
-    expect(blockedApply).toMatchObject({ ok: false, detail: expect.stringContaining("custom resolution") });
+    const blockedApply = await applyAssistantAction(
+      {
+        id: "apply-legacy-custom",
+        type: "propose_apply_plan_draft",
+        plan_id: plan.id,
+        label: "Apply",
+        summary: "test",
+        params: { draft_id: draft.id },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
+    expect(blockedApply).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("custom resolution"),
+    });
     saveBuildPlanningBrief(repo, legacyBrief);
-    const blocked = await applyAssistantAction({
-      id: "rebuild-custom", type: "propose_rebuild_plan", plan_id: plan.id,
-      label: "Rebuild", summary: "test", params: {},
-    }, { repo, jobs: { start: async () => "unused" } as never });
-    expect(blocked).toMatchObject({ ok: false, detail: expect.stringContaining("custom resolution") });
+    const blocked = await applyAssistantAction(
+      {
+        id: "rebuild-custom",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: {},
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
+    expect(blocked).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("custom resolution"),
+    });
     expect(readBuildPlanningBrief(repo, plan.id)?.draft_id).toBeUndefined();
 
     const changedRoles = readBuildPlanningBrief(repo, plan.id)!;
@@ -1290,28 +1718,52 @@ option_groups:
     );
     changedRoles.draft_id = undefined;
     saveBuildPlanningBrief(repo, changedRoles);
-    const rebuiltWithoutVendor = await applyAssistantAction({
-      id: "rebuild-without-vendor", type: "propose_rebuild_plan", plan_id: plan.id,
-      label: "Rebuild", summary: "test", params: {},
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const rebuiltWithoutVendor = await applyAssistantAction(
+      {
+        id: "rebuild-without-vendor",
+        type: "propose_rebuild_plan",
+        plan_id: plan.id,
+        label: "Rebuild",
+        summary: "test",
+        params: {},
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(rebuiltWithoutVendor.ok).toBe(true);
-    expect(repo.getProfileLayers(plan.id).some((layer) => layer.project_id === vendor.id)).toBe(false);
+    expect(repo.getProfileLayers(plan.id).some((layer) => layer.project_id === vendor.id)).toBe(
+      false,
+    );
   });
 
   it("invalidates a reviewed draft when a difference decision changes", async () => {
     const plan = repo.createProfile("Invalidated decision");
     const brief = newBuildPlanningBrief(plan.id, "Build", []);
-    brief.differences = [{
-      id: "one", group_id: "group", family: "parts", kind: "changed",
-      source_a: "A", source_b: "B", path_a: "part.stl", path_b: "part.stl", detail: "changed",
-    }];
+    brief.differences = [
+      {
+        id: "one",
+        group_id: "group",
+        family: "parts",
+        kind: "changed",
+        source_a: "A",
+        source_b: "B",
+        path_a: "part.stl",
+        path_b: "part.stl",
+        detail: "changed",
+      },
+    ];
     brief.draft_id = 12;
     saveBuildPlanningBrief(repo, brief);
-    const result = await applyAssistantAction({
-      id: "changed-choice", type: "propose_resolve_build_differences", plan_id: plan.id,
-      label: "Resolve", summary: "test",
-      params: { group_id: "group", resolution: "choose_source_a", rationale: "Choose A" },
-    }, { repo, jobs: { start: async () => "unused" } as never });
+    const result = await applyAssistantAction(
+      {
+        id: "changed-choice",
+        type: "propose_resolve_build_differences",
+        plan_id: plan.id,
+        label: "Resolve",
+        summary: "test",
+        params: { group_id: "group", resolution: "choose_source_a", rationale: "Choose A" },
+      },
+      { repo, jobs: { start: async () => "unused" } as never },
+    );
     expect(result.ok).toBe(true);
     expect(readBuildPlanningBrief(repo, plan.id)?.draft_id).toBeUndefined();
   });
@@ -1450,9 +1902,9 @@ option_groups:
         },
       },
     };
-    expect(
-      inferStackPresetId(catalog, "Voron-2", ["Voron-Stealthburner", "Voron-Tap"]),
-    ).toBe("v24_sb_tap");
+    expect(inferStackPresetId(catalog, "Voron-2", ["Voron-Stealthburner", "Voron-Tap"])).toBe(
+      "v24_sb_tap",
+    );
   });
 
   it("resolves model-suffixed source names like 'Voron-Trident R2-0'", async () => {
@@ -1521,9 +1973,7 @@ option_groups:
     });
     expect(result.ok).toBe(true);
     expect(result.job_id).toBe("sync-job-1");
-    expect(started).toEqual([
-      { kind: "sync", payload: { project_ids: [source.id] } },
-    ]);
+    expect(started).toEqual([{ kind: "sync", payload: { project_ids: [source.id] } }]);
   });
 
   it("search_plan_parts returns part_id matches by filename", async () => {
@@ -1705,8 +2155,9 @@ option_groups:
       jobs: { start: async () => "x" } as never,
     });
     expect(result.ok).toBe(true);
-    const followUp = (result.result as { follow_up_action?: { type: string; params: Record<string, unknown> } })
-      .follow_up_action;
+    const followUp = (
+      result.result as { follow_up_action?: { type: string; params: Record<string, unknown> } }
+    ).follow_up_action;
     expect(followUp?.type).toBe("start_sync");
     expect(followUp?.params.project_ids).toHaveLength(1);
   });
@@ -1842,8 +2293,16 @@ option_groups:
 
   it("ingest_guide_text tool returns GuideExtract", async () => {
     // Vocabulary comes from this workspace's own sources.
-    repo.createSource({ name: "Voron-Trident", url: "https://example.com/t.git", source_kind: "github" });
-    repo.createSource({ name: "Voron-Tap", url: "https://example.com/tap.git", source_kind: "github" });
+    repo.createSource({
+      name: "Voron-Trident",
+      url: "https://example.com/t.git",
+      source_kind: "github",
+    });
+    repo.createSource({
+      name: "Voron-Tap",
+      url: "https://example.com/tap.git",
+      source_kind: "github",
+    });
     const raw = JSON.parse(
       (
         await invokeAssistantTool(
@@ -1894,9 +2353,7 @@ option_groups:
       { repo, jobs: { start: async () => "x" } as never },
     );
     expect(result.ok).toBe(true);
-    expect(result.result?.exclude).toEqual(
-      expect.arrayContaining(["nozzle_probe", "z_endstop"]),
-    );
+    expect(result.result?.exclude).toEqual(expect.arrayContaining(["nozzle_probe", "z_endstop"]));
     // Without suggested_excludes on the action, exclude is untouched.
     const klicky = repo.createSource({
       name: "Klicky-Probe",
@@ -2012,18 +2469,13 @@ option_groups:
     // exercise the handler with a real call that will fail SSRF on private — use public mock via vi.
     const { vi } = await import("vitest");
     const outbound = await import("../lib/outbound-url.js");
-    const spy = vi.spyOn(outbound, "safeOutboundFetch").mockResolvedValue(
-      new Response(html, { status: 200 }),
-    );
+    const spy = vi
+      .spyOn(outbound, "safeOutboundFetch")
+      .mockResolvedValue(new Response(html, { status: 200 }));
     try {
       const raw = JSON.parse(
-        (
-          await invokeAssistantTool(
-            "fetch_web_page",
-            { url: "https://example.com/docs" },
-            { repo },
-          )
-        ).content,
+        (await invokeAssistantTool("fetch_web_page", { url: "https://example.com/docs" }, { repo }))
+          .content,
       );
       expect(raw.ok).toBe(true);
       expect(raw.text).toMatch(/Hello kit world/);
@@ -2075,24 +2527,14 @@ option_groups:
     expect(traversal.error).toMatch(/traversal|Invalid path/i);
 
     const binaryExt = JSON.parse(
-      (
-        await invokeAssistantTool(
-          "read_source_file",
-          { source: "EMU", path: "part.stl" },
-          { repo },
-        )
-      ).content,
+      (await invokeAssistantTool("read_source_file", { source: "EMU", path: "part.stl" }, { repo }))
+        .content,
     );
     expect(binaryExt.error).toMatch(/binary/i);
 
     const capped = JSON.parse(
-      (
-        await invokeAssistantTool(
-          "read_source_file",
-          { source: "EMU", path: "big.md" },
-          { repo },
-        )
-      ).content,
+      (await invokeAssistantTool("read_source_file", { source: "EMU", path: "big.md" }, { repo }))
+        .content,
     );
     expect(capped.truncated).toBe(true);
     expect(capped.text.length).toBeLessThanOrEqual(100 * 1024);
@@ -2105,14 +2547,12 @@ option_groups:
       <a class="result__a" href="https://example.com/a">Title A</a>
       <a class="result__snippet">Snippet A</a>
     `;
-    const spy = vi.spyOn(outbound, "safeOutboundFetch").mockResolvedValue(
-      new Response(html, { status: 200 }),
-    );
+    const spy = vi
+      .spyOn(outbound, "safeOutboundFetch")
+      .mockResolvedValue(new Response(html, { status: 200 }));
     try {
       const raw = JSON.parse(
-        (
-          await invokeAssistantTool("web_search", { query: "voron tap" }, { repo })
-        ).content,
+        (await invokeAssistantTool("web_search", { query: "voron tap" }, { repo })).content,
       );
       expect(raw.untrusted_banner).toMatch(/UNTRUSTED/i);
       expect(raw.provider).toBeTruthy();
