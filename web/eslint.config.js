@@ -54,6 +54,15 @@ export default tseslint.config(
     },
   },
   {
+    // Existing violations live in eslint-suppressions.json. Lower those counts; never raise them.
+    files: ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+    rules: {
+      complexity: ["error", { max: 20 }],
+      "max-depth": ["error", { max: 5 }],
+      "max-params": ["error", { max: 5 }],
+    },
+  },
+  {
     // Generated from Rust contracts; fix names in the generator, not here.
     files: ["**/*.generated.ts"],
     rules: { "@typescript-eslint/naming-convention": "off" },
