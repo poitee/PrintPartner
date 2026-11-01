@@ -165,11 +165,7 @@ export async function gatherSourceDocsForAssistant(options: {
     let text = "";
     if (source.local_path) {
       if (doc.kind === "pdf") {
-        const cached = readCachedPdfText(
-          source.local_path,
-          doc.path,
-          pdfTextStorage ?? {},
-        );
+        const cached = readCachedPdfText(source.local_path, doc.path, pdfTextStorage ?? {});
         if (cached) {
           const chunks = cached.chunks.length
             ? cached.chunks

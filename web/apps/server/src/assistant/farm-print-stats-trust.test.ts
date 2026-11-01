@@ -21,8 +21,15 @@ const BAMBU_ID = "printer-862c7a57-5";
 
 function machine(id: string, name: string, integrationId: string | null): PrinterMachine {
   return {
-    id, name, model: name, bed_width_mm: 250, bed_depth_mm: 250, bed_height_mm: 250, margin_mm: 4,
-    max_filament_slots: 1, loaded_filaments: [{ slot: 1, filament_color_id: null, label: "" }],
+    id,
+    name,
+    model: name,
+    bed_width_mm: 250,
+    bed_depth_mm: 250,
+    bed_height_mm: 250,
+    margin_mm: 4,
+    max_filament_slots: 1,
+    loaded_filaments: [{ slot: 1, filament_color_id: null, label: "" }],
     integration_id: integrationId,
   };
 }
@@ -97,20 +104,37 @@ describe("GRE-1002 farm and print stats you can trust", () => {
     // One Plan-attached print on the Bambu, stored under the host's other name.
     const plan = repo.createProfile("Bambu run");
     const link: PrinterCheckoffLink = {
-      id: randomUUID(), profile_id: plan.id, integration_id: "bambu-host", printer_id: BAMBU_ID,
-      host_name: "Bambu X2D", filename: "bambu.gcode", units: [], state: "awaiting_verify",
-      host_outcome: "success", saw_active: true, created_at: daysAgo(5), completed_at: daysAgo(5),
+      id: randomUUID(),
+      profile_id: plan.id,
+      integration_id: "bambu-host",
+      printer_id: BAMBU_ID,
+      host_name: "Bambu X2D",
+      filename: "bambu.gcode",
+      units: [],
+      state: "awaiting_verify",
+      host_outcome: "success",
+      saw_active: true,
+      created_at: daysAgo(5),
+      completed_at: daysAgo(5),
     };
     repo.setSetting("printer.checkoff_links", JSON.stringify([link]));
     // A print_jobs row so Prusa XL has a real last-activity time; CoreOne has none.
     repo.insertPrintJob({
-      id: randomUUID(), profileId: plan.id, printerId: "prusa-xl", material: "PLA", status: "completed",
+      id: randomUUID(),
+      profileId: plan.id,
+      printerId: "prusa-xl",
+      material: "PLA",
+      status: "completed",
       at: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
       completedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
     });
   }
 
-  async function call(name: string, input: Record<string, unknown>, integrations?: IntegrationPort) {
+  async function call(
+    name: string,
+    input: Record<string, unknown>,
+    integrations?: IntegrationPort,
+  ) {
     return JSON.parse((await invokeAssistantTool(name, input, { repo, integrations })).content);
   }
 
@@ -125,37 +149,78 @@ describe("GRE-1002 farm and print stats you can trust", () => {
     expect(seen.attached_to_plan + seen.not_attached_to_plan).toBe(seen.total);
     expect(seen.not_attached_to_plan).toBe(16);
     expect(seen.attached_to_plan).toBe(1);
-    const byId = Object.fromEntries(seen.by_printer.map((r: { printer_id: string }) => [r.printer_id, r]));
+    const byId = Object.fromEntries(
+      seen.by_printer.map((r: { printer_id: string }) => [r.printer_id, r]),
+    );
     expect(byId.trident.seen).toBeGreaterThanOrEqual(8);
     expect(byId.redoubt.seen).toBeGreaterThanOrEqual(8);
-    expect(byId.trident).toMatchObject({ printer_name: "Trident", completed: 8, failed: 0, cancelled: 0 });
+    expect(byId.trident).toMatchObject({
+      printer_name: "Trident",
+      completed: 8,
+      failed: 0,
+      cancelled: 0,
+    });
     expect(stats.empty_window).toBeUndefined();
   });
 
   it("1: prints on a host shared by two fleet printers keep their stored id instead of guessing", async () => {
     saveFleet(repo, [machine("a", "A", "shared-host"), machine("b", "B", "shared-host")]);
     saveUnattributedPrint(repo, {
-      id: randomUUID(), integration_id: "shared-host", printer_id: "default", host_name: "shared.local",
-      filename: "x.gcode", completed_at: daysAgo(1), gcode_objects: [], candidates: [],
+      id: randomUUID(),
+      integration_id: "shared-host",
+      printer_id: "default",
+      host_name: "shared.local",
+      filename: "x.gcode",
+      completed_at: daysAgo(1),
+      gcode_objects: [],
+      candidates: [],
     });
     const seen = (await call("get_print_stats", { hours: 48 })).prints_seen_on_printers;
     expect(seen.by_printer).toEqual([
-      { printer_id: "default", printer_name: "shared.local", seen: 1, completed: 1, failed: 0, cancelled: 0 },
+      {
+        printer_id: "default",
+        printer_name: "shared.local",
+        seen: 1,
+        completed: 1,
+        failed: 0,
+        cancelled: 0,
+      },
     ]);
   });
 
   it("2: a claimed print and the link the claim created count once", async () => {
     saveFleet(repo, fleet);
     saveUnattributedPrint(repo, {
-      id: randomUUID(), integration_id: "host-mk4", printer_id: "default", host_name: "mk4.local",
-      filename: "Plate_1.gcode", completed_at: daysAgo(1), gcode_objects: [], candidates: [],
-      claimed_at: daysAgo(1), claimed_profile_id: 1,
+      id: randomUUID(),
+      integration_id: "host-mk4",
+      printer_id: "default",
+      host_name: "mk4.local",
+      filename: "Plate_1.gcode",
+      completed_at: daysAgo(1),
+      gcode_objects: [],
+      candidates: [],
+      claimed_at: daysAgo(1),
+      claimed_profile_id: 1,
     });
-    repo.setSetting("printer.checkoff_links", JSON.stringify([{
-      id: "claim", profile_id: 1, integration_id: "host-mk4", printer_id: "default", host_name: "mk4.local",
-      filename: "plate_1.gcode", units: [], saw_active: true, created_at: daysAgo(1), completed_at: daysAgo(1),
-      state: "awaiting_verify", host_outcome: "success",
-    }]));
+    repo.setSetting(
+      "printer.checkoff_links",
+      JSON.stringify([
+        {
+          id: "claim",
+          profile_id: 1,
+          integration_id: "host-mk4",
+          printer_id: "default",
+          host_name: "mk4.local",
+          filename: "plate_1.gcode",
+          units: [],
+          saw_active: true,
+          created_at: daysAgo(1),
+          completed_at: daysAgo(1),
+          state: "awaiting_verify",
+          host_outcome: "success",
+        },
+      ]),
+    );
     const seen = (await call("get_print_stats", { hours: 48 })).prints_seen_on_printers;
     expect(seen).toMatchObject({ total: 1, attached_to_plan: 1, not_attached_to_plan: 0 });
     expect(seen.by_printer).toEqual([
@@ -166,14 +231,23 @@ describe("GRE-1002 farm and print stats you can trust", () => {
   it("2: failed and cancelled checkoff prints count as seen; still-watching ones do not", async () => {
     saveFleet(repo, fleet);
     const base = {
-      profile_id: 1, integration_id: "host-mk4", printer_id: "mk4", host_name: "MK4", filename: "x.gcode",
-      units: [], saw_active: true, created_at: daysAgo(1),
+      profile_id: 1,
+      integration_id: "host-mk4",
+      printer_id: "mk4",
+      host_name: "MK4",
+      filename: "x.gcode",
+      units: [],
+      saw_active: true,
+      created_at: daysAgo(1),
     };
-    repo.setSetting("printer.checkoff_links", JSON.stringify([
-      { ...base, id: "a", state: "host_failed", host_outcome: "failed" },
-      { ...base, id: "b", state: "host_failed", host_outcome: "cancelled" },
-      { ...base, id: "c", state: "watching", host_outcome: "unknown" },
-    ]));
+    repo.setSetting(
+      "printer.checkoff_links",
+      JSON.stringify([
+        { ...base, id: "a", state: "host_failed", host_outcome: "failed" },
+        { ...base, id: "b", state: "host_failed", host_outcome: "cancelled" },
+        { ...base, id: "c", state: "watching", host_outcome: "unknown" },
+      ]),
+    );
     const seen = (await call("get_print_stats", { hours: 48 })).prints_seen_on_printers;
     expect(seen.total).toBe(2);
     expect(seen.by_printer).toEqual([
@@ -187,9 +261,18 @@ describe("GRE-1002 farm and print stats you can trust", () => {
 
     expect(farm.printer_count).toBe(8);
     expect(farm.state_counts).toEqual({
-      idle: 2, printing: 0, paused: 0, complete: 5, error: 0, offline: 0, not_connected: 1,
+      idle: 2,
+      printing: 0,
+      paused: 0,
+      complete: 5,
+      error: 0,
+      offline: 0,
+      not_connected: 1,
     });
-    const total = Object.values(farm.state_counts as Record<string, number>).reduce((a, b) => a + b, 0);
+    const total = Object.values(farm.state_counts as Record<string, number>).reduce(
+      (a, b) => a + b,
+      0,
+    );
     expect(total).toBe(farm.printer_count);
 
     const bambu = farm.printers.find((p: { id: string }) => p.id === BAMBU_ID);
@@ -221,13 +304,34 @@ describe("GRE-1002 farm and print stats you can trust", () => {
 
   it("6: a failed print with no finish time does not set idle_since", async () => {
     saveFleet(repo, [machine("coreone", "CoreOne", "host-coreone")]);
-    repo.setSetting("printer.checkoff_links", JSON.stringify([{
-      id: "f", profile_id: 1, integration_id: "host-coreone", printer_id: "coreone", host_name: "CoreOne",
-      filename: "x.gcode", units: [], saw_active: true, created_at: daysAgo(3), state: "host_failed",
-      host_outcome: "failed",
-    }]));
-    const farm = await call("get_farm_status", {}, integrationPort({ "host-coreone": { state: "idle" } }));
-    expect(farm.printers[0]).toMatchObject({ state: "idle", idle_since: null, idle_for: "unknown" });
+    repo.setSetting(
+      "printer.checkoff_links",
+      JSON.stringify([
+        {
+          id: "f",
+          profile_id: 1,
+          integration_id: "host-coreone",
+          printer_id: "coreone",
+          host_name: "CoreOne",
+          filename: "x.gcode",
+          units: [],
+          saw_active: true,
+          created_at: daysAgo(3),
+          state: "host_failed",
+          host_outcome: "failed",
+        },
+      ]),
+    );
+    const farm = await call(
+      "get_farm_status",
+      {},
+      integrationPort({ "host-coreone": { state: "idle" } }),
+    );
+    expect(farm.printers[0]).toMatchObject({
+      state: "idle",
+      idle_since: null,
+      idle_for: "unknown",
+    });
   });
 
   it("6: idle_for formats days, hours and minutes", () => {
@@ -247,23 +351,30 @@ describe("GRE-1002 farm and print stats you can trust", () => {
 
     const names = new Set<string>([
       farm.printers.find((p: { id: string }) => p.id === BAMBU_ID).name,
-      stats.prints_seen_on_printers.by_printer.find((r: { printer_id: string }) => r.printer_id === BAMBU_ID)
-        .printer_name,
+      stats.prints_seen_on_printers.by_printer.find(
+        (r: { printer_id: string }) => r.printer_id === BAMBU_ID,
+      ).printer_name,
       ...checkoff.links
         .filter((l: { printer_id: string }) => l.printer_id === BAMBU_ID)
         .map((l: { host_name: string }) => l.host_name),
     ]);
     expect([...names]).toEqual(["Bambu H2D"]);
-    expect(new Set(checkoff.unattributed.map((u: { host_name: string }) => u.host_name)))
-      .toEqual(new Set(["Trident", "Redoubt"]));
+    expect(new Set(checkoff.unattributed.map((u: { host_name: string }) => u.host_name))).toEqual(
+      new Set(["Trident", "Redoubt"]),
+    );
   });
 
   it("8: an empty window says so in words and names the window start", async () => {
     const stats = await call("get_print_stats", { hours: 1440 });
     expect(stats.prints_seen_on_printers).toEqual({
-      total: 0, attached_to_plan: 0, not_attached_to_plan: 0, by_printer: [],
+      total: 0,
+      attached_to_plan: 0,
+      not_attached_to_plan: 0,
+      by_printer: [],
     });
-    expect(stats.empty_window).toBe(`No plates sent and no prints seen on printers since ${stats.since}.`);
+    expect(stats.empty_window).toBe(
+      `No plates sent and no prints seen on printers since ${stats.since}.`,
+    );
   });
 
   it("9: reading stats, farm status and checkoff writes nothing", async () => {

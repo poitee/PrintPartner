@@ -1,4 +1,4 @@
-import type { AiProviderId, AssistantChatMessage, } from "@print-partner/contracts";
+import type { AiProviderId, AssistantChatMessage } from "@print-partner/contracts";
 import type { AssistantToolSpec } from "./tool-specs.js";
 
 export type AssistantChatParams = {

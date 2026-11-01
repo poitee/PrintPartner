@@ -19,10 +19,13 @@ function repoStub(sources: Source[], categories: string[]): AppRepository {
 
 describe("assistant source tool model", () => {
   it("resolves source names exactly, case-insensitively, and separator-insensitively", () => {
-    const repo = repoStub([
-      { id: 1, name: "Voron-Parts", category: null },
-      { id: 2, name: "Voron-Parts R2", category: null },
-    ], []);
+    const repo = repoStub(
+      [
+        { id: 1, name: "Voron-Parts", category: null },
+        { id: 2, name: "Voron-Parts R2", category: null },
+      ],
+      [],
+    );
 
     expect(sourceByName(repo, "Voron-Parts")?.id).toBe(1);
     expect(sourceByName(repo, "voron-parts")?.id).toBe(1);
@@ -31,11 +34,14 @@ describe("assistant source tool model", () => {
   });
 
   it("summarizes nested categories with direct and recursive counts", () => {
-    const repo = repoStub([
-      { id: 1, name: "Base", category: "Printers" },
-      { id: 2, name: "Frame", category: "Printers/Frame" },
-      { id: 3, name: "Loose", category: null },
-    ], ["Printers", "Printers/Frame"]);
+    const repo = repoStub(
+      [
+        { id: 1, name: "Base", category: "Printers" },
+        { id: 2, name: "Frame", category: "Printers/Frame" },
+        { id: 3, name: "Loose", category: null },
+      ],
+      ["Printers", "Printers/Frame"],
+    );
 
     expect(countSourcesUnderCategory(repo, "Printers")).toBe(2);
     expect(summarizeSourceCategories(repo)).toMatchObject({
@@ -54,8 +60,8 @@ describe("assistant source tool model", () => {
     expect(JSON.parse(categoryNotFoundError(repo, "Unknown"))).toMatchObject({
       categories: ["Printers"],
     });
-    expect(JSON.parse(sourceNotFoundError(repo, "Voron Part", "Call list_sources first.")).error).toContain(
-      "Did you mean",
-    );
+    expect(
+      JSON.parse(sourceNotFoundError(repo, "Voron Part", "Call list_sources first.")).error,
+    ).toContain("Did you mean");
   });
 });

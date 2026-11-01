@@ -35,4 +35,3 @@ export function createAssistantPort(runtime: AssistantRuntimeConfig): AssistantP
 
   return createNoneAssistant();
 }
-

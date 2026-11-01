@@ -21,7 +21,7 @@ describe("fetchAssistantProvider", () => {
       expect(await response.text()).toBe("first second");
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });
@@ -45,7 +45,7 @@ describe("fetchAssistantProvider", () => {
       expect(requests).toBe(1);
     } finally {
       await new Promise<void>((resolve, reject) =>
-        server.close((error) => error ? reject(error) : resolve()),
+        server.close((error) => (error ? reject(error) : resolve())),
       );
     }
   });

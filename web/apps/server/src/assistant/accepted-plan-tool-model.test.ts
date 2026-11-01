@@ -5,7 +5,9 @@ const digest = "a".repeat(64);
 
 describe("accepted plan tool model", () => {
   it("formats accepted progress for assistant print stats", () => {
-    expect(printStatsAcceptedProgress({ kind: "ready", totalUnits: 12, remainingUnits: 3 })).toEqual({
+    expect(
+      printStatsAcceptedProgress({ kind: "ready", totalUnits: 12, remainingUnits: 3 }),
+    ).toEqual({
       kind: "ready",
       total_units: 12,
       remaining_units: 3,

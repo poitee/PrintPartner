@@ -8,9 +8,11 @@ describe("mergeSuggestedExcludes", () => {
   });
 
   it("trims suggestions, drops blanks, and preserves existing excludes", () => {
-    expect(
-      mergeSuggestedExcludes(["kept.stl"], [" new.stl ", "", "kept.stl", null]),
-    ).toEqual(["kept.stl", "new.stl", "null"]);
+    expect(mergeSuggestedExcludes(["kept.stl"], [" new.stl ", "", "kept.stl", null])).toEqual([
+      "kept.stl",
+      "new.stl",
+      "null",
+    ]);
   });
 
   it("returns null when suggestions contain no usable path", () => {

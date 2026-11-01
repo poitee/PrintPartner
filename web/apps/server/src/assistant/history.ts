@@ -29,9 +29,7 @@ function isProposedAction(value: unknown): value is AssistantProposedAction {
   );
 }
 
-function sanitizeProposedActions(
-  raw: unknown,
-): AssistantProposedAction[] | undefined {
+function sanitizeProposedActions(raw: unknown): AssistantProposedAction[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const actions = raw
     .filter(isProposedAction)
@@ -110,10 +108,7 @@ export function appendAssistantHistory(
  * Remove a pending proposed action from history after Apply or Dismiss.
  * Returns true when an action was removed.
  */
-export function removePendingProposedAction(
-  repo: AppRepository,
-  actionId: string,
-): boolean {
+export function removePendingProposedAction(repo: AppRepository, actionId: string): boolean {
   if (!actionId) return false;
   const messages = loadAssistantHistory(repo);
   let changed = false;
@@ -247,10 +242,7 @@ export function collectCatalogFeedbackTokens(
   for (const id of Object.keys(presets)) {
     if (id.trim()) out.add(id.trim().toLowerCase());
   }
-  const bases = (catalog.bases ?? {}) as Record<
-    string,
-    { source_name?: string }
-  >;
+  const bases = (catalog.bases ?? {}) as Record<string, { source_name?: string }>;
   for (const [id, b] of Object.entries(bases)) {
     if (id.trim()) out.add(id.trim().toLowerCase());
     const sn = b?.source_name?.trim();
@@ -278,12 +270,10 @@ export function aggregateFeedbackScores(
   repo: AppRepository,
   knownTokens: Iterable<string> = [],
 ): FeedbackScores {
-  const known = new Set(
-    [...knownTokens].map((t) => t.toLowerCase()).filter((t) => t.length >= 3),
-  );
+  const known = new Set([...knownTokens].map((t) => t.toLowerCase()).filter((t) => t.length >= 3));
   const byPlanId = new Map<number, number>();
   const byToken = new Map<string, number>();
-  const bump = <K,>(map: Map<K, number>, key: K, delta: number) => {
+  const bump = <K>(map: Map<K, number>, key: K, delta: number) => {
     map.set(key, (map.get(key) ?? 0) + delta);
   };
 
@@ -294,11 +284,7 @@ export function aggregateFeedbackScores(
     const hay = `${entry.message_excerpt ?? ""} ${entry.comment ?? ""}`;
     if (!hay.trim() || !known.size) continue;
     const commentBoost =
-      entry.comment && entry.comment.trim()
-        ? entry.rating === "up"
-          ? 1
-          : -1
-        : 0;
+      entry.comment && entry.comment.trim() ? (entry.rating === "up" ? 1 : -1) : 0;
     const delta = baseDelta + commentBoost;
     const seen = new Set<string>();
     const consider = (tok: string) => {

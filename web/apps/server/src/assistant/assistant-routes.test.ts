@@ -114,7 +114,11 @@ describe("assistant routes", () => {
     const repo = ports.repository!;
     const { createIntegrationPort } = await import("../integrations/store.js");
     const { getIntegrationAdapter } = await import("../integrations/registry.js");
-    createIntegrationPort({ repo, getAdapter: getIntegrationAdapter, statusExecution: new StatusExecution() }).create({
+    createIntegrationPort({
+      repo,
+      getAdapter: getIntegrationAdapter,
+      statusExecution: new StatusExecution(),
+    }).create({
       type: "ai_assistant",
       name: "Ollama",
       config: {
@@ -193,9 +197,9 @@ describe("assistant routes", () => {
     const listed = await app.inject({ method: "GET", url: "/assistant/feedback" });
     expect(listed.statusCode).toBe(200);
     const body = listed.json() as { entries: Array<{ rating: string; message_excerpt: string }> };
-    expect(body.entries.some((e) => e.rating === "up" && e.message_excerpt?.includes("helpful"))).toBe(
-      true,
-    );
+    expect(
+      body.entries.some((e) => e.rating === "up" && e.message_excerpt?.includes("helpful")),
+    ).toBe(true);
   });
 
   it("GET /assistant/preferences returns digest in self-host", async () => {

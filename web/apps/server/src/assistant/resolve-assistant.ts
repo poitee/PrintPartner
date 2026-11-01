@@ -72,10 +72,7 @@ function stringOrNull(raw: unknown): string | null {
   return raw.trim();
 }
 
-function credentialsOk(
-  provider: AiProviderId,
-  apiKey: string | null,
-): boolean {
+function credentialsOk(provider: AiProviderId, apiKey: string | null): boolean {
   if (provider === "anthropic" || provider === "openai") return Boolean(apiKey);
   if (provider === "ollama") return true;
   return false;
@@ -209,19 +206,15 @@ export function resolveAssistantRuntime(
     const searchKeyRaw = item.config.search_api_key ?? item.config.searchApiKey;
     // Explicit empty string clears override → fall back to env.
     const searchApiKey =
-      searchKeyRaw === undefined || searchKeyRaw === null
-        ? null
-        : stringOrNull(searchKeyRaw);
+      searchKeyRaw === undefined || searchKeyRaw === null ? null : stringOrNull(searchKeyRaw);
 
-    const allowUrlRaw =
-      item.config.allow_url_ingest ?? item.config.allowUrlIngest;
+    const allowUrlRaw = item.config.allow_url_ingest ?? item.config.allowUrlIngest;
     const assistantAllowUrlIngest =
       allowUrlRaw === undefined || allowUrlRaw === null
         ? env.assistantAllowUrlIngest
         : boolOrDefault(allowUrlRaw, env.assistantAllowUrlIngest);
 
-    const guideMaxRaw =
-      item.config.guide_ingest_max_bytes ?? item.config.guideIngestMaxBytes;
+    const guideMaxRaw = item.config.guide_ingest_max_bytes ?? item.config.guideIngestMaxBytes;
     const assistantGuideIngestMaxBytes =
       guideMaxRaw === undefined || guideMaxRaw === null || guideMaxRaw === ""
         ? env.assistantGuideIngestMaxBytes
@@ -239,8 +232,8 @@ export function resolveAssistantRuntime(
       anthropicApiKey: provider === "anthropic" ? apiKey : null,
       openaiApiKey: provider === "openai" ? apiKey : null,
       openaiBaseUrl:
-        provider === "openai" ? baseUrl ?? env.openaiBaseUrl ?? "https://api.openai.com" : null,
-      ollamaUrl: provider === "ollama" ? baseUrl ?? env.ollamaUrl : env.ollamaUrl,
+        provider === "openai" ? (baseUrl ?? env.openaiBaseUrl ?? "https://api.openai.com") : null,
+      ollamaUrl: provider === "ollama" ? (baseUrl ?? env.ollamaUrl) : env.ollamaUrl,
       aiModel: model,
       aiMaxTokens: maxTokens,
       useOtherBuildsAsExamples,

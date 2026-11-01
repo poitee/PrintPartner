@@ -20,7 +20,6 @@ function memoryRepo(): AppRepository & { _store: Map<string, string> } {
 }
 
 describe("aggregateFeedbackScores", () => {
-
   it("boosts known tokens from comments and builds high-confidence prefer line", () => {
     const repo = memoryRepo();
     appendAssistantFeedback(repo, {

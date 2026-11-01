@@ -7,10 +7,7 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { GOLDEN_EVAL_FIXTURES } from "./golden-eval.fixtures.js";
 import { invokeAssistantTool } from "./tools.js";
 
-const FIXTURE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../test-fixtures/kit-workspace",
-);
+const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "../test-fixtures/kit-workspace");
 
 describe("golden kit-advisor evals (no live LLM)", () => {
   let dataDir: string;
@@ -55,8 +52,7 @@ describe("golden kit-advisor evals (no live LLM)", () => {
     it(`${fixture.id}: ${fixture.description}`, async () => {
       expect(fixture.expected_tool).toBeTruthy();
       const toolName = fixture.expected_tool!;
-      const useOther =
-        fixture.id === "respect-use-other-builds-off" ? false : true;
+      const useOther = fixture.id === "respect-use-other-builds-off" ? false : true;
 
       const result = await invokeAssistantTool(
         toolName,
@@ -87,5 +83,4 @@ describe("golden kit-advisor evals (no live LLM)", () => {
       }
     });
   }
-
 });
