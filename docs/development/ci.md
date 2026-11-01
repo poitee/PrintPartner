@@ -39,6 +39,22 @@ staged changes. When staged Rust files change, it runs `cargo fmt --check` on
 a copy of the staged files, so unstaged edits do not change the result.
 The hook is opt-in; CI runs the same checks either way.
 
+## Complexity ratchet
+
+`npm run lint` in `web/` also runs `scripts/complexity-ratchet.mjs`. It lints
+the TypeScript and JavaScript under `web/` with three ESLint core rules:
+`complexity` above 20, `max-depth` above 5 and `max-params` above 5. It then
+compares the number of findings for each file and rule with
+`scripts/complexity-baseline.json`. The step fails when a count goes up,
+including for a new file, which has a baseline of zero. CI runs it in the
+`web` job through `npm run lint`.
+
+When you lower a count, run `node ../scripts/complexity-ratchet.mjs --update`
+from `web/` and commit the baseline. `--update` only writes when every count is
+at or below the baseline, so it can't raise one. Function and file length
+limits come after the Prettier rollout, because reformatting changes line
+counts.
+
 ## The OS jobs
 
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.

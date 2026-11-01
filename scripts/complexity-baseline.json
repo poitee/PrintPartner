@@ -1,0 +1,422 @@
+{
+  "apps/server/src/__tests__/body-limits.ts": {
+    "complexity": 1,
+    "max-depth": 1
+  },
+  "apps/server/src/app.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/assistant/build-decisions.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/assistant/domain-pack.ts": {
+    "complexity": 5
+  },
+  "apps/server/src/assistant/history.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/assistant/openai-adapter.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/assistant/operation-resources.test.ts": {
+    "complexity": 1,
+    "max-params": 2
+  },
+  "apps/server/src/assistant/preferences-digest.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/assistant/resolve-assistant.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/assistant/source-docs-digest.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/assistant/tools.ts": {
+    "complexity": 6,
+    "max-depth": 6,
+    "max-params": 1
+  },
+  "apps/server/src/config.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/db/accepted-plan-duplicate-import.test.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/db/accepted-plan-operational.ts": {
+    "complexity": 3
+  },
+  "apps/server/src/db/accepted-plan-progress-summary.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/db/accepted-plate-layout-model.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/db/accepted-plates.ts": {
+    "max-params": 1
+  },
+  "apps/server/src/db/accepted-printer-attribution.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/db/repository.ts": {
+    "complexity": 18,
+    "max-depth": 1
+  },
+  "apps/server/src/integrations/adapters/bambu.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/integrations/adapters/home-assistant.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/integrations/adapters/moonraker.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/integrations/adapters/prusalink.ts": {
+    "complexity": 3
+  },
+  "apps/server/src/lib/outbound-url.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/lib/print-file-classification.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/mcp/product-mcp.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/ownership-exports.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/ownership-history-copy.test.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/ownership-history.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/ownership-migration.ts": {
+    "complexity": 3,
+    "max-depth": 1
+  },
+  "apps/server/src/ownership-plate-history.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/ownership/source-sync-admission.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/accepted-plates.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/assistant.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/auth.ts": {
+    "complexity": 1,
+    "max-params": 1
+  },
+  "apps/server/src/routes/backups.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/bambu-connect.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/routes/jobs.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/metrics.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/plan-drafts.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/plans.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/routes/printer-checkoff.ts": {
+    "complexity": 4
+  },
+  "apps/server/src/routes/slicer-instances.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/routes/sources.ts": {
+    "complexity": 4
+  },
+  "apps/server/src/services/accepted-plan-review-callers.test.ts": {
+    "max-params": 1
+  },
+  "apps/server/src/services/accepted-plate-3mf.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/accepted-plate-workspace.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/backup-restore.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/services/build-planning.ts": {
+    "complexity": 4
+  },
+  "apps/server/src/services/export-stl-pack.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/github-sync.ts": {
+    "complexity": 1,
+    "max-params": 1
+  },
+  "apps/server/src/services/guide-ingest.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/services/imported-print-inventory.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/interaction-graph.ts": {
+    "complexity": 3
+  },
+  "apps/server/src/services/job-runner.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/kit-bundle-share.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/kit-vocabulary.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/local-source-revision.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/pdf-text-extract.ts": {
+    "complexity": 1,
+    "max-params": 1
+  },
+  "apps/server/src/services/plan-compare.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/plan-drafts.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/plan-publication.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/plan-snapshots.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/printer-checkoff-store.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/printer-checkoff-verify.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/services/printer-fleet.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/printer-outcomes-store.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/printer-send-queue-store.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/printer-upload-job.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/printer-upload-multipart.ts": {
+    "complexity": 1,
+    "max-depth": 1
+  },
+  "apps/server/src/services/profile-sync.ts": {
+    "max-params": 1
+  },
+  "apps/server/src/services/reference-share-import.ts": {
+    "max-params": 1
+  },
+  "apps/server/src/services/repo-tree-summary.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/required-unit-reconciliation.test.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/required-unit-reconciliation.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/source-manifest-migration.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/source-watcher.ts": {
+    "complexity": 2
+  },
+  "apps/server/src/services/spoolman-deduct.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/stack-preset.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/three-mf-import.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/services/unattributed-print-store.ts": {
+    "max-params": 1
+  },
+  "apps/server/src/services/zip-directory.ts": {
+    "complexity": 1
+  },
+  "apps/server/src/storage-lease.ts": {
+    "max-depth": 1
+  },
+  "apps/web/src/api/endpoints/checkoff.ts": {
+    "complexity": 2
+  },
+  "apps/web/src/api/endpoints/planDrafts.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/components/CommandPalette.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/ImportRulesTree.tsx": {
+    "complexity": 2
+  },
+  "apps/web/src/components/KitManifestOptions.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/PlanPicker.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/Preview3D.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/RoleFilamentPicker.tsx": {
+    "complexity": 3
+  },
+  "apps/web/src/components/build/BuildRecipePanel.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/checkoff/CheckoffCorrectionDialog.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/checkoff/PastPrintIntakePanel.tsx": {
+    "complexity": 2
+  },
+  "apps/web/src/components/checkoff/PrintVerifyPanel.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/checkoff/ProgressPartRow.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/export/PrinterSendPanel.tsx": {
+    "complexity": 2
+  },
+  "apps/web/src/components/export/accepted-plates/AcceptedPlateAssignmentForm.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/export/accepted-plates/AcceptedPlateSection.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/printers/PrintFileAssignForm.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/review/PartColorDialog.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/review/ReviewPartsSheet.tsx": {
+    "complexity": 2
+  },
+  "apps/web/src/components/review/ReviewSheetMobileCard.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/settings/AboutUpdatesCard.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/settings/BackupManagementCard.tsx": {
+    "complexity": 2
+  },
+  "apps/web/src/components/settings/PrinterProfileAssignmentSection.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/settings/PrintersSettingsCard.tsx": {
+    "complexity": 3
+  },
+  "apps/web/src/components/sources/SourceDetailSheet.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/components/sources/SourceWatchPanel.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/context/PlanWorkspaceContext.tsx": {
+    "complexity": 4,
+    "max-depth": 3
+  },
+  "apps/web/src/hooks/useBambuWorkflowAccess.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/hooks/useProfileUrlSync.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/lib/parseSlicedObjects.ts": {
+    "complexity": 2
+  },
+  "apps/web/src/lib/partsManifest.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/lib/persistedCheckoffUi.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/lib/persistedReviewPartsUi.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/lib/planSaveCache.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/lib/planSaveError.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/lib/workPackageProjection.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/lib/workPackageTasks.ts": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/BuildPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/CheckoffPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/ExportPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/GlobalProductionPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/HelpPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/LoginPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/PartsPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/PrintersPage.tsx": {
+    "complexity": 2
+  },
+  "apps/web/src/pages/SettingsPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/pages/SourcesPage.tsx": {
+    "complexity": 1
+  },
+  "apps/web/src/queries/sourceContent.ts": {
+    "complexity": 1
+  },
+  "scripts/check-ci-tool-pins.mjs": {
+    "complexity": 3,
+    "max-params": 1
+  },
+  "scripts/desktop-parity/capture.mts": {
+    "max-params": 1
+  },
+  "scripts/desktop-parity/schemas.mts": {
+    "max-params": 1
+  },
+  "scripts/plan-save-benchmark.mts": {
+    "max-depth": 3
+  },
+  "scripts/rust-contracts/generate.mjs": {
+    "complexity": 1
+  }
+}
