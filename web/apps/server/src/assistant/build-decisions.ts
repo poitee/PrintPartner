@@ -185,10 +185,7 @@ export function configDecisionsFromGuideText(guideText: string): BuildDecision[]
 }
 
 /** Convert domain-pack decisions.yaml rows into BuildDecision candidates. */
-function decisionsFromDomainYaml(
-  sourceName: string,
-  dataDir?: string | null,
-): BuildDecision[] {
+function decisionsFromDomainYaml(sourceName: string, dataDir?: string | null): BuildDecision[] {
   const rows = loadSourceDecisionsYaml(sourceName, dataDir);
   const out: BuildDecision[] = [];
   for (const row of rows) {
@@ -272,9 +269,7 @@ function applyUserConstraintsToDecisions(
  * Build kit-selection merge map from decisions that already have a suggested
  * option (from user constraints or heuristics).
  */
-export function selectionsFromSuggestedDecisions(
-  decisions: BuildDecision[],
-): ManifestSelections {
+export function selectionsFromSuggestedDecisions(decisions: BuildDecision[]): ManifestSelections {
   const out: ManifestSelections = {};
   for (const d of decisions) {
     if (!d.suggested_selection) continue;
@@ -305,10 +300,9 @@ export function detectBuildDecisionsHeuristic(params: {
 
   // Core kit config from prose first (electronics / lanes), then folder variants.
   const fromGuide = configDecisionsFromGuideText(params.guideText ?? "");
-  const fromYaml =
-    params.sourceName?.trim()
-      ? decisionsFromDomainYaml(params.sourceName.trim(), params.dataDir)
-      : [];
+  const fromYaml = params.sourceName?.trim()
+    ? decisionsFromDomainYaml(params.sourceName.trim(), params.dataDir)
+    : [];
   for (const d of mergeDecisionCandidates(fromGuide, fromYaml)) {
     if (decisions.length >= MAX_DECISIONS) break;
     decisions.push(d);
@@ -355,9 +349,7 @@ export function detectBuildDecisionsHeuristic(params: {
       "No decision points detected — repo may be a single-variant kit, or it needs a sync so docs/tree are available.",
     );
   } else {
-    notes.push(
-      "These are candidate decisions — ask one at a time; do not dump every candidate.",
-    );
+    notes.push("These are candidate decisions — ask one at a time; do not dump every candidate.");
   }
 
   return { decisions: withSuggestions, notes, method: "heuristic" };
@@ -407,9 +399,7 @@ function parseLlmDecisionPatches(raw: string): LlmDecisionPatch[] | null {
           ? row.label.trim().slice(0, 140)
           : undefined,
       suggested_selection:
-        typeof row.suggested_selection === "string"
-          ? row.suggested_selection.trim()
-          : undefined,
+        typeof row.suggested_selection === "string" ? row.suggested_selection.trim() : undefined,
       priority: typeof row.priority === "number" ? row.priority : undefined,
       drop: row.drop === true,
     });

@@ -18,9 +18,7 @@ type ProposeAssistantActionInput = Readonly<{
   extras?: Record<string, unknown>;
 }>;
 
-export function proposeAssistantAction(
-  input: ProposeAssistantActionInput,
-): ToolInvokeResult {
+export function proposeAssistantAction(input: ProposeAssistantActionInput): ToolInvokeResult {
   const action: AssistantProposedAction = {
     id: randomUUID(),
     type: input.type,
@@ -40,17 +38,15 @@ export function proposeAssistantAction(
   };
 }
 
-export function proposeAssistantActionUnlessDismissed(
-  input: {
-    repo: AppRepository;
-    type: AssistantActionType;
-    planId: number;
-    label: string;
-    summary: string;
-    params: Record<string, unknown>;
-    extras?: Record<string, unknown>;
-  },
-): ToolInvokeResult {
+export function proposeAssistantActionUnlessDismissed(input: {
+  repo: AppRepository;
+  type: AssistantActionType;
+  planId: number;
+  label: string;
+  summary: string;
+  params: Record<string, unknown>;
+  extras?: Record<string, unknown>;
+}): ToolInvokeResult {
   if (
     input.planId > 0 &&
     !isAssistantUiAction(input.type) &&
@@ -59,7 +55,8 @@ export function proposeAssistantActionUnlessDismissed(
     return {
       content: JSON.stringify({
         error: "user_dismissed",
-        detail: "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
+        detail:
+          "User dismissed this action fingerprint on this plan. Ask before re-proposing the same change.",
         fingerprint: decisionFingerprint(input.type, input.params),
         action_type: input.type,
       }),

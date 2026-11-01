@@ -15,11 +15,7 @@ function redactSecrets(text: string): string {
  * Build a user-facing provider failure message with HTTP status and a short body
  * snippet (no secrets). Prefer structured `error.message` / `message` when present.
  */
-export function formatProviderHttpError(
-  label: string,
-  status: number,
-  bodyText: string,
-): string {
+export function formatProviderHttpError(label: string, status: number, bodyText: string): string {
   const raw = bodyText.replace(/\s+/g, " ").trim();
   if (raw) {
     try {

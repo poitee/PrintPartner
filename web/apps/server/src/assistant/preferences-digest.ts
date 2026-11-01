@@ -63,9 +63,7 @@ export function decisionFingerprint(
       .map(([key, value]) => {
         const encoded = Array.isArray(value)
           ? JSON.stringify(
-              [...value].sort((left, right) =>
-                String(left).localeCompare(String(right)),
-              ),
+              [...value].sort((left, right) => String(left).localeCompare(String(right))),
             )
           : String(value);
         return `${key}=${encoded}`;
@@ -92,10 +90,7 @@ function patternLabel(actionType: string, params: Record<string, unknown>): stri
 
 type PreferEntry = { count: number; label: string; noise: boolean };
 
-function selectPreferEntries(
-  appliedCounts: Map<string, PreferEntry>,
-  max: number,
-): PreferEntry[] {
+function selectPreferEntries(appliedCounts: Map<string, PreferEntry>, max: number): PreferEntry[] {
   const sorted = [...appliedCounts.values()].sort(
     (a, b) => b.count - a.count || a.label.localeCompare(b.label),
   );
@@ -163,9 +158,10 @@ function collectNoteLines(list: PlanDecision[]): string[] {
   return notes;
 }
 
-function collectGlobalPreferAvoid(
-  list: PlanDecision[],
-): { preferLines: string[]; avoidLines: string[] } {
+function collectGlobalPreferAvoid(list: PlanDecision[]): {
+  preferLines: string[];
+  avoidLines: string[];
+} {
   const appliedCounts = new Map<string, PreferEntry>();
   const avoided = new Map<string, { label: string; noise: boolean }>();
 
@@ -286,8 +282,6 @@ export function isDismissedFingerprint(
   const fp = decisionFingerprint(actionType, params);
   const decisions = repo.listPlanDecisions(planId, MAX_DECISIONS);
   return decisions.some(
-    (d) =>
-      d.kind === "dismissed_action" &&
-      decisionFingerprint(d.action_type, d.params) === fp,
+    (d) => d.kind === "dismissed_action" && decisionFingerprint(d.action_type, d.params) === fp,
   );
 }

@@ -8,9 +8,7 @@ type SyncActionParams = {
 };
 
 export function buildSyncAction(params: SyncActionParams): AssistantProposedAction {
-  const projectIds = (params.projectIds ?? []).filter(
-    (id) => Number.isFinite(id) && id > 0,
-  );
+  const projectIds = (params.projectIds ?? []).filter((id) => Number.isFinite(id) && id > 0);
   const sourceName = params.sourceName?.trim() || undefined;
   const syncParams: Record<string, unknown> = {};
   if (projectIds.length > 0) syncParams.project_ids = [...new Set(projectIds)];

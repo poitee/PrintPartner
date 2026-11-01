@@ -83,9 +83,7 @@ function summarizeOnePlan(
       presetId ? `inferred_stack_preset=${presetId}` : null,
       selectionEntries.length
         ? `kit_selections={${selectionEntries
-            .map(([key, selection]) =>
-              `${key}=${formatManifestSelection(selection)}`,
-            )
+            .map(([key, selection]) => `${key}=${formatManifestSelection(selection)}`)
             .join(", ")}}`
         : "kit_selections={}",
       filamentLines.length ? `role_filaments={${filamentLines.join(", ")}}` : null,
@@ -117,8 +115,7 @@ export function summarizeOtherBuildsAsExamples(options: ExampleBuildsOptions): s
     .listProfileHeaders()
     .filter((p) => p.id !== options.excludePlanId)
     .sort((a, b) => {
-      const scoreDiff =
-        (feedback.byPlanId.get(b.id) ?? 0) - (feedback.byPlanId.get(a.id) ?? 0);
+      const scoreDiff = (feedback.byPlanId.get(b.id) ?? 0) - (feedback.byPlanId.get(a.id) ?? 0);
       if (scoreDiff !== 0) return scoreDiff;
       return a.id - b.id;
     })

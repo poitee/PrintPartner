@@ -10,15 +10,9 @@ export function sanitizeAssistantDisplayText(content: string): string {
   out = out.replace(/^\s*[}\]]+\s*$/gm, "");
   out = out.replace(/\n\s*[}\]]{1,4}\s*$/g, "");
   // “Click Apply” narration when cards already exist / are recovered
-  out = out.replace(
-    /\bTo apply these settings, click[\s\S]*?(?:proceed|build|UI)\.?\s*/gi,
-    "",
-  );
+  out = out.replace(/\bTo apply these settings, click[\s\S]*?(?:proceed|build|UI)\.?\s*/gi, "");
   out = out.replace(/\bPlease confirm to proceed[\s\S]*?(?:\n|$)/gi, "");
-  out = out.replace(
-    /\bHere is an example of what the build recipe[\s\S]*?(?=\n\n|$)/gi,
-    "",
-  );
+  out = out.replace(/\bHere is an example of what the build recipe[\s\S]*?(?=\n\n|$)/gi, "");
   out = out.replace(/\bPlease note that this is just an example[\s\S]*?(?=\n\n|$)/gi, "");
   out = out.replace(/\n\n↗ [^\n]+/g, "");
   // Collapse excessive blank lines

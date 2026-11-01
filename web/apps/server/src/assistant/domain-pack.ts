@@ -1,20 +1,11 @@
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
 import type { ManifestSelections } from "@print-partner/contracts";
 import type { AppRepository } from "../db/repository.js";
 import { parseManifestSelections } from "../services/manifest-selections.js";
-import {
-  formatCompatibilityDigestLine,
-  normalizeCompatibility,
-} from "./compatibility.js";
+import { formatCompatibilityDigestLine, normalizeCompatibility } from "./compatibility.js";
 
 const MODULE_DATA = join(dirname(fileURLToPath(import.meta.url)), "../data/assistant-domain");
 const SRC_DATA = join(dirname(fileURLToPath(import.meta.url)), "../../src/data/assistant-domain");
@@ -169,10 +160,14 @@ function upsertAdvisorNotesFromMarkdown(
   files: { workflow?: string | null; pitfalls?: string | null; quotes?: string | null },
 ): number {
   let count = 0;
-  if (upsertAdvisorSourceNote(repo, projectId, ADVISOR_NOTE_TITLES.workflow, files.workflow ?? "")) {
+  if (
+    upsertAdvisorSourceNote(repo, projectId, ADVISOR_NOTE_TITLES.workflow, files.workflow ?? "")
+  ) {
     count += 1;
   }
-  if (upsertAdvisorSourceNote(repo, projectId, ADVISOR_NOTE_TITLES.pitfalls, files.pitfalls ?? "")) {
+  if (
+    upsertAdvisorSourceNote(repo, projectId, ADVISOR_NOTE_TITLES.pitfalls, files.pitfalls ?? "")
+  ) {
     count += 1;
   }
   if (upsertAdvisorSourceNote(repo, projectId, ADVISOR_NOTE_TITLES.quotes, files.quotes ?? "")) {
@@ -257,10 +252,7 @@ function refToTagOrBranch(ref: unknown): { tag?: string | null; branch?: string 
   return { tag: value, branch: null };
 }
 
-function normalizeSelectionMap(
-  raw: unknown,
-  path: string,
-): ManifestSelections | undefined {
+function normalizeSelectionMap(raw: unknown, path: string): ManifestSelections | undefined {
   if (raw == null) return undefined;
   const selections = parseManifestSelections(raw, path);
   return Object.keys(selections).length ? selections : undefined;
@@ -316,9 +308,7 @@ function loadAliasEntries(dataDir?: string | null): AliasEntry[] {
   const aliasPath = findFile(dataDir, "_global", "alias_map.yaml");
   if (!aliasPath) return [];
   const raw = loadYamlFile(aliasPath) as { aliases?: unknown[] } | null;
-  return (raw?.aliases ?? [])
-    .map(normalizeAliasEntry)
-    .filter((a): a is AliasEntry => a != null);
+  return (raw?.aliases ?? []).map(normalizeAliasEntry).filter((a): a is AliasEntry => a != null);
 }
 
 /** Load optional per-source decisions.yaml candidates from the domain pack. */
@@ -345,7 +335,9 @@ export function loadSourceDecisionsYaml(
       const decisionsPath = join(sourcesRoot, dir, "decisions.yaml");
       if (!existsSync(decisionsPath)) continue;
       if (!candidates.includes(dir)) {
-        const identity = loadYamlFile(join(sourcesRoot, dir, "identity.yaml")) as SourceIdentity | null;
+        const identity = loadYamlFile(
+          join(sourcesRoot, dir, "identity.yaml"),
+        ) as SourceIdentity | null;
         if (
           identity?.source_name !== name &&
           dir !== name &&
@@ -401,8 +393,7 @@ export function normalizeStacks(raw: unknown): Array<{ id: string; stack: StackE
       const item = raw[i];
       if (!item || typeof item !== "object") continue;
       const o = item as Record<string, unknown>;
-      const base =
-        o.base && typeof o.base === "object" ? (o.base as Record<string, unknown>) : {};
+      const base = o.base && typeof o.base === "object" ? (o.base as Record<string, unknown>) : {};
       const name = o.name != null ? String(o.name) : `stack_${i}`;
       const baseRef = base.ref ?? o.base_tag;
       const { tag } = refToTagOrBranch(baseRef);
@@ -497,11 +488,7 @@ function liveSourceFilter(sourceNames?: readonly string[] | null): LiveSourceFil
   };
 }
 
-function formatAliasLines(
-  aliases: AliasEntry[],
-  live: LiveSourceFilter,
-  noteMax = 72,
-): string[] {
+function formatAliasLines(aliases: AliasEntry[], live: LiveSourceFilter, noteMax = 72): string[] {
   const relevant = aliases.filter(
     (a) => live.has(a.resolve?.source_name) || (a.resolve?.addons ?? []).some((n) => live.has(n)),
   );
@@ -576,10 +563,7 @@ function formatSourceDigestsSection(dataDir: string | null, live: LiveSourceFilt
     let mdExcerptCount = 0;
     for (const name of scoped.slice(0, 14)) {
       const dir = join(sourcesRoot, name);
-      const identity = loadYamlFile(join(dir, "identity.yaml")) as Record<
-        string,
-        unknown
-      > | null;
+      const identity = loadYamlFile(join(dir, "identity.yaml")) as Record<string, unknown> | null;
       const compat = loadYamlFile(join(dir, "compatibility.yaml")) as Record<
         string,
         unknown
@@ -637,7 +621,12 @@ function formatPackPitfallsSection(dataDir: string | null): string[] {
  * first, then aliases fill remaining space (notes shortened to fit).
  * Always reserve room for aliases so phrase → source mappings stay visible.
  */
-function joinUnderBudget(header: string, priority: string[][], aliases: string[], maxChars: number): string {
+function joinUnderBudget(
+  header: string,
+  priority: string[][],
+  aliases: string[],
+  maxChars: number,
+): string {
   if (!aliases.length) {
     return truncate([header, ...priority.flat()].join("\n"), maxChars);
   }
@@ -828,7 +817,9 @@ function findSourcePackDir(dataDir: string | null | undefined, sourceName: strin
       continue;
     }
     for (const dirName of dirs) {
-      const identity = loadYamlFile(join(sourcesRoot, dirName, "identity.yaml")) as SourceIdentity | null;
+      const identity = loadYamlFile(
+        join(sourcesRoot, dirName, "identity.yaml"),
+      ) as SourceIdentity | null;
       if (identity?.source_name === name) return join(sourcesRoot, dirName);
     }
   }

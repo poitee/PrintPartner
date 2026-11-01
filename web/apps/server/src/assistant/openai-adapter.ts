@@ -1,8 +1,5 @@
 import type { AssistantChatMessage } from "@print-partner/contracts";
-import {
-  readBoundedJsonResponse,
-  readBoundedResponseChunks,
-} from "../lib/bounded-response.js";
+import { readBoundedJsonResponse, readBoundedResponseChunks } from "../lib/bounded-response.js";
 import { readProviderHttpError } from "./provider-error.js";
 import { fetchAssistantProvider } from "./provider-fetch.js";
 import type {
@@ -282,16 +279,18 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
           const name = rawCall.function.name;
           if (typeof name !== "string" || !name) return [];
           const rawArguments = rawCall.function.arguments;
-          return [{
-            id: `call_${index}`,
-            name,
-            input:
-              typeof rawArguments === "string"
-                ? parseArgs(rawArguments)
-                : isRecord(rawArguments)
-                  ? rawArguments
-                  : {},
-          }];
+          return [
+            {
+              id: `call_${index}`,
+              name,
+              input:
+                typeof rawArguments === "string"
+                  ? parseArgs(rawArguments)
+                  : isRecord(rawArguments)
+                    ? rawArguments
+                    : {},
+            },
+          ];
         });
         const content = typeof message?.content === "string" ? message.content.trim() : "";
         return {
@@ -341,13 +340,15 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
         if (!isRecord(rawCall) || !isRecord(rawCall.function)) return [];
         const name = rawCall.function.name;
         if (typeof name !== "string" || !name) return [];
-        return [{
-          id: typeof rawCall.id === "string" && rawCall.id ? rawCall.id : `call_${index}`,
-          name,
-          input: parseArgs(
-            typeof rawCall.function.arguments === "string" ? rawCall.function.arguments : "{}",
-          ),
-        }];
+        return [
+          {
+            id: typeof rawCall.id === "string" && rawCall.id ? rawCall.id : `call_${index}`,
+            name,
+            input: parseArgs(
+              typeof rawCall.function.arguments === "string" ? rawCall.function.arguments : "{}",
+            ),
+          },
+        ];
       });
       const content = typeof message?.content === "string" ? message.content.trim() : "";
       const stopReason =
@@ -375,9 +376,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
             // Native /api/chat streams NDJSON objects.
             try {
               const event: unknown = JSON.parse(trimmed);
-              const message = isRecord(event) && isRecord(event.message)
-                ? event.message
-                : null;
+              const message = isRecord(event) && isRecord(event.message) ? event.message : null;
               const token = typeof message?.content === "string" ? message.content : "";
               if (token) handlers.onToken(token);
             } catch {
@@ -390,9 +389,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
           if (!payload || payload === "[DONE]") return;
           try {
             const event: unknown = JSON.parse(payload);
-            const choices = isRecord(event) && Array.isArray(event.choices)
-              ? event.choices
-              : [];
+            const choices = isRecord(event) && Array.isArray(event.choices) ? event.choices : [];
             const choice = isRecord(choices[0]) ? choices[0] : null;
             const delta = isRecord(choice?.delta) ? choice.delta : null;
             const token = typeof delta?.content === "string" ? delta.content : "";
@@ -401,10 +398,7 @@ export function createOpenAiCompatibleAssistant(deps: OpenAiDeps): AssistantPort
             /* skip malformed SSE chunk */
           }
         };
-        for await (const value of readBoundedResponseChunks(
-          res,
-          MAX_COMPLETION_RESPONSE_BYTES,
-        )) {
+        for await (const value of readBoundedResponseChunks(res, MAX_COMPLETION_RESPONSE_BYTES)) {
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";

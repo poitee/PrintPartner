@@ -1,8 +1,5 @@
 import type { AssistantChatMessage } from "@print-partner/contracts";
-import {
-  readBoundedJsonResponse,
-  readBoundedResponseChunks,
-} from "../lib/bounded-response.js";
+import { readBoundedJsonResponse, readBoundedResponseChunks } from "../lib/bounded-response.js";
 import { readProviderHttpError } from "./provider-error.js";
 import { fetchAssistantProvider } from "./provider-fetch.js";
 import type {
@@ -156,10 +153,11 @@ export function createAnthropicAssistant(deps: AnthropicDeps): AssistantPort {
       const body = await readBoundedJsonResponse(res, MAX_COMPLETION_RESPONSE_BYTES);
       const content = isRecord(body) && Array.isArray(body.content) ? body.content : [];
       const text = content
-        .flatMap((block) => isRecord(block) && block.type === "text"
-          && typeof block.text === "string" && block.text
-          ? [block.text]
-          : [])
+        .flatMap((block) =>
+          isRecord(block) && block.type === "text" && typeof block.text === "string" && block.text
+            ? [block.text]
+            : [],
+        )
         .join("");
       if (!text) throw new Error("Anthropic returned an empty response");
       return text;
@@ -235,10 +233,7 @@ export function createAnthropicAssistant(deps: AnthropicDeps): AssistantPort {
             /* skip malformed SSE chunk */
           }
         };
-        for await (const value of readBoundedResponseChunks(
-          res,
-          MAX_COMPLETION_RESPONSE_BYTES,
-        )) {
+        for await (const value of readBoundedResponseChunks(res, MAX_COMPLETION_RESPONSE_BYTES)) {
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";

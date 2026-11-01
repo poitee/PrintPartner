@@ -14,12 +14,17 @@ import { invokeAssistantTool } from "./tools.js";
 
 const disabled = { error: "Feature farm is disabled.", code: "FEATURE_DISABLED" };
 const invalid = { error: "Stored feature toggles are invalid.", code: "FEATURE_TOGGLES_INVALID" };
-const emptyStats = expect.objectContaining({ plates_sent: 0, plates_completed: 0, plates_failed: 0 });
+const emptyStats = expect.objectContaining({
+  plates_sent: 0,
+  plates_completed: 0,
+  plates_failed: 0,
+});
 
 function toolData(result: Awaited<ReturnType<Client["callTool"]>>) {
   if (!Array.isArray(result.content)) throw new Error("Missing content");
   const text = result.content[0];
-  if (!text || text.type !== "text" || typeof text.text !== "string") throw new Error("Missing text");
+  if (!text || text.type !== "text" || typeof text.text !== "string")
+    throw new Error("Missing text");
   return JSON.parse(text.text);
 }
 
@@ -84,7 +89,9 @@ describe("get_print_stats farm feature admission", () => {
       if (stored !== undefined) repo.setSetting("feature_toggles", stored);
       const jobsSpy = vi.spyOn(repo, "recentPrintJobs");
       const client = await mcp();
-      expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(false);
+      expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(
+        false,
+      );
       const call = await client.callTool({ name: "get_print_stats", arguments: {} });
       expect(call.isError).toBe(true);
       expect(toolData(call)).toEqual(disabled);
@@ -96,8 +103,12 @@ describe("get_print_stats farm feature admission", () => {
   it("allows farm true on assistant and MCP, and lists the tool", async () => {
     repo.setSetting("feature_toggles", '{"farm":true}');
     const client = await mcp();
-    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(true);
-    expect(toolData(await client.callTool({ name: "get_print_stats", arguments: {} }))).toEqual(emptyStats);
+    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(
+      true,
+    );
+    expect(toolData(await client.callTool({ name: "get_print_stats", arguments: {} }))).toEqual(
+      emptyStats,
+    );
     expect(await assistant()).toEqual(emptyStats);
   });
 
@@ -107,7 +118,9 @@ describe("get_print_stats farm feature admission", () => {
       repo.setSetting("feature_toggles", value);
       const jobsSpy = vi.spyOn(repo, "recentPrintJobs");
       const client = await mcp();
-      expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(false);
+      expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(
+        false,
+      );
       const call = await client.callTool({ name: "get_print_stats", arguments: {} });
       expect(call.isError).toBe(true);
       expect(toolData(call)).toEqual(invalid);
@@ -131,12 +144,18 @@ describe("get_print_stats farm feature admission", () => {
   it("open MCP session hides and denies on revoke, then restores on re-enable", async () => {
     repo.setSetting("feature_toggles", '{"farm":true}');
     const client = await mcp();
-    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(true);
-    expect(toolData(await client.callTool({ name: "get_print_stats", arguments: {} }))).toEqual(emptyStats);
+    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(
+      true,
+    );
+    expect(toolData(await client.callTool({ name: "get_print_stats", arguments: {} }))).toEqual(
+      emptyStats,
+    );
 
     repo.setSetting("feature_toggles", '{"farm":false}');
     const jobsSpy = vi.spyOn(repo, "recentPrintJobs");
-    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(false);
+    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(
+      false,
+    );
     const denied = await client.callTool({ name: "get_print_stats", arguments: {} });
     expect(denied.isError).toBe(true);
     expect(toolData(denied)).toEqual(disabled);
@@ -144,7 +163,11 @@ describe("get_print_stats farm feature admission", () => {
     expect(jobsSpy).toHaveBeenCalledTimes(0);
 
     repo.setSetting("feature_toggles", '{"farm":true}');
-    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(true);
-    expect(toolData(await client.callTool({ name: "get_print_stats", arguments: {} }))).toEqual(emptyStats);
+    expect((await client.listTools()).tools.some((tool) => tool.name === "get_print_stats")).toBe(
+      true,
+    );
+    expect(toolData(await client.callTool({ name: "get_print_stats", arguments: {} }))).toEqual(
+      emptyStats,
+    );
   });
 });

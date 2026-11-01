@@ -84,7 +84,8 @@ export function categoryNotFoundError(repo: AppRepository, requested: string): s
 
 /** Sources filed under `path` or any of its subcategories. */
 export function countSourcesUnderCategory(repo: AppRepository, path: string): number {
-  return repo.listSources().filter((source) => isCategoryPathWithin(source.category ?? "", path)).length;
+  return repo.listSources().filter((source) => isCategoryPathWithin(source.category ?? "", path))
+    .length;
 }
 
 /** Library category tree plus per-category Source counts, for MCP callers. */
