@@ -1,14 +1,31 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import AdmZip from "adm-zip";
-import { HOSTED_PLANNING_CAPABILITY, INVITE_BOARD_CAPABILITY, HOSTED_TENANT_DISK_QUOTA_BYTES } from "@print-partner/contracts";
+import {
+  HOSTED_PLANNING_CAPABILITY,
+  INVITE_BOARD_CAPABILITY,
+  HOSTED_TENANT_DISK_QUOTA_BYTES,
+} from "@print-partner/contracts";
 import { SourceActivationConflictError, AppRepository } from "./db/repository.js";
 import { createSaasPorts } from "./adapters/saas/index.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { HOSTED_FEATURE_DISABLED_DETAIL, HOSTED_LAN_DISABLED_DETAIL } from "./lib/hosted-planning-deny.js";
+import {
+  HOSTED_FEATURE_DISABLED_DETAIL,
+  HOSTED_LAN_DISABLED_DETAIL,
+} from "./lib/hosted-planning-deny.js";
 import { assertSafeOutboundUrl, setPrivateOutboundDenied } from "./lib/outbound-url.js";
 import { tenantSourceUploadPrefix } from "./lib/secure-path.js";
 import { SOURCE_SNAPSHOT_MANIFEST_FILE } from "./services/local-source-snapshot.js";
@@ -17,8 +34,10 @@ vi.mock("./services/local-source-revision.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./services/local-source-revision.js")>();
   return {
     ...actual,
-    removeObsoleteHostedWorkingTree: vi.fn((...args: Parameters<typeof actual.removeObsoleteHostedWorkingTree>) =>
-      actual.removeObsoleteHostedWorkingTree(...args)),
+    removeObsoleteHostedWorkingTree: vi.fn(
+      (...args: Parameters<typeof actual.removeObsoleteHostedWorkingTree>) =>
+        actual.removeObsoleteHostedWorkingTree(...args),
+    ),
   };
 });
 
@@ -239,7 +258,9 @@ describe("hosted planning host", () => {
         headers: { cookie: bevCookie },
       });
       expect(feed.statusCode).toBe(200);
-      const listed = feed.json() as { posts: Array<{ id: string; title: string; snapshot?: unknown }> };
+      const listed = feed.json() as {
+        posts: Array<{ id: string; title: string; snapshot?: unknown }>;
+      };
       expect(listed.posts).toHaveLength(1);
       expect(listed.posts[0]?.id).toBe(created.post.id);
       expect(listed.posts[0]?.title).toBe("Board Build");
@@ -333,40 +354,70 @@ describe("hosted planning host", () => {
 it("cleans hosted upload staging and refuses snapshot expansion before activation", async () => {
   const { app, ports } = await hostedApp();
   try {
-    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
-      email: "quota@example.com", password: "correct-horse-battery",
-    } });
+    const registration = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: {
+        email: "quota@example.com",
+        password: "correct-horse-battery",
+      },
+    });
     const user = registration.json<{ user: { user_id: string } }>().user;
     const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
-    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
-      payload: { name: "Quota upload", source_kind: "archive" } });
+    const source = await app.inject({
+      method: "POST",
+      url: "/sources",
+      headers: { cookie },
+      payload: { name: "Quota upload", source_kind: "archive" },
+    });
     expect(source.statusCode).toBe(200);
     const id = source.json<{ id: number }>().id;
-    const upload = (content: string) => app.inject({ method: "POST", url: `/sources/${id}/upload-files`,
-      headers: { cookie, "content-type": "multipart/form-data; boundary=quota-boundary" },
-      payload: Buffer.from(`--quota-boundary\r\nContent-Disposition: form-data; name="files"; filename="part.stl"\r\nContent-Type: application/octet-stream\r\n\r\n${content}\r\n--quota-boundary--\r\n`),
-    });
+    const upload = (content: string) =>
+      app.inject({
+        method: "POST",
+        url: `/sources/${id}/upload-files`,
+        headers: { cookie, "content-type": "multipart/form-data; boundary=quota-boundary" },
+        payload: Buffer.from(
+          `--quota-boundary\r\nContent-Disposition: form-data; name="files"; filename="part.stl"\r\nContent-Type: application/octet-stream\r\n\r\n${content}\r\n--quota-boundary--\r\n`,
+        ),
+      });
     expect((await upload("solid first\nendsolid first\n")).statusCode).toBe(200);
     const repo = ports.getRepository(user.user_id);
     const original = repo.getSource(id)!;
     const dataDir = ports.dataDir;
     expect(existsSync(join(dataDir, "sources", String(id)))).toBe(false);
     const { measureTenantDiskUsage } = await import("./lib/tenant-disk-quota.js");
-    const used = await measureTenantDiskUsage({ dataDir, reposDir: ports.reposDir, tenantId: user.user_id, sourceIds: [id] });
+    const used = await measureTenantDiskUsage({
+      dataDir,
+      reposDir: ports.reposDir,
+      tenantId: user.user_id,
+      sourceIds: [id],
+    });
     const { tenantExportDirectory } = await import("./lib/secure-path.js");
     const exportDir = tenantExportDirectory(join(dataDir, "exports"), user.user_id);
     mkdirSync(exportDir, { recursive: true });
     const filler = join(exportDir, "quota-fixture");
     writeFileSync(filler, "");
     const replacement = "solid second\nendsolid second\n";
-    truncateSync(filler, HOSTED_TENANT_DISK_QUOTA_BYTES - used - Buffer.byteLength(replacement) - 1);
+    truncateSync(
+      filler,
+      HOSTED_TENANT_DISK_QUOTA_BYTES - used - Buffer.byteLength(replacement) - 1,
+    );
     const refused = await upload(replacement);
     expect(refused.statusCode).toBe(413);
     expect(refused.json<{ detail: string }>().detail).toContain("2 GiB");
-    expect(repo.getSource(id)?.current_source_revision_id).toBe(original.current_source_revision_id);
+    expect(repo.getSource(id)?.current_source_revision_id).toBe(
+      original.current_source_revision_id,
+    );
     expect(existsSync(join(dataDir, "sources", String(id)))).toBe(false);
-    expect(await measureTenantDiskUsage({ dataDir, reposDir: ports.reposDir, tenantId: user.user_id, sourceIds: [id] }))
-      .toBeLessThanOrEqual(HOSTED_TENANT_DISK_QUOTA_BYTES);
+    expect(
+      await measureTenantDiskUsage({
+        dataDir,
+        reposDir: ports.reposDir,
+        tenantId: user.user_id,
+        sourceIds: [id],
+      }),
+    ).toBeLessThanOrEqual(HOSTED_TENANT_DISK_QUOTA_BYTES);
   } finally {
     await app.close();
     await ports.db.close();
@@ -376,13 +427,22 @@ it("cleans hosted upload staging and refuses snapshot expansion before activatio
 it("removes an obsolete hosted working tree only after upload publication succeeds", async () => {
   const { app, ports } = await hostedApp();
   try {
-    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
-      email: "legacy@example.com", password: "correct-horse-battery",
-    } });
+    const registration = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: {
+        email: "legacy@example.com",
+        password: "correct-horse-battery",
+      },
+    });
     const user = registration.json<{ user: { user_id: string } }>().user;
     const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
-    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
-      payload: { name: "Legacy upload", source_kind: "archive" } });
+    const source = await app.inject({
+      method: "POST",
+      url: "/sources",
+      headers: { cookie },
+      payload: { name: "Legacy upload", source_kind: "archive" },
+    });
     expect(source.statusCode).toBe(200);
     const id = source.json<{ id: number }>().id;
     const dataDir = ports.dataDir;
@@ -390,9 +450,13 @@ it("removes an obsolete hosted working tree only after upload publication succee
     mkdirSync(join(legacy, "files"), { recursive: true });
     writeFileSync(join(legacy, "files", "legacy.stl"), "legacy bytes");
     const { measureTenantDiskUsage } = await import("./lib/tenant-disk-quota.js");
-    const usage = () => measureTenantDiskUsage({
-      dataDir, reposDir: ports.reposDir, tenantId: user.user_id, sourceIds: [id],
-    });
+    const usage = () =>
+      measureTenantDiskUsage({
+        dataDir,
+        reposDir: ports.reposDir,
+        tenantId: user.user_id,
+        sourceIds: [id],
+      });
     const planted = await usage();
     const repo = ports.getRepository(user.user_id);
     const beforePath = repo.getSource(id)?.local_path ?? null;
@@ -400,21 +464,27 @@ it("removes an obsolete hosted working tree only after upload publication succee
       method: "POST",
       url: `/sources/${id}/upload-zip`,
       headers: { cookie, "content-type": "multipart/form-data; boundary=legacy-boundary" },
-      payload: Buffer.from("--legacy-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.zip\"\r\nContent-Type: application/octet-stream\r\n\r\nnot-a-zip\r\n--legacy-boundary--\r\n"),
+      payload: Buffer.from(
+        '--legacy-boundary\r\nContent-Disposition: form-data; name="file"; filename="upload.zip"\r\nContent-Type: application/octet-stream\r\n\r\nnot-a-zip\r\n--legacy-boundary--\r\n',
+      ),
     });
     expect(rejected.statusCode).toBe(400);
     expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
     expect(repo.getSource(id)?.local_path ?? null).toBe(beforePath);
     expect(await usage()).toBe(planted);
 
-    const conflict = vi.spyOn(AppRepository.prototype, "activateSourceRevision").mockImplementation(() => {
-      throw new SourceActivationConflictError();
-    });
+    const conflict = vi
+      .spyOn(AppRepository.prototype, "activateSourceRevision")
+      .mockImplementation(() => {
+        throw new SourceActivationConflictError();
+      });
     const conflicted = await app.inject({
       method: "POST",
       url: `/sources/${id}/upload-files`,
       headers: { cookie, "content-type": "multipart/form-data; boundary=conflict-boundary" },
-      payload: Buffer.from("--conflict-boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\nsolid conflict\nendsolid conflict\n\r\n--conflict-boundary--\r\n"),
+      payload: Buffer.from(
+        '--conflict-boundary\r\nContent-Disposition: form-data; name="files"; filename="part.stl"\r\nContent-Type: application/octet-stream\r\n\r\nsolid conflict\nendsolid conflict\n\r\n--conflict-boundary--\r\n',
+      ),
     });
     conflict.mockRestore();
     expect(conflicted.statusCode).toBe(409);
@@ -426,7 +496,9 @@ it("removes an obsolete hosted working tree only after upload publication succee
       method: "POST",
       url: `/sources/${id}/upload-files`,
       headers: { cookie, "content-type": "multipart/form-data; boundary=publish-boundary" },
-      payload: Buffer.from("--publish-boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\nsolid published\nendsolid published\n\r\n--publish-boundary--\r\n"),
+      payload: Buffer.from(
+        '--publish-boundary\r\nContent-Disposition: form-data; name="files"; filename="part.stl"\r\nContent-Type: application/octet-stream\r\n\r\nsolid published\nendsolid published\n\r\n--publish-boundary--\r\n',
+      ),
     });
     expect(published.statusCode).toBe(200);
     expect(existsSync(legacy)).toBe(false);
@@ -445,7 +517,9 @@ it("removes an obsolete hosted working tree only after upload publication succee
       url: `/sources/${id}/upload-zip`,
       headers: { cookie, "content-type": "multipart/form-data; boundary=zip-boundary" },
       payload: Buffer.concat([
-        Buffer.from("--zip-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.zip\"\r\nContent-Type: application/octet-stream\r\n\r\n"),
+        Buffer.from(
+          '--zip-boundary\r\nContent-Disposition: form-data; name="file"; filename="upload.zip"\r\nContent-Type: application/octet-stream\r\n\r\n',
+        ),
         zip.toBuffer(),
         Buffer.from("\r\n--zip-boundary--\r\n"),
       ]),
@@ -462,15 +536,26 @@ it("keeps a published upload successful when obsolete hosted tree cleanup fails"
   const revision = await import("./services/local-source-revision.js");
   const cleanup = vi.mocked(revision.removeObsoleteHostedWorkingTree);
   const original = cleanup.getMockImplementation();
-  cleanup.mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+  cleanup.mockRejectedValueOnce(
+    Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }),
+  );
   const { app, ports } = await hostedApp();
   try {
-    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
-      email: "cleanup-failed@example.com", password: "correct-horse-battery",
-    } });
+    const registration = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: {
+        email: "cleanup-failed@example.com",
+        password: "correct-horse-battery",
+      },
+    });
     const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
-    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
-      payload: { name: "Cleanup failure", source_kind: "archive" } });
+    const source = await app.inject({
+      method: "POST",
+      url: "/sources",
+      headers: { cookie },
+      payload: { name: "Cleanup failure", source_kind: "archive" },
+    });
     const id = source.json<{ id: number }>().id;
     const legacy = join(ports.dataDir, "sources", String(id));
     mkdirSync(join(legacy, "files"), { recursive: true });
@@ -479,12 +564,16 @@ it("keeps a published upload successful when obsolete hosted tree cleanup fails"
       method: "POST",
       url: `/sources/${id}/upload-files`,
       headers: { cookie, "content-type": "multipart/form-data; boundary=kept-boundary" },
-      payload: Buffer.from("--kept-boundary\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\nsolid kept\nendsolid kept\n\r\n--kept-boundary--\r\n"),
+      payload: Buffer.from(
+        '--kept-boundary\r\nContent-Disposition: form-data; name="files"; filename="part.stl"\r\nContent-Type: application/octet-stream\r\n\r\nsolid kept\nendsolid kept\n\r\n--kept-boundary--\r\n',
+      ),
     });
     expect(published.statusCode).toBe(200);
     expect(published.json()).not.toMatchObject({ detail: "EACCES: permission denied" });
     expect(readFileSync(join(legacy, "files", "legacy.stl"), "utf8")).toBe("legacy bytes");
-    const active = ports.getRepository(registration.json<{ user: { user_id: string } }>().user.user_id).getSource(id)?.local_path;
+    const active = ports
+      .getRepository(registration.json<{ user: { user_id: string } }>().user.user_id)
+      .getSource(id)?.local_path;
     expect(active).toBeTruthy();
     expect(readFileSync(join(active!, "part.stl"), "utf8")).toBe("solid kept\nendsolid kept\n");
   } finally {
@@ -513,19 +602,25 @@ it("drops completed upload staging before a queued tenant upload measures quota"
   const firstStaging: string[] = [];
   const realPublish = revision.publishLocalSourceWorkingTree;
   let releaseFirst!: () => void;
-  const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-  let hold!: () => void;
-  const held = new Promise<void>((resolve) => { hold = resolve; });
-  let publishedPath = "";
-  const publish = vi.spyOn(revision, "publishLocalSourceWorkingTree").mockImplementation(async (...args) => {
-    const result = await realPublish(...args);
-    if (publish.mock.calls.length === 1) {
-      publishedPath = result.local_path ?? "";
-      hold();
-      await gate;
-    }
-    return result;
+  const gate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
   });
+  let hold!: () => void;
+  const held = new Promise<void>((resolve) => {
+    hold = resolve;
+  });
+  let publishedPath = "";
+  const publish = vi
+    .spyOn(revision, "publishLocalSourceWorkingTree")
+    .mockImplementation(async (...args) => {
+      const result = await realPublish(...args);
+      if (publish.mock.calls.length === 1) {
+        publishedPath = result.local_path ?? "";
+        hold();
+        await gate;
+      }
+      return result;
+    });
   const realMeasure = quota.measureTenantDiskUsage;
   const realCharge = quota.chargeTenantDiskBytes;
   let countCharges = false;
@@ -539,14 +634,18 @@ it("drops completed upload staging before a queued tenant upload measures quota"
   const realRun = quota.runWithTenantDiskQuota;
   let quotaEntries = 0;
   let secondQueued!: () => void;
-  const secondWaiting = new Promise<void>((resolve) => { secondQueued = resolve; });
+  const secondWaiting = new Promise<void>((resolve) => {
+    secondQueued = resolve;
+  });
   const run = vi.spyOn(quota, "runWithTenantDiskQuota").mockImplementation(async (input, work) => {
     quotaEntries += 1;
     const entry = quotaEntries;
     if (entry === 2) queueMicrotask(() => secondQueued());
     return realRun(input, async () => {
       if (entry === 2) {
-        stagingPresentAtQueuedScan = firstStaging.some((name) => existsSync(join(dataDir, "sources", name)));
+        stagingPresentAtQueuedScan = firstStaging.some((name) =>
+          existsSync(join(dataDir, "sources", name)),
+        );
         queuedUsage = await realMeasure({
           dataDir: input.dataDir,
           reposDir: input.reposDir,
@@ -563,36 +662,53 @@ it("drops completed upload staging before a queued tenant upload measures quota"
     });
   });
   try {
-    const registration = await app.inject({ method: "POST", url: "/auth/register", payload: {
-      email: "quota-race@example.com", password: "correct-horse-battery",
-    } });
+    const registration = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: {
+        email: "quota-race@example.com",
+        password: "correct-horse-battery",
+      },
+    });
     const user = registration.json<{ user: { user_id: string } }>().user;
     const cookie = String(registration.headers["set-cookie"]).split(";")[0]!;
-    const source = await app.inject({ method: "POST", url: "/sources", headers: { cookie },
-      payload: { name: "Quota race", source_kind: "archive" } });
+    const source = await app.inject({
+      method: "POST",
+      url: "/sources",
+      headers: { cookie },
+      payload: { name: "Quota race", source_kind: "archive" },
+    });
     expect(source.statusCode).toBe(200);
     const id = source.json<{ id: number }>().id;
     const bytes = 4096;
-    const upload = (content: Buffer) => app.inject({
-      method: "POST",
-      url: `/sources/${id}/upload-files`,
-      headers: { cookie, "content-type": "multipart/form-data; boundary=quota-race" },
-      payload: Buffer.concat([
-        Buffer.from("--quota-race\r\nContent-Disposition: form-data; name=\"files\"; filename=\"part.stl\"\r\nContent-Type: application/octet-stream\r\n\r\n"),
-        content,
-        Buffer.from("\r\n--quota-race--\r\n"),
-      ]),
-    });
+    const upload = (content: Buffer) =>
+      app.inject({
+        method: "POST",
+        url: `/sources/${id}/upload-files`,
+        headers: { cookie, "content-type": "multipart/form-data; boundary=quota-race" },
+        payload: Buffer.concat([
+          Buffer.from(
+            '--quota-race\r\nContent-Disposition: form-data; name="files"; filename="part.stl"\r\nContent-Type: application/octet-stream\r\n\r\n',
+          ),
+          content,
+          Buffer.from("\r\n--quota-race--\r\n"),
+        ]),
+      });
     const first = upload(Buffer.alloc(bytes, 0x61));
     await held;
     const prefix = tenantSourceUploadPrefix(user.user_id);
-    firstStaging.push(...readdirSync(join(dataDir, "sources")).filter((name) => name.startsWith(prefix)));
+    firstStaging.push(
+      ...readdirSync(join(dataDir, "sources")).filter((name) => name.startsWith(prefix)),
+    );
     expect(firstStaging).toHaveLength(1);
     const stagingPath = join(dataDir, "sources", firstStaging[0]!);
     expect(existsSync(stagingPath)).toBe(true);
     const stagingBytes = fileBytes(stagingPath);
     const manifestLen = statSync(join(publishedPath, SOURCE_SNAPSHOT_MANIFEST_FILE)).size;
-    const exportDir = (await import("./lib/secure-path.js")).tenantExportDirectory(join(dataDir, "exports"), user.user_id);
+    const exportDir = (await import("./lib/secure-path.js")).tenantExportDirectory(
+      join(dataDir, "exports"),
+      user.user_id,
+    );
     mkdirSync(exportDir, { recursive: true });
     const filler = join(exportDir, "quota-race");
     writeFileSync(filler, "");
