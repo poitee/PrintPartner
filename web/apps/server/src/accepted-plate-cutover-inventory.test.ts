@@ -41,7 +41,8 @@ describe("accepted Plate server cutover inventory", () => {
       join(webRoot, "packages/contracts/src"),
       join(webRoot, "packages/domain/src"),
     ];
-    const source = roots.flatMap(productionTypeScriptFiles)
+    const source = roots
+      .flatMap(productionTypeScriptFiles)
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
     for (const legacy of [
@@ -65,8 +66,15 @@ describe("accepted Plate server cutover inventory", () => {
   });
 
   it("keeps browser, assistant, and MCP production code off removed interfaces", () => {
-    const roots = [join(webRoot, "apps/web/src"), join(serverRoot, "assistant"), join(serverRoot, "mcp")];
-    const source = roots.flatMap(productionTypeScriptFiles).map((path) => readFileSync(path, "utf8")).join("\n");
+    const roots = [
+      join(webRoot, "apps/web/src"),
+      join(serverRoot, "assistant"),
+      join(serverRoot, "mcp"),
+    ];
+    const source = roots
+      .flatMap(productionTypeScriptFiles)
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
     for (const legacy of [
       "/print-plan",
       "/print-groups",

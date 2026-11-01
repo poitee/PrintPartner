@@ -9,10 +9,7 @@ import {
   loadKitManifest,
   saveKitManifest,
 } from "./services/kit-manifest-store.js";
-import {
-  loadManifestYaml,
-  selectionIncludesPart,
-} from "./services/manifest-apply.js";
+import { loadManifestYaml, selectionIncludesPart } from "./services/manifest-apply.js";
 import { buildPlanManifestBuilder } from "./services/plan-manifest-builder.js";
 
 describe("kit manifest store", () => {
@@ -202,7 +199,10 @@ selections:
     });
     if (valid.kind !== "created") throw new Error("valid multi-select draft was not created");
     expect(
-      valid.draft.parts.filter((part) => part.included).map((part) => part.filename).sort(),
+      valid.draft.parts
+        .filter((part) => part.included)
+        .map((part) => part.filename)
+        .sort(),
     ).toEqual(["panels.stl", "skirts.stl"]);
 
     saveKitManifest(repo, plan.id, { selections: { extras: "skirts" } });
@@ -233,21 +233,13 @@ selections:
     });
     const repoPath = join(dir, "repos", String(source.id));
     const spindleRoot = join(repoPath, "STL Files", "Spindle-Mounts");
-    for (const folder of [
-      "65mm-Spindle-Mounts",
-      "80mm-Spindle-Mounts",
-      "LDO-Kit-Spindle-Mount",
-    ]) {
+    for (const folder of ["65mm-Spindle-Mounts", "80mm-Spindle-Mounts", "LDO-Kit-Spindle-Mount"]) {
       mkdirSync(join(spindleRoot, folder), { recursive: true });
       writeFileSync(join(spindleRoot, folder, `${folder}.stl`), `solid ${folder}`);
     }
     mkdirSync(join(repoPath, "STL Files", "Archive"), { recursive: true });
     writeFileSync(join(repoPath, "STL Files", "Archive", "unchecked.stl"), "solid unchecked");
-    const electronicsPath = join(
-      spindleRoot,
-      "LDO-Kit-Spindle-Mount",
-      "electronics",
-    );
+    const electronicsPath = join(spindleRoot, "LDO-Kit-Spindle-Mount", "electronics");
     mkdirSync(electronicsPath, { recursive: true });
     writeFileSync(join(electronicsPath, "controller.stl"), "solid controller");
     repo.updateSource(source.id, { local_path: repoPath });
@@ -256,9 +248,10 @@ selections:
     const plan = repo.createProfile("Milo V2.0", source.id);
     const builder = buildPlanManifestBuilder(repo, plan.id, dir);
     expect(builder.merged_option_groups.controller?.variants[0]?.id).toBe("stock");
-    const [spindleGroupId, spindleGroup] = Object.entries(builder.merged_option_groups).find(
-      ([, group]) => group.label === "Spindle-Mounts",
-    ) ?? [];
+    const [spindleGroupId, spindleGroup] =
+      Object.entries(builder.merged_option_groups).find(
+        ([, group]) => group.label === "Spindle-Mounts",
+      ) ?? [];
     expect(spindleGroup?.variants.map((variant) => variant.id).sort()).toEqual([
       "65mm_spindle_mounts",
       "80mm_spindle_mounts",
@@ -275,8 +268,9 @@ selections:
     });
     if (result.kind !== "created") throw new Error("Milo draft was not created");
 
-    expect(result.draft.parts.find((part) => part.relativePath === "STL Files/Archive/unchecked.stl"))
-      .toMatchObject({ included: false });
+    expect(
+      result.draft.parts.find((part) => part.relativePath === "STL Files/Archive/unchecked.stl"),
+    ).toMatchObject({ included: false });
     expect(
       result.draft.parts.filter((part) => part.included).map((part) => part.relativePath),
     ).toEqual([
@@ -297,9 +291,9 @@ selections:
         parts: ["**/Stealthburner/**"]
 `);
     const group = doc.option_groups!.toolhead!;
-    expect(
-      selectionIncludesPart("STLs/Stealthburner/hotend.stl", group, "stealthburner"),
-    ).toBe(true);
+    expect(selectionIncludesPart("STLs/Stealthburner/hotend.stl", group, "stealthburner")).toBe(
+      true,
+    );
     expect(selectionIncludesPart("STLs/stock_toolhead/part.stl", group, "stealthburner")).toBe(
       false,
     );

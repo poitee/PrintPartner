@@ -25,12 +25,7 @@ function directoryEntries(path: string): string[] {
 }
 
 function responseDetail(body: unknown): string {
-  if (
-    body &&
-    typeof body === "object" &&
-    "detail" in body &&
-    typeof body.detail === "string"
-  ) {
+  if (body && typeof body === "object" && "detail" in body && typeof body.detail === "string") {
     return body.detail;
   }
   throw new Error("Upload response did not contain a detail string");
@@ -85,12 +80,7 @@ describe("multipart upload boundaries", () => {
       payload: { name: "Upload boundary Source", source_kind: "local" },
     });
     const body: unknown = created.json();
-    if (
-      !body ||
-      typeof body !== "object" ||
-      !("id" in body) ||
-      typeof body.id !== "number"
-    ) {
+    if (!body || typeof body !== "object" || !("id" in body) || typeof body.id !== "number") {
       throw new Error("Source fixture did not return an id");
     }
     sourceId = body.id;
@@ -163,7 +153,11 @@ describe("multipart upload boundaries", () => {
     const response = await app.inject({
       method: "POST",
       url: `/sources/${sourceId}/upload-files`,
-      payload: Buffer.concat([filePart("a.stl"), filePart("b.stl"), Buffer.from(`--${boundary}--\r\n`)]),
+      payload: Buffer.concat([
+        filePart("a.stl"),
+        filePart("b.stl"),
+        Buffer.from(`--${boundary}--\r\n`),
+      ]),
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
     });
 
@@ -211,9 +205,7 @@ describe("multipart upload boundaries", () => {
       expect(response.statusCode).toBe(413);
       expect(responseDetail(response.json())).toContain("64 MiB");
       expect(
-        directoryEntries(
-          join(dataDir, "exports", "tenant-default", "printer-uploads"),
-        ),
+        directoryEntries(join(dataDir, "exports", "tenant-default", "printer-uploads")),
       ).toEqual([]);
     },
   );
@@ -233,11 +225,9 @@ describe("multipart upload boundaries", () => {
 
     expect(response.statusCode).toBe(413);
     expect(responseDetail(response.json())).toContain("64 MiB");
-    expect(
-      directoryEntries(
-        join(dataDir, "exports", "tenant-default", "bambu-connect"),
-      ),
-    ).toEqual([]);
+    expect(directoryEntries(join(dataDir, "exports", "tenant-default", "bambu-connect"))).toEqual(
+      [],
+    );
   });
 
   it.each(["/backups/validate", "/backups/restore"])(

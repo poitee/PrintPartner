@@ -19,10 +19,7 @@ function multipartZip(buffer: Buffer, filename = "archive.zip") {
   };
 }
 
-function multipartFiles(
-  files: Array<{ name: string; content: Buffer }>,
-  field = "files",
-) {
+function multipartFiles(files: Array<{ name: string; content: Buffer }>, field = "files") {
   const boundary = "----pp-test-boundary";
   const parts: Buffer[] = [];
   parts.push(
