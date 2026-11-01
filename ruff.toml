@@ -1,0 +1,9 @@
+required-version = "==0.17.3"
+target-version = "py311"
+line-length = 100
+extend-exclude = [".audit"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
