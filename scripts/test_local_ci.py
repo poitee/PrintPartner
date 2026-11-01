@@ -19,7 +19,7 @@ spec.loader.exec_module(local_ci)
 TOOLS = {
     "node": "v24.21.0", "npm": "11.0.0", "cargo": "cargo 1.99.0", "cargo-nextest": "0.9.148",
     "python3": "Python 3.12.0", "git": "git version 2.50.0", "ast-grep": "ast-grep 0.50.0",
-    "actionlint": "1.7.12", "zizmor": "zizmor 1.31.1",
+    "actionlint": "1.7.12", "zizmor": "zizmor 1.31.1", "cargo-machete": "0.9.2",
 }
 
 
@@ -66,7 +66,7 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci(), 0)
         for step in ["fmt", "clippy-off", "clippy-on", "nextest-off", "nextest-on", "doc-off", "doc-on",
                      "web-assets", "workaround-ratchet", "ast-grep", "boundaries", "selector-tests",
-                     "node-fixtures", "actionlint", "zizmor"]:
+                     "node-fixtures", "actionlint", "zizmor", "rust-deps"]:
             self.assertEqual(ci.summary[step], "PASS", step)
         for step in ["rust-windows", "rust-macos", "pr-evidence"]:
             self.assertEqual(ci.summary[step], "SKIP", step)
@@ -109,6 +109,17 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci(), 0)
         self.assertEqual(ci.summary["ast-grep"], "SKIP")
         self.assertIn("ast-grep 0.50.0", ci.output)
+
+    def test_rust_deps_requires_the_pinned_scanner(self):
+        for version in (None, "0.9.1"):
+            tools = {k: v for k, v in TOOLS.items() if k != "cargo-machete"}
+            if version:
+                tools["cargo-machete"] = version
+            ci = LocalCi(self, tools=tools)
+            self.assertEqual(ci("--only", "rust-deps", "--fail-on-skip"), 1)
+            self.assertEqual(ci.summary["rust-deps"], "SKIP")
+            self.assertEqual(ci.ran, [])
+            self.assertIn("cargo-machete", ci.output)
 
     def test_fail_on_skip_rejects_missing_tools_and_wrong_versions(self):
         for tools in ({k: v for k, v in TOOLS.items() if k != "npm"},

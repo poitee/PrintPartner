@@ -13,6 +13,7 @@ import argparse
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,9 @@ def cargo(step_id, title, ci_step, command, requires=(("cargo", None),)):
 
 
 NEXTEST = (("cargo", None), ("cargo-nextest", None))
+# The workflow's install step owns the scanner version.
+MACHETE_VERSION = re.search(r"tool: cargo-machete@([0-9.]+)",
+                            (ROOT / ".github/workflows/rust-deps-weekly.yml").read_text())[1]
 CARGO = "cargo {} --manifest-path rust/Cargo.toml --locked --workspace"
 
 STEPS = [
@@ -87,6 +91,11 @@ STEPS = [
          (CROSS_OS + "Fetch pinned historical schema commits",), requires=(("git", None),)),
     Step("fmt", "cargo fmt", ("cargo fmt --manifest-path rust/Cargo.toml --all --check",),
          (CROSS_OS + "cargo fmt",), requires=(("cargo", None),)),
+    Step("rust-deps", "unused Rust dependencies",
+         ("python3 -B -m unittest discover -s scripts -p test_cargo_machete.py -v",
+          "cargo machete rust"),
+         ("rust-deps-weekly.yml#Check unused Rust dependencies",),
+         requires=(("python3", None), ("cargo", None), ("cargo-machete", MACHETE_VERSION))),
     Step("web-assets", "desktop web assets and rust/bundle-manifest.json",
          ("node_path=$(node -p process.execPath)",
           "npm --prefix web ci",

@@ -67,6 +67,28 @@ Keep formatting in separate bounded PRs, then enforce the checks in CI and the
 opt-in hook. Do not treat configuration alone as a passing formatter readiness
 criterion or add broad source exclusions to manufacture a pass.
 
+## Unused Rust dependencies
+
+The `cargo-machete` job in `rust-deps-weekly.yml` now fails on unused dependencies
+and tool errors. It runs on ready PRs, pushes to `main`, merge groups, manual runs
+and the existing weekly schedule. Draft PRs skip the job. This replaces the
+weekly report-only behavior without changing required-check settings.
+
+Install the existing pinned version, then run its local CI step:
+
+```sh
+cargo install cargo-machete --version 0.9.2 --locked
+just ci --only rust-deps
+```
+
+The step tests the scanner
+against disposable crates, including an unused dependency that must fail, before
+running `cargo machete rust`. It scans all Rust crates without compiling them.
+The baseline has no findings. The only existing ignore is `tauri-build` in
+`pp-desktop`, documented next to its metadata entry for build-script use.
+Remove unused dependencies rather than adding ignores. Use an ignore only for a
+verified false positive, with a comment explaining the use the scanner missed.
+
 ## The OS jobs
 
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.
@@ -132,6 +154,7 @@ It runs the steps below in the order that `just ci --list` prints, and continues
 | `boundaries` | `check-boundaries.py --self-test` and `check-domain-deps.py --self-test` | `chain-tip-gate.yml` |
 | `historical-schema` | `rust/scripts/fetch-historical-schema-commits.sh`, which fetches the pinned commits that the pp-storage tests archive. It runs before nextest. | `rust (linux)` (required) |
 | `fmt` | Step 4 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
+| `rust-deps` | Scanner negative controls and `cargo machete rust`, pinned to 0.9.2 | `cargo-machete` in `rust-deps-weekly.yml` |
 | `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
 | `workaround-ratchet` | `scripts/workaround-ratchet.mjs` and its tests, which cap `TODO`, `eslint-disable` and Rust `#[allow]` markers, on Node 22.23.3. It runs after `web-assets`, which installs its parser. | `web` job of `web-ci.yml` |
 | `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 5 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
