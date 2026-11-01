@@ -32,7 +32,9 @@ async function listen(server: Server): Promise<string> {
 }
 
 async function close(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
 }
 
 describe("spoolman-client", () => {
@@ -111,13 +113,16 @@ describe("spoolman-client", () => {
   });
 
   it("rejects a Spoolman redirect to cloud metadata before following it", async () => {
-    vi.mocked(safeConnectorFetch).mockResolvedValueOnce(new Response(null, {
-      status: 302,
-      headers: { location: "http://169.254.169.254/latest/meta-data/" },
-    }));
+    vi.mocked(safeConnectorFetch).mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest/meta-data/" },
+      }),
+    );
 
-    await expect(listSpoolmanFilaments({ base_url: "http://127.0.0.1:7912" }))
-      .rejects.toThrow(/redirect changed origin/);
+    await expect(listSpoolmanFilaments({ base_url: "http://127.0.0.1:7912" })).rejects.toThrow(
+      /redirect changed origin/,
+    );
     expect(safeConnectorFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -135,8 +140,9 @@ describe("spoolman-client", () => {
     });
     const sourceUrl = await listen(source);
     try {
-      await expect(listSpoolmanFilaments({ base_url: sourceUrl, api_key: "test-token" }))
-        .rejects.toThrow(/redirect changed origin/);
+      await expect(
+        listSpoolmanFilaments({ base_url: sourceUrl, api_key: "test-token" }),
+      ).rejects.toThrow(/redirect changed origin/);
       expect(destinationRequests).toBe(0);
     } finally {
       await close(source);
@@ -174,8 +180,9 @@ describe("spoolman-client", () => {
     });
     const baseUrl = await listen(server);
     try {
-      await expect(listSpoolmanFilaments({ base_url: baseUrl }))
-        .rejects.toThrow(/Too many Spoolman redirects/);
+      await expect(listSpoolmanFilaments({ base_url: baseUrl })).rejects.toThrow(
+        /Too many Spoolman redirects/,
+      );
       expect(requests).toBe(6);
     } finally {
       await close(server);
@@ -196,8 +203,7 @@ describe("spoolman-client", () => {
     });
     const sourceUrl = await listen(source);
     try {
-      await expect(useSpoolFilament({ base_url: sourceUrl }, 7, 100))
-        .rejects.toThrow(/redirect/i);
+      await expect(useSpoolFilament({ base_url: sourceUrl }, 7, 100)).rejects.toThrow(/redirect/i);
       expect(destinationRequests).toBe(0);
     } finally {
       await close(source);
@@ -234,7 +240,8 @@ describe("spoolman-client", () => {
   it("listSpoolmanFilaments parses array response with vendor objects", async () => {
     const server = createServer((_req, res) => {
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify([
+      res.end(
+        JSON.stringify([
           {
             id: 1,
             name: "A",
@@ -242,7 +249,8 @@ describe("spoolman-client", () => {
             material: "PLA",
             color_hex: "#111111",
           },
-        ]));
+        ]),
+      );
     });
     const baseUrl = await listen(server);
     try {

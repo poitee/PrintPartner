@@ -91,8 +91,9 @@ export function parseSpoolmanFilamentList(body: unknown): SpoolmanFilament[] {
   const rows: unknown[] = Array.isArray(body)
     ? body
     : envelope
-      ? [envelope.items, envelope.results, envelope.data]
-        .find((value): value is unknown[] => Array.isArray(value)) ?? []
+      ? ([envelope.items, envelope.results, envelope.data].find((value): value is unknown[] =>
+          Array.isArray(value),
+        ) ?? [])
       : [];
   const out: SpoolmanFilament[] = [];
   for (const row of rows) {
@@ -201,10 +202,14 @@ async function spoolmanFetch(
   let current = initial;
   const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const response = await safeConnectorFetch(current.toString(), {
-      headers: authHeaders(config),
-      signal,
-    }, { allowPrivate: true });
+    const response = await safeConnectorFetch(
+      current.toString(),
+      {
+        headers: authHeaders(config),
+        signal,
+      },
+      { allowPrivate: true },
+    );
     if (!FOLLOWABLE_REDIRECT_STATUSES.has(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) return response;
@@ -235,11 +240,12 @@ export async function testSpoolmanConnection(
         try {
           const body = await readBoundedJsonResponse(res, MAX_METADATA_RESPONSE_BYTES);
           if (body && typeof body === "object" && !Array.isArray(body)) {
-            detail = "version" in body && typeof body.version === "string"
-              ? `v${body.version}`
-              : "status" in body && typeof body.status === "string"
-                ? body.status
-                : "";
+            detail =
+              "version" in body && typeof body.version === "string"
+                ? `v${body.version}`
+                : "status" in body && typeof body.status === "string"
+                  ? body.status
+                  : "";
           }
         } catch {
           /* ignore parse errors */
@@ -309,8 +315,9 @@ export function parseSpoolmanSpoolList(body: unknown): SpoolmanSpool[] {
   const rows: unknown[] = Array.isArray(body)
     ? body
     : envelope
-      ? [envelope.items, envelope.results, envelope.data]
-        .find((value): value is unknown[] => Array.isArray(value)) ?? []
+      ? ([envelope.items, envelope.results, envelope.data].find((value): value is unknown[] =>
+          Array.isArray(value),
+        ) ?? [])
       : [];
   const out: SpoolmanSpool[] = [];
   for (const row of rows) {
@@ -345,22 +352,28 @@ export async function useSpoolFilament(
 ): Promise<void> {
   const baseUrl = normalizeSpoolmanBaseUrl(config.base_url ?? config.baseUrl);
   if (!baseUrl) throw new Error("Spoolman base_url is required");
-  const res = await safeConnectorFetch(`${apiRoot(baseUrl)}/spool/${spoolId}/use`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(config),
+  const res = await safeConnectorFetch(
+    `${apiRoot(baseUrl)}/spool/${spoolId}/use`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(config),
+      },
+      body: JSON.stringify({ use_length: useLengthMm }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     },
-    body: JSON.stringify({ use_length: useLengthMm }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  }, { allowPrivate: true });
+    { allowPrivate: true },
+  );
   if (res.status >= 300 && res.status < 400) {
     await cancelResponseBody(res);
     throw new Error("Spoolman use spool failed: redirect not allowed");
   }
   if (!res.ok) {
     const text = await readBoundedResponseText(res, MAX_ERROR_RESPONSE_BYTES).catch(() => "");
-    throw new Error(`Spoolman use spool failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+    throw new Error(
+      `Spoolman use spool failed: HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`,
+    );
   }
   await cancelResponseBody(res);
 }

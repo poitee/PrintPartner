@@ -30,22 +30,44 @@ describe("integration store", () => {
       testConnection: async () => ({ ok: true, message: "Spoolman connected" }),
     };
     const port = createIntegrationPort({
-      repo, statusExecution: execution,
-      getAdapter: (type) => type === "moonraker" ? printer : metadata,
+      repo,
+      statusExecution: execution,
+      getAdapter: (type) => (type === "moonraker" ? printer : metadata),
     });
     try {
-      const disabled = port.create({ type: "moonraker", name: "Disabled", config: { enabled: false } });
+      const disabled = port.create({
+        type: "moonraker",
+        name: "Disabled",
+        config: { enabled: false },
+      });
       const failed = port.create({ type: "moonraker", name: "Failed", config: { fail: true } });
       const unsupported = port.create({ type: "spoolman", name: "Spools", config: {} });
-      expect(await port.getStatus("missing")).toEqual({ state: "offline", message: "Integration not found" });
-      expect(await port.getStatus(disabled.id)).toEqual({ state: "offline", message: "Integration disabled" });
-      expect(await execution.probe(printer, { enabled: false })).toEqual({ state: "idle", message: "Idle" });
+      expect(await port.getStatus("missing")).toEqual({
+        state: "offline",
+        message: "Integration not found",
+      });
+      expect(await port.getStatus(disabled.id)).toEqual({
+        state: "offline",
+        message: "Integration disabled",
+      });
+      expect(await execution.probe(printer, { enabled: false })).toEqual({
+        state: "idle",
+        message: "Idle",
+      });
       expect(await port.test(disabled.id)).toEqual({ ok: true, message: "Connected" });
-      expect(await port.getStatus(failed.id)).toEqual({ state: "offline", message: "Host refused" });
-      expect(await port.getStatus(unsupported.id)).toEqual({ state: "unknown", message: "Status not supported for spoolman" });
+      expect(await port.getStatus(failed.id)).toEqual({
+        state: "offline",
+        message: "Host refused",
+      });
+      expect(await port.getStatus(unsupported.id)).toEqual({
+        state: "unknown",
+        message: "Status not supported for spoolman",
+      });
       await execution.stop();
       expect(await port.test(unsupported.id)).toEqual({ ok: true, message: "Spoolman connected" });
-      await expect(execution.probe(printer, {})).rejects.toThrow("Printer status execution stopped");
+      await expect(execution.probe(printer, {})).rejects.toThrow(
+        "Printer status execution stopped",
+      );
     } finally {
       await execution.stop();
       sqlite.close();
@@ -58,7 +80,11 @@ describe("integration store", () => {
     const sqlite = new SqliteDatabase(dir);
     sqlite.connect();
     const repo = new AppRepository(getDb(sqlite), undefined, sqlite.reposDir);
-    const port = createIntegrationPort({ repo, statusExecution: new StatusExecution(), getAdapter: () => undefined });
+    const port = createIntegrationPort({
+      repo,
+      statusExecution: new StatusExecution(),
+      getAdapter: () => undefined,
+    });
     try {
       const corrupt = [null, 7, { type: "bambu", config: { access_code: "keep-me" } }];
       repo.setSetting("integrations", JSON.stringify(corrupt));
@@ -210,20 +236,16 @@ describe("integration store", () => {
     const spoolman = port.create({ type: "spoolman", name: "Spools", config: {} });
 
     const listed = port.list();
-    const capabilitiesOf = (id: string) =>
-      listed.find((row) => row.id === id)?.capabilities;
+    const capabilitiesOf = (id: string) => listed.find((row) => row.id === id)?.capabilities;
 
     // Moonraker browses files and serves cameras.
-    expect(capabilitiesOf(moonraker.id))
-      .toEqual({ files: true, cameras: true, status: true });
+    expect(capabilitiesOf(moonraker.id)).toEqual({ files: true, cameras: true, status: true });
     // Bambu reports print state but browses no files, so it is a printer host
     // that can bind a Plan even though it cannot list stored files. The client
     // used to hide Plan binding from it by hardcoding moonraker/prusalink.
-    expect(capabilitiesOf(bambu.id))
-      .toEqual({ files: false, cameras: false, status: true });
+    expect(capabilitiesOf(bambu.id)).toEqual({ files: false, cameras: false, status: true });
     // Spoolman is not a printer host at all.
-    expect(capabilitiesOf(spoolman.id))
-      .toEqual({ files: false, cameras: false, status: false });
+    expect(capabilitiesOf(spoolman.id)).toEqual({ files: false, cameras: false, status: false });
 
     expect(port.get(bambu.id)?.capabilities?.status).toBe(true);
 

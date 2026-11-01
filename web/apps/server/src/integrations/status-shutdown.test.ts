@@ -9,7 +9,9 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 
 function barrier() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -34,12 +36,21 @@ it("refuses a real printer response released after application shutdown begins",
   vi.stubEnv("PRINT_PARTNER_API_KEY", "");
   const ports = createSelfHostPorts(dir);
   await ports.db.connect();
-  ports.repository.setSetting("integrations", JSON.stringify([{
-    id: "host", type: "moonraker", name: "Host",
-    config: { base_url: `http://127.0.0.1:${address.port}` },
-  }]));
+  ports.repository.setSetting(
+    "integrations",
+    JSON.stringify([
+      {
+        id: "host",
+        type: "moonraker",
+        name: "Host",
+        config: { base_url: `http://127.0.0.1:${address.port}` },
+      },
+    ]),
+  );
   const app = await buildApp(loadConfig(), ports);
-  app.addHook("preClose", async () => { closing.resolve(); });
+  app.addHook("preClose", async () => {
+    closing.resolve();
+  });
   try {
     const response = app.inject({ method: "GET", url: "/api/v1/integrations/host/status" });
     await entered.promise;
@@ -48,7 +59,10 @@ it("refuses a real printer response released after application shutdown begins",
     release.resolve();
     const result = await response;
     expect(result.statusCode).toBe(200);
-    expect(result.json()).toEqual({ state: "offline", message: "Printer status execution stopped" });
+    expect(result.json()).toEqual({
+      state: "offline",
+      message: "Printer status execution stopped",
+    });
     await stopped;
   } finally {
     release.resolve();
