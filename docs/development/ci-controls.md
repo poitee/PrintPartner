@@ -29,7 +29,8 @@ CODEOWNERS assigns these paths to `@poitee`:
 - The PR evidence checker and its test, and the `scripts/linear/` directory.
   Linear PR sync runs a script from that directory with the Linear secret. Python imports files next to that script before the standard library.
 - `scripts/release.mjs`, `web/scripts/atomic-package-build.mjs`, `Dockerfile`, and `docker-entrypoint.sh`, which the release workflow runs directly or builds into the published image.
-- `rust/ast-grep-baseline.json`, `scripts/workaround-baseline.json`, and Rust snapshot directories under `rust/crates/`.
+- `rust/ast-grep-baseline.json`, `rust/clippy-limits-baseline.json`,
+  `scripts/workaround-baseline.json`, and Rust snapshot directories under `rust/crates/`.
 
 The workflow `.github/workflows/actionlint.yml` starts on every `pull_request`, on pushes to `main` and `master`, on merge groups and on manual dispatch.
 Its `changes` job selects the `actionlint` and `zizmor` jobs.

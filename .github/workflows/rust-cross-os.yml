@@ -202,6 +202,14 @@ jobs:
         # Keep rebuild-on clippy on Linux/Windows PRs; macOS PRs still skip it.
         if: ${{ !cancelled() && steps.assets.outcome == 'success' && (env.RUST_OS != 'macos' || github.event_name != 'pull_request') }}
         run: cargo clippy --manifest-path rust/Cargo.toml --locked ${{ env.CARGO_SCOPE }} --all-targets --keep-going --features desktop_rebuild -- -D warnings
+      - name: Check Rust Clippy limits
+        if: ${{ !cancelled() && steps.assets.outcome == 'success' && env.RUST_OS == 'linux' }}
+        env:
+          RATCHET_BASE: ${{ github.event_name == 'push' && github.event.before || 'refs/heads/main' }}
+        run: |
+          git fetch --no-tags --depth=1 origin "+$RATCHET_BASE:refs/remotes/origin/main"
+          python3 -B -m unittest discover -s rust/scripts -p test_clippy_limits.py -v
+          python3 -B rust/scripts/check-clippy-limits.py
       - name: nextest (desktop_rebuild off)
         if: ${{ !cancelled() && steps.assets.outcome == 'success' }}
         timeout-minutes: 45

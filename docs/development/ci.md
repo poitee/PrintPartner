@@ -91,6 +91,34 @@ verified false positive, with a comment explaining the use the scanner missed.
 
 ## The OS jobs
 
+### Rust complexity limits
+
+The Linux build also runs `rust/scripts/check-clippy-limits.py`. It checks the
+whole workspace and all targets with `desktop_rebuild` off and on. It enables
+Clippy's `cognitive_complexity`, `too_many_lines`, `match_same_arms`, and
+`if_same_then_else` lints with their pinned-toolchain default thresholds.
+The existing `-D warnings` passes still run separately.
+
+`rust/clippy-limits-baseline.json` records each lint's count in each feature
+mode. The checker counts a source span once when both library and test builds
+report it. Dependency diagnostics do not count. Compilation errors, incomplete
+Cargo JSON, and unknown or removed lints fail the check.
+
+Counts must match the baseline. Fix new findings rather than raising it.
+After removing findings, regenerate the counts with
+`python3 rust/scripts/check-clippy-limits.py --update`.
+Both checking and updating reject baseline increases over `origin/main`.
+The first landing permits a baseline only when that file does not yet exist
+on `origin/main`. A missing base ref is an error.
+
+CI compares a main push with the commit it replaced. Other events compare
+with main. `just ci --only clippy-limits` fetches main without making the
+local clone shallow, runs the checker's negative controls, and checks the
+workspace. Run it on Linux after building the desktop assets and manifest.
+The extra Clippy passes reuse the build cache but still visit both feature
+modes. These counts cap existing findings; they do not mean the Rust
+complexity backlog is fixed.
+
 The workflow has one job per OS. Each job uses the toolchain pinned in `rust-toolchain.toml`.
 
 | Check name | Runner | Packages | Tests |
@@ -158,6 +186,7 @@ It runs the steps below in the order that `just ci --list` prints, and continues
 | `web-assets` | Desktop web build and `rust/bundle-manifest.json` | `rust (linux)` (required) |
 | `workaround-ratchet` | `scripts/workaround-ratchet.mjs` and its tests, which cap `TODO`, `eslint-disable` and Rust `#[allow]` markers, on Node 22.23.3. It runs after `web-assets`, which installs its parser. | `web` job of `web-ci.yml` |
 | `clippy-off`, `clippy-on`, `nextest-off`, `nextest-on`, `doc-off`, `doc-on` | Steps 5 to 10 of the OS jobs, with the Linux `--workspace` scope | `rust (linux)` (required) |
+| `clippy-limits` | Clippy complexity negative controls and baseline check, with both feature modes on Linux | `rust (linux)` (required) |
 | `node-fixtures` | The `--check` mode of each Node parity fixture generator, and the HTTP route inventory diff, on Node 22.23.3 | `desktop-contracts.yml` and `auth-admission-freshness.yml` |
 
 Except where noted below, each step runs the command lines of its workflow step without changes. The script sets the same environment that CI sets: `NEXTEST_FILTER`, `PP_TEST_NODE`, `VITE_PRINT_PARTNER_DESKTOP`, and `RUNNER_TEMP`. The cargo steps also get `INSTA_UPDATE=no`, so a snapshot mismatch fails the step instead of writing a `.snap.new` file. `RUNNER_TEMP` is under `$CARGO_TARGET_DIR/local-ci`, or under `rust/target/local-ci` if `CARGO_TARGET_DIR` is not set. The local command differs from CI in these ways:

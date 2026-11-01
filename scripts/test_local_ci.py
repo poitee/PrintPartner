@@ -96,6 +96,15 @@ class LocalCiTests(unittest.TestCase):
         self.assertEqual(ci.summary["doc-on"], "PASS")
         self.assertIn("1 failed", ci.output)
 
+    @unittest.skipUnless(local_ci.sys.platform == "linux", "Clippy baseline needs Linux")
+    def test_clippy_limits_runs_after_clippy_and_propagates_failure(self):
+        ci = LocalCi(self, fail={"clippy-limits"})
+        self.assertEqual(ci(), 1)
+        self.assertEqual(ci.summary["clippy-limits"], "FAIL")
+        self.assertLess(ci.ran.index("clippy-on"), ci.ran.index("clippy-limits"))
+        self.assertIn("nextest-on", ci.ran)
+        self.assertIn("clippy-limits", ci.output)
+
     def test_a_missing_tool_skips_its_step_with_the_reason_and_runs_nothing_for_it(self):
         tools = {k: v for k, v in TOOLS.items() if k != "actionlint"}
         ci = LocalCi(self, tools=tools)

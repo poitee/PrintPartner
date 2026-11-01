@@ -6,6 +6,7 @@
 /rust/scripts/check-* @poitee
 /rust/deny.toml @poitee
 /rust/ast-grep-baseline.json @poitee
+/rust/clippy-limits-baseline.json @poitee
 /scripts/workaround-baseline.json @poitee
 /rust/crates/**/snapshots/ @poitee
 /scripts/check-github-actions-pinned.sh @poitee
