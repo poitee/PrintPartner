@@ -18,10 +18,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import type { Pool } from "pg";
 import { AppRepository, type SchemaTables } from "../db/repository.js";
 import * as pgSchema from "../db/schema-pg.js";
-import {
-  registerPostgresSyncQuery,
-  unregisterPostgresSyncQuery,
-} from "../db/sync-db-bridge.js";
+import { registerPostgresSyncQuery, unregisterPostgresSyncQuery } from "../db/sync-db-bridge.js";
 
 const roots: string[] = [];
 
@@ -45,10 +42,12 @@ async function fixture(planCount = 1) {
     const profile = repo.createProfile(`Assistant Progress ${index + 1}`, source.id);
     acceptPlanForTest(repo, profile.id);
     const part = repo.listParts(profile.id).parts[0]!;
-    const remapped = editAcceptedPartsForTest(repo, profile.id, [{
-      projectionPartId: part.id,
-      quantityOverride: 1,
-    }]);
+    const remapped = editAcceptedPartsForTest(repo, profile.id, [
+      {
+        projectionPartId: part.id,
+        quantityOverride: 1,
+      },
+    ]);
     const acceptedPart = repo.getPartRow(remapped.get(part.id)!);
     if (!acceptedPart) throw new Error("test accepted Part is missing");
     return { profile, part: acceptedPart };
@@ -225,11 +224,7 @@ describe("assistant accepted Progress tools", () => {
 
   it("does not read compatibility ProfileSummary for accepted Progress tools", async () => {
     const { repo, profile } = await fixture();
-    const remaining = await invokeAssistantTool(
-      "get_remaining",
-      { plan_id: profile.id },
-      { repo },
-    );
+    const remaining = await invokeAssistantTool("get_remaining", { plan_id: profile.id }, { repo });
     expect(JSON.parse(remaining.content)).toMatchObject({
       plan_id: profile.id,
       plan_name: "Assistant Progress 1",
@@ -381,12 +376,15 @@ describe("assistant accepted Progress tools", () => {
     const capturedErrors: unknown[][] = [];
     await app.register(rateLimit, { global: false });
     app.decorateRequest("tenantId", "");
-    app.addHook("onRequest", async (request: { tenantId: string; log: { error: (...args: unknown[]) => void } }) => {
-      request.tenantId = "default";
-      request.log.error = (...args: unknown[]) => {
-        capturedErrors.push(args);
-      };
-    });
+    app.addHook(
+      "onRequest",
+      async (request: { tenantId: string; log: { error: (...args: unknown[]) => void } }) => {
+        request.tenantId = "default";
+        request.log.error = (...args: unknown[]) => {
+          capturedErrors.push(args);
+        };
+      },
+    );
     await registerAssistantRoutes(app, { repo, config: loadConfig(), jobs });
     await app.ready();
     const archiveAcceptedPlan = repo.archiveAcceptedPlan.bind(repo);
@@ -593,7 +591,9 @@ describe("assistant accepted Progress tools", () => {
         payload: { action },
       });
       expect(response.statusCode).toBe(400);
-      expect(response.json()).toMatchObject({ detail: "Accepted Plan basis does not match action Plan" });
+      expect(response.json()).toMatchObject({
+        detail: "Accepted Plan basis does not match action Plan",
+      });
       expect(response.body).not.toContain(second.profile.name);
       expect(repo.getProfileHeader(first.profile.id)?.archived_at).toBeNull();
       expect(repo.getProfileHeader(second.profile.id)?.archived_at).toBeNull();

@@ -157,20 +157,19 @@ export function normalizeCompatibility(raw: unknown): NormalizedCompatibility | 
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const sourceName =
-    o.source_name != null ? String(o.source_name).trim() : o.name != null ? String(o.name).trim() : "";
+    o.source_name != null
+      ? String(o.source_name).trim()
+      : o.name != null
+        ? String(o.name).trim()
+        : "";
   if (!sourceName) return null;
 
   const attaches_to = parseAttaches(o.attaches_to ?? o.attaches_to_bases);
   const basesFromFlat = asStringList(o.attaches_to_bases);
-  const attaches_to_bases = [
-    ...new Set([...attaches_to.map((a) => a.base), ...basesFromFlat]),
-  ];
+  const attaches_to_bases = [...new Set([...attaches_to.map((a) => a.base), ...basesFromFlat])];
 
   const conflicts_with = [
-    ...new Set([
-      ...asStringList(o.conflicts_with),
-      ...asStringList(o.conflicts),
-    ]),
+    ...new Set([...asStringList(o.conflicts_with), ...asStringList(o.conflicts)]),
   ];
 
   const not_for = asStringList(o.not_for);
@@ -231,9 +230,7 @@ export function formatCompatibilityDigestLine(c: NormalizedCompatibility): strin
     const sample = c.replaces_parts
       .slice(0, 2)
       .map((p) =>
-        p.to_slug_or_path
-          ? `${p.from_slug_or_path}→${p.to_slug_or_path}`
-          : p.from_slug_or_path,
+        p.to_slug_or_path ? `${p.from_slug_or_path}→${p.to_slug_or_path}` : p.from_slug_or_path,
       )
       .join("; ");
     bits.push(`replaces_parts=${sample}`);

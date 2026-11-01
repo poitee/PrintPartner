@@ -25,9 +25,9 @@ describe("assistant remote streams", () => {
   });
 
   it("emits an Ollama NDJSON token when the final event has no newline", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
-      JSON.stringify({ message: { content: "last token" } }),
-    ));
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ message: { content: "last token" } })));
     vi.stubGlobal("fetch", fetchMock);
     const assistant = createOpenAiCompatibleAssistant({
       provider: "ollama",
@@ -51,12 +51,14 @@ describe("assistant remote streams", () => {
   });
 
   it("emits an Anthropic SSE token when the final event has no newline", async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
-      `data: ${JSON.stringify({
-        type: "content_block_delta",
-        delta: { type: "text_delta", text: "last token" },
-      })}`,
-    ));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        `data: ${JSON.stringify({
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "last token" },
+        })}`,
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const assistant = createAnthropicAssistant({
       apiKey: "test-key",

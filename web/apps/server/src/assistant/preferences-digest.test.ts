@@ -67,9 +67,7 @@ describe("isNoisePreferencePattern", () => {
     expect(isNoisePreferencePattern("add_addon", { source_name: "Voron-Stealthburner" })).toBe(
       false,
     );
-    expect(isNoisePreferencePattern("apply_build_recipe", { workflow: "full_stack" })).toBe(
-      false,
-    );
+    expect(isNoisePreferencePattern("apply_build_recipe", { workflow: "full_stack" })).toBe(false);
   });
 });
 
@@ -146,11 +144,10 @@ describe("buildPreferencesDigest", () => {
         params: { preset_id: "ldo_trident_r2" },
       }),
     ];
-    const digest = buildPreferencesDigest(
-      {} as AppRepository,
-      10,
-      { decisions: [], globalDecisions },
-    );
+    const digest = buildPreferencesDigest({} as AppRepository, 10, {
+      decisions: [],
+      globalDecisions,
+    });
     expect(digest).toContain("## Cross-plan memory (other builds)");
     expect(digest).toContain("Cross-plan prefer (2×): apply_stack_preset preset_id=ldo_trident_r2");
   });

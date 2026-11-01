@@ -16,7 +16,9 @@ export type PrintStatsAcceptedProgress =
       readonly reason: "compatibility_dirty" | "uninitialized" | "integrity" | "concurrent_update";
     };
 
-export function printStatsAcceptedProgress(progress: AcceptedProfileProgress): PrintStatsAcceptedProgress {
+export function printStatsAcceptedProgress(
+  progress: AcceptedProfileProgress,
+): PrintStatsAcceptedProgress {
   switch (progress.kind) {
     case "ready":
       return {

@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  summarizeKitCatalog,
-} from "./assistant-context.js";
+import { summarizeKitCatalog } from "./assistant-context.js";
 
 const sampleCatalog = {
   version: 1,

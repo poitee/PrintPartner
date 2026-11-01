@@ -13,10 +13,7 @@ import {
   normalizeStacks,
 } from "./domain-pack.js";
 
-const FIXTURE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../test-fixtures/kit-workspace",
-);
+const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "../test-fixtures/kit-workspace");
 
 describe("assistant domain pack", () => {
   const dirs: string[] = [];

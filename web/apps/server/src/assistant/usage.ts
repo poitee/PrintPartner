@@ -14,10 +14,7 @@ function utcDayKey(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
-export function loadDailyUsage(
-  repo: AppRepository,
-  now: Date = new Date(),
-): DailyUsageSnapshot {
+export function loadDailyUsage(repo: AppRepository, now: Date = new Date()): DailyUsageSnapshot {
   const today = utcDayKey(now);
   const raw = repo.getSetting(USAGE_KEY);
   if (!raw) return { date: today, requests: 0, tokens: 0 };

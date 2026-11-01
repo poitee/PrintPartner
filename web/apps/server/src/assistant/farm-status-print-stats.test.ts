@@ -142,7 +142,13 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
     expect(coreone.not_connected_reason).toBe("no printer host linked");
 
     expect(data.state_counts).toEqual({
-      idle: 1, printing: 1, paused: 0, complete: 0, error: 0, offline: 0, not_connected: 1,
+      idle: 1,
+      printing: 1,
+      paused: 0,
+      complete: 0,
+      error: 0,
+      offline: 0,
+      not_connected: 1,
     });
   });
 
@@ -151,13 +157,49 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
 
     const now = Date.now();
     const jobs = [
-      { status: "completed", printerId: "trident-r2", material: "LDO PLA", filamentConsumedG: 42, hoursAgo: 1 },
-      { status: "completed", printerId: "trident-r2", material: "LDO PLA", filamentConsumedG: 38, hoursAgo: 3 },
-      { status: "completed", printerId: "prusa-xl", material: "PETG", filamentConsumedG: 55, hoursAgo: 6 },
-      { status: "failed", printerId: "coreone1", material: "ABS", filamentConsumedG: 10, hoursAgo: 2 },
-      { status: "sent", printerId: "trident-r2", material: "LDO PLA", filamentConsumedG: null, hoursAgo: 0.2 },
+      {
+        status: "completed",
+        printerId: "trident-r2",
+        material: "LDO PLA",
+        filamentConsumedG: 42,
+        hoursAgo: 1,
+      },
+      {
+        status: "completed",
+        printerId: "trident-r2",
+        material: "LDO PLA",
+        filamentConsumedG: 38,
+        hoursAgo: 3,
+      },
+      {
+        status: "completed",
+        printerId: "prusa-xl",
+        material: "PETG",
+        filamentConsumedG: 55,
+        hoursAgo: 6,
+      },
+      {
+        status: "failed",
+        printerId: "coreone1",
+        material: "ABS",
+        filamentConsumedG: 10,
+        hoursAgo: 2,
+      },
+      {
+        status: "sent",
+        printerId: "trident-r2",
+        material: "LDO PLA",
+        filamentConsumedG: null,
+        hoursAgo: 0.2,
+      },
       // outside the default 8h lookback window — must NOT be counted
-      { status: "completed", printerId: "prusa-xl", material: "PETG", filamentConsumedG: 999, hoursAgo: 30 },
+      {
+        status: "completed",
+        printerId: "prusa-xl",
+        material: "PETG",
+        filamentConsumedG: 999,
+        hoursAgo: 30,
+      },
     ];
 
     for (const j of jobs) {
@@ -183,9 +225,9 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
     expect(data.plates_failed).toBe(1);
     expect(data.filament_consumed_g).toBe(42 + 38 + 55 + 10); // excludes the null and the out-of-window row
     expect(data.active_plans.kind).toBe("available");
-    expect(
-      data.active_plans.plans.some((p: { plan_id: number }) => p.plan_id === plan.id),
-    ).toBe(true);
+    expect(data.active_plans.plans.some((p: { plan_id: number }) => p.plan_id === plan.id)).toBe(
+      true,
+    );
 
     // custom window: widen to 48h to pick up the previously-excluded row
     const wide = JSON.parse(
@@ -313,11 +355,10 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
     expect(data.error).toBeUndefined();
     expect(JSON.stringify(data)).not.toContain("secret SQL");
     expect(JSON.stringify(log.mock.calls)).not.toContain("secret SQL");
-    expect(log).toHaveBeenCalledWith(
-      "error",
-      "[assistant] Plan progress collection unavailable",
-      { failure: "unexpected", operation: "get_print_stats" },
-    );
+    expect(log).toHaveBeenCalledWith("error", "[assistant] Plan progress collection unavailable", {
+      failure: "unexpected",
+      operation: "get_print_stats",
+    });
   });
 
   it("get_farm_status does not error when fleet is empty", async () => {
@@ -364,7 +405,11 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
   });
 
   it("get_print_stats accepts a numeric-string hours value", async () => {
-    const result = await invokeAssistantTool("get_print_stats", { hours: "24" as unknown as number }, { repo });
+    const result = await invokeAssistantTool(
+      "get_print_stats",
+      { hours: "24" as unknown as number },
+      { repo },
+    );
     const data = JSON.parse(result.content);
     expect(data.error).toBeUndefined();
     expect(data.window_hours).toBe(24);
@@ -400,7 +445,9 @@ describe("print_jobs schema supports get_farm_status / get_print_stats", () => {
     // 3 completed / (3 completed + 1 failed) — the "sent" row is in flight.
     expect(data.completion_rate).toBe(0.75);
 
-    const trident = data.by_printer.find((p: { printer_id: string }) => p.printer_id === "trident-r2");
+    const trident = data.by_printer.find(
+      (p: { printer_id: string }) => p.printer_id === "trident-r2",
+    );
     expect(trident.plates_sent).toBe(4);
     expect(trident.plates_completed).toBe(2);
     expect(trident.plates_failed).toBe(1);

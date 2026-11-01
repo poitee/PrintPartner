@@ -96,7 +96,6 @@ Supports single lane or multi-lane expandable setups.
     expect(src).not.toMatch(/EMU|Trianglelab|DW-Tas/i);
   });
 
-
   it("surfaces PCB choice as variant and User_Mods as optional", () => {
     const { decisions } = detectBuildDecisionsHeuristic({ treeSummary: emuSummary });
     const byId = Object.fromEntries(decisions.map((d) => [d.id, d]));

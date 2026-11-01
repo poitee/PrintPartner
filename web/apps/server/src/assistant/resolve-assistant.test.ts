@@ -7,10 +7,7 @@ import { createSelfHostPorts } from "../adapters/self-host/index.js";
 import { loadConfig } from "../config.js";
 import { createIntegrationPort } from "../integrations/store.js";
 import { getIntegrationAdapter } from "../integrations/registry.js";
-import {
-  parseSearchProviderOverride,
-  resolveAssistantRuntime,
-} from "./resolve-assistant.js";
+import { parseSearchProviderOverride, resolveAssistantRuntime } from "./resolve-assistant.js";
 
 describe("parseSearchProviderOverride", () => {
   it("maps the removed SearXNG setting to its former DuckDuckGo fallback", () => {
