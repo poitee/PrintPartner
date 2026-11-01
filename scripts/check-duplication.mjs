@@ -55,16 +55,26 @@ function jscpdEntry() {
 
 const version = (name) => JSON.parse(readFileSync(requireWeb.resolve(`${name}/package.json`), "utf8")).version;
 
+export function hashPrettierInputs(config, ignore) {
+  const normalizeLineEndings = (text) => text.replace(/\r\n?/g, "\n");
+  return createHash("sha256")
+    .update(normalizeLineEndings(config))
+    .update("\0")
+    .update(normalizeLineEndings(ignore))
+    .digest("hex");
+}
+
 // Counts are comparable only when measured the same way. Bump the revision when
 // the scanner arguments or the normalization change.
-const prettierInputsHash = createHash("sha256")
-  .update(readFileSync(join(REPO_ROOT, ".prettierrc.json")))
-  .update("\0")
-  .update(readFileSync(join(REPO_ROOT, ".prettierignore")))
-  .digest("hex");
+const prettierInputsHash = hashPrettierInputs(
+  readFileSync(join(REPO_ROOT, ".prettierrc.json"), "utf8"),
+  readFileSync(join(REPO_ROOT, ".prettierignore"), "utf8"),
+);
 export const METHOD = `revision 2; jscpd ${version("jscpd")}; prettier ${version("prettier")}; config ${prettierInputsHash}`;
 
-const SKIPPED_DIRS = new Set(["node_modules", "dist", "target", "fixtures", "snapshots", "__snapshots__"]);
+const SKIPPED_DIRS = new Set(
+  IGNORED.filter((glob) => glob.startsWith("**/") && glob.endsWith("/**")).map((glob) => glob.slice(3, -3)),
+);
 const FORMATTED = ["web/**/*.{ts,tsx,mts,cts,js,mjs,cjs,jsx}", ...IGNORED.map((glob) => `!${glob}`)];
 
 // Token counts depend on formatting: Prettier adds trailing commas and

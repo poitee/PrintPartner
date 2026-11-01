@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { AREAS, baselineAtRef, compare, jscpdArgs, main as runMain, METHOD, parseBaseline, readReport, scan } from "./check-duplication.mjs";
+import { AREAS, baselineAtRef, compare, hashPrettierInputs, jscpdArgs, main as runMain, METHOD, parseBaseline, readReport, scan } from "./check-duplication.mjs";
 
 const main = (...args) => runMain(...args, () => null);
 
@@ -32,6 +32,10 @@ test("baseline must list every area with a nonnegative integer", () => {
   for (const bad of [{ method: "", counts: zero() }, { method: 1, counts: zero() }, { method: METHOD }]) {
     assert.throws(() => parseBaseline(JSON.stringify(bad)));
   }
+});
+
+test("formatter config fingerprint ignores checkout line-ending changes", () => {
+  assert.equal(hashPrettierInputs("config\nvalue\n", "ignored\npath\n"), hashPrettierInputs("config\r\nvalue\r\n", "ignored\r\npath\r\n"));
 });
 
 test("an empty or malformed jscpd report never passes", () => {
