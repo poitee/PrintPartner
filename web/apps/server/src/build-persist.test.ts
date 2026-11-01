@@ -8,10 +8,7 @@ import { tmpdir } from "node:os";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createSelfHostPorts } from "./adapters/self-host/index.js";
-import {
-  resolveCaseInsensitiveRepoPath,
-  resolvePartStl,
-} from "./services/part-paths.js";
+import { resolveCaseInsensitiveRepoPath, resolvePartStl } from "./services/part-paths.js";
 
 describe("Build persistence and STL preview", () => {
   it("resolves STL paths case-insensitively on disk", () => {
@@ -19,10 +16,7 @@ describe("Build persistence and STL preview", () => {
     mkdirSync(join(dir, "Probes", "KlickyProbe", "STL"), { recursive: true });
     const stlPath = join(dir, "Probes", "KlickyProbe", "STL", "1mm_Spacer.stl");
     writeFileSync(stlPath, "solid test");
-    const resolved = resolveCaseInsensitiveRepoPath(
-      dir,
-      "probes/klickyprobe/stl/1mm_spacer.stl",
-    );
+    const resolved = resolveCaseInsensitiveRepoPath(dir, "probes/klickyprobe/stl/1mm_spacer.stl");
     expect(resolved).toBe(stlPath);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -47,11 +41,13 @@ describe("Build persistence and STL preview", () => {
     const parts = repo.listParts(plan.id).parts;
     expect(parts.length).toBe(1);
     const priorPartId = parts[0]!.id;
-    const partId = editAcceptedPartsForTest(repo, plan.id, [{
-      projectionPartId: priorPartId,
-      included: false,
-      quantityOverride: 3,
-    }]).get(priorPartId)!;
+    const partId = editAcceptedPartsForTest(repo, plan.id, [
+      {
+        projectionPartId: priorPartId,
+        included: false,
+        quantityOverride: 3,
+      },
+    ]).get(priorPartId)!;
     const reloaded = repo.listParts(plan.id).parts[0]!;
     expect(reloaded.included).toBe(false);
     expect(reloaded.quantity_effective).toBe(3);

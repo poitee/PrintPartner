@@ -71,13 +71,16 @@ describe("profile-sync reload failure semantics", () => {
     roots.push(dataDir);
     const ports = createSelfHostPorts(dataDir);
     await ports.db.connect();
-    const app = await buildApp({
-      ...loadConfig(),
-      dataDir,
-      multiUser: true,
-      authRequired: true,
-      sessionSecret: "profile-sync-test-secret",
-    }, ports);
+    const app = await buildApp(
+      {
+        ...loadConfig(),
+        dataDir,
+        multiUser: true,
+        authRequired: true,
+        sessionSecret: "profile-sync-test-secret",
+      },
+      ports,
+    );
 
     try {
       expect(profileSync.startManagedProfileSync).not.toHaveBeenCalled();

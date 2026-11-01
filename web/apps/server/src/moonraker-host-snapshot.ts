@@ -2,7 +2,10 @@ import { z } from "zod";
 import { isRecord } from "./lib/guards.js";
 
 const moonrakerRow = z.object({
-  id: z.string().min(1).refine((id) => Buffer.byteLength(id, "utf8") <= 256),
+  id: z
+    .string()
+    .min(1)
+    .refine((id) => Buffer.byteLength(id, "utf8") <= 256),
   config: z.record(z.string(), z.unknown()).nullish(),
 });
 
@@ -52,7 +55,10 @@ export function moonrakerHostSnapshot(raw: string | undefined | null) {
     const apiKey = typeof key === "string" ? key : null;
     // Project before serialization so one huge row cannot exceed the snapshot limit
     // and stop every healthy poller. Rust still knows the id and does not poll it.
-    if (configBytes(baseUrl) > MAX_CONFIG_BYTES || (apiKey !== null && configBytes(apiKey) > MAX_CONFIG_BYTES)) {
+    if (
+      configBytes(baseUrl) > MAX_CONFIG_BYTES ||
+      (apiKey !== null && configBytes(apiKey) > MAX_CONFIG_BYTES)
+    ) {
       return projectedHost(item.id, config.enabled !== false);
     }
     return { id: item.id, base_url: baseUrl, api_key: apiKey, enabled: config.enabled !== false };
