@@ -23,8 +23,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || (github.event_name == 'push' && github.run_attempt == '1' && !startsWith(github.ref, 'refs/tags/')) && 'push' || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.run_attempt == '1' && !startsWith(github.ref, 'refs/tags/')) }}
+  # Each main push compares with the commit it replaced, so a cancelled push
+  # run would let its baseline increase through unchecked.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   jscpd:

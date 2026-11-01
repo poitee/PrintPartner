@@ -92,6 +92,7 @@ the baseline stable through the formatter rollout.
 `scripts/duplication-baseline.json` caps each area separately. Any increase fails,
 with clone locations for files changed since `origin/main`, or the ref in
 `PP_DUPLICATION_BASE`. CI uses the PR base or the commit before a main push.
+Every main push gets its own run, which a newer push never cancels.
 Missing reports, source-free scans and scanner errors also fail.
 
 Extract shared code instead of copying it. After removing duplication, run
@@ -355,7 +356,7 @@ To collect twenty consecutive green hosted `rust (macos)` job links after tip is
 
 ## Other Rust workflows
 
-- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. It is the one push-to-`main` CI workflow that does not cancel superseded runs: a cancelled run would skip the ratchet for that push's diff, and the job is short. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
+- **Desktop Rust (hosted)** (`desktop-fleet-rust.yml`) runs only the ast-grep ratchet, in the `ast-grep ratchet` job. It runs on pull requests and pushes to `main` that change `rust/**`. Every push to `main` gets its own run, so a merge of two individually green pull requests is still checked. Like the duplication check, it does not cancel superseded runs: a cancelled run would skip the ratchet for that push's diff, and the job is short. On a push, the ratchet compares against the `main` commit that push replaced. It does not build or test Rust; `rust (linux)` does that once per push.
 - **Native macOS bundle** (`desktop-native-macos.yml`) builds the unsigned macOS app and runs the macOS storage tests. Its `changes` job selects them by event and changed paths:
   - On pull requests, `linux-precheck`, `server-smoke`, the arm64 `bundle` and `macos-storage-gate` run only when the PR has the exact `macos` label, is not a draft, and changes desktop inputs. The selector includes the Rust inputs above, the native workflow, its cleanup tests and the Rust verification helper directory. Fork PRs skip `macos-storage-gate`. The Intel bundle never runs on pull requests.
   - Pushes to `main` or `master`, merge groups, nightly and manual runs select every job, including the Intel bundle.
@@ -441,7 +442,8 @@ is new.
 
 Every CI workflow that runs on pushes to `main` groups those pushes by workflow
 and ref and cancels the older run when a newer push arrives, except the ast-grep
-ratchet above. The newest `main` run tests every earlier merge, so a burst of
+ratchet above and the [duplication check](#duplicated-code). Both compare each
+push with the commit it replaced. The newest `main` run tests every earlier merge, so a burst of
 merges no longer queues one full run per merge. The cost is attribution: a
 cancelled merge has no result of its own. To find the merge that broke `main`,
 dispatch the workflow on each candidate SHA. Reruns (attempt 2 and later, which
