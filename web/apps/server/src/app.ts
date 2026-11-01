@@ -1,6 +1,14 @@
 import { StatusExecution } from "./integrations/status-execution.js";
 import { moonrakerHostSnapshot } from "./moonraker-host-snapshot.js";
-import { acquireDataDirectory, desktopContext, desktopPrincipal, desktopRateLimit, mappedDesktopTenant, mappedDesktopDatabaseAvailable, registerDesktopBoundary } from "./desktop-context.js";
+import {
+  acquireDataDirectory,
+  desktopContext,
+  desktopPrincipal,
+  desktopRateLimit,
+  mappedDesktopTenant,
+  mappedDesktopDatabaseAvailable,
+  registerDesktopBoundary,
+} from "./desktop-context.js";
 import { rustOwnedCopy } from "./db/rust-owned.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
@@ -21,15 +29,16 @@ import { registerBackupRoutes } from "./routes/backups.js";
 import { registerLoggingRoutes } from "./routes/logging.js";
 import { registerApiKeyManagementRoutes } from "./routes/api-key-management.js";
 import { registerMetricsRoutes } from "./routes/metrics.js";
-import { registerApiV1Plugin, registerOpenApi, registerOpenApiJsonRoutes } from "./routes/api-v1.js";
+import {
+  registerApiV1Plugin,
+  registerOpenApi,
+  registerOpenApiJsonRoutes,
+} from "./routes/api-v1.js";
 import { registerApiV2PlanPlugin } from "./routes/api-v2.js";
 import { registerAcceptedPlateRoutes } from "./routes/accepted-plates.js";
 import { registerPlanDraftRoutes } from "./routes/plan-drafts.js";
 import { registerAuthRoutes, registerTenantMiddleware } from "./routes/auth.js";
-import {
-  createAdminPreHandler,
-  registerApiKeyAuth,
-} from "./middleware/api-key.js";
+import { createAdminPreHandler, registerApiKeyAuth } from "./middleware/api-key.js";
 import { registerRequestLoggingMiddleware } from "./middleware/request-logging.js";
 import { validateProductionConfig } from "./config.js";
 import {
@@ -40,7 +49,10 @@ import {
 import fastifyStatic from "@fastify/static";
 import { existsSync } from "node:fs";
 import { rustOwnedNodeParticipants } from "./ownership/operation-cutover.js";
-import { beginSourceSyncAdmission, sourceSyncOwnedByRust } from "./ownership/source-sync-admission.js";
+import {
+  beginSourceSyncAdmission,
+  sourceSyncOwnedByRust,
+} from "./ownership/source-sync-admission.js";
 import { dirname, join, resolve } from "node:path";
 import { isBrowserDocumentNavigation, isSpaClientPath } from "./lib/spa-nav.js";
 import type { SaasDbStore } from "./adapters/saas/index.js";
@@ -68,10 +80,7 @@ import { readExternalAccessSettings } from "./services/external-access.js";
 import { listActivePrinterSendQueue } from "./services/printer-send-queue-store.js";
 import { sweepExpiredTransferArtifacts } from "./services/transfer-artifact-retention.js";
 import { migrateLegacySourceManifestOverridesForTenant } from "./services/source-manifest-migration.js";
-import {
-  MAX_SOURCE_UPLOAD_FILES,
-  MAX_SOURCE_UPLOAD_PARTS,
-} from "./services/archive-import.js";
+import { MAX_SOURCE_UPLOAD_FILES, MAX_SOURCE_UPLOAD_PARTS } from "./services/archive-import.js";
 import {
   KIT_BUNDLE_UPLOAD_TOO_LARGE_DETAIL,
   MAX_KIT_BUNDLE_UPLOAD_BYTES,
@@ -102,9 +111,7 @@ export function createPorts(config: ServerConfig): RuntimePorts {
   }
   return createSelfHostPorts(
     config.dataDir,
-    config.multiUser
-      ? ISOLATED_SOURCE_FILESYSTEM
-      : TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
+    config.multiUser ? ISOLATED_SOURCE_FILESYSTEM : TRUSTED_SINGLE_USER_SOURCE_FILESYSTEM,
     mappedDesktopTenant() ? "existing-current-schema" : "migrate",
   );
 }
@@ -140,7 +147,8 @@ function resolveAuthStore(ports: RuntimePorts, config: ServerConfig): AuthStore 
   const store = resolveStoreDb(ports);
   if (!store) return null;
   return createAuthStore(store.db, store.driver, {
-    claimDefaultTenantForFirstUser: mappedDesktopTenant() === null && !config.singleUserAuth && config.deployMode !== "saas",
+    claimDefaultTenantForFirstUser:
+      mappedDesktopTenant() === null && !config.singleUserAuth && config.deployMode !== "saas",
   });
 }
 
@@ -192,9 +200,7 @@ const ADMIN_ROUTE_PREFIXES = [
 
 function isAdministrativeRoute(url: string): boolean {
   const path = url.split("?")[0] ?? url;
-  return ADMIN_ROUTE_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
-  );
+  return ADMIN_ROUTE_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
 export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
@@ -223,7 +229,11 @@ export async function buildApp(config: ServerConfig, ports: RuntimePorts) {
   }
 }
 
-async function configureApp(app: FastifyInstance, config: ServerConfig, ports: RuntimePorts): Promise<void> {
+async function configureApp(
+  app: FastifyInstance,
+  config: ServerConfig,
+  ports: RuntimePorts,
+): Promise<void> {
   app.addHook("onSend", async (_request, reply, payload) => {
     if (!reply.hasHeader("Cache-Control")) {
       reply.header("Cache-Control", "private, no-store");
@@ -237,7 +247,8 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   // authenticates the signed principal; the public gateway does not admit this path.
   if (desktopContext() && repository) {
     app.get("/__desktop/moonraker-hosts", async (request, reply) => {
-      if (!desktopPrincipal(request)) return reply.code(403).send({ detail: "Desktop principal required" });
+      if (!desktopPrincipal(request))
+        return reply.code(403).send({ detail: "Desktop principal required" });
       const raw = repository.getSetting("integrations");
       const hosts = moonrakerHostSnapshot(raw);
       // 4xx: malformed stored settings fail closed immediately. 5xx stays reserved
@@ -302,8 +313,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
       if (route.config?.rateLimit != null) return;
       if (Array.isArray(route.onRequest)) {
         if (!route.onRequest.includes(desktopRateLimit)) route.onRequest.push(desktopRateLimit);
-      }
-      else if (route.onRequest) route.onRequest = [route.onRequest, desktopRateLimit];
+      } else if (route.onRequest) route.onRequest = [route.onRequest, desktopRateLimit];
       else route.onRequest = [desktopRateLimit];
     });
   }
@@ -327,9 +337,12 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   const requireAdmin = createAdminPreHandler(config, validateRequestApiKey);
   app.addHook("preHandler", async (request, reply) => {
     const mappedPath = mappedDesktopTenant()
-      ? decodeURIComponent(new URL(request.url, "http://desktop").pathname) : null;
-    const mappedAdminRoute = mappedPath && (isAdministrativeRoute(mappedPath) ||
-      isAdministrativeRoute(mappedPath.replace(/^\/api\/v[12](?=\/)/, "")));
+      ? decodeURIComponent(new URL(request.url, "http://desktop").pathname)
+      : null;
+    const mappedAdminRoute =
+      mappedPath &&
+      (isAdministrativeRoute(mappedPath) ||
+        isAdministrativeRoute(mappedPath.replace(/^\/api\/v[12](?=\/)/, "")));
     if (mappedAdminRoute && !request.sessionUser?.is_admin) {
       return reply.code(403).send({ detail: "Administrator access required" });
     }
@@ -340,10 +353,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
 
   if (config.staticDir && existsSync(config.staticDir)) {
     app.addHook("preHandler", async (request, reply) => {
-      if (
-        isSpaClientPath(request.url) &&
-        isBrowserDocumentNavigation(request)
-      ) {
+      if (isSpaClientPath(request.url) && isBrowserDocumentNavigation(request)) {
         return reply.sendFile("index.html", config.staticDir!);
       }
     });
@@ -354,12 +364,18 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
 
   if (repository) {
     const statusExecution = new StatusExecution();
-    app.addHook("preClose", async () => { await statusExecution.stop(); });
+    app.addHook("preClose", async () => {
+      await statusExecution.stop();
+    });
     // Rust owns a fenced operation's participants and every route alias; Node runs none of them.
     const rustOwned = rustOwnedNodeParticipants(config.dataDir);
     beginSourceSyncAdmission(config.dataDir, rustOwned);
     // The migration rewrites queue paths, so it moves with the printer send queue.
-    if (config.deployMode === "self-host" && !mappedDesktopTenant() && !rustOwned.has("migration.migrateLegacySelfHostExports")) {
+    if (
+      config.deployMode === "self-host" &&
+      !mappedDesktopTenant() &&
+      !rustOwned.has("migration.migrateLegacySelfHostExports")
+    ) {
       migrateLegacySelfHostExports(config.dataDir, repository);
     }
     const backgroundTenantIds = () => configuredTenantIds(config, authStore);
@@ -367,10 +383,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
       // The migration is a Source Sync participant; Rust runs it after cutover.
       if (sourceSyncOwnedByRust()) return;
       for (const tenantId of backgroundTenantIds()) {
-        const report = await migrateLegacySourceManifestOverridesForTenant(
-          repository,
-          tenantId,
-        );
+        const report = await migrateLegacySourceManifestOverridesForTenant(repository, tenantId);
         if (report.migrated.length > 0) {
           app.log.info(
             { tenantId, sourceIds: report.migrated.map((item) => item.sourceId) },
@@ -410,7 +423,11 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     const thumbsDir = join(config.dataDir, "thumbs");
     const coversDir = join(config.dataDir, "covers");
     const getRepo = () => repository;
-    const jobs = (ports.jobs as InProcessJobRunner) ?? createJobRunner(getRepo, config.dataDir, { tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes });
+    const jobs =
+      (ports.jobs as InProcessJobRunner) ??
+      createJobRunner(getRepo, config.dataDir, {
+        tenantDiskQuotaBytes: planning.tenantDiskQuotaBytes,
+      });
 
     // Extract SQLite instance for backup/restore
     let sqlite = null;
@@ -425,9 +442,8 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
       !rustOwned.has("worker.startManagedProfileSync")
     ) {
       const { startManagedProfileSync } = await import("./services/profile-sync-manager.js");
-      const { broadcastProfileSync, registerProfileSyncWebSocket } = await import(
-        "./services/profile-sync-broadcast.js"
-      );
+      const { broadcastProfileSync, registerProfileSyncWebSocket } =
+        await import("./services/profile-sync-broadcast.js");
       registerProfileSyncWebSocket(app);
       profileSyncHandle = startManagedProfileSync({
         repository,
@@ -498,22 +514,23 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
     }
 
     // Register backup routes (available regardless of auth mode)
-    if (!mappedDesktopTenant()) await registerBackupRoutes(app, {
-      dataDir: config.dataDir,
-      sqlite,
-      appVersion: config.version,
-      ...(sqlite
-        ? {
-            refreshDatabaseConsumers: () => {
-              const restoredDb = getDb(sqlite);
-              repository.replaceDatabase(restoredDb);
-              authStore?.replaceDatabase(restoredDb);
-              boardStore?.replaceDatabase(restoredDb);
-            },
-            afterDatabaseRefresh: migrateLegacySourceManifests,
-          }
-        : {}),
-    });
+    if (!mappedDesktopTenant())
+      await registerBackupRoutes(app, {
+        dataDir: config.dataDir,
+        sqlite,
+        appVersion: config.version,
+        ...(sqlite
+          ? {
+              refreshDatabaseConsumers: () => {
+                const restoredDb = getDb(sqlite);
+                repository.replaceDatabase(restoredDb);
+                authStore?.replaceDatabase(restoredDb);
+                boardStore?.replaceDatabase(restoredDb);
+              },
+              afterDatabaseRefresh: migrateLegacySourceManifests,
+            }
+          : {}),
+      });
 
     // Register logging routes
     await registerLoggingRoutes(app);
@@ -557,11 +574,7 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
         const { KIT_JSON_TOO_LARGE_DETAIL, KitJsonTooLargeError, parseKitBundleBuffer } =
           await import("./services/export-kit.js");
         try {
-          const buf = readBufferUnderDataDir(
-            config.dataDir,
-            path,
-            MAX_KIT_BUNDLE_UPLOAD_BYTES,
-          );
+          const buf = readBufferUnderDataDir(config.dataDir, path, MAX_KIT_BUNDLE_UPLOAD_BYTES);
           const data = parseKitBundleBuffer(buf, path);
           return repository.importKitBundle(data, trimmedString(body.new_name) || null);
         } catch (error) {
@@ -619,7 +632,6 @@ async function configureApp(app: FastifyInstance, config: ServerConfig, ports: R
   }
 
   registerOpenApiJsonRoutes(app);
-
 }
 
 export async function startServer(config: ServerConfig) {
@@ -652,9 +664,7 @@ export async function startServer(config: ServerConfig) {
       // One-time migration: move print_outcomes blob → print_job_parts SQL rows.
       if (ports.repository && !mappedDesktopTenant()) {
         try {
-          const { migratePrintOutcomesBlob } = await import(
-            "./services/printer-outcomes-store.js"
-          );
+          const { migratePrintOutcomesBlob } = await import("./services/printer-outcomes-store.js");
           migratePrintOutcomesBlob(ports.repository);
         } catch (err) {
           console.warn("[print-outcomes] blob migration skipped:", err);
@@ -664,13 +674,8 @@ export async function startServer(config: ServerConfig) {
       // Best-effort: upsert Advisor notes from shipped/imported domain pack onto matching sources.
       if (ports.repository && !mappedDesktopTenant()) {
         try {
-          const { backfillAdvisorNotesFromDomainPack } = await import(
-            "./assistant/domain-pack.js"
-          );
-          const result = backfillAdvisorNotesFromDomainPack(
-            ports.repository,
-            config.dataDir,
-          );
+          const { backfillAdvisorNotesFromDomainPack } = await import("./assistant/domain-pack.js");
+          const result = backfillAdvisorNotesFromDomainPack(ports.repository, config.dataDir);
           if (result.notes_upserted > 0) {
             console.info(
               `[assistant-domain] backfilled ${result.notes_upserted} advisor note(s) across ${result.sources_matched} source(s)`,
@@ -683,7 +688,9 @@ export async function startServer(config: ServerConfig) {
 
       app = await buildApp(config, ports);
       const desktop = desktopContext();
-      await app.listen(desktop ? { path: desktop.socket_path } : { host: config.host, port: config.port });
+      await app.listen(
+        desktop ? { path: desktop.socket_path } : { host: config.host, port: config.port },
+      );
       return { app, ports };
     } catch (err) {
       await app?.close();

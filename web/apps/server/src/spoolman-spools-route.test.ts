@@ -18,80 +18,94 @@ describe("GET /api/v1/integrations/:id/spoolman/spools", () => {
     delete process.env.PRINT_PARTNER_API_KEY;
   });
 
-  it.each([undefined, "1", "true"])("returns spools after admission with rebuild flag %j", async (flag) => {
-    if (flag === undefined) delete process.env.PP_DESKTOP_REBUILD;
-    else vi.stubEnv("PP_DESKTOP_REBUILD", flag);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string | URL) => {
-        const path = String(url);
-        if (path.includes("/api/v1/spool")) {
-          return new Response(
-            JSON.stringify([
-              {
-                id: 3,
-                filament_id: 7,
-                remaining_weight: 412.5,
-                location: "Shelf A",
-              },
-            ]),
-            { headers: { "content-type": "application/json" } },
+  it.each([undefined, "1", "true"])(
+    "returns spools after admission with rebuild flag %j",
+    async (flag) => {
+      if (flag === undefined) delete process.env.PP_DESKTOP_REBUILD;
+      else vi.stubEnv("PP_DESKTOP_REBUILD", flag);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string | URL) => {
+          const path = String(url);
+          if (path.includes("/api/v1/spool")) {
+            return new Response(
+              JSON.stringify([
+                {
+                  id: 3,
+                  filament_id: 7,
+                  remaining_weight: 412.5,
+                  location: "Shelf A",
+                },
+              ]),
+              { headers: { "content-type": "application/json" } },
+            );
+          }
+          return new Response("{}", {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          });
+        }),
+      );
+
+      const dir = mkdtempSync(join(tmpdir(), "pp-spoolman-spools-"));
+      process.env.PRINT_PARTNER_DATA_DIR = dir;
+      delete process.env.PRINT_PARTNER_API_KEY;
+
+      const config = loadConfig();
+      const ports = createSelfHostPorts(dir);
+      await ports.db.connect();
+      const integrations = createIntegrationPort({
+        statusExecution: new StatusExecution(),
+        repo: ports.repository,
+        getAdapter: (type) => (type === "spoolman" ? spoolmanAdapter : undefined),
+      });
+      const created = integrations.create({
+        type: "spoolman",
+        name: "Workshop",
+        config: { base_url: "http://192.168.1.50:7912", enabled: true },
+      });
+
+      const app = await buildApp(config, ports);
+
+      if (flag !== undefined) {
+        for (const resource of ["spools", "filaments"]) {
+          const denied = await app.inject(
+            `/api/v1/integrations/${created.id}/spoolman/${resource}`,
           );
+          expect(denied.statusCode).toBe(403);
+          expect(denied.json()).toEqual({
+            status: 403,
+            title: "Forbidden",
+            detail: "Feature spoolman is disabled.",
+            code: "FEATURE_DISABLED",
+          });
         }
-        return new Response("{}", {
-          status: 404,
-          headers: { "content-type": "application/json" },
-        });
-      }),
-    );
-
-    const dir = mkdtempSync(join(tmpdir(), "pp-spoolman-spools-"));
-    process.env.PRINT_PARTNER_DATA_DIR = dir;
-    delete process.env.PRINT_PARTNER_API_KEY;
-
-    const config = loadConfig();
-    const ports = createSelfHostPorts(dir);
-    await ports.db.connect();
-    const integrations = createIntegrationPort({
-      statusExecution: new StatusExecution(),
-      repo: ports.repository,
-      getAdapter: (type) => (type === "spoolman" ? spoolmanAdapter : undefined),
-    });
-    const created = integrations.create({
-      type: "spoolman",
-      name: "Workshop",
-      config: { base_url: "http://192.168.1.50:7912", enabled: true },
-    });
-
-    const app = await buildApp(config, ports);
-
-    if (flag !== undefined) {
-      for (const resource of ["spools", "filaments"]) {
-        const denied = await app.inject(`/api/v1/integrations/${created.id}/spoolman/${resource}`);
-        expect(denied.statusCode).toBe(403);
-        expect(denied.json()).toEqual({ status: 403, title: "Forbidden",
-          detail: "Feature spoolman is disabled.", code: "FEATURE_DISABLED" });
+        ports.repository.setSetting("feature_toggles", '{"spoolman":true}');
       }
-      ports.repository.setSetting("feature_toggles", '{"spoolman":true}');
-    }
 
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/v1/integrations/${created.id}/spoolman/spools`,
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as {
-      spools: Array<{ id: number; filament_id: number; remaining_weight: number; location: string }>;
-    };
-    expect(body.spools).toHaveLength(1);
-    expect(body.spools[0]!.id).toBe(3);
-    expect(body.spools[0]!.filament_id).toBe(7);
-    expect(body.spools[0]!.remaining_weight).toBe(412.5);
-    expect(body.spools[0]!.location).toBe("Shelf A");
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/integrations/${created.id}/spoolman/spools`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        spools: Array<{
+          id: number;
+          filament_id: number;
+          remaining_weight: number;
+          location: string;
+        }>;
+      };
+      expect(body.spools).toHaveLength(1);
+      expect(body.spools[0]!.id).toBe(3);
+      expect(body.spools[0]!.filament_id).toBe(7);
+      expect(body.spools[0]!.remaining_weight).toBe(412.5);
+      expect(body.spools[0]!.location).toBe("Shelf A");
 
-    await app.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
+      await app.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
 
   it("returns JSON (not HTML) for flat /integrations path (not registered)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-spoolman-flat-404-"));
