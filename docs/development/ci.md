@@ -95,9 +95,10 @@ verified false positive, with a comment explaining the use the scanner missed.
 
 The Linux build also runs `rust/scripts/check-clippy-limits.py`. It checks the
 whole workspace and all targets with `desktop_rebuild` off and on. It enables
-Clippy's `cognitive_complexity`, `too_many_lines`, `match_same_arms`, and
-`if_same_then_else` lints with their pinned-toolchain default thresholds.
-The existing `-D warnings` passes still run separately.
+Clippy's allow-by-default `cognitive_complexity`, `too_many_lines`, and
+`match_same_arms` lints with their pinned-toolchain default thresholds.
+Warn-by-default lints such as `if_same_then_else` stay with the existing
+`-D warnings` passes, which already reject every finding.
 
 `rust/clippy-limits-baseline.json` records each lint's count in each feature
 mode. The checker counts a source span once when both library and test builds

@@ -12,7 +12,6 @@ LINTS = (
     "clippy::cognitive_complexity",
     "clippy::too_many_lines",
     "clippy::match_same_arms",
-    "clippy::if_same_then_else",
 )
 MODES = ("off", "on")
 BASE_REF = "origin/main"
