@@ -129,7 +129,9 @@ export type ServerConfig = {
 
 const DEFAULT_DATA_DIR = process.env.PRINT_PARTNER_DATA_DIR ?? "./data";
 const require = createRequire(import.meta.url);
-const requireFromServerPackage = createRequire(require.resolve("@print-partner/server/package.json"));
+const requireFromServerPackage = createRequire(
+  require.resolve("@print-partner/server/package.json"),
+);
 const appPackage: unknown = requireFromServerPackage("../../package.json");
 if (
   typeof appPackage !== "object" ||
@@ -171,17 +173,18 @@ export function validateProductionConfig(
   if (config.deployMode === "saas" && !config.sessionSecret && config.githubOAuthConfigured) {
     throw new Error("SESSION_SECRET is required in production SaaS mode with OAuth enabled");
   }
-  if (config.deployMode === "saas" && config.authRequired && !config.sessionSecret && !config.saasBasicAuth) {
+  if (
+    config.deployMode === "saas" &&
+    config.authRequired &&
+    !config.sessionSecret &&
+    !config.saasBasicAuth
+  ) {
     throw new Error("SESSION_SECRET or SAAS_BASIC_AUTH is required when SaaS auth is enabled");
   }
   if (config.smtpConfigured && !config.appPublicUrl) {
     throw new Error("APP_PUBLIC_URL is required when SMTP password-reset email is enabled");
   }
-  if (
-    config.deployMode === "saas" &&
-    config.databaseUrl &&
-    !config.postgresExperimental
-  ) {
+  if (config.deployMode === "saas" && config.databaseUrl && !config.postgresExperimental) {
     throw new Error(
       "Postgres support is experimental; set POSTGRES_EXPERIMENTAL=1 to acknowledge the sync-bridge limitations",
     );
@@ -283,10 +286,9 @@ export function loadConfig(): ServerConfig {
   const saasAllowAnonymous = process.env.SAAS_ALLOW_ANONYMOUS === "1";
   const oauthConfigured = Boolean(githubClientId || discordClientId);
   const authRequired =
-    multiUser || singleUserAuth ||
-    (deployMode === "saas" &&
-      !saasAllowAnonymous &&
-      Boolean(saasBasicAuth || oauthConfigured));
+    multiUser ||
+    singleUserAuth ||
+    (deployMode === "saas" && !saasAllowAnonymous && Boolean(saasBasicAuth || oauthConfigured));
 
   const basicUser = process.env.BASIC_AUTH_USER ?? null;
   const basicPass = process.env.BASIC_AUTH_PASS ?? null;
@@ -314,7 +316,9 @@ export function loadConfig(): ServerConfig {
   const aiDailyTokenBudget = Number(process.env.AI_DAILY_TOKEN_BUDGET ?? 0);
   const aiOptIn = process.env.AI_ENABLED === "1";
   const aiEnabled =
-    aiOptIn && aiProvider !== "none" && aiCredentialsPresent(aiProvider, anthropicApiKey, openaiApiKey);
+    aiOptIn &&
+    aiProvider !== "none" &&
+    aiCredentialsPresent(aiProvider, anthropicApiKey, openaiApiKey);
 
   return {
     deployMode,
@@ -351,7 +355,8 @@ export function loadConfig(): ServerConfig {
     authSuccessRedirect: process.env.AUTH_SUCCESS_REDIRECT ?? "/",
     basicAuthUser: basicUser,
     basicAuthPass: basicPass,
-    integrationApiKey: process.env.INTEGRATION_API_KEY?.trim() || process.env.PRINT_PARTNER_API_KEY?.trim() || null,
+    integrationApiKey:
+      process.env.INTEGRATION_API_KEY?.trim() || process.env.PRINT_PARTNER_API_KEY?.trim() || null,
     updateCheckEnabled: process.env.PRINT_PARTNER_UPDATE_CHECK !== "0",
     githubRepo: process.env.GITHUB_REPO?.trim() || "poitee/PrintPartner",
     latestVersionOverride: process.env.PRINT_PARTNER_LATEST_VERSION?.trim() || null,

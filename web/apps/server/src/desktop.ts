@@ -1,6 +1,11 @@
 import { chmodSync } from "node:fs";
 import {
-  installDesktopContext, desktopContext, mappedDesktopTenant, mappedDesktopDatabaseAvailable, closeDesktopAccount, releaseOrphanedDesktopOwner,
+  installDesktopContext,
+  desktopContext,
+  mappedDesktopTenant,
+  mappedDesktopDatabaseAvailable,
+  closeDesktopAccount,
+  releaseOrphanedDesktopOwner,
 } from "./desktop-context.js";
 import { interruptPrinterUploadsOnShutdown } from "./services/printer-send-queue.js";
 
@@ -10,15 +15,26 @@ async function setupFromParent(): Promise<unknown> {
     const timer = setTimeout(() => reject(new Error("Desktop setup timed out")), 5000);
     const read = (chunk: Buffer) => {
       buffered += chunk.toString("utf8");
-      if (buffered.length > 8192) { clearTimeout(timer); reject(new Error("Desktop setup rejected")); return; }
+      if (buffered.length > 8192) {
+        clearTimeout(timer);
+        reject(new Error("Desktop setup rejected"));
+        return;
+      }
       const end = buffered.indexOf("\n");
       if (end < 0) return;
       process.stdin.off("data", read);
       clearTimeout(timer);
-      try { resolve(JSON.parse(buffered.slice(0, end))); } catch { reject(new Error("Desktop setup rejected")); }
+      try {
+        resolve(JSON.parse(buffered.slice(0, end)));
+      } catch {
+        reject(new Error("Desktop setup rejected"));
+      }
     };
     process.stdin.on("data", read);
-    process.stdin.once("end", () => { clearTimeout(timer); reject(new Error("Desktop parent disconnected")); });
+    process.stdin.once("end", () => {
+      clearTimeout(timer);
+      reject(new Error("Desktop parent disconnected"));
+    });
   });
 }
 
@@ -51,9 +67,15 @@ const stop = async () => {
 
 try {
   installDesktopContext(await setupFromParent());
-  process.stdin.once("end", () => { void stop(); });
-  process.once("SIGTERM", () => { void stop(); });
-  process.once("SIGINT", () => { void stop(); });
+  process.stdin.once("end", () => {
+    void stop();
+  });
+  process.once("SIGTERM", () => {
+    void stop();
+  });
+  process.once("SIGINT", () => {
+    void stop();
+  });
   const setup = desktopContext();
   if (!setup) throw new Error("Desktop setup missing");
   process.env.PRINT_PARTNER_DATA_DIR = setup.data_dir;

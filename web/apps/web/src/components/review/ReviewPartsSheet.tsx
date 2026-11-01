@@ -423,10 +423,10 @@ const ReviewPartsSheet = forwardRef<ReviewPartsSheetHandle, Props>(function Revi
   };
 
   const onSpoolChange = useCallback(
-    (partId: number, spoolman_spool_id: string | null) => {
+    (partId: number, spoolmanSpoolId: string | null) => {
       const targetProfileId = profileId;
       const action = spoolmanAccess.beginAction();
-      void setSpoolmanSpool(partId, spoolman_spool_id).catch((err: unknown) => {
+      void setSpoolmanSpool(partId, spoolmanSpoolId).catch((err: unknown) => {
         void queryClient.invalidateQueries({
           queryKey: queryKeys.planFeatures(targetProfileId),
         });

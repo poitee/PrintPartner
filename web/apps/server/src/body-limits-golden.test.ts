@@ -22,55 +22,73 @@ const captured = vi.hoisted(() => ({
 // Observe the real app's registration without adding a production export or changing its behavior.
 vi.mock("fastify", async (importOriginal) => {
   const original = await importOriginal<typeof import("fastify")>();
-  return { ...original, default: new Proxy(original.default, {
-    apply(target, thisArg, args) {
-      const app: FastifyInstance = Reflect.apply(target, thisArg, args);
-      captured.jsonBodyBytes = app.initialConfig.bodyLimit!;
-      app.addHook("onRoute", (route) => { captured.routes.push(route); });
-      return app;
-    },
-  }) };
+  return {
+    ...original,
+    default: new Proxy(original.default, {
+      apply(target, thisArg, args) {
+        const app: FastifyInstance = Reflect.apply(target, thisArg, args);
+        captured.jsonBodyBytes = app.initialConfig.bodyLimit!;
+        app.addHook("onRoute", (route) => {
+          captured.routes.push(route);
+        });
+        return app;
+      },
+    }),
+  };
 });
 vi.mock("@fastify/multipart", async (importOriginal) => {
   const original = await importOriginal<typeof import("@fastify/multipart")>();
-  return { ...original, default: new Proxy(original.default, {
-    apply(target, thisArg, args) {
-      const result = Reflect.apply(target, thisArg, args);
-      captured.multipart = args[1].limits;
-      return result;
-    },
-  }) };
+  return {
+    ...original,
+    default: new Proxy(original.default, {
+      apply(target, thisArg, args) {
+        const result = Reflect.apply(target, thisArg, args);
+        captured.multipart = args[1].limits;
+        return result;
+      },
+    }),
+  };
 });
 vi.mock("@fastify/rate-limit", async (importOriginal) => {
   const original = await importOriginal<typeof import("@fastify/rate-limit")>();
-  return { ...original, default: new Proxy(original.default, {
-    apply(target, thisArg, args) {
-      captured.rateLimit = args[1];
-      const app: FastifyInstance = args[0];
-      const addHook = app.addHook;
-      // Observe whether the plugin's own onRoute callback actually adds a limiter.
-      app.addHook = new Proxy(addHook, {
-        apply(hookTarget, hookThis, hookArgs) {
-          if (hookArgs[0] === "onRoute") {
-            hookArgs[1] = new Proxy(hookArgs[1], {
-              apply(routeTarget, routeThis, routeArgs) {
-                const route: RouteOptions = routeArgs[0];
-                const before = new Set(Object.values(route).flat());
-                const result = Reflect.apply(routeTarget, routeThis, routeArgs);
-                if (Object.values(route).flat().some((value) => typeof value === "function" && !before.has(value))) {
-                  captured.rateLimitedRoutes.add(route);
-                }
-                return result;
-              },
-            });
-          }
-          return Reflect.apply(hookTarget, hookThis, hookArgs);
-        },
-      });
-      try { return Reflect.apply(target, thisArg, args); }
-      finally { app.addHook = addHook; }
-    },
-  }) };
+  return {
+    ...original,
+    default: new Proxy(original.default, {
+      apply(target, thisArg, args) {
+        captured.rateLimit = args[1];
+        const app: FastifyInstance = args[0];
+        const addHook = app.addHook;
+        // Observe whether the plugin's own onRoute callback actually adds a limiter.
+        app.addHook = new Proxy(addHook, {
+          apply(hookTarget, hookThis, hookArgs) {
+            if (hookArgs[0] === "onRoute") {
+              hookArgs[1] = new Proxy(hookArgs[1], {
+                apply(routeTarget, routeThis, routeArgs) {
+                  const route: RouteOptions = routeArgs[0];
+                  const before = new Set(Object.values(route).flat());
+                  const result = Reflect.apply(routeTarget, routeThis, routeArgs);
+                  if (
+                    Object.values(route)
+                      .flat()
+                      .some((value) => typeof value === "function" && !before.has(value))
+                  ) {
+                    captured.rateLimitedRoutes.add(route);
+                  }
+                  return result;
+                },
+              });
+            }
+            return Reflect.apply(hookTarget, hookThis, hookArgs);
+          },
+        });
+        try {
+          return Reflect.apply(target, thisArg, args);
+        } finally {
+          app.addHook = addHook;
+        }
+      },
+    }),
+  };
 });
 
 import { buildApp } from "./app.js";
@@ -102,13 +120,23 @@ describe("HTTP body limits golden", () => {
           { deployMode: "self-host", multiUser: true },
           { deployMode: "saas", multiUser: true },
         ] as const) {
-          app = await buildApp({
-            ...loadConfig(), dataDir, staticDir: nodeEnv === "production" ? staticDir : null, deployMode,
-            multiUser, singleUserAuth: false, authRequired: true,
-            sessionSecret: "golden-fixture-session-secret-for-tests",
-            integrationApiKey: null, updateCheckEnabled: false,
-            discordOAuthConfigured: true, githubOAuthConfigured: true,
-          }, ports);
+          app = await buildApp(
+            {
+              ...loadConfig(),
+              dataDir,
+              staticDir: nodeEnv === "production" ? staticDir : null,
+              deployMode,
+              multiUser,
+              singleUserAuth: false,
+              authRequired: true,
+              sessionSecret: "golden-fixture-session-secret-for-tests",
+              integrationApiKey: null,
+              updateCheckEnabled: false,
+              discordOAuthConfigured: true,
+              githubOAuthConfigured: true,
+            },
+            ports,
+          );
           await app.ready();
           await app.close();
           app = undefined;
@@ -117,10 +145,15 @@ describe("HTTP body limits golden", () => {
       const snapshot = exportHttpBodyLimits(captured.routes, captured, srcDir);
       const { routes } = snapshot;
       if (process.env.UPDATE_BODY_LIMITS_GOLDEN === "1") {
-        writeFileSync(goldenPath, `{\n  "semantics": ${JSON.stringify(snapshot.semantics)},\n  "routes": [\n${routes.map((route) => `    ${JSON.stringify(route)}`).join(",\n")}\n  ]\n}\n`);
+        writeFileSync(
+          goldenPath,
+          `{\n  "semantics": ${JSON.stringify(snapshot.semantics)},\n  "routes": [\n${routes.map((route) => `    ${JSON.stringify(route)}`).join(",\n")}\n  ]\n}\n`,
+        );
       }
       expect(snapshot).toEqual(JSON.parse(readFileSync(goldenPath, "utf8")));
-      console.info(`HTTP body limits golden: ${routes.length} routes; ${routes.filter((route) => route.multipart).length} multipart routes`);
+      console.info(
+        `HTTP body limits golden: ${routes.length} routes; ${routes.filter((route) => route.multipart).length} multipart routes`,
+      );
     } finally {
       await app?.close();
       ports.db.close();

@@ -23,7 +23,49 @@ export default tseslint.config(
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
       "@typescript-eslint/no-empty-object-type": "off",
+      // Code names are camelCase, types PascalCase, constants UPPER_CASE. Property
+      // keys and destructured names follow the JSON and SQLite fields they mirror.
+      "@typescript-eslint/naming-convention": [
+        "error",
+        { selector: "default", format: ["camelCase"], leadingUnderscore: "allow" },
+        // Renamed React component props, such as { icon: Icon }, are PascalCase.
+        { selector: "parameter", format: ["camelCase", "PascalCase"], leadingUnderscore: "allow" },
+        {
+          selector: "variable",
+          format: ["camelCase", "UPPER_CASE", "PascalCase"],
+          leadingUnderscore: "allow",
+        },
+        { selector: ["variable", "parameter"], modifiers: ["destructured"], format: null },
+        { selector: "function", format: ["camelCase", "PascalCase"] },
+        { selector: "typeLike", format: ["PascalCase"] },
+        { selector: "enumMember", format: ["PascalCase", "UPPER_CASE"] },
+        { selector: "import", format: null },
+        {
+          selector: [
+            "objectLiteralProperty",
+            "objectLiteralMethod",
+            "typeProperty",
+            "typeMethod",
+            "classProperty",
+          ],
+          format: null,
+        },
+      ],
     },
+  },
+  {
+    // Existing violations live in eslint-suppressions.json. Lower those counts; never raise them.
+    files: ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+    rules: {
+      complexity: ["error", { max: 20 }],
+      "max-depth": ["error", { max: 5 }],
+      "max-params": ["error", { max: 5 }],
+    },
+  },
+  {
+    // Generated from Rust contracts; fix names in the generator, not here.
+    files: ["**/*.generated.ts"],
+    rules: { "@typescript-eslint/naming-convention": "off" },
   },
   {
     files: ["apps/web/public/sw.js"],

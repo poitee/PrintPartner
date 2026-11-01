@@ -77,7 +77,10 @@ function postMultipartFile(
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
         response.on("end", () =>
-          resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
         );
         response.on("error", reject);
       },
@@ -101,7 +104,10 @@ describe("upload memory", () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    writeFileSync(zipPath, zipSync({ "parts/payload.bin": [randomBytes(PAYLOAD_BYTES), { level: 0 }] }));
+    writeFileSync(
+      zipPath,
+      zipSync({ "parts/payload.bin": [randomBytes(PAYLOAD_BYTES), { level: 0 }] }),
+    );
     process.env.PRINT_PARTNER_DATA_DIR = dataDir;
     delete process.env.PRINT_PARTNER_API_KEY;
     ports = createSelfHostPorts(dataDir);

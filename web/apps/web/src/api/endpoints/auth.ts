@@ -41,11 +41,11 @@ export async function loginWithEmail(
 export async function registerWithEmail(
   email: string,
   password: string,
-  display_name: string,
+  displayName: string,
 ): Promise<{ user: AuthUser }> {
   return engineFetch<{ user: AuthUser }>("/auth/register", {
     method: "POST",
-    body: JSON.stringify({ email, password, display_name }),
+    body: JSON.stringify({ email, password, display_name: displayName }),
   });
 }
 

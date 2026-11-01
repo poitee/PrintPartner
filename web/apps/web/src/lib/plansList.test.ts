@@ -114,13 +114,13 @@ describe("accepted Progress display", () => {
         accepted_progress: { kind: "ready", total_units: 5, remaining_units: 0 },
       }),
     ).toBe(true);
-    for (const accepted_progress of [
+    for (const acceptedProgress of [
       { kind: "ready", total_units: 0, remaining_units: 0 } as const,
       { kind: "ready", total_units: 5, remaining_units: 1 } as const,
       { kind: "empty" } as const,
       { kind: "unavailable", reason: "uninitialized" } as const,
     ]) {
-      expect(canArchiveAcceptedPlan({ archived_at: null, accepted_progress })).toBe(false);
+      expect(canArchiveAcceptedPlan({ archived_at: null, accepted_progress: acceptedProgress })).toBe(false);
     }
     expect(
       canArchiveAcceptedPlan({

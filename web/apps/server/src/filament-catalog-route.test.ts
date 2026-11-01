@@ -84,10 +84,13 @@ describe("GET /filaments/catalog Spoolman merge", () => {
   it("surfaces spoolman_error when Spoolman filaments request fails", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}", {
-        status: 503,
-        headers: { "content-type": "application/json" },
-      })),
+      vi.fn(
+        async () =>
+          new Response("{}", {
+            status: 503,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
     );
 
     const dir = mkdtempSync(join(tmpdir(), "pp-catalog-sm-err-"));

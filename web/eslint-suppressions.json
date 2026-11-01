@@ -1,0 +1,828 @@
+{
+  "apps/server/src/__tests__/body-limits.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-depth": {
+      "count": 1
+    }
+  },
+  "apps/server/src/app.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/assistant/build-decisions.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/assistant/compatibility.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 8
+    }
+  },
+  "apps/server/src/assistant/domain-pack.ts": {
+    "complexity": {
+      "count": 5
+    }
+  },
+  "apps/server/src/assistant/history.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/assistant/openai-adapter.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/assistant/operation-resources.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 76
+    },
+    "complexity": {
+      "count": 1
+    },
+    "max-params": {
+      "count": 2
+    }
+  },
+  "apps/server/src/assistant/preferences-digest.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/assistant/resolve-assistant.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/assistant/source-docs-digest.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/assistant/tools.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 6
+    },
+    "complexity": {
+      "count": 6
+    },
+    "max-depth": {
+      "count": 6
+    },
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/config.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/db/accepted-plan-duplicate-import.test.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/db/accepted-plan-operational.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "apps/server/src/db/accepted-plan-progress-summary.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/db/accepted-plate-layout-model.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/db/accepted-plates.ts": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/db/accepted-printer-attribution.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/db/repository.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 4
+    },
+    "complexity": {
+      "count": 18
+    },
+    "max-depth": {
+      "count": 1
+    }
+  },
+  "apps/server/src/integrations/adapters/bambu.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/integrations/adapters/home-assistant.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/integrations/adapters/moonraker.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/integrations/adapters/prusalink.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "apps/server/src/integrations/spoolman-client.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/lib/outbound-url.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/lib/print-file-classification.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/mcp/product-mcp.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/ownership-exports.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/ownership-history-copy.test.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/ownership-history.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/ownership-migration.ts": {
+    "complexity": {
+      "count": 3
+    },
+    "max-depth": {
+      "count": 1
+    }
+  },
+  "apps/server/src/ownership-plate-history.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/ownership/source-sync-admission.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/accepted-plates.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/assistant.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/auth.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/backups.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/bambu-connect.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 4
+    },
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/routes/jobs.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 12
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/metrics.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/plan-drafts.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/plans.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/printer-checkoff-progress.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/routes/printer-checkoff.ts": {
+    "complexity": {
+      "count": 4
+    }
+  },
+  "apps/server/src/routes/printer-send-queue.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/routes/settings.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/routes/slicer-instances.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/routes/sources.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 4
+    }
+  },
+  "apps/server/src/routes/spoolman-workflow-access.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/accepted-plan-review-callers.test.ts": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/accepted-plate-3mf.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/accepted-plate-workspace.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/backup-restore.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/build-planning.ts": {
+    "complexity": {
+      "count": 4
+    }
+  },
+  "apps/server/src/services/build-recipe.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/export-stl-pack.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/github-sync.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/guide-ingest.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 9
+    },
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/imported-print-inventory.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/interaction-graph.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 3
+    }
+  },
+  "apps/server/src/services/job-runner.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/kit-bundle-share.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/kit-vocabulary.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/knowledge-bundle.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/services/local-source-revision.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/pdf-text-extract.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/plan-compare.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/plan-drafts.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/plan-publication.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/plan-snapshots.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-checkoff-store.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-checkoff-verify.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/printer-fleet.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-outcomes-store.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 5
+    },
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-profile-assignments.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 3
+    }
+  },
+  "apps/server/src/services/printer-send-queue-store.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-send-queue.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-upload-farm-feature-access.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/printer-upload-feature-access.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/printer-upload-job.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/printer-upload-multipart.ts": {
+    "complexity": {
+      "count": 1
+    },
+    "max-depth": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/profile-sync.ts": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/reference-share-import.ts": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/repo-tree-summary.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/required-unit-reconciliation.test.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/required-unit-reconciliation.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/source-manifest-migration.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/source-watcher.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/server/src/services/spoolman-deduct.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/stack-preset.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/three-mf-import.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/unattributed-print-store.ts": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "apps/server/src/services/zip-directory.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/server/src/storage-lease.test.ts": {
+    "@typescript-eslint/naming-convention": {
+      "count": 1
+    }
+  },
+  "apps/server/src/storage-lease.ts": {
+    "max-depth": {
+      "count": 1
+    }
+  },
+  "apps/web/src/api/endpoints/checkoff.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/api/endpoints/planDrafts.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/CommandPalette.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/ImportRulesTree.tsx": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/components/KitManifestOptions.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/PlanPicker.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/Preview3D.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/RoleFilamentPicker.tsx": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "apps/web/src/components/build/BuildRecipePanel.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/checkoff/CheckoffCorrectionDialog.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/checkoff/PastPrintIntakePanel.tsx": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/components/checkoff/PrintVerifyPanel.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/checkoff/ProgressPartRow.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/export/PrinterSendPanel.tsx": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/components/export/accepted-plates/AcceptedPlateAssignmentForm.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/export/accepted-plates/AcceptedPlateSection.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/printers/PrintFileAssignForm.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/review/PartColorDialog.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/review/ReviewPartsSheet.tsx": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/components/review/ReviewSheetMobileCard.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/settings/AboutUpdatesCard.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/settings/BackupManagementCard.tsx": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/components/settings/PrinterProfileAssignmentSection.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/settings/PrintersSettingsCard.tsx": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "apps/web/src/components/sources/SourceDetailSheet.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/components/sources/SourceWatchPanel.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/context/PlanWorkspaceContext.tsx": {
+    "complexity": {
+      "count": 4
+    },
+    "max-depth": {
+      "count": 3
+    }
+  },
+  "apps/web/src/hooks/useBambuWorkflowAccess.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/hooks/useProfileUrlSync.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/lib/parseSlicedObjects.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/lib/partsManifest.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/lib/persistedCheckoffUi.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/lib/persistedReviewPartsUi.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/lib/planSaveCache.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/lib/planSaveError.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/lib/workPackageProjection.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/lib/workPackageTasks.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/BuildPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/CheckoffPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/ExportPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/GlobalProductionPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/HelpPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/LoginPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/PartsPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/PrintersPage.tsx": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "apps/web/src/pages/SettingsPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/pages/SourcesPage.tsx": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "apps/web/src/queries/sourceContent.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "scripts/check-ci-tool-pins.mjs": {
+    "complexity": {
+      "count": 3
+    },
+    "max-params": {
+      "count": 1
+    }
+  },
+  "scripts/desktop-parity/capture.mts": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "scripts/desktop-parity/schemas.mts": {
+    "max-params": {
+      "count": 1
+    }
+  },
+  "scripts/plan-save-benchmark.mts": {
+    "max-depth": {
+      "count": 3
+    }
+  },
+  "scripts/rust-contracts/generate.mjs": {
+    "complexity": {
+      "count": 1
+    }
+  }
+}

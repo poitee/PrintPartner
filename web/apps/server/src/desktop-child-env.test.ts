@@ -22,9 +22,10 @@ const SETTINGS_TABLE = new URL(
 function childFixedEnv(): Record<string, string> {
   const table = readFileSync(fileURLToPath(SETTINGS_TABLE), "utf8");
   return Object.fromEntries(
-    [...table.matchAll(/\("([A-Z0-9_]+)", Owner::Fixed\("([^"]*)"\)\)/g)].map(
-      (match) => [match[1], match[2]],
-    ),
+    [...table.matchAll(/\("([A-Z0-9_]+)", Owner::Fixed\("([^"]*)"\)\)/g)].map((match) => [
+      match[1],
+      match[2],
+    ]),
   );
 }
 

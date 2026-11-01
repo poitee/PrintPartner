@@ -8,7 +8,10 @@ import { resolveFilamentAssignment } from "./db/accepted-part-filament.js";
 import { getDb, SqliteDatabase } from "./db/client.js";
 import { AppRepository } from "./db/repository.js";
 import { globalThumbnailPath } from "./lib/thumbnails.js";
-import { clearPartThumbnailCacheAtHexes, clearPlanThumbnailCache } from "./services/plan-thumbnails.js";
+import {
+  clearPartThumbnailCacheAtHexes,
+  clearPlanThumbnailCache,
+} from "./services/plan-thumbnails.js";
 import {
   canonicalRoleOrder,
   loadRoleFilamentDefaults,
@@ -76,10 +79,7 @@ describe("clearPartThumbnailCacheAtHexes", () => {
     writeFileSync(oldThumb, Buffer.from("old"));
     writeFileSync(newThumb, Buffer.from("new"));
 
-    const cleared = clearPartThumbnailCacheAtHexes(thumbsDir, stlPath, "primary", [
-      oldHex,
-      newHex,
-    ]);
+    const cleared = clearPartThumbnailCacheAtHexes(thumbsDir, stlPath, "primary", [oldHex, newHex]);
     expect(cleared).toBeGreaterThanOrEqual(2);
 
     rmSync(dir, { recursive: true, force: true });
