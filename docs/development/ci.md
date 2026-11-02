@@ -87,18 +87,25 @@ node scripts/check-duplication.mjs
 ```
 
 The scanner uses mild mode and at least 50 tokens per clone. The minimum line
-count is 0, so line wrapping cannot hide a clone or add one. Token counts keep
-the baseline stable through the formatter rollout.
-`scripts/duplication-baseline.json` caps each area separately. Any increase fails,
-with clone locations for files changed since `origin/main`, or the ref in
+count is 0, so line wrapping cannot hide a clone or add one. Before scanning,
+the checker formats a temporary copy of the web sources with the pinned Prettier
+version and the repository's Prettier config and ignore rules. This keeps
+formatting batches from changing web token counts or clone boundaries. Rust and
+Python sources are scanned as checked in.
+`scripts/duplication-baseline.json` records the scan method and caps each area
+separately. A method change requires an explicit baseline update, reviewed with
+the changed counts. The scan runs when the Prettier config or ignore file changes.
+Any increase within the same method fails and reports clone locations for files
+changed since `origin/main`, or the ref in
 `PP_DUPLICATION_BASE`. CI uses the PR base or the commit before a main push.
 Every main push gets its own run, which a newer push never cancels.
 Missing reports, source-free scans and scanner errors also fail.
 
 Extract shared code instead of copying it. After removing duplication, run
 `node scripts/check-duplication.mjs --update` and commit the lower counts.
-Checking and updating both reject baseline increases over the base ref.
-The initial landing permits a baseline only when the base has none.
+Checking and updating reject increases when the base uses the same scan method.
+A new method requires an explicit baseline update because old counts are not
+comparable. Review that baseline change with the method change.
 The baseline caps existing duplication; it does not mean those clones are fixed.
 
 `just ci --only duplication` runs the same tests and scan on Node 22.23.3.

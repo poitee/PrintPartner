@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { AREAS, baselineAtRef, compare, jscpdArgs, main as runMain, parseBaseline, readReport, scan } from "./check-duplication.mjs";
+import { AREAS, baselineAtRef, compare, hashPrettierInputs, jscpdArgs, main as runMain, METHOD, parseBaseline, readReport, scan } from "./check-duplication.mjs";
 
 const main = (...args) => runMain(...args, () => null);
 
 const zero = () => Object.fromEntries(Object.keys(AREAS).map((area) => [area, 0]));
+const baseline = (counts, method = METHOD) => ({ method, counts });
 const results = (counts) =>
   Object.fromEntries(Object.entries(counts).map(([area, duplicatedTokens]) => [area, { duplicatedTokens, clones: [] }]));
 
@@ -23,10 +24,18 @@ function quiet(t) {
 }
 
 test("baseline must list every area with a nonnegative integer", () => {
-  assert.deepEqual(parseBaseline(JSON.stringify(zero())), zero());
+  assert.deepEqual(parseBaseline(JSON.stringify(zero())), { method: null, counts: zero() });
+  assert.deepEqual(parseBaseline(JSON.stringify(baseline(zero()))), baseline(zero()));
   for (const bad of [{}, { ...zero(), extra: 0 }, { ...zero(), rust: -1 }, { ...zero(), rust: 1.5 }, { ...zero(), rust: "1" }]) {
     assert.throws(() => parseBaseline(JSON.stringify(bad)));
   }
+  for (const bad of [{ method: "", counts: zero() }, { method: 1, counts: zero() }, { method: METHOD }]) {
+    assert.throws(() => parseBaseline(JSON.stringify(bad)));
+  }
+});
+
+test("formatter config fingerprint ignores checkout line-ending changes", () => {
+  assert.equal(hashPrettierInputs("config\nvalue\n", "ignored\npath\n"), hashPrettierInputs("config\r\nvalue\r\n", "ignored\r\npath\r\n"));
 });
 
 test("an empty or malformed jscpd report never passes", () => {
@@ -57,7 +66,7 @@ test("main fails on a rise, passes on equal or lower counts, and update refuses 
   quiet(t);
   const root = scratch(t);
   const path = join(root, "baseline.json");
-  writeFileSync(path, JSON.stringify({ ...zero(), rust: 5 }));
+  writeFileSync(path, JSON.stringify(baseline({ ...zero(), rust: 5 })));
   assert.equal(main([], root, path, () => results({ ...zero(), rust: 6 })), 1);
   assert.equal(main([], root, path, () => results({ ...zero(), rust: 5 })), 0);
   assert.equal(main([], root, path, () => results({ ...zero(), rust: 4 })), 0);
@@ -65,7 +74,7 @@ test("main fails on a rise, passes on equal or lower counts, and update refuses 
   assert.equal(main(["--update"], root, path, () => results({ ...zero(), rust: 6 })), 1);
   assert.equal(readFileSync(path, "utf8"), before);
   assert.equal(main(["--update"], root, path, () => results({ ...zero(), rust: 4 })), 0);
-  assert.equal(parseBaseline(readFileSync(path, "utf8")).rust, 4);
+  assert.equal(parseBaseline(readFileSync(path, "utf8")).counts.rust, 4);
 });
 
 test("a missing baseline is an error outside --update", (t) => {
@@ -78,13 +87,24 @@ test("checking and updating reject a hand-raised baseline over the base ref", (t
   quiet(t);
   const root = scratch(t);
   const path = join(root, "baseline.json");
-  writeFileSync(path, JSON.stringify({ ...zero(), rust: 6 }));
+  writeFileSync(path, JSON.stringify(baseline({ ...zero(), rust: 6 })));
   for (const argv of [[], ["--update"]]) {
-    assert.equal(runMain(argv, root, path, () => results({ ...zero(), rust: 6 }), () => ({ ...zero(), rust: 5 })), 1);
+    assert.equal(runMain(argv, root, path, () => results({ ...zero(), rust: 6 }), () => baseline({ ...zero(), rust: 5 })), 1);
   }
-  assert.equal(parseBaseline(readFileSync(path, "utf8")).rust, 6);
+  assert.equal(parseBaseline(readFileSync(path, "utf8")).counts.rust, 6);
   // Updating to the base's count can repair a hand-raised local baseline.
-  assert.equal(runMain(["--update"], root, path, () => results({ ...zero(), rust: 5 }), () => ({ ...zero(), rust: 5 })), 0);
+  assert.equal(runMain(["--update"], root, path, () => results({ ...zero(), rust: 5 }), () => baseline({ ...zero(), rust: 5 })), 0);
+});
+
+test("a method change permits migration to a new baseline", (t) => {
+  quiet(t);
+  const root = scratch(t);
+  const path = join(root, "baseline.json");
+  const oldMethod = baseline({ ...zero(), rust: 5 }, "revision 1");
+  writeFileSync(path, JSON.stringify(oldMethod));
+  assert.throws(() => runMain([], root, path, () => results({ ...zero(), rust: 6 }), () => oldMethod), /run with --update/);
+  assert.equal(runMain(["--update"], root, path, () => results({ ...zero(), rust: 6 }), () => oldMethod), 0);
+  assert.deepEqual(parseBaseline(readFileSync(path, "utf8")), baseline({ ...zero(), rust: 6 }));
 });
 
 test("base lookup distinguishes first landing from missing refs and malformed baselines", () => {
@@ -94,7 +114,7 @@ test("base lookup distinguishes first landing from missing refs and malformed ba
     return args[0] === "rev-parse" ? "commit\n" : args[0] === "ls-tree" ? listed : shown;
   };
   assert.equal(baselineAtRef("/repo", "base", fake("", "")), null);
-  assert.deepEqual(baselineAtRef("/repo", "base", fake("scripts/duplication-baseline.json\n", JSON.stringify(zero()))), zero());
+  assert.deepEqual(baselineAtRef("/repo", "base", fake("scripts/duplication-baseline.json\n", JSON.stringify(baseline(zero())))), baseline(zero()));
   assert.throws(() => baselineAtRef("/repo", "base", fake("scripts/duplication-baseline.json", "{}")));
   assert.throws(() => baselineAtRef("/repo", "missing", () => { throw new Error("missing ref"); }), /missing ref/);
   assert.deepEqual(calls[0], ["rev-parse", "--verify", "--end-of-options", "base^{commit}"]);
@@ -132,4 +152,24 @@ test("real jscpd finds a copied block and ignores fixtures", (t) => {
   writeFileSync(join(root, "web/apps/web/test/a.browser.mjs"), js("first"));
   writeFileSync(join(root, "web/apps/web/test/b.browser.mjs"), js("second"));
   assert.ok(scan(root)["web/apps/web"].duplicatedTokens >= before + 50, "copied UI test JavaScript must count");
+});
+
+test("formatting a copied block with Prettier does not change the count", (t) => {
+  const root = scratch(t);
+  for (const path of Object.values(AREAS)) {
+    mkdirSync(join(root, path), { recursive: true });
+    const name = path.includes("sidecar") ? "only.py" : path.includes("rust") ? "only.rs" : "only.ts";
+    const lines = Array.from({ length: 12 }, (_, i) => (name.endsWith(".py") ? `v${i} = ${i} * ${i + 7}` : `const v${i} = ${i} * ${i + 7};`));
+    writeFileSync(join(root, path, name), `${lines.join("\n")}\n`);
+  }
+  // Prettier adds trailing commas and arrow parentheses here, which adds tokens.
+  const fields = Array.from({ length: 10 }, (_, i) => `    field${i}: rows.map(row => row.values[${i}] * scale)`);
+  const raw = (name) => `export function ${name}(rows: Row[], scale: number) {\n  return {\n${fields.join(",\n")}\n  };\n}\n`;
+  const formatted = (name) => raw(name).replace(/row =>/g, "(row) =>").replace(/scale\)\n  \};/, "scale),\n  };");
+  writeFileSync(join(root, "web/packages/a.ts"), raw("first"));
+  writeFileSync(join(root, "web/packages/b.ts"), raw("second"));
+  const before = scan(root)["web/packages"].duplicatedTokens;
+  assert.ok(before >= 50, `expected the copied block, got ${before}`);
+  writeFileSync(join(root, "web/packages/a.ts"), formatted("first"));
+  assert.equal(scan(root)["web/packages"].duplicatedTokens, before);
 });

@@ -1,7 +1,10 @@
 {
-  "web/apps/server": 110040,
-  "web/apps/web": 32055,
-  "web/packages": 402,
-  "rust": 171653,
-  "slicer-sidecar": 60
+  "method": "revision 2; jscpd 5.4.2; prettier 3.9.10; config 23ba5e2a7390126e21c8fe79018572f9ab4bc16659a8beb1a9f7d422dbba613a",
+  "counts": {
+    "web/apps/server": 112373,
+    "web/apps/web": 32984,
+    "web/packages": 402,
+    "rust": 171653,
+    "slicer-sidecar": 60
+  }
 }
