@@ -48,6 +48,18 @@ function budget(script, label, field, limit) {
   writeFileSync(path, JSON.stringify(limits));
 }
 
+function editManifest(script, edit) {
+  const path = join(dirname(script), "..", "dist", ".vite", "manifest.json");
+  const manifest = JSON.parse(readFileSync(path, "utf8"));
+  edit(manifest);
+  writeFileSync(path, JSON.stringify(manifest));
+}
+
+function exactPublicBudget(script) {
+  budget(script, "public visits", "raw", 2048);
+  budget(script, "public visits", "gzip", 2 * gzipSync("a".repeat(1024)).length);
+}
+
 function fails(script, message) {
   assert.throws(() => execFileSync(process.execPath, [script], { stdio: "pipe" }),
     (error) => error.status === 1 && error.stderr.toString().includes(message));
@@ -86,8 +98,7 @@ for (const label of ["public visits", "authenticated visits", "src/pages/PartsPa
 
 test("exact limits pass and a one-byte regression fails without display rounding", (t) => {
   const script = fixture(t);
-  budget(script, "public visits", "raw", 2048);
-  budget(script, "public visits", "gzip", 2 * gzipSync("a".repeat(1024)).length);
+  exactPublicBudget(script);
   execFileSync(process.execPath, [script], { stdio: "pipe" });
   budget(script, "public visits", "raw", 2047);
   fails(script, "2048 bytes exceeds 2047 by 1 bytes");
@@ -101,13 +112,11 @@ test("route budgets include their shared baseline", (t) => {
 
 test("static closures handle cycles and count each output file once", (t) => {
   const script = fixture(t);
-  const path = join(dirname(script), "..", "dist", ".vite", "manifest.json");
-  const manifest = JSON.parse(readFileSync(path, "utf8"));
-  manifest.alias = { file: "assets/shared.js", imports: ["index.html"] };
-  manifest["index.html"].imports.push("alias");
-  writeFileSync(path, JSON.stringify(manifest));
-  budget(script, "public visits", "raw", 2048);
-  budget(script, "public visits", "gzip", 2 * gzipSync("a".repeat(1024)).length);
+  editManifest(script, (manifest) => {
+    manifest.alias = { file: "assets/shared.js", imports: ["index.html"] };
+    manifest["index.html"].imports.push("alias");
+  });
+  exactPublicBudget(script);
   execFileSync(process.execPath, [script], { stdio: "pipe" });
 });
 
@@ -131,10 +140,9 @@ test("JavaScript outside the manifest is counted", (t) => {
 
 test("a nested route without a budget fails", (t) => {
   const script = fixture(t);
-  const path = join(dirname(script), "..", "dist", ".vite", "manifest.json");
-  const manifest = JSON.parse(readFileSync(path, "utf8"));
-  manifest["src/pages/admin/SettingsPage.tsx"] = { file: "assets/parts.js" };
-  writeFileSync(path, JSON.stringify(manifest));
+  editManifest(script, (manifest) => {
+    manifest["src/pages/admin/SettingsPage.tsx"] = { file: "assets/parts.js" };
+  });
   fails(script, "src/pages/admin/SettingsPage.tsx raw: missing or invalid byte budget");
 });
 
@@ -150,10 +158,9 @@ test("invalid or missing budgets fail instead of disabling the check", (t) => {
 
 test("missing manifest imports fail", (t) => {
   const script = fixture(t);
-  const path = join(dirname(script), "..", "dist", ".vite", "manifest.json");
-  const manifest = JSON.parse(readFileSync(path, "utf8"));
-  delete manifest.shared;
-  writeFileSync(path, JSON.stringify(manifest));
+  editManifest(script, (manifest) => {
+    delete manifest.shared;
+  });
   fails(script, "TypeError");
 });
 
