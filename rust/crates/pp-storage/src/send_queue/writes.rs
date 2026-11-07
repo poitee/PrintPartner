@@ -57,6 +57,11 @@ pub enum Request {
     Get {
         id: String,
     },
+    /// The item `id` when Send now may claim it, or [`Request::Dispatch`]'s
+    /// refusal, without writing. Routes check the printer only after this.
+    Check {
+        id: String,
+    },
     /// Up to [`DRAIN_ITEM_CAP`] `queued` items in stored order, optionally
     /// for one printer.
     Ready {
@@ -213,6 +218,7 @@ fn transact(
     } else {
         match command.request {
             Request::Get { id } => item(&tx, &tenant, &id)?.map_or(NOT_FOUND, Reply::Item),
+            Request::Check { id } => check(&tx, &tenant, &id)?,
             Request::Ready { printer_id } => Reply::Items(
                 rows(&tx, &tenant)?
                     .unwrap_or_default()
@@ -333,13 +339,10 @@ fn dispatch(
     id: &str,
     host_name: &str,
 ) -> Result<Reply> {
-    let stored = match resendable(tx, tenant, id)? {
+    let stored = match sendable(tx, tenant, id)? {
         Ok(stored) => stored,
         Err(refusal) => return Ok(refusal),
     };
-    if outcome_unknown(tx, tenant, &stored)? {
-        return Ok(OUTCOME_UNKNOWN);
-    }
     let sending: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM printer_send_queue WHERE tenant_id=?1 AND printer_id=?2 AND state='sending')",
         params![tenant, stored.printer_id],
@@ -426,6 +429,53 @@ fn dispatch(
         item,
         job_id: job.job_id,
     })
+}
+
+/// Node's `storedQueueAdmissionProblem`: a send needs the Farm feature on
+/// for the item's Plan, or for the user when it has none.
+fn farm_refusal(tx: &Transaction<'_>, tenant: &str, id: &str) -> Result<Option<Reply>> {
+    let profile: Option<i64> = tx.query_row(
+        "SELECT profile_id FROM printer_send_queue WHERE tenant_id=?1 AND id=?2",
+        params![tenant, id],
+        |row| row.get(0),
+    )?;
+    let plan = profile.and_then(|id| pp_domain::PositiveId::new(id.unsigned_abs()).ok());
+    Ok(match crate::features::resolve_for_send(tx, tenant, plan) {
+        Ok(view) if view.effective().enabled(pp_domain::features::Feature::Farm) => None,
+        Ok(_) => Some(Reply::Refused {
+            status: 403,
+            detail: "Feature farm is disabled.",
+            code: Some("FEATURE_DISABLED"),
+        }),
+        Err(_) => Some(Reply::Refused {
+            status: 500,
+            detail: "Stored feature toggles are invalid.",
+            code: Some("FEATURE_TOGGLES_INVALID"),
+        }),
+    })
+}
+
+fn check(tx: &Transaction<'_>, tenant: &str, id: &str) -> Result<Reply> {
+    if let Err(refusal) = sendable(tx, tenant, id)? {
+        return Ok(refusal);
+    }
+    Ok(item(tx, tenant, id)?.map_or(NOT_FOUND, Reply::Item))
+}
+
+/// The item when Send now may send it: resendable, its last outcome known,
+/// and Farm on for its Plan; otherwise the refusal.
+fn sendable(tx: &Transaction<'_>, tenant: &str, id: &str) -> Result<Result<Stored, Reply>> {
+    let stored = match resendable(tx, tenant, id)? {
+        Ok(stored) => stored,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    if outcome_unknown(tx, tenant, &stored)? {
+        return Ok(Err(OUTCOME_UNKNOWN));
+    }
+    if let Some(refusal) = farm_refusal(tx, tenant, id)? {
+        return Ok(Err(refusal));
+    }
+    Ok(Ok(stored))
 }
 
 fn remove(tx: &Transaction<'_>, tenant: &str, subject: &str, id: &str) -> Result<Reply> {
