@@ -87,6 +87,12 @@ pub(super) struct App {
     waiters: Arc<tokio::sync::Semaphore>,
 }
 
+impl App {
+    pub(super) fn body_limit(&self) -> usize {
+        self.config.body_limit
+    }
+}
+
 struct Cancellation(Arc<AtomicBool>);
 impl Cancellation {
     fn new() -> Self {
@@ -112,7 +118,7 @@ pub(super) enum SummaryContract {
 }
 
 impl SummaryContract {
-    fn of(request: &axum::extract::Request) -> Self {
+    pub(super) fn of(request: &axum::extract::Request) -> Self {
         request
             .extensions()
             .get::<Self>()
@@ -138,7 +144,11 @@ pub fn build_router(config: BuildHttpConfig, client: BuildGraphClient) -> Router
     };
     let routes = Router::new()
         .route("/plans", get(list).post(create))
-        .route("/plans/{id}", get(detail).delete(remove))
+        .route(
+            "/plans/{id}",
+            get(detail).delete(remove).patch(super::header::update),
+        )
+        .route("/plans/{id}/archive", post(super::header::archive))
         .route("/plans/{id}/layers", get(list_layers).post(attach_addon))
         .route("/plans/{id}/layers/base", put(set_base))
         .route(
@@ -436,6 +446,11 @@ pub(super) async fn unknown_build(app: App, request: axum::extract::Request) -> 
     let Some(presented) = request.extensions().get::<PresentedCredential>().cloned() else {
         return failure(StatusCode::UNAUTHORIZED, "Authentication required");
     };
+    missing_build(app, presented).await
+}
+
+/// [`unknown_build`] once the request is read.
+pub(super) async fn missing_build(app: App, presented: PresentedCredential) -> Response {
     match outcome(app, presented, BuildCommand::List).await {
         Ok(_) => failure(StatusCode::NOT_FOUND, "Profile not found"),
         Err(response) => *response,
@@ -528,6 +543,26 @@ fn present(
             let profiles: Vec<_> = profiles.into_iter().filter_map(Result::ok).collect();
             json_response(StatusCode::OK, &json!(ProfileList { profiles }), head)
         }
+        BuildOutcome::RenameTaken { name } => crate::problem::duplicate_build_name(&name),
+        BuildOutcome::NameRequired => failure(StatusCode::BAD_REQUEST, "Profile name is required"),
+        BuildOutcome::FeatureDisabled => crate::problem::coded(
+            StatusCode::FORBIDDEN,
+            "Feature orders is disabled.",
+            "FEATURE_DISABLED",
+        ),
+        BuildOutcome::Uncoercible { archive: true } => {
+            failure(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+        }
+        BuildOutcome::Uncoercible { archive: false } => failure(
+            StatusCode::BAD_REQUEST,
+            "Cannot convert object to primitive value",
+        ),
+        BuildOutcome::FeatureTogglesInvalid => crate::problem::coded(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Stored feature toggles are invalid.",
+            "FEATURE_TOGGLES_INVALID",
+        ),
+        BuildOutcome::ArchiveRefused(refusal) => super::header::archive_refused(refusal),
         BuildOutcome::Read { profile: value } | BuildOutcome::Touched { profile: value } => {
             match summary(*value) {
                 Ok(body) => json_response(StatusCode::OK, &body, head),
@@ -586,7 +621,7 @@ fn present(
 /// Why the legacy v1 contract cannot present a Plan whose accepted progress
 /// is unavailable.
 #[derive(Debug, PartialEq, Eq)]
-enum Refusal {
+pub(super) enum Refusal {
     Integrity,
     CompatibilityDirty,
     Uninitialized,
@@ -596,7 +631,7 @@ enum Refusal {
 }
 
 impl Refusal {
-    fn response(self) -> Response {
+    pub(super) fn response(self) -> Response {
         match self {
             Self::Integrity => failure(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -739,7 +774,7 @@ fn encode_json_response(
 }
 
 /// 400 for a body that is not a JSON object: malformed, not invalid.
-fn unreadable() -> Response {
+pub(super) fn unreadable() -> Response {
     crate::problem::typed(
         crate::problem::ProblemType::MalformedRequest,
         StatusCode::BAD_REQUEST,
